@@ -21,6 +21,7 @@ from typing import List, Set
 def get_claude_project_dir() -> Path:
     """Convert current working directory to Claude project directory path."""
     cwd = os.getcwd()
+
     # Replace / with - to match Claude's directory naming convention
     project_path = cwd.replace("/", "-")
     claude_dir = Path.home() / ".claude" / "projects" / project_path
