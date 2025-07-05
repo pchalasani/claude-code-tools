@@ -1,6 +1,6 @@
 [project]
 name = "claude-code-tools"
-version = "0.1.3"
+version = "0.1.4"
 description = "Collection of tools for working with Claude Code"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -18,7 +18,7 @@ build-backend = "hatchling.build"
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "0.1.3"
+version = "0.1.4"
 tag_format = "v$version"
 version_files = [
     "pyproject.toml:version",
