@@ -1,0 +1,53 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/pchalasani/Git/claude-code-tools/hooks/file_size_conditional_hook.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/pchalasani/Git/claude-code-tools/hooks/pretask_subtask_flag.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/pchalasani/Git/claude-code-tools/hooks/grep_block_hook.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/pchalasani/Git/claude-code-tools/hooks/bash_hook.py"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/pchalasani/Git/claude-code-tools/hooks/posttask_subtask_flag.py"
+          }
+        ]
+      }
+    ]
+  }
+}
