@@ -41,6 +41,34 @@ find-claude-session "python,error,traceback"
 find-claude-session "docker,compose,deployment"
 ```
 
+### vault
+
+Centralized encrypted backup for .env files using SOPS.
+
+**Usage:**
+```bash
+# Smart sync (automatic direction)
+vault sync
+
+# Encrypt local .env to centralized vault
+vault encrypt
+
+# Decrypt to local .env  
+vault decrypt
+
+# List all encrypted backups
+vault list
+
+# Show detailed status
+vault status
+
+# Force specific direction
+vault sync --push     # Force encrypt
+vault sync --pull     # Force decrypt
+```
+
+**Location**: Encrypted backups stored in `~/.dotenvs/`
+
 **Installation Notes:**
 
 For global installation:
