@@ -18,28 +18,67 @@ uv tool install git+https://github.com/USERNAME/claude-code-tools
 
 ### find-claude-session
 
-Search Claude Code session files by keywords.
+Search Claude Code session files by keywords with an interactive UI.
+
+**Features:**
+- Search within current project or globally across all Claude projects
+- Interactive session selection with rich terminal UI
+- Session preview showing first user message
+- Automatic directory switching for cross-project sessions
+- Progress indicator for global searches
 
 **Usage:**
 ```bash
+# Search in current project
 find-claude-session "keyword1,keyword2,keyword3"
+
+# Search across all Claude projects
+find-claude-session "keyword1,keyword2,keyword3" --global
+find-claude-session "keyword1,keyword2,keyword3" -g
 ```
 
-Searches through Claude Code session JSONL files in the project directory corresponding to your current working directory. Returns session IDs that contain ALL specified keywords, sorted by modification time (newest first).
+Searches through Claude Code session JSONL files and presents an interactive UI showing the top 10 matching sessions. Sessions are sorted by modification time (newest first).
 
-**Output Format:**
-```
-session-id | YYYY-MM-DD HH:MM:SS | N lines
-```
+**Interactive UI:**
+- Displays session ID, project name, date, and preview
+- Select a session by entering its number (1-10)
+- Automatically resumes the selected session with `claude -r`
+- For cross-project sessions, prompts to change directory first
 
 **Examples:**
 ```bash
 # Find sessions discussing Python errors
 find-claude-session "python,error,traceback"
 
+# Find sessions about langroid across all projects
+find-claude-session "langroid" -g
+
 # Find sessions about specific topics
 find-claude-session "docker,compose,deployment"
 ```
+
+**Note:** The tool works with or without the `rich` library. If `rich` is installed, you get the interactive UI. Otherwise, it falls back to a simple text-based selection.
+
+**Persistent Directory Changes:**
+
+By default, when resuming a session from a different project, the directory change won't persist after exiting Claude. To make directory changes permanent, use the shell function wrapper:
+
+1. Add this to your shell config (.bashrc/.zshrc):
+   ```bash
+   fcs() { eval "$(find-claude-session --shell "$@" | sed '/^$/d')"; }
+   ```
+
+2. Or source the provided function:
+   ```bash
+   source /path/to/claude-code-tools/scripts/fcs-function.sh
+   ```
+
+3. Then use `fcs` instead of `find-claude-session`:
+   ```bash
+   fcs "keyword" -g
+   ```
+
+This ensures that when you resume a session from a different project, your shell will change to that project's directory and stay there after Claude exits.
 
 ### vault
 
