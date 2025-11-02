@@ -414,7 +414,7 @@ class TmuxCLIController:
         output, _ = self._run_tmux_command(cmd)
         return output
 
-    def wait_for_idle(self, window_id: Optional[str] = None, idle_time: float = 2.0,
+    def wait_for_idle(self, window_id: Optional[str] = None, idle_time: float = 3.0,
                      check_interval: float = 0.5, timeout: Optional[int] = None) -> bool:
         """
         Wait for a window to become idle (no output changes for idle_time seconds).
@@ -667,7 +667,7 @@ class CLI:
             except ValueError as e:
                 print(str(e))
     
-    def wait_idle(self, window_name: Optional[str] = None, idle_time: float = 2.0,
+    def wait_idle(self, window_name: Optional[str] = None, idle_time: float = 3.0,
                   timeout: Optional[int] = None):
         """Wait for window to become idle (no output changes).
 
