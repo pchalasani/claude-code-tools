@@ -414,6 +414,43 @@ class TmuxCLIController:
         output, _ = self._run_tmux_command(cmd)
         return output
 
+    def wait_for_idle(self, window_id: Optional[str] = None, idle_time: float = 2.0,
+                     check_interval: float = 0.5, timeout: Optional[int] = None) -> bool:
+        """
+        Wait for a window to become idle (no output changes for idle_time seconds).
+
+        Args:
+            window_id: Target window
+            idle_time: Seconds of no change to consider idle
+            check_interval: Seconds between checks
+            timeout: Maximum seconds to wait (None for no timeout)
+
+        Returns:
+            True if idle detected, False if timeout
+        """
+        target = window_id or self.target_window
+        if not target:
+            raise ValueError("No target window specified")
+
+        start_time = time.time()
+        last_change_time = time.time()
+        last_hash = ""
+
+        while True:
+            if timeout and (time.time() - start_time > timeout):
+                return False
+
+            content = self.capture_window(target)
+            content_hash = hashlib.md5(content.encode()).hexdigest()
+
+            if content_hash != last_hash:
+                last_hash = content_hash
+                last_change_time = time.time()
+            elif time.time() - last_change_time >= idle_time:
+                return True
+
+            time.sleep(check_interval)
+
     def launch_cli(self, command: str, window_name: Optional[str] = None) -> Optional[str]:
         """
         Launch a CLI application in a new window.
@@ -511,21 +548,21 @@ class CLI:
             print(f"Launched '{command}' in window: {identifier}")
         return identifier
     
-    def send(self, text: str, target: Optional[str] = None,
+    def send(self, text: str, window_name: Optional[str] = None,
              enter: bool = True, delay_enter: Union[bool, float] = True):
         """Send text to a window.
 
         Args:
             text: Text to send
-            target: Target window identifier (window name)
+            window_name: Target window name
             enter: Whether to send Enter key after text
             delay_enter: If True, use 1.0s delay; if float, use that delay in seconds
         """
         if self.mode == 'local':
-            if target:
-                resolved = self.controller.resolve_window_identifier(target)
+            if window_name:
+                resolved = self.controller.resolve_window_identifier(window_name)
                 if not resolved:
-                    print(f"Could not resolve window: {target}")
+                    print(f"Could not resolve window: {window_name}")
                     return
                 self.controller.send_keys_to_window(text, window_id=resolved,
                                                    enter=enter, delay_enter=delay_enter)
@@ -533,87 +570,87 @@ class CLI:
                 self.controller.send_keys_to_window(text, enter=enter, delay_enter=delay_enter)
         else:
             # Remote mode
-            self.controller.send_keys(text, pane_id=target, enter=enter, delay_enter=delay_enter)
+            self.controller.send_keys(text, pane_id=window_name, enter=enter, delay_enter=delay_enter)
         print("Text sent")
     
-    def capture(self, target: Optional[str] = None, lines: Optional[int] = None):
+    def capture(self, window_name: Optional[str] = None, lines: Optional[int] = None):
         """Capture window content.
 
         Args:
-            target: Target window identifier (window name)
+            window_name: Target window identifier (window name)
             lines: Number of lines to capture from bottom
         """
         if self.mode == 'local':
-            if target:
-                resolved = self.controller.resolve_window_identifier(target)
+            if window_name:
+                resolved = self.controller.resolve_window_identifier(window_name)
                 if not resolved:
-                    print(f"Could not resolve window: {target}")
+                    print(f"Could not resolve window: {window_name}")
                     return ""
                 content = self.controller.capture_window(window_id=resolved, lines=lines)
             else:
                 content = self.controller.capture_window(lines=lines)
         else:
             # Remote mode
-            content = self.controller.capture_pane(pane_id=target, lines=lines)
+            content = self.controller.capture_pane(pane_id=window_name, lines=lines)
         return content
     
-    def interrupt(self, target: Optional[str] = None):
+    def interrupt(self, window_name: Optional[str] = None):
         """Send Ctrl+C to a window.
 
         Args:
-            target: Target window identifier (window name)
+            window_name: Target window identifier (window name)
         """
         if self.mode == 'local':
-            if target:
-                resolved = self.controller.resolve_window_identifier(target)
+            if window_name:
+                resolved = self.controller.resolve_window_identifier(window_name)
                 if not resolved:
-                    print(f"Could not resolve window: {target}")
+                    print(f"Could not resolve window: {window_name}")
                     return
                 self.controller._run_tmux_command(['send-keys', '-t', resolved, 'C-c'])
             else:
                 self.controller._run_tmux_command(['send-keys', '-t', self.controller.target_window, 'C-c'])
         else:
             # Remote mode
-            target_id = self.controller._resolve_pane_id(target)
+            target_id = self.controller._resolve_pane_id(window_name)
             self.controller.send_interrupt(pane_id=target_id)
         print("Sent interrupt signal")
 
-    def escape(self, target: Optional[str] = None):
+    def escape(self, window_name: Optional[str] = None):
         """Send Escape key to a window.
 
         Args:
-            target: Target window identifier (window name)
+            window_name: Target window identifier (window name)
         """
         if self.mode == 'local':
-            if target:
-                resolved = self.controller.resolve_window_identifier(target)
+            if window_name:
+                resolved = self.controller.resolve_window_identifier(window_name)
                 if not resolved:
-                    print(f"Could not resolve window: {target}")
+                    print(f"Could not resolve window: {window_name}")
                     return
                 self.controller._run_tmux_command(['send-keys', '-t', resolved, 'Escape'])
             else:
                 self.controller._run_tmux_command(['send-keys', '-t', self.controller.target_window, 'Escape'])
         else:
             # Remote mode
-            target_id = self.controller._resolve_pane_id(target)
+            target_id = self.controller._resolve_pane_id(window_name)
             self.controller.send_escape(pane_id=target_id)
         print("Sent escape key")
 
-    def kill(self, target: Optional[str] = None):
+    def kill(self, window_name: Optional[str] = None):
         """Kill a window.
 
         Args:
-            target: Target window identifier (window name)
+            window_name: Target window identifier (window name)
         """
         if self.mode == 'local':
-            if target:
-                resolved = self.controller.resolve_window_identifier(target)
+            if window_name:
+                resolved = self.controller.resolve_window_identifier(window_name)
                 if not resolved:
-                    print(f"Could not resolve window: {target}")
+                    print(f"Could not resolve window: {window_name}")
                     return
                 try:
-                    self.controller.kill_window(window_id=target)
-                    print(f"Window '{target}' killed")
+                    self.controller.kill_window(window_id=window_name)
+                    print(f"Window '{window_name}' killed")
                 except ValueError as e:
                     print(str(e))
             else:
@@ -625,20 +662,41 @@ class CLI:
         else:
             # Remote mode
             try:
-                self.controller.kill_window(window_id=target)
+                self.controller.kill_window(window_id=window_name)
                 print("Window killed")
             except ValueError as e:
                 print(str(e))
     
-    def wait_idle(self, target: Optional[str] = None, idle_time: float = 2.0,
+    def wait_idle(self, window_name: Optional[str] = None, idle_time: float = 2.0,
                   timeout: Optional[int] = None):
         """Wait for window to become idle (no output changes).
 
-        Note: This feature has been removed in the simplified version.
-        Use manual sleep or check capture output instead.
+        Args:
+            window_name: Target window name
+            idle_time: Seconds of no change to consider idle
+            timeout: Maximum seconds to wait
         """
-        print("wait_idle has been removed. Use time.sleep() or check capture output manually.")
-        return False
+        if self.mode == 'local':
+            if window_name:
+                resolved = self.controller.resolve_window_identifier(window_name)
+                if not resolved:
+                    print(f"Could not resolve window: {window_name}")
+                    return False
+                target = window_name
+            else:
+                target = None
+
+            print(f"Waiting for window to become idle (no changes for {idle_time}s)...")
+            if self.controller.wait_for_idle(window_id=target, idle_time=idle_time, timeout=timeout):
+                print("Window is idle")
+                return True
+            else:
+                print("Timeout waiting for idle")
+                return False
+        else:
+            # Remote mode
+            print("wait_idle not supported in remote mode")
+            return False
     
     def attach(self):
         """Attach to the managed session (remote mode only)."""

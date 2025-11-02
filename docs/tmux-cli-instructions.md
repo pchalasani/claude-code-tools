@@ -54,30 +54,30 @@ tmux-cli launch "python3" --window-name=my-python
 ### Send input to a window
 ```bash
 # Send to a window (by name):
-tmux-cli send "text" --target=WINDOW_NAME
-# Example: tmux-cli send "print('hello')" --target=tmux-cli-my-python
+tmux-cli send "text" --window-name=WINDOW_NAME
+# Example: tmux-cli send "print('hello')" --window-name=tmux-cli-my-python
 
 # By default, there's a 1-second delay between text and Enter.
 # This ensures compatibility with various CLI applications.
 
 # To send without Enter:
-tmux-cli send "text" --target=WINDOW_NAME --enter=False
+tmux-cli send "text" --window-name=WINDOW_NAME --enter=False
 
 # To send immediately without delay:
-tmux-cli send "text" --target=WINDOW_NAME --delay-enter=False
+tmux-cli send "text" --window-name=WINDOW_NAME --delay-enter=False
 
 # To use a custom delay (in seconds):
-tmux-cli send "text" --target=WINDOW_NAME --delay-enter=0.5
+tmux-cli send "text" --window-name=WINDOW_NAME --delay-enter=0.5
 ```
 
 ### Capture output from a window
 ```bash
 # Capture from a window:
-tmux-cli capture --target=WINDOW_NAME
-# Example: tmux-cli capture --target=tmux-cli-my-python
+tmux-cli capture --window-name=WINDOW_NAME
+# Example: tmux-cli capture --window-name=tmux-cli-my-python
 
 # Capture last N lines:
-tmux-cli capture --target=WINDOW_NAME --lines=10
+tmux-cli capture --window-name=WINDOW_NAME --lines=10
 ```
 
 ### List all windows
@@ -106,8 +106,8 @@ tmux-cli status
 ### Kill a window
 ```bash
 # Kill a window (by name):
-tmux-cli kill --target=WINDOW_NAME
-# Example: tmux-cli kill --target=tmux-cli-my-python
+tmux-cli kill --window-name=WINDOW_NAME
+# Example: tmux-cli kill --window-name=tmux-cli-my-python
 ```
 
 ### Clean up all tmux-cli windows
@@ -119,15 +119,15 @@ tmux-cli cleanup
 ### Send interrupt (Ctrl+C)
 ```bash
 # To a window:
-tmux-cli interrupt --target=WINDOW_NAME
-# Example: tmux-cli interrupt --target=tmux-cli-my-python
+tmux-cli interrupt --window-name=WINDOW_NAME
+# Example: tmux-cli interrupt --window-name=tmux-cli-my-python
 ```
 
 ### Send escape key
 ```bash
 # To a window:
-tmux-cli escape --target=WINDOW_NAME
-# Example: tmux-cli escape --target=tmux-cli-my-python
+tmux-cli escape --window-name=WINDOW_NAME
+# Example: tmux-cli escape --window-name=tmux-cli-my-python
 # Useful for exiting vim-like applications
 ```
 
@@ -147,18 +147,18 @@ tmux-cli help
 
 2. Run your command in the shell:
    ```bash
-   tmux-cli send "python script.py" --target=tmux-cli-1730559234-123
+   tmux-cli send "python script.py" --window-name=tmux-cli-1730559234-123
    ```
 
 3. Interact with the program:
    ```bash
-   tmux-cli send "user input" --target=tmux-cli-1730559234-123
-   tmux-cli capture --target=tmux-cli-1730559234-123  # Check output
+   tmux-cli send "user input" --window-name=tmux-cli-1730559234-123
+   tmux-cli capture --window-name=tmux-cli-1730559234-123  # Check output
    ```
 
 4. Clean up when done:
    ```bash
-   tmux-cli kill --target=tmux-cli-1730559234-123
+   tmux-cli kill --window-name=tmux-cli-1730559234-123
    # Or clean up all tmux-cli windows at once:
    tmux-cli cleanup
    ```
@@ -173,9 +173,9 @@ tmux-cli launch "zsh" --window-name=my-dev
 # Returns: tmux-cli-my-dev
 
 # Now you can use the shorter name:
-tmux-cli send "python script.py" --target=tmux-cli-my-dev
-tmux-cli capture --target=tmux-cli-my-dev
-tmux-cli kill --target=tmux-cli-my-dev
+tmux-cli send "python script.py" --window-name=tmux-cli-my-dev
+tmux-cli capture --window-name=tmux-cli-my-dev
+tmux-cli kill --window-name=tmux-cli-my-dev
 ```
 
 ## Remote Mode Specific Commands
@@ -234,14 +234,14 @@ If you see "Could not resolve window: xxx", check:
 WIN=$(tmux-cli launch "python3" --window-name=repl)
 
 # Send commands
-tmux-cli send "import sys" --target=$WIN
-tmux-cli send "print(sys.version)" --target=$WIN
+tmux-cli send "import sys" --window-name=$WIN
+tmux-cli send "print(sys.version)" --window-name=$WIN
 
 # Get output
-tmux-cli capture --target=$WIN --lines=5
+tmux-cli capture --window-name=$WIN --lines=5
 
 # Clean up
-tmux-cli kill --target=$WIN
+tmux-cli kill --window-name=$WIN
 ```
 
 ### Running a script
@@ -250,16 +250,16 @@ tmux-cli kill --target=$WIN
 WIN=$(tmux-cli launch "zsh" --window-name=script-runner)
 
 # Run the script
-tmux-cli send "python my_script.py" --target=$WIN
+tmux-cli send "python my_script.py" --window-name=$WIN
 
 # Wait a bit
 sleep 5
 
 # Check output
-tmux-cli capture --target=$WIN
+tmux-cli capture --window-name=$WIN
 
 # Clean up
-tmux-cli kill --target=$WIN
+tmux-cli kill --window-name=$WIN
 ```
 
 ### Multiple concurrent sessions
@@ -270,9 +270,9 @@ WIN2=$(tmux-cli launch "zsh" --window-name=task2)
 WIN3=$(tmux-cli launch "zsh" --window-name=task3)
 
 # Run different tasks
-tmux-cli send "python task1.py" --target=$WIN1
-tmux-cli send "python task2.py" --target=$WIN2
-tmux-cli send "python task3.py" --target=$WIN3
+tmux-cli send "python task1.py" --window-name=$WIN1
+tmux-cli send "python task2.py" --window-name=$WIN2
+tmux-cli send "python task3.py" --window-name=$WIN3
 
 # Check status of all
 tmux-cli status
