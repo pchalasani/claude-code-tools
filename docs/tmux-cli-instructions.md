@@ -1,27 +1,23 @@
 # tmux-cli Instructions
 
-A command-line tool for controlling CLI applications running in tmux.
+A command-line tool for controlling CLI applications running in tmux windows.
 Automatically detects whether you're inside or outside tmux and uses the appropriate mode.
 
 ## Auto-Detection
-- **Inside tmux (Local Mode)**: Manages windows in your current tmux session (default)
-  - Can also manage panes if needed (use `--use-pane` flag)
+- **Inside tmux (Local Mode)**: Manages windows in your current tmux session
 - **Outside tmux (Remote Mode)**: Creates and manages a separate tmux session with windows
 
 ## Prerequisites
 - tmux must be installed
 - The `tmux-cli` command must be available (installed via `uv tool install`)
 
-## Window and Pane Identification
-
-**Windows (default, recommended):**
+## Window Identification
 
 All tmux-cli managed windows start with the prefix `tmux-cli-` for easy identification and management.
 
 - Auto-generated names: `tmux-cli-1730559234-123` (timestamp-based)
 - Custom names: specified with `--window-name` flag, automatically prefixed
   - Example: `--window-name=my-session` creates window `tmux-cli-my-session`
-- Window indices: Can also reference by index (depends on your tmux `base-index` setting)
 - Full format: `session:window_name` (e.g., `mysession:tmux-cli-my-session`)
 
 **Managed Window Tracking:**
@@ -30,71 +26,58 @@ The `tmux-cli-` prefix allows the tool to:
 - Show them separately in `tmux-cli status`
 - Clean them all up at once with `tmux-cli cleanup`
 
-**Panes:**
-- Pane number: Can reference by index (depends on your tmux `pane-base-index` setting)
-- Full format: `session:window.pane` (e.g., `myapp:1.2`)
-- Note: Pane indices shift when panes are closed, making them less stable than windows
-
 ## ⚠️ IMPORTANT: Always Launch a Shell First!
 
 **Always launch zsh first** to prevent losing output when commands fail:
+
 ```bash
-tmux-cli launch "zsh"  # Do this FIRST
-tmux-cli send "your-command" --pane=2  # Then run commands
+tmux-cli launch "zsh"
+# Returns: tmux-cli-1730559234-123
 ```
 
-If you launch a command directly and it errors, the pane closes immediately and you lose all output!
+If you launch a command directly and it errors, the window closes immediately and you lose all output!
 
 ## Core Commands
 
 ### Launch a CLI application
 ```bash
-# Default: Creates a new window
+# Creates a new window in the background
 tmux-cli launch "command"
 # Example: tmux-cli launch "python3"
 # Returns: tmux-cli-1730559234-123
 
-# With custom window name (gets auto-prefixed):
-tmux-cli launch "python3" --window-name="my-python"
+# With custom window name:
+tmux-cli launch "python3" --window-name=my-python
 # Returns: tmux-cli-my-python
-
-# Using panes instead of windows:
-tmux-cli launch "python3" --use-pane
-# Returns: pane identifier (e.g., session:window.pane format like myapp:1.2)
 ```
 
-### Send input to a window/pane
+### Send input to a window
 ```bash
 # Send to a window (by name):
-tmux-cli send "text" --target=WINDOW_NAME
-# Example: tmux-cli send "print('hello')" --target=tmux-cli-my-python
-
-# Or send to a pane:
-tmux-cli send "text" --pane=PANE_ID
-# Example: tmux-cli send "print('hello')" --pane=3
+tmux-cli send "text" --window-name=WINDOW_NAME
+# Example: tmux-cli send "print('hello')" --window-name=tmux-cli-my-python
 
 # By default, there's a 1-second delay between text and Enter.
 # This ensures compatibility with various CLI applications.
 
 # To send without Enter:
-tmux-cli send "text" --target=WINDOW_NAME --enter=False
+tmux-cli send "text" --window-name=WINDOW_NAME --enter=False
 
 # To send immediately without delay:
-tmux-cli send "text" --target=WINDOW_NAME --delay-enter=False
+tmux-cli send "text" --window-name=WINDOW_NAME --delay-enter=False
 
 # To use a custom delay (in seconds):
-tmux-cli send "text" --target=WINDOW_NAME --delay-enter=0.5
+tmux-cli send "text" --window-name=WINDOW_NAME --delay-enter=0.5
 ```
 
-### Capture output from a window/pane
+### Capture output from a window
 ```bash
 # Capture from a window:
-tmux-cli capture --target=WINDOW_NAME
-# Example: tmux-cli capture --target=tmux-cli-my-python
+tmux-cli capture --window-name=WINDOW_NAME
+# Example: tmux-cli capture --window-name=tmux-cli-my-python
 
-# Or capture from a pane:
-tmux-cli capture --pane=PANE_ID
-# Example: tmux-cli capture --pane=2
+# Capture last N lines:
+tmux-cli capture --window-name=WINDOW_NAME --lines=10
 ```
 
 ### List all windows
@@ -103,18 +86,12 @@ tmux-cli list_windows
 # Shows all windows in the current session with indices, names, and commands
 ```
 
-### List all panes
-```bash
-tmux-cli list_panes
-# Returns: JSON with pane IDs, indices, and status
-```
-
 ### Show current tmux status
 ```bash
 tmux-cli status
-# Shows current location, tmux-cli managed windows, all windows, and panes
+# Shows current location, tmux-cli managed windows, and all windows
 # Example output:
-#   Current location: myapp:main.0
+#   Current location: myapp:main
 #
 #   tmux-cli managed windows:
 #     tmux-cli-1730559234-123      python3
@@ -126,15 +103,11 @@ tmux-cli status
 #     2   tmux-cli-1730559235-456      zsh
 ```
 
-### Kill a window/pane
+### Kill a window
 ```bash
 # Kill a window (by name):
-tmux-cli kill --target=WINDOW_NAME
-# Example: tmux-cli kill --target=tmux-cli-my-python
-
-# Or kill a pane:
-tmux-cli kill --pane=PANE_ID
-# Example: tmux-cli kill --pane=2
+tmux-cli kill --window-name=WINDOW_NAME
+# Example: tmux-cli kill --window-name=tmux-cli-my-python
 ```
 
 ### Clean up all tmux-cli windows
@@ -146,37 +119,19 @@ tmux-cli cleanup
 ### Send interrupt (Ctrl+C)
 ```bash
 # To a window:
-tmux-cli interrupt --target=WINDOW_NAME
-# Example: tmux-cli interrupt --target=tmux-cli-my-python
-
-# Or to a pane:
-tmux-cli interrupt --pane=PANE_ID
-# Example: tmux-cli interrupt --pane=2
+tmux-cli interrupt --window-name=WINDOW_NAME
+# Example: tmux-cli interrupt --window-name=tmux-cli-my-python
 ```
 
 ### Send escape key
 ```bash
 # To a window:
-tmux-cli escape --target=WINDOW_NAME
-# Example: tmux-cli escape --target=tmux-cli-my-python
-
-# Or to a pane:
-tmux-cli escape --pane=PANE_ID
-# Example: tmux-cli escape --pane=3
+tmux-cli escape --window-name=WINDOW_NAME
+# Example: tmux-cli escape --window-name=tmux-cli-my-python
 # Useful for exiting vim-like applications
 ```
 
-### Wait for pane to become idle
-```bash
-tmux-cli wait_idle --pane=PANE_ID
-# Example: tmux-cli wait_idle --pane=2
-# Waits until no output changes for 2 seconds (default)
-
-# Custom idle time and timeout:
-tmux-cli wait_idle --pane=2 --idle-time=3.0 --timeout=60
-```
-
-### Get help
+### Show help
 ```bash
 tmux-cli help
 # Displays this documentation
@@ -192,18 +147,18 @@ tmux-cli help
 
 2. Run your command in the shell:
    ```bash
-   tmux-cli send "python script.py" --target=tmux-cli-1730559234-123
+   tmux-cli send "python script.py" --window-name=tmux-cli-1730559234-123
    ```
 
 3. Interact with the program:
    ```bash
-   tmux-cli send "user input" --target=tmux-cli-1730559234-123
-   tmux-cli capture --target=tmux-cli-1730559234-123  # Check output
+   tmux-cli send "user input" --window-name=tmux-cli-1730559234-123
+   tmux-cli capture --window-name=tmux-cli-1730559234-123  # Check output
    ```
 
 4. Clean up when done:
    ```bash
-   tmux-cli kill --target=tmux-cli-1730559234-123
+   tmux-cli kill --window-name=tmux-cli-1730559234-123
    # Or clean up all tmux-cli windows at once:
    tmux-cli cleanup
    ```
@@ -218,28 +173,22 @@ tmux-cli launch "zsh" --window-name=my-dev
 # Returns: tmux-cli-my-dev
 
 # Now you can use the shorter name:
-tmux-cli send "python script.py" --target=tmux-cli-my-dev
-tmux-cli capture --target=tmux-cli-my-dev
-tmux-cli kill --target=tmux-cli-my-dev
+tmux-cli send "python script.py" --window-name=tmux-cli-my-dev
+tmux-cli capture --window-name=tmux-cli-my-dev
+tmux-cli kill --window-name=tmux-cli-my-dev
 ```
 
 ## Remote Mode Specific Commands
 
 These commands are only available when running outside tmux:
 
-### Attach to session
+### Attach to managed session
 ```bash
 tmux-cli attach
-# Opens the managed tmux session to view live
+# Attaches to the managed session
 ```
 
-### Clean up session
-```bash
-tmux-cli cleanup
-# Kills the entire managed session and all its windows
-```
-
-### List windows
+### List windows (remote)
 ```bash
 tmux-cli list_windows
 # Shows all windows in the managed session
@@ -260,39 +209,74 @@ tmux-cli list_windows
 - Use `capture` to check the current state before sending input
 - If you launch a command directly (not via shell), the window closes when the command exits
 - Windows are isolated from your current workspace
-- Both `--target` and `--pane` parameters are supported
+- Windows launch in the background (don't steal focus)
 
-**Using Panes:**
-- Use `--use-pane` flag with `launch` to create panes instead of windows
-- Pane identifiers: `session:window.pane` format (like `myapp:1.2`) or just indices like `1`, `2`
-- Note: Pane indices shift when panes are closed, making them less stable than windows
-- Panes modify your current window layout; windows don't
+## Window Benefits
 
-## Avoiding Polling
-Instead of repeatedly checking with `capture`, use `wait_idle`:
+- **Stable names**: Window names don't change when other windows are created/destroyed
+- **Independent**: Windows don't affect your current workspace layout
+- **Auto-tracked**: All managed windows have `tmux-cli-` prefix
+- **Bulk cleanup**: Remove all with `tmux-cli cleanup`
+- **Custom names**: Easy identification with `--window-name`
+
+## Error Handling
+
+If you see "Could not resolve window: xxx", check:
+1. Did you save the window name from `launch`?
+2. Is the window still running? Use `tmux-cli status` to check
+3. Did you spell the window name correctly?
+
+## Examples
+
+### Interactive Python REPL
 ```bash
-# Send command to a CLI application
-tmux-cli send "analyze this code" --target=my-session
+# Launch Python in a named window
+WIN=$(tmux-cli launch "python3" --window-name=repl)
 
-# Wait for it to finish (no output for 3 seconds)
-tmux-cli wait_idle --target=my-session --idle-time=3.0
+# Send commands
+tmux-cli send "import sys" --window-name=$WIN
+tmux-cli send "print(sys.version)" --window-name=$WIN
 
-# Now capture the result
-tmux-cli capture --target=my-session
+# Get output
+tmux-cli capture --window-name=$WIN --lines=5
+
+# Clean up
+tmux-cli kill --window-name=$WIN
 ```
 
-## Windows vs Panes
+### Running a script
+```bash
+# Always use a shell first!
+WIN=$(tmux-cli launch "zsh" --window-name=script-runner)
 
-**Windows (default):**
-- Names don't change when other windows are created/destroyed
-- Independent of your current workspace layout
-- Can be accessed from any window in the session
-- Auto-tracked via `tmux-cli-` prefix
-- Bulk cleanup with `tmux-cli cleanup`
-- Custom names supported: `--window-name=my-session` → `tmux-cli-my-session`
+# Run the script
+tmux-cli send "python my_script.py" --window-name=$WIN
 
-**Panes:**
-- Share space within your current window
-- Indices shift when panes are closed (e.g., closing a pane renumbers all subsequent panes)
-- Useful when you want to see multiple things side-by-side
-- Use `--use-pane` flag with launch command
+# Wait a bit
+sleep 5
+
+# Check output
+tmux-cli capture --window-name=$WIN
+
+# Clean up
+tmux-cli kill --window-name=$WIN
+```
+
+### Multiple concurrent sessions
+```bash
+# Launch multiple windows
+WIN1=$(tmux-cli launch "zsh" --window-name=task1)
+WIN2=$(tmux-cli launch "zsh" --window-name=task2)
+WIN3=$(tmux-cli launch "zsh" --window-name=task3)
+
+# Run different tasks
+tmux-cli send "python task1.py" --window-name=$WIN1
+tmux-cli send "python task2.py" --window-name=$WIN2
+tmux-cli send "python task3.py" --window-name=$WIN3
+
+# Check status of all
+tmux-cli status
+
+# Clean up all at once
+tmux-cli cleanup
+```
