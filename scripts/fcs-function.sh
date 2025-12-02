@@ -12,8 +12,22 @@ fcs() {
         find-claude-session --help
         return
     fi
-    
-    # Run find-claude-session in shell mode and evaluate the output
-    # Use sed to remove any leading empty lines that might cause issues
-    eval "$(find-claude-session --shell "$@" | sed '/^$/d')"
+
+    # Run find-claude-session in shell mode
+    local output
+    output=$(find-claude-session --shell "$@" | sed '/^$/d')
+
+    # Security: Validate output before eval - only allow safe commands
+    # Expected outputs: cd "path", export VAR=value, claude -r session_id
+    if [[ -z "$output" ]]; then
+        return 0
+    elif [[ "$output" =~ ^cd\ \" ]] || \
+         [[ "$output" =~ ^export\ [A-Z_]+= ]] || \
+         [[ "$output" =~ ^claude\ -r\  ]]; then
+        eval "$output"
+    else
+        echo "fcs: Unexpected output format, not executing for safety" >&2
+        echo "Output was: $output" >&2
+        return 1
+    fi
 }

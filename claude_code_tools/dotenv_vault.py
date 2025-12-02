@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Centralized encrypted backup for .env files using SOPS."""
 
+import re
 import sys
 import subprocess
 import datetime
@@ -38,8 +39,13 @@ class DotenvVault:
             sys.exit(1)
 
     def _project_name(self):
-        """Get current project name from directory."""
-        return Path.cwd().name
+        """Get current project name from directory (sanitized for security)."""
+        name = Path.cwd().name
+        # Security: Remove path traversal and special characters
+        name = name.replace('/', '_').replace('\\', '_').replace('..', '_')
+        name = re.sub(r'[^a-zA-Z0-9_.-]', '_', name)
+        # Ensure non-empty
+        return name if name else 'unnamed_project'
 
     def _backup_path(self, project=None):
         """Get encrypted file path for project."""
