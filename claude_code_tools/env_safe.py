@@ -12,11 +12,10 @@ It specifically avoids displaying actual values to prevent accidental exposure
 of secrets, API keys, and other sensitive information.
 """
 
-import os
 import sys
 import argparse
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 import re
 
 
@@ -138,7 +137,6 @@ def validate_syntax(filepath: Path) -> None:
         
         with open(filepath, 'r', encoding='utf-8') as f:
             for line_num, line in enumerate(f, 1):
-                original_line = line
                 line = line.strip()
                 
                 # Skip empty lines and comments
@@ -208,10 +206,10 @@ preventing accidental exposure of sensitive environment values.
     check_parser.add_argument('key', help='The key name to check')
     
     # Count command
-    count_parser = subparsers.add_parser('count', help='Count variables')
+    subparsers.add_parser('count', help='Count variables')
     
     # Validate command
-    validate_parser = subparsers.add_parser('validate', help='Validate syntax')
+    subparsers.add_parser('validate', help='Validate syntax')
     
     args = parser.parse_args()
     

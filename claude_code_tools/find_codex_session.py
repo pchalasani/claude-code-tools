@@ -18,7 +18,6 @@ import json
 import os
 import re
 import shlex
-import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -394,7 +393,7 @@ def show_action_menu(match: dict) -> Optional[str]:
     print(f"\n=== Session: {match['session_id'][:16]}... ===")
     print(f"Project: {match['project']}")
     print(f"Branch: {match['branch']}")
-    print(f"\nWhat would you like to do?")
+    print("\nWhat would you like to do?")
     print("1. Resume session (default)")
     print("2. Show session file path")
     print("3. Copy session file to file (*.jsonl) or directory")
@@ -584,7 +583,7 @@ Examples:
             args.shell
         )
     elif action == "path":
-        print(f"\nSession file path:")
+        print("\nSession file path:")
         print(selected_match["file_path"])
     elif action == "copy":
         copy_session_file(selected_match["file_path"])

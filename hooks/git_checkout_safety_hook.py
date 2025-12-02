@@ -47,14 +47,14 @@ def check_git_checkout_command(command):
         # Get more detailed status if there are changes
         if has_changes:
             # Get the list of modified files
-            diff_result = subprocess.run(
+            subprocess.run(
                 ["git", "diff", "--name-only", "HEAD"],
                 capture_output=True,
                 text=True,
                 cwd=os.getcwd()
             )
             
-            unstaged_result = subprocess.run(
+            subprocess.run(
                 ["git", "diff", "--name-only"],
                 capture_output=True,
                 text=True,

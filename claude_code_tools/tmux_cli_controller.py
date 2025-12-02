@@ -7,7 +7,7 @@ This script provides functions to interact with CLI applications running in tmux
 import subprocess
 import time
 import re
-from typing import Optional, List, Dict, Tuple, Callable, Union
+from typing import Optional, List, Dict, Tuple, Union
 import json
 import os
 import hashlib
@@ -36,7 +36,7 @@ def _load_help_text():
                 help_file = resources.files('claude_code_tools') / 'docs' / 'tmux-cli-instructions.md'
                 if help_file.is_file():
                     return help_file.read_text(encoding='utf-8')
-            except:
+            except Exception:
                 pass
             
             # 2. Try accessing parent package to find docs at root level
@@ -46,7 +46,7 @@ def _load_help_text():
                 help_file = package_root / 'docs' / 'tmux-cli-instructions.md'
                 if help_file.is_file():
                     return help_file.read_text(encoding='utf-8')
-            except:
+            except Exception:
                 pass
         
         # Try pkg_resources as another fallback
@@ -58,12 +58,12 @@ def _load_help_text():
                     return pkg_resources.resource_string(
                         'claude_code_tools', path
                     ).decode('utf-8')
-                except:
+                except Exception:
                     continue
-        except:
+        except Exception:
             pass
             
-    except Exception as e:
+    except Exception:
         pass
     
     # If all else fails, return a basic help message
@@ -156,7 +156,7 @@ class TmuxCLIController:
             else:
                 # Fallback to pane ID
                 return pane_id
-        except:
+        except Exception:
             return pane_id
     
     def resolve_pane_identifier(self, identifier: str) -> Optional[str]:
@@ -196,7 +196,7 @@ class TmuxCLIController:
                     'display-message', '-t', f'{session}:{window}.{pane_index}', '-p', '#{pane_id}'
                 ])
                 return output if code == 0 else None
-            except:
+            except Exception:
                 return None
                 
         return None
@@ -604,7 +604,7 @@ class CLI:
         # List all panes in current window
         panes = self.controller.list_panes()
         if panes:
-            print(f"\nPanes in current window:")
+            print("\nPanes in current window:")
             for pane in panes:
                 active_marker = " *" if pane['active'] else "  "
                 command = pane.get('command', '')

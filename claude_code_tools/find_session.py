@@ -14,7 +14,6 @@ Examples:
 
 import argparse
 import json
-import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -271,7 +270,7 @@ def show_action_menu(session: dict, stderr_mode: bool = False) -> Optional[str]:
     print(f"Project: {session['project']}", file=output)
     if session.get("branch"):
         print(f"Branch: {session['branch']}", file=output)
-    print(f"\nWhat would you like to do?", file=output)
+    print("\nWhat would you like to do?", file=output)
     print("1. Resume session (default)", file=output)
     print("2. Show session file path", file=output)
     print("3. Copy session file to file (*.jsonl) or directory", file=output)
@@ -324,10 +323,10 @@ def handle_action(session: dict, action: str, shell_mode: bool = False) -> None:
                 session["cwd"],
                 claude_home=session.get("claude_home"),
             )
-            print(f"\nSession file path:")
+            print("\nSession file path:")
             print(file_path)
         elif agent == "codex":
-            print(f"\nSession file path:")
+            print("\nSession file path:")
             print(session.get("file_path", "Unknown"))
 
     elif action == "copy":

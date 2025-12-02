@@ -17,13 +17,11 @@ For the directory change to persist, use the shell function:
 import argparse
 import json
 import os
-import re
 import shlex
-import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import List, Set, Tuple, Optional
+from typing import List, Tuple, Optional
 
 try:
     from rich.console import Console
@@ -447,7 +445,7 @@ def show_action_menu(session_info: Tuple[str, float, float, int, str, str, str, 
     print(f"Project: {project_name}")
     if git_branch:
         print(f"Branch: {git_branch}")
-    print(f"\nWhat would you like to do?")
+    print("\nWhat would you like to do?")
     print("1. Resume session (default)")
     print("2. Show session file path")
     print("3. Copy session file to file (*.jsonl) or directory")
@@ -550,7 +548,7 @@ def resume_session(session_id: str, project_path: str, shell_mode: bool = False,
     change_dir = False
     if project_path != current_dir:
         if RICH_AVAILABLE and console:
-            console.print(f"\n[yellow]This session is from a different project:[/yellow]")
+            console.print("\n[yellow]This session is from a different project:[/yellow]")
             console.print(f"  Current directory: {current_dir}")
             console.print(f"  Session directory: {project_path}")
             
@@ -559,7 +557,7 @@ def resume_session(session_id: str, project_path: str, shell_mode: bool = False,
             else:
                 console.print("[yellow]Staying in current directory. Session resume may fail.[/yellow]")
         else:
-            print(f"\nThis session is from a different project:")
+            print("\nThis session is from a different project:")
             print(f"  Current directory: {current_dir}")
             print(f"  Session directory: {project_path}")
             
@@ -699,7 +697,7 @@ To persist directory changes when resuming sessions:
                 resume_session(session_id, project_path, shell_mode=args.shell, claude_home=args.claude_home)
             elif action == "path":
                 session_file_path = get_session_file_path(session_id, project_path, args.claude_home)
-                print(f"\nSession file path:")
+                print("\nSession file path:")
                 print(session_file_path)
             elif action == "copy":
                 session_file_path = get_session_file_path(session_id, project_path, args.claude_home)

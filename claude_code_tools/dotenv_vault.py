@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Centralized encrypted backup for .env files using SOPS."""
 
-import os
 import sys
 import subprocess
 import datetime
@@ -140,7 +139,7 @@ class DotenvVault:
 
     def status(self):
         """Show status for current project."""
-        project = self._project_name()
+        self._project_name()
         backup_path = self._backup_path()
         
         env_exists = Path(".env").exists()
@@ -175,9 +174,9 @@ class DotenvVault:
 
     def sync(self, direction=None):
         """Smart sync between local .env and centralized vault."""
-        project = self._project_name()
-        backup_path = self._backup_path()
-        env_file = Path.cwd() / ".env"
+        self._project_name()
+        self._backup_path()
+        Path.cwd() / ".env"
         
         status = self.status()
         
