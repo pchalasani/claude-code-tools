@@ -10,10 +10,10 @@ def check_rm_command(command):
     normalized_cmd = ' '.join(command.strip().split())
     
     # Check if it's an rm command
-    # This catches: rm, /bin/rm, /usr/bin/rm, etc.
-    # Also simpler check: if the command starts with rm or contains rm after common separators
-    if (normalized_cmd.startswith("rm ") or normalized_cmd == "rm" or 
-        re.search(r'(^|[;&|]\s*)(/\S*/)?rm\b', normalized_cmd)):
+    # This catches: rm, /bin/rm, /usr/bin/rm, sudo rm, etc.
+    # Also handles: rm after separators (;, &, |) and sudo prefix
+    if (normalized_cmd.startswith("rm ") or normalized_cmd == "rm" or
+        re.search(r'(^|[;&|]\s*)(sudo\s+)?(/\S*/)?rm\b', normalized_cmd)):
         reason_text = (
             "Instead of using 'rm':\n "
             "- MOVE files using `mv` to the TRASH directory in the CURRENT folder (create it if needed), \n"
