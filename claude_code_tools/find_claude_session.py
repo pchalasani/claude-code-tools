@@ -17,13 +17,11 @@ For the directory change to persist, use the shell function:
 import argparse
 import json
 import os
-import re
 import shlex
-import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import List, Set, Tuple, Optional
+from typing import List, Tuple, Optional
 
 try:
     from rich.console import Console
@@ -326,7 +324,7 @@ def find_sessions(keywords: List[str], global_search: bool = False, claude_home:
     return matching_sessions
 
 
-def display_interactive_ui(sessions: List[Tuple[str, float, int, str, str, str, Optional[str]]], keywords: List[str], stderr_mode: bool = False, num_matches: int = 10) -> Optional[Tuple[str, str]]:
+def display_interactive_ui(sessions: List[Tuple[str, float, float, int, str, str, str, Optional[str]]], keywords: List[str], stderr_mode: bool = False, num_matches: int = 10) -> Optional[Tuple[str, float, float, int, str, str, str, Optional[str]]]:
     """Display interactive UI for session selection."""
     if not RICH_AVAILABLE:
         return None
@@ -360,7 +358,17 @@ def display_interactive_ui(sessions: List[Tuple[str, float, int, str, str, str, 
     table.add_column("Lines", style="cyan", justify="right")
     table.add_column("Last User Message", style="white", max_width=60, overflow="fold")
     
-    for idx, (session_id, mod_time, create_time, line_count, project_name, preview, _, git_branch) in enumerate(display_sessions, 1):
+    for idx, session_info in enumerate(display_sessions, 1):
+        # Safely unpack session info
+        session_id = session_info[0]
+        mod_time = session_info[1]
+        create_time = session_info[2]
+        line_count = session_info[3]
+        project_name = session_info[4]
+        preview = session_info[5]
+        # project_path = session_info[6]  # Not used in display
+        git_branch = session_info[7] if len(session_info) > 7 else None
+
         # Format: "10/04 - 10/09 13:45"
         create_date = datetime.fromtimestamp(create_time).strftime('%m/%d')
         mod_date = datetime.fromtimestamp(mod_time).strftime('%m/%d %H:%M')
@@ -447,7 +455,7 @@ def show_action_menu(session_info: Tuple[str, float, float, int, str, str, str, 
     print(f"Project: {project_name}")
     if git_branch:
         print(f"Branch: {git_branch}")
-    print(f"\nWhat would you like to do?")
+    print("\nWhat would you like to do?")
     print("1. Resume session (default)")
     print("2. Show session file path")
     print("3. Copy session file to file (*.jsonl) or directory")
@@ -550,7 +558,7 @@ def resume_session(session_id: str, project_path: str, shell_mode: bool = False,
     change_dir = False
     if project_path != current_dir:
         if RICH_AVAILABLE and console:
-            console.print(f"\n[yellow]This session is from a different project:[/yellow]")
+            console.print("\n[yellow]This session is from a different project:[/yellow]")
             console.print(f"  Current directory: {current_dir}")
             console.print(f"  Session directory: {project_path}")
             
@@ -559,7 +567,7 @@ def resume_session(session_id: str, project_path: str, shell_mode: bool = False,
             else:
                 console.print("[yellow]Staying in current directory. Session resume may fail.[/yellow]")
         else:
-            print(f"\nThis session is from a different project:")
+            print("\nThis session is from a different project:")
             print(f"  Current directory: {current_dir}")
             print(f"  Session directory: {project_path}")
             
@@ -699,7 +707,7 @@ To persist directory changes when resuming sessions:
                 resume_session(session_id, project_path, shell_mode=args.shell, claude_home=args.claude_home)
             elif action == "path":
                 session_file_path = get_session_file_path(session_id, project_path, args.claude_home)
-                print(f"\nSession file path:")
+                print("\nSession file path:")
                 print(session_file_path)
             elif action == "copy":
                 session_file_path = get_session_file_path(session_id, project_path, args.claude_home)

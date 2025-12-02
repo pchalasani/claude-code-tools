@@ -10,10 +10,10 @@ def check_rm_command(command):
     normalized_cmd = ' '.join(command.strip().split())
     
     # Check if it's an rm command
-    # This catches: rm, /bin/rm, /usr/bin/rm, etc.
-    # Also simpler check: if the command starts with rm or contains rm after common separators
-    if (normalized_cmd.startswith("rm ") or normalized_cmd == "rm" or 
-        re.search(r'(^|[;&|]\s*)(/\S*/)?rm\b', normalized_cmd)):
+    # This catches: rm, /bin/rm, /usr/bin/rm, sudo rm, etc.
+    # Also handles: rm after separators (;, &, |) and sudo prefix
+    if (normalized_cmd.startswith("rm ") or normalized_cmd == "rm" or
+        re.search(r'(^|[;&|]\s*)(sudo\s+)?(/\S*/)?rm\b', normalized_cmd)):
         reason_text = (
             "Instead of using 'rm':\n "
             "- MOVE files using `mv` to the TRASH directory in the CURRENT folder (create it if needed), \n"
@@ -31,28 +31,21 @@ def check_rm_command(command):
 
 # If run as a standalone script
 if __name__ == "__main__":
-    import json
-    import sys
-    
-    data = json.load(sys.stdin)
-    
+    from hook_utils import load_and_validate_input, approve, block
+
+    data = load_and_validate_input()
+
     # Check if this is a Bash tool call
     tool_name = data.get("tool_name")
     if tool_name != "Bash":
-        print(json.dumps({"decision": "approve"}))
-        sys.exit(0)
-    
+        approve()
+
     # Get the command being executed
     command = data.get("tool_input", {}).get("command", "")
-    
+
     should_block, reason = check_rm_command(command)
-    
+
     if should_block:
-        print(json.dumps({
-            "decision": "block",
-            "reason": reason
-        }, ensure_ascii=False))
+        block(reason)
     else:
-        print(json.dumps({"decision": "approve"}))
-    
-    sys.exit(0)
+        approve()

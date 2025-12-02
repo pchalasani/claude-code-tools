@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Centralized encrypted backup for .env files using SOPS."""
 
-import os
+import re
 import sys
 import subprocess
 import datetime
@@ -23,7 +23,8 @@ class DotenvVault:
                 ["gpg", "--list-secret-keys", "--keyid-format", "LONG"],
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
+                timeout=30
             )
             lines = result.stdout.strip().split('\n')
             for line in lines:
@@ -38,8 +39,13 @@ class DotenvVault:
             sys.exit(1)
 
     def _project_name(self):
-        """Get current project name from directory."""
-        return Path.cwd().name
+        """Get current project name from directory (sanitized for security)."""
+        name = Path.cwd().name
+        # Security: Remove path traversal and special characters
+        name = name.replace('/', '_').replace('\\', '_').replace('..', '_')
+        name = re.sub(r'[^a-zA-Z0-9_.-]', '_', name)
+        # Ensure non-empty
+        return name if name else 'unnamed_project'
 
     def _backup_path(self, project=None):
         """Get encrypted file path for project."""
@@ -77,7 +83,7 @@ class DotenvVault:
         
         try:
             with open(backup_path, 'w') as f:
-                subprocess.run(cmd, stdout=f, check=True)
+                subprocess.run(cmd, stdout=f, check=True, timeout=30)
             click.echo(f"✅ Encrypted .env → {backup_path}")
             return True
         except subprocess.CalledProcessError as e:
@@ -119,7 +125,7 @@ class DotenvVault:
         
         try:
             with open(env_file, 'w') as f:
-                subprocess.run(cmd, stdout=f, check=True)
+                subprocess.run(cmd, stdout=f, check=True, timeout=30)
             click.echo(f"✅ Decrypted {backup_path} → {env_file}")
             return True
         except subprocess.CalledProcessError as e:
@@ -140,7 +146,7 @@ class DotenvVault:
 
     def status(self):
         """Show status for current project."""
-        project = self._project_name()
+        self._project_name()
         backup_path = self._backup_path()
         
         env_exists = Path(".env").exists()
@@ -175,9 +181,9 @@ class DotenvVault:
 
     def sync(self, direction=None):
         """Smart sync between local .env and centralized vault."""
-        project = self._project_name()
-        backup_path = self._backup_path()
-        env_file = Path.cwd() / ".env"
+        self._project_name()
+        self._backup_path()
+        Path.cwd() / ".env"
         
         status = self.status()
         
