@@ -22,7 +22,8 @@ class DotenvVault:
                 ["gpg", "--list-secret-keys", "--keyid-format", "LONG"],
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
+                timeout=30
             )
             lines = result.stdout.strip().split('\n')
             for line in lines:
@@ -76,7 +77,7 @@ class DotenvVault:
         
         try:
             with open(backup_path, 'w') as f:
-                subprocess.run(cmd, stdout=f, check=True)
+                subprocess.run(cmd, stdout=f, check=True, timeout=30)
             click.echo(f"✅ Encrypted .env → {backup_path}")
             return True
         except subprocess.CalledProcessError as e:
@@ -118,7 +119,7 @@ class DotenvVault:
         
         try:
             with open(env_file, 'w') as f:
-                subprocess.run(cmd, stdout=f, check=True)
+                subprocess.run(cmd, stdout=f, check=True, timeout=30)
             click.echo(f"✅ Decrypted {backup_path} → {env_file}")
             return True
         except subprocess.CalledProcessError as e:

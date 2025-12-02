@@ -6,6 +6,7 @@ This hook does not block but provides guidance.
 import json
 import sys
 import os
+from datetime import datetime
 
 def analyze_todos(todos):
     """Analyze todos and provide recommendations."""
@@ -55,7 +56,7 @@ def main():
 
         with open(log_file, 'a') as f:
             f.write(json.dumps({
-                "timestamp": str(os.popen('date -Iseconds').read().strip()),
+                "timestamp": datetime.now().isoformat(),
                 "analysis": analysis,
                 "todo_count": len(todos)
             }) + "\n")

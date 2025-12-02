@@ -2,7 +2,6 @@
 import os
 import json
 import sys
-import subprocess
 
 
 data = json.load(sys.stdin)
@@ -48,8 +47,13 @@ if file_path and os.path.exists(file_path):
     if is_binary_file(file_path):
         print(json.dumps({"decision": "approve"}))
         sys.exit(0)
-    
-    line_count = int(subprocess.check_output(['wc', '-l', file_path]).split()[0])
+
+    # Count lines using pure Python (more portable, no subprocess overhead)
+    def count_lines(filepath):
+        with open(filepath, 'rb') as f:
+            return sum(1 for _ in f)
+
+    line_count = count_lines(file_path)
     
     # Compute effective number of lines to be read
     if limit > 0:

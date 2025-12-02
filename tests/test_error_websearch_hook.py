@@ -78,9 +78,11 @@ class TestDetectErrors:
         assert len(error_line) <= 200
 
     def test_error_patterns_list_not_empty(self):
-        """ERROR_PATTERNS should contain patterns."""
+        """ERROR_PATTERNS should contain pre-compiled patterns."""
         assert len(ERROR_PATTERNS) > 0
-        assert "error:" in ERROR_PATTERNS
+        # Verify patterns are compiled regex objects
+        import re
+        assert all(isinstance(p, re.Pattern) for p in ERROR_PATTERNS)
 
 
 class TestLogErrorForResolution:

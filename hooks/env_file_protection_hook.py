@@ -5,6 +5,54 @@ Blocks commands that would expose .env contents and suggests safer alternatives.
 """
 import re
 
+# Pre-compiled patterns for performance (compiled once at module load)
+ENV_PATTERNS = [
+    # Direct file reading
+    re.compile(r'\bcat\s+.*\.env\b', re.IGNORECASE),
+    re.compile(r'\bless\s+.*\.env\b', re.IGNORECASE),
+    re.compile(r'\bmore\s+.*\.env\b', re.IGNORECASE),
+    re.compile(r'\bhead\s+.*\.env\b', re.IGNORECASE),
+    re.compile(r'\btail\s+.*\.env\b', re.IGNORECASE),
+    # Editors - both reading and writing
+    re.compile(r'\bnano\s+.*\.env\b', re.IGNORECASE),
+    re.compile(r'\bvi\s+.*\.env\b', re.IGNORECASE),
+    re.compile(r'\bvim\s+.*\.env\b', re.IGNORECASE),
+    re.compile(r'\bemacs\s+.*\.env\b', re.IGNORECASE),
+    re.compile(r'\bcode\s+.*\.env\b', re.IGNORECASE),
+    re.compile(r'\bsubl\s+.*\.env\b', re.IGNORECASE),
+    re.compile(r'\batom\s+.*\.env\b', re.IGNORECASE),
+    re.compile(r'\bgedit\s+.*\.env\b', re.IGNORECASE),
+    # Writing/modifying .env files
+    re.compile(r'>\s*\.env\b', re.IGNORECASE),
+    re.compile(r'>>\s*\.env\b', re.IGNORECASE),
+    re.compile(r'\becho\s+.*>\s*\.env\b', re.IGNORECASE),
+    re.compile(r'\becho\s+.*>>\s*\.env\b', re.IGNORECASE),
+    re.compile(r'\bprintf\s+.*>\s*\.env\b', re.IGNORECASE),
+    re.compile(r'\bprintf\s+.*>>\s*\.env\b', re.IGNORECASE),
+    re.compile(r'\bsed\s+.*-i.*\.env\b', re.IGNORECASE),
+    re.compile(r'\bawk\s+.*>\s*\.env\b', re.IGNORECASE),
+    re.compile(r'\btee\s+.*\.env\b', re.IGNORECASE),
+    re.compile(r'\bcp\s+.*\.env\b', re.IGNORECASE),
+    re.compile(r'\bmv\s+.*\.env\b', re.IGNORECASE),
+    re.compile(r'\btouch\s+.*\.env\b', re.IGNORECASE),
+    # Searching/grepping .env files
+    re.compile(r'\bgrep\s+.*\.env\b', re.IGNORECASE),
+    re.compile(r'\brg\s+.*\.env\b', re.IGNORECASE),
+    re.compile(r'\bag\s+.*\.env\b', re.IGNORECASE),
+    re.compile(r'\back\s+.*\.env\b', re.IGNORECASE),
+    re.compile(r'\bfind\s+.*-name\s+["\']?\.env', re.IGNORECASE),
+    # Other ways to expose .env contents
+    re.compile(r'\becho\s+.*\$\(.*cat\s+.*\.env.*\)', re.IGNORECASE),
+    re.compile(r'\bprintf\s+.*\$\(.*cat\s+.*\.env.*\)', re.IGNORECASE),
+    # Also check for patterns without the dot (like "env" file)
+    re.compile(r'\bcat\s+["\']?env["\']?\s*$', re.IGNORECASE),
+    re.compile(r'\bcat\s+["\']?env["\']?\s*[;&|]', re.IGNORECASE),
+    re.compile(r'\bless\s+["\']?env["\']?\s*$', re.IGNORECASE),
+    re.compile(r'\bless\s+["\']?env["\']?\s*[;&|]', re.IGNORECASE),
+    re.compile(r'>\s*["\']?env["\']?\s*$', re.IGNORECASE),
+    re.compile(r'>>\s*["\']?env["\']?\s*$', re.IGNORECASE),
+]
+
 def check_env_file_access(command):
     """
     Check if a command attempts to read, write, or edit .env files.
@@ -12,65 +60,10 @@ def check_env_file_access(command):
     """
     # Normalize the command
     normalized_cmd = ' '.join(command.strip().split())
-    
-    # Patterns that indicate reading, writing, or editing .env files
-    env_patterns = [
-        # Direct file reading
-        r'\bcat\s+.*\.env\b',
-        r'\bless\s+.*\.env\b',
-        r'\bmore\s+.*\.env\b',
-        r'\bhead\s+.*\.env\b',
-        r'\btail\s+.*\.env\b',
-        
-        # Editors - both reading and writing
-        r'\bnano\s+.*\.env\b',
-        r'\bvi\s+.*\.env\b',
-        r'\bvim\s+.*\.env\b',
-        r'\bemacs\s+.*\.env\b',
-        r'\bcode\s+.*\.env\b',
-        r'\bsubl\s+.*\.env\b',
-        r'\batom\s+.*\.env\b',
-        r'\bgedit\s+.*\.env\b',
-        
-        # Writing/modifying .env files
-        r'>\s*\.env\b',  # Redirect to .env
-        r'>>\s*\.env\b',  # Append to .env
-        r'\becho\s+.*>\s*\.env\b',
-        r'\becho\s+.*>>\s*\.env\b',
-        r'\bprintf\s+.*>\s*\.env\b',
-        r'\bprintf\s+.*>>\s*\.env\b',
-        r'\bsed\s+.*-i.*\.env\b',  # sed in-place editing
-        r'\bawk\s+.*>\s*\.env\b',
-        r'\btee\s+.*\.env\b',
-        r'\bcp\s+.*\.env\b',  # Copying to .env
-        r'\bmv\s+.*\.env\b',  # Moving to .env
-        r'\btouch\s+.*\.env\b',  # Creating .env
-        
-        # Searching/grepping .env files
-        r'\bgrep\s+.*\.env\b',
-        r'\bgrep\s+.*\s+\.env\b',
-        r'\brg\s+.*\.env\b',
-        r'\brg\s+.*\s+\.env\b',
-        r'\bag\s+.*\.env\b',
-        r'\back\s+.*\.env\b',
-        r'\bfind\s+.*-name\s+["\']?\.env',
-        
-        # Other ways to expose .env contents
-        r'\becho\s+.*\$\(.*cat\s+.*\.env.*\)',
-        r'\bprintf\s+.*\$\(.*cat\s+.*\.env.*\)',
-        
-        # Also check for patterns without the dot (like "env" file)
-        r'\bcat\s+["\']?env["\']?\s*$',
-        r'\bcat\s+["\']?env["\']?\s*[;&|]',
-        r'\bless\s+["\']?env["\']?\s*$',
-        r'\bless\s+["\']?env["\']?\s*[;&|]',
-        r'>\s*["\']?env["\']?\s*$',
-        r'>>\s*["\']?env["\']?\s*$',
-    ]
-    
+
     # Check if any pattern matches
-    for pattern in env_patterns:
-        if re.search(pattern, normalized_cmd, re.IGNORECASE):
+    for pattern in ENV_PATTERNS:
+        if pattern.search(normalized_cmd):
             reason_text = (
                 "Blocked: Direct access to .env files is not allowed for security reasons.\n\n"
                 "• Reading .env files could expose sensitive values\n"

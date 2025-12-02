@@ -9,39 +9,32 @@ import os
 import re
 from datetime import datetime
 
-# Error patterns to detect
+# Pre-compiled error patterns for performance (compiled once at module load)
 ERROR_PATTERNS = [
-    r'error:',
-    r'Error:',
-    r'ERROR',
-    r'failed',
-    r'FAILED',
-    r'exception',
-    r'Exception',
-    r'EXCEPTION',
-    r'not found',
-    r'cannot find',
-    r'Cannot find',
-    r'undefined',
-    r'Undefined',
-    r'npm ERR!',
-    r'SyntaxError',
-    r'TypeError',
-    r'ReferenceError',
-    r'ModuleNotFoundError',
-    r'ImportError',
-    r'command not found',
-    r'Permission denied',
-    r'ENOENT',
-    r'EACCES',
-    r'compilation failed',
-    r'build failed',
-    r'test failed',
-    r'assertion failed',
-    r'AssertionError',
-    r'panic:',
-    r'fatal:',
-    r'Fatal:',
+    re.compile(r'error:', re.IGNORECASE),
+    re.compile(r'\bERROR\s+in\b', re.IGNORECASE),  # Webpack-style errors
+    re.compile(r'failed', re.IGNORECASE),
+    re.compile(r'exception', re.IGNORECASE),
+    re.compile(r'not found', re.IGNORECASE),
+    re.compile(r'cannot find', re.IGNORECASE),
+    re.compile(r'undefined', re.IGNORECASE),
+    re.compile(r'npm ERR!'),
+    re.compile(r'SyntaxError'),
+    re.compile(r'TypeError'),
+    re.compile(r'ReferenceError'),
+    re.compile(r'ModuleNotFoundError'),
+    re.compile(r'ImportError'),
+    re.compile(r'command not found', re.IGNORECASE),
+    re.compile(r'Permission denied', re.IGNORECASE),
+    re.compile(r'ENOENT'),
+    re.compile(r'EACCES'),
+    re.compile(r'compilation failed', re.IGNORECASE),
+    re.compile(r'build failed', re.IGNORECASE),
+    re.compile(r'test failed', re.IGNORECASE),
+    re.compile(r'assertion failed', re.IGNORECASE),
+    re.compile(r'AssertionError'),
+    re.compile(r'panic:', re.IGNORECASE),
+    re.compile(r'fatal:', re.IGNORECASE),
 ]
 
 def detect_errors(output):
@@ -50,11 +43,11 @@ def detect_errors(output):
         return False, None
 
     for pattern in ERROR_PATTERNS:
-        if re.search(pattern, output, re.IGNORECASE):
+        if pattern.search(output):
             # Extract the error line
             lines = output.split('\n')
             for line in lines:
-                if re.search(pattern, line, re.IGNORECASE):
+                if pattern.search(line):
                     return True, line.strip()[:200]  # First 200 chars
 
     return False, None
