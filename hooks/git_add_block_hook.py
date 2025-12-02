@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import hashlib
 import re
 import os
 import subprocess
@@ -27,12 +28,13 @@ This restriction prevents accidentally staging unwanted files."""
         return True, reason
     
     # Hard block patterns: -A, --all, -a, ., ../, etc.
+    # Fixed ReDoS: replaced .*\s+ with [^\s]*\s* to prevent catastrophic backtracking
     dangerous_pattern = re.compile(
-        r'^git\s+add\s+(?:.*\s+)?('
-        r'-[a-zA-Z]*[Aa][a-zA-Z]*(\s|$)|'  # Flags containing 'A' or 'a'
-        r'--all(\s|$)|'                     # Long form --all
-        r'\.(\s|$)|'                        # git add . (current directory)
-        r'\.\./[\.\w/]*(\s|$)'             # git add ../ or ../.. patterns
+        r'^git\s+add\s+(?:[^\s]*\s+)?('
+        r'-[a-zA-Z]*[Aa][a-zA-Z]*(?:\s|$)|'  # Flags containing 'A' or 'a'
+        r'--all(?:\s|$)|'                     # Long form --all
+        r'\.(?:\s|$)|'                        # git add . (current directory)
+        r'\.\./(?:[\.\w/]*)?(?:\s|$)'        # git add ../ or ../.. patterns
         r')', re.IGNORECASE
     )
     
@@ -69,7 +71,9 @@ This restriction prevents accidentally staging unwanted files."""
         
         if dir_path:
             # Check if flag file exists (second attempt)
-            flag_file = Path(f'.claude_git_add_dir_{dir_path.replace("/", "_")}.flag')
+            # Use hash to prevent path traversal and ensure safe filenames
+            safe_name = hashlib.sha256(dir_path.encode()).hexdigest()[:16]
+            flag_file = Path(f'.claude_git_add_dir_{safe_name}.flag')
             
             if flag_file.exists():
                 # Second attempt - delete flag and allow

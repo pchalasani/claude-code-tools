@@ -37,6 +37,29 @@ ERROR_PATTERNS = [
     re.compile(r'fatal:', re.IGNORECASE),
 ]
 
+# Pre-compiled patterns for sensitive data sanitization
+SENSITIVE_PATTERNS = [
+    (re.compile(r'sk-ant-[a-zA-Z0-9-]{20,}'), 'sk-ant-[REDACTED]'),
+    (re.compile(r'sk-[a-zA-Z0-9]{32,}'), 'sk-[REDACTED]'),
+    (re.compile(r'Bearer\s+[^\s]+', re.IGNORECASE), 'Bearer [REDACTED]'),
+    (re.compile(r'(password|passwd|pwd)[:=]\s*[^\s]+', re.IGNORECASE), r'\1=[REDACTED]'),
+    (re.compile(r'(api[_-]?key)[:=]\s*[^\s]+', re.IGNORECASE), r'\1=[REDACTED]'),
+    (re.compile(r'(token)[:=]\s*[^\s]+', re.IGNORECASE), r'\1=[REDACTED]'),
+    (re.compile(r'(secret)[:=]\s*[^\s]+', re.IGNORECASE), r'\1=[REDACTED]'),
+    (re.compile(r'(Authorization):\s*[^\n]+', re.IGNORECASE), r'\1: [REDACTED]'),
+]
+
+
+def sanitize_sensitive_data(text):
+    """Remove sensitive patterns from text before logging."""
+    if not text:
+        return text
+
+    for pattern, replacement in SENSITIVE_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
 def detect_errors(output):
     """Detect if output contains error patterns."""
     if not output:
@@ -59,21 +82,30 @@ def log_error_for_resolution(error_line, command, full_output):
 
     log_file = os.path.join(log_dir, "pending_errors.jsonl")
 
+    # Sanitize all data before logging to prevent credential exposure
+    safe_command = sanitize_sensitive_data(command)
+    safe_error_line = sanitize_sensitive_data(error_line)
+    safe_output = sanitize_sensitive_data(full_output[:2000])
+
     entry = {
         "timestamp": datetime.now().isoformat(),
-        "command": command,
-        "error_line": error_line,
-        "full_output": full_output[:2000],  # Limit size
+        "command": safe_command,
+        "error_line": safe_error_line,
+        "full_output": safe_output,
         "status": "pending",
         "search_suggestions": [
-            f"{error_line} fix",
-            f"{error_line} stackoverflow",
-            f"{error_line} solution"
+            f"{safe_error_line} fix",
+            f"{safe_error_line} stackoverflow",
+            f"{safe_error_line} solution"
         ]
     }
 
-    with open(log_file, 'a') as f:
-        f.write(json.dumps(entry) + '\n')
+    try:
+        with open(log_file, 'a') as f:
+            f.write(json.dumps(entry) + '\n')
+    except (OSError, IOError):
+        # If logging fails, continue without blocking
+        pass
 
     return entry
 

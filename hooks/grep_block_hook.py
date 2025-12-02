@@ -2,11 +2,24 @@
 import json
 import sys
 
-# This hook is triggered when grep is detected in a bash command
-# Always block and remind to use rg instead
 
-print(json.dumps({
-    "decision": "block",
-    "reason": "Use 'rg' (ripgrep) instead of grep for faster and better search results"
-}))
-sys.exit(0)
+def check_grep_command():
+    """
+    Always block grep commands.
+    Returns tuple: (should_block: bool, reason: str)
+    """
+    return True, "Use 'rg' (ripgrep) instead of grep for faster and better search results"
+
+
+def main():
+    """Main entry point for hook."""
+    should_block, reason = check_grep_command()
+    print(json.dumps({
+        "decision": "block" if should_block else "approve",
+        "reason": reason
+    }))
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
