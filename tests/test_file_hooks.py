@@ -8,12 +8,10 @@ Comprehensive pytest tests for file-related hooks:
 """
 
 import json
-import os
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Dict, Any
-from unittest.mock import patch
 
 import pytest
 

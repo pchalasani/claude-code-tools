@@ -10,7 +10,6 @@ Tests the following hooks:
 
 import os
 import pytest
-import tempfile
 import hashlib
 from pathlib import Path
 from unittest.mock import patch, MagicMock

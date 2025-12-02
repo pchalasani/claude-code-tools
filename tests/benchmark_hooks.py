@@ -20,7 +20,6 @@ from git_checkout_safety_hook import check_git_checkout_command
 from git_add_block_hook import check_git_add_command
 from rm_block_hook import check_rm_command
 from env_file_protection_hook import check_env_file_access
-from git_commit_block_hook import check_git_commit_command
 
 
 class BenchmarkResult:
@@ -57,7 +56,7 @@ def benchmark_function(func, *args, iterations=1000):
     # Warm-up run (not counted)
     try:
         func(*args)
-    except:
+    except Exception:
         pass
     
     # Actual benchmark
@@ -65,7 +64,7 @@ def benchmark_function(func, *args, iterations=1000):
         start = time.perf_counter()
         try:
             func(*args)
-        except Exception as e:
+        except Exception:
             pass
         end = time.perf_counter()
         result.add_time(end - start)
@@ -104,8 +103,8 @@ def print_result(result, threshold_ms=10):
 
 def main():
     print_section("HOOK PERFORMANCE BENCHMARK")
-    print(f"Running 1000 iterations per test...")
-    print(f"Performance threshold: 10ms per call\n")
+    print("Running 1000 iterations per test...")
+    print("Performance threshold: 10ms per call\n")
     
     results = []
     
@@ -190,12 +189,12 @@ def main():
     
     print("Testing lazy loading...")
     start = time.perf_counter()
-    checks = _get_check_functions()
+    _ = _get_check_functions()  # noqa: F841
     load_time = (time.perf_counter() - start) * 1000
     print(f"  First load time: {load_time:.4f} ms")
-    
+
     start = time.perf_counter()
-    checks = _get_check_functions()
+    _ = _get_check_functions()  # noqa: F841
     cached_load_time = (time.perf_counter() - start) * 1000
     print(f"  Cached load time: {cached_load_time:.4f} ms\n")
     

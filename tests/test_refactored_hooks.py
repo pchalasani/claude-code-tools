@@ -5,12 +5,9 @@ These tests provide coverage by importing functions directly.
 """
 
 import json
-import os
 import sys
-import tempfile
 from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
