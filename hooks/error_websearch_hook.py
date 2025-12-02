@@ -9,6 +9,8 @@ import os
 import re
 from datetime import datetime
 
+from hook_utils import load_and_validate_input, approve
+
 # Pre-compiled error patterns for performance (compiled once at module load)
 ERROR_PATTERNS = [
     re.compile(r'error:', re.IGNORECASE),
@@ -110,14 +112,13 @@ def log_error_for_resolution(error_line, command, full_output):
     return entry
 
 def main():
-    data = json.load(sys.stdin)
+    data = load_and_validate_input()
 
     tool_name = data.get("tool_name")
 
     # Only process Bash tool results
     if tool_name != "Bash":
-        print(json.dumps({"decision": "approve"}))
-        sys.exit(0)
+        approve()
 
     # Get the output from the tool result
     tool_result = data.get("tool_result", {})
@@ -143,7 +144,7 @@ def main():
         }
         print(json.dumps(suggestion, ensure_ascii=False))
     else:
-        print(json.dumps({"decision": "approve"}))
+        approve()
 
     sys.exit(0)
 

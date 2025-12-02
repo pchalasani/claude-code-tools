@@ -88,9 +88,10 @@ def check_git_checkout_command(command):
             
             return True, warning
         
-    except Exception as e:
+    except Exception:
         # If we can't determine status, err on the side of caution
-        reason = f"Could not verify repository status: {str(e)}\nPlease manually check 'git status' before proceeding."
+        # Don't expose exception details (information disclosure vulnerability)
+        reason = "Could not verify repository status. Please manually check 'git status' before proceeding."
         return True, reason
     
     # No uncommitted changes, safe to proceed
@@ -99,28 +100,21 @@ def check_git_checkout_command(command):
 
 # If run as a standalone script
 if __name__ == "__main__":
-    import json
-    import sys
-    
-    data = json.load(sys.stdin)
-    
+    from hook_utils import load_and_validate_input, approve, block
+
+    data = load_and_validate_input()
+
     # Check if this is a Bash tool call
     tool_name = data.get("tool_name")
     if tool_name != "Bash":
-        print(json.dumps({"decision": "approve"}))
-        sys.exit(0)
-    
+        approve()
+
     # Get the command being executed
     command = data.get("tool_input", {}).get("command", "")
-    
+
     should_block, reason = check_git_checkout_command(command)
-    
+
     if should_block:
-        print(json.dumps({
-            "decision": "block",
-            "reason": reason
-        }))
+        block(reason)
     else:
-        print(json.dumps({"decision": "approve"}))
-    
-    sys.exit(0)
+        approve()

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Hook to check file size and suggest delegation for large files."""
 import os
-import json
-import sys
+
+from hook_utils import load_and_validate_input, approve, block
 
 
 def is_binary_file(filepath):
@@ -114,7 +114,7 @@ def check_file_size(file_path, offset=0, limit=0, is_main_agent=True):
 
 def main():
     """Main entry point for hook."""
-    data = json.load(sys.stdin)
+    data = load_and_validate_input()
 
     # Check if we're in a subtask
     flag_file = '.claude_in_subtask.flag'
@@ -128,14 +128,9 @@ def main():
     should_block, reason = check_file_size(file_path, offset, limit, is_main_agent)
 
     if should_block:
-        print(json.dumps({
-            "decision": "block",
-            "reason": reason,
-        }))
+        block(reason)
     else:
-        print(json.dumps({"decision": "approve"}))
-
-    sys.exit(0)
+        approve()
 
 
 if __name__ == "__main__":

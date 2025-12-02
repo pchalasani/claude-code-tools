@@ -4,9 +4,10 @@ Hook that logs TodoWrite operations and suggests sequential thinking for complex
 This hook does not block but provides guidance.
 """
 import json
-import sys
 import os
 from datetime import datetime
+
+from hook_utils import load_and_validate_input, approve
 
 def analyze_todos(todos):
     """Analyze todos and provide recommendations."""
@@ -38,12 +39,11 @@ def analyze_todos(todos):
     return None
 
 def main():
-    data = json.load(sys.stdin)
+    data = load_and_validate_input()
 
     tool_name = data.get("tool_name")
     if tool_name != "TodoWrite":
-        print(json.dumps({"decision": "approve"}))
-        sys.exit(0)
+        approve()
 
     todos = data.get("tool_input", {}).get("todos", [])
 
@@ -62,8 +62,7 @@ def main():
             }) + "\n")
 
     # Always approve - this hook is advisory only
-    print(json.dumps({"decision": "approve"}))
-    sys.exit(0)
+    approve()
 
 if __name__ == "__main__":
     main()

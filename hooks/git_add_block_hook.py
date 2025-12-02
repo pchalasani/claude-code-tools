@@ -68,20 +68,27 @@ This restriction prevents accidentally staging unwanted files."""
             if i > 0 and parts[i-1] == 'add' and part.endswith('/'):
                 dir_path = part.rstrip('/')
                 break
-        
+
         if dir_path:
             # Check if flag file exists (second attempt)
             # Use hash to prevent path traversal and ensure safe filenames
             safe_name = hashlib.sha256(dir_path.encode()).hexdigest()[:16]
             flag_file = Path(f'.claude_git_add_dir_{safe_name}.flag')
-            
-            if flag_file.exists():
-                # Second attempt - delete flag and allow
-                flag_file.unlink()
+
+            # Atomically check and remove flag (second attempt)
+            try:
+                os.remove(str(flag_file))
                 return False, None
-            
-            # First attempt - create flag and show warning with file list
-            flag_file.touch()
+            except FileNotFoundError:
+                pass
+
+            # First attempt - create flag atomically and show warning with file list
+            try:
+                fd = os.open(str(flag_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+                os.close(fd)
+            except FileExistsError:
+                # Flag already exists from another process, treat as second attempt
+                return False, None
             
             # Try to list files that would be staged
             try:
@@ -147,28 +154,21 @@ Otherwise, use 'git add <specific-files>' to stage only the files you need."""
 
 # If run as a standalone script
 if __name__ == "__main__":
-    import json
-    import sys
-    
-    data = json.load(sys.stdin)
-    
+    from hook_utils import load_and_validate_input, approve, block
+
+    data = load_and_validate_input()
+
     # Check if this is a Bash tool call
     tool_name = data.get("tool_name")
     if tool_name != "Bash":
-        print(json.dumps({"decision": "approve"}))
-        sys.exit(0)
-    
+        approve()
+
     # Get the command being executed
     command = data.get("tool_input", {}).get("command", "")
-    
+
     should_block, reason = check_git_add_command(command)
-    
+
     if should_block:
-        print(json.dumps({
-            "decision": "block",
-            "reason": reason
-        }))
+        block(reason)
     else:
-        print(json.dumps({"decision": "approve"}))
-    
-    sys.exit(0)
+        approve()
