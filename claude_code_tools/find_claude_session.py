@@ -324,7 +324,7 @@ def find_sessions(keywords: List[str], global_search: bool = False, claude_home:
     return matching_sessions
 
 
-def display_interactive_ui(sessions: List[Tuple[str, float, int, str, str, str, Optional[str]]], keywords: List[str], stderr_mode: bool = False, num_matches: int = 10) -> Optional[Tuple[str, str]]:
+def display_interactive_ui(sessions: List[Tuple[str, float, float, int, str, str, str, Optional[str]]], keywords: List[str], stderr_mode: bool = False, num_matches: int = 10) -> Optional[Tuple[str, float, float, int, str, str, str, Optional[str]]]:
     """Display interactive UI for session selection."""
     if not RICH_AVAILABLE:
         return None
@@ -358,7 +358,17 @@ def display_interactive_ui(sessions: List[Tuple[str, float, int, str, str, str, 
     table.add_column("Lines", style="cyan", justify="right")
     table.add_column("Last User Message", style="white", max_width=60, overflow="fold")
     
-    for idx, (session_id, mod_time, create_time, line_count, project_name, preview, _, git_branch) in enumerate(display_sessions, 1):
+    for idx, session_info in enumerate(display_sessions, 1):
+        # Safely unpack session info
+        session_id = session_info[0]
+        mod_time = session_info[1]
+        create_time = session_info[2]
+        line_count = session_info[3]
+        project_name = session_info[4]
+        preview = session_info[5]
+        # project_path = session_info[6]  # Not used in display
+        git_branch = session_info[7] if len(session_info) > 7 else None
+
         # Format: "10/04 - 10/09 13:45"
         create_date = datetime.fromtimestamp(create_time).strftime('%m/%d')
         mod_date = datetime.fromtimestamp(mod_time).strftime('%m/%d %H:%M')

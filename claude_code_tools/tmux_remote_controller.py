@@ -87,7 +87,7 @@ class RemoteTmuxController:
         """
         return window_target
     
-    def list_panes(self) -> List[Dict[str, str]]:
+    def list_panes(self) -> List[Dict[str, Union[str, bool]]]:
         """In remote mode, list windows in the managed session.
         Returns a list shaped similarly to local list_panes, with keys:
         id (window target), index, title (window name), active (bool), size (N/A)
@@ -99,7 +99,7 @@ class RemoteTmuxController:
         ])
         if code != 0 or not out:
             return []
-        windows: List[Dict[str, str]] = []
+        windows: List[Dict[str, Union[str, bool]]] = []
         for line in out.split('\n'):
             if not line:
                 continue
@@ -203,13 +203,13 @@ class RemoteTmuxController:
         self._run_tmux(['kill-session', '-t', self.session_name])
         self.target_window = None
     
-    def list_windows(self) -> List[Dict[str, str]]:
+    def list_windows(self) -> List[Dict[str, Union[str, bool]]]:
         """List all windows in the managed session with basic info."""
         self._ensure_session()
         out, code = self._run_tmux(['list-windows', '-t', self.session_name, '-F', '#{window_index}|#{window_name}|#{window_active}'])
         if code != 0 or not out:
             return []
-        windows: List[Dict[str, str]] = []
+        windows: List[Dict[str, Union[str, bool]]] = []
         for line in out.split('\n'):
             if not line:
                 continue

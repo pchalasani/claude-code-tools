@@ -310,7 +310,7 @@ def find_sessions(
 
 def display_interactive_ui(
     matches: list[dict],
-    keywords: list[str] = None,
+    keywords: Optional[list[str]] = None,
 ) -> Optional[dict]:
     """
     Display matches in interactive UI and get user selection.

@@ -92,14 +92,14 @@ class TmuxCLIController:
     def __init__(self, session_name: Optional[str] = None, window_name: Optional[str] = None):
         """
         Initialize the controller.
-        
+
         Args:
             session_name: Name of tmux session (defaults to current)
             window_name: Name of tmux window (defaults to current)
         """
         self.session_name = session_name
         self.window_name = window_name
-        self.target_pane = None
+        self.target_pane: Optional[str] = None
     
     def _run_tmux_command(self, command: List[str]) -> Tuple[str, int]:
         """
@@ -161,7 +161,7 @@ class TmuxCLIController:
     
     def resolve_pane_identifier(self, identifier: str) -> Optional[str]:
         """Convert various pane identifier formats to pane ID.
-        
+
         Supports:
         - Pane IDs: %123
         - session:window.pane: mysession:1.2
@@ -169,20 +169,22 @@ class TmuxCLIController:
         """
         if not identifier:
             return None
-        
+
         # Convert to string if it's a number
         identifier = str(identifier)
-            
+
         # If it's already a pane ID (%123), return as is
         if identifier.startswith('%'):
             return identifier
-            
+
         # If it's just a number, treat as pane index in current window
         if identifier.isdigit():
             panes = self.list_panes()
             for pane in panes:
-                if pane['index'] == identifier:
-                    return pane['id']
+                pane_index = pane['index']
+                if isinstance(pane_index, str) and pane_index == identifier:
+                    pane_id = pane['id']
+                    return pane_id if isinstance(pane_id, str) else None
             return None
             
         # If it's session:window.pane format
@@ -214,10 +216,10 @@ class TmuxCLIController:
         output, code = self._run_tmux_command(['display-message', '-p', '#{window_id}'])
         return output if code == 0 else None
     
-    def list_panes(self) -> List[Dict[str, str]]:
+    def list_panes(self) -> List[Dict[str, Union[str, bool]]]:
         """
         List all panes in the current window.
-        
+
         Returns:
             List of dicts with pane info (id, index, title, active, size, command, formatted_id)
         """
@@ -234,8 +236,8 @@ class TmuxCLIController:
         
         if code != 0:
             return []
-        
-        panes = []
+
+        panes: List[Dict[str, Union[str, bool]]] = []
         for line in output.split('\n'):
             if line:
                 parts = line.split('|')
@@ -296,7 +298,7 @@ class TmuxCLIController:
     def select_pane(self, pane_id: Optional[str] = None, pane_index: Optional[int] = None):
         """
         Select a pane as the target for operations.
-        
+
         Args:
             pane_id: Pane ID (e.g., %0, %1)
             pane_index: Pane index (0-based)
@@ -306,8 +308,11 @@ class TmuxCLIController:
         elif pane_index is not None:
             panes = self.list_panes()
             for pane in panes:
-                if int(pane['index']) == pane_index:
-                    self.target_pane = pane['id']
+                pane_idx = pane['index']
+                if isinstance(pane_idx, str) and int(pane_idx) == pane_index:
+                    pane_target_id = pane['id']
+                    if isinstance(pane_target_id, str):
+                        self.target_pane = pane_target_id
                     break
     
     def send_keys(self, text: str, pane_id: Optional[str] = None, enter: bool = True,
@@ -566,15 +571,15 @@ class CLI:
     
     def __init__(self, session: Optional[str] = None):
         """Initialize with auto-detection of tmux environment.
-        
+
         Args:
             session: Optional session name for remote mode (ignored in local mode)
         """
         self.in_tmux = bool(os.environ.get('TMUX'))
-        
+
         if self.in_tmux:
             # Inside tmux - use local controller
-            self.controller = TmuxCLIController()
+            self.controller: Union[TmuxCLIController, 'RemoteTmuxController'] = TmuxCLIController()
             self.mode = 'local'
         else:
             # Outside tmux - use remote controller
@@ -620,7 +625,7 @@ class CLI:
     
     def launch(self, command: str, vertical: bool = True, size: int = 50, name: Optional[str] = None):
         """Launch a command in a new pane/window.
-        
+
         Args:
             command: Command to launch
             vertical: Split direction (only used in local mode)
@@ -628,18 +633,25 @@ class CLI:
             name: Window name (only used in remote mode)
         """
         if self.mode == 'local':
-            pane_id = self.controller.launch_cli(command, vertical=vertical, size=size)
-            print(f"Launched '{command}' in pane {pane_id}")
+            if isinstance(self.controller, TmuxCLIController):
+                pane_id = self.controller.launch_cli(command, vertical=vertical, size=size)
+                print(f"Launched '{command}' in pane {pane_id}")
+            else:
+                pane_id = None
         else:
             # Remote mode
-            pane_id = self.controller.launch_cli(command, name=name)
-            print(f"Launched '{command}' in window: {pane_id}")
+            from .tmux_remote_controller import RemoteTmuxController
+            if isinstance(self.controller, RemoteTmuxController):
+                pane_id = self.controller.launch_cli(command, name=name)
+                print(f"Launched '{command}' in window: {pane_id}")
+            else:
+                pane_id = None
         return pane_id
     
     def send(self, text: str, pane: Optional[str] = None, enter: bool = True,
              delay_enter: Union[bool, float] = True):
         """Send text to a pane.
-        
+
         Args:
             text: Text to send
             pane: Target pane (session:window.pane, %id, or just index)
@@ -648,14 +660,15 @@ class CLI:
         """
         if self.mode == 'local':
             # Local mode - resolve pane identifier
-            if pane:
-                resolved_pane = self.controller.resolve_pane_identifier(pane)
-                if resolved_pane:
-                    self.controller.select_pane(pane_id=resolved_pane)
-                else:
-                    print(f"Could not resolve pane identifier: {pane}")
-                    return
-            self.controller.send_keys(text, enter=enter, delay_enter=delay_enter)
+            if isinstance(self.controller, TmuxCLIController):
+                if pane:
+                    resolved_pane = self.controller.resolve_pane_identifier(pane)
+                    if resolved_pane:
+                        self.controller.select_pane(pane_id=resolved_pane)
+                    else:
+                        print(f"Could not resolve pane identifier: {pane}")
+                        return
+                self.controller.send_keys(text, enter=enter, delay_enter=delay_enter)
         else:
             # Remote mode - pass pane_id directly
             self.controller.send_keys(text, pane_id=pane, enter=enter,
@@ -666,14 +679,17 @@ class CLI:
         """Capture and print pane content."""
         if self.mode == 'local':
             # Local mode - resolve pane identifier
-            if pane:
-                resolved_pane = self.controller.resolve_pane_identifier(pane)
-                if resolved_pane:
-                    self.controller.select_pane(pane_id=resolved_pane)
-                else:
-                    print(f"Could not resolve pane identifier: {pane}")
-                    return ""
-            content = self.controller.capture_pane(lines=lines)
+            if isinstance(self.controller, TmuxCLIController):
+                if pane:
+                    resolved_pane = self.controller.resolve_pane_identifier(pane)
+                    if resolved_pane:
+                        self.controller.select_pane(pane_id=resolved_pane)
+                    else:
+                        print(f"Could not resolve pane identifier: {pane}")
+                        return ""
+                content = self.controller.capture_pane(lines=lines)
+            else:
+                content = ""
         else:
             # Remote mode - pass pane_id directly
             content = self.controller.capture_pane(pane_id=pane, lines=lines)
@@ -684,79 +700,92 @@ class CLI:
         """Send Ctrl+C to a pane."""
         if self.mode == 'local':
             # Local mode - resolve pane identifier
-            if pane:
-                resolved_pane = self.controller.resolve_pane_identifier(pane)
-                if resolved_pane:
-                    self.controller.select_pane(pane_id=resolved_pane)
-                else:
-                    print(f"Could not resolve pane identifier: {pane}")
-                    return
-            self.controller.send_interrupt()
+            if isinstance(self.controller, TmuxCLIController):
+                if pane:
+                    resolved_pane = self.controller.resolve_pane_identifier(pane)
+                    if resolved_pane:
+                        self.controller.select_pane(pane_id=resolved_pane)
+                    else:
+                        print(f"Could not resolve pane identifier: {pane}")
+                        return
+                self.controller.send_interrupt()
         else:
             # Remote mode - resolve and pass pane_id
-            target = self.controller._resolve_pane_id(pane)
-            self.controller.send_interrupt(pane_id=target)
+            from .tmux_remote_controller import RemoteTmuxController
+            if isinstance(self.controller, RemoteTmuxController):
+                target = self.controller._resolve_pane_id(pane)
+                self.controller.send_interrupt(pane_id=target)
         print("Sent interrupt signal")
     
     def escape(self, pane: Optional[str] = None):
         """Send Escape key to a pane."""
         if self.mode == 'local':
             # Local mode - resolve pane identifier
-            if pane:
-                resolved_pane = self.controller.resolve_pane_identifier(pane)
-                if resolved_pane:
-                    self.controller.select_pane(pane_id=resolved_pane)
-                else:
-                    print(f"Could not resolve pane identifier: {pane}")
-                    return
-            self.controller.send_escape()
+            if isinstance(self.controller, TmuxCLIController):
+                if pane:
+                    resolved_pane = self.controller.resolve_pane_identifier(pane)
+                    if resolved_pane:
+                        self.controller.select_pane(pane_id=resolved_pane)
+                    else:
+                        print(f"Could not resolve pane identifier: {pane}")
+                        return
+                self.controller.send_escape()
         else:
             # Remote mode - resolve and pass pane_id
-            target = self.controller._resolve_pane_id(pane)
-            self.controller.send_escape(pane_id=target)
+            from .tmux_remote_controller import RemoteTmuxController
+            if isinstance(self.controller, RemoteTmuxController):
+                target = self.controller._resolve_pane_id(pane)
+                self.controller.send_escape(pane_id=target)
         print("Sent escape key")
     
     def kill(self, pane: Optional[str] = None):
         """Kill a pane/window."""
         if self.mode == 'local':
             # Local mode - kill pane
-            if pane:
-                resolved_pane = self.controller.resolve_pane_identifier(pane)
-                if resolved_pane:
-                    self.controller.select_pane(pane_id=resolved_pane)
-                else:
-                    print(f"Could not resolve pane identifier: {pane}")
-                    return
-            try:
-                self.controller.kill_pane()
-                print("Pane killed")
-            except ValueError as e:
-                print(str(e))
+            if isinstance(self.controller, TmuxCLIController):
+                if pane:
+                    resolved_pane = self.controller.resolve_pane_identifier(pane)
+                    if resolved_pane:
+                        self.controller.select_pane(pane_id=resolved_pane)
+                    else:
+                        print(f"Could not resolve pane identifier: {pane}")
+                        return
+                try:
+                    self.controller.kill_pane()
+                    print("Pane killed")
+                except ValueError as e:
+                    print(str(e))
         else:
             # Remote mode - kill window
-            try:
-                self.controller.kill_window(window_id=pane)
-                print("Window killed")
-            except ValueError as e:
-                print(str(e))
+            from .tmux_remote_controller import RemoteTmuxController
+            if isinstance(self.controller, RemoteTmuxController):
+                try:
+                    self.controller.kill_window(window_id=pane)
+                    print("Window killed")
+                except ValueError as e:
+                    print(str(e))
     
-    def wait_idle(self, pane: Optional[str] = None, idle_time: float = 2.0, 
+    def wait_idle(self, pane: Optional[str] = None, idle_time: float = 2.0,
                   timeout: Optional[int] = None):
         """Wait for pane to become idle (no output changes)."""
+        target: Optional[str] = None
         if self.mode == 'local':
             # Local mode - resolve pane identifier
-            if pane:
-                resolved_pane = self.controller.resolve_pane_identifier(pane)
-                if resolved_pane:
-                    self.controller.select_pane(pane_id=resolved_pane)
-                else:
-                    print(f"Could not resolve pane identifier: {pane}")
-                    return False
-            target = None
+            if isinstance(self.controller, TmuxCLIController):
+                if pane:
+                    resolved_pane = self.controller.resolve_pane_identifier(pane)
+                    if resolved_pane:
+                        self.controller.select_pane(pane_id=resolved_pane)
+                    else:
+                        print(f"Could not resolve pane identifier: {pane}")
+                        return False
+                target = None
         else:
             # Remote mode - resolve pane_id
-            target = self.controller._resolve_pane_id(pane)
-        
+            from .tmux_remote_controller import RemoteTmuxController
+            if isinstance(self.controller, RemoteTmuxController):
+                target = self.controller._resolve_pane_id(pane)
+
         print(f"Waiting for pane to become idle (no changes for {idle_time}s)...")
         if self.controller.wait_for_idle(pane_id=target, idle_time=idle_time, timeout=timeout):
             print("Pane is idle")

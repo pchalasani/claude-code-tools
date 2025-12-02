@@ -17,7 +17,7 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, cast
 
 # Import search functions from existing tools
 from claude_code_tools.find_claude_session import (
@@ -117,23 +117,23 @@ def search_all_agents(
         if agent_config.name == "claude":
             # Search Claude sessions
             home = claude_home or agent_config.home_dir
-            sessions = find_claude_sessions(
+            claude_sessions = find_claude_sessions(
                 keywords, global_search=global_search, claude_home=home
             )
 
-            # Add agent metadata to each session
-            for session in sessions:
+            # Add agent metadata to each session (tuples from find_claude_sessions)
+            for session_tuple in claude_sessions:
                 session_dict = {
                     "agent": "claude",
                     "agent_display": agent_config.display_name,
-                    "session_id": session[0],
-                    "mod_time": session[1],
-                    "create_time": session[2],
-                    "lines": session[3],
-                    "project": session[4],
-                    "preview": session[5],
-                    "cwd": session[6],
-                    "branch": session[7] if len(session) > 7 else "",
+                    "session_id": session_tuple[0],  # session_id
+                    "mod_time": session_tuple[1],  # modification time
+                    "create_time": session_tuple[2],  # creation time
+                    "lines": session_tuple[3],  # line count
+                    "project": session_tuple[4],  # project name
+                    "preview": session_tuple[5],  # preview text
+                    "cwd": session_tuple[6],  # working directory
+                    "branch": session_tuple[7] if len(session_tuple) > 7 else "",  # git branch
                     "claude_home": home,
                 }
                 all_sessions.append(session_dict)
@@ -144,32 +144,32 @@ def search_all_agents(
             codex_home_path = get_codex_home(home)
 
             if codex_home_path.exists():
-                sessions = find_codex_sessions(
+                codex_sessions = find_codex_sessions(
                     codex_home_path,
                     keywords,
                     num_matches=num_matches * 2,  # Get more for merging
                     global_search=global_search,
                 )
 
-                # Add agent metadata to each session
-                for session in sessions:
+                # Add agent metadata to each session (dicts from find_codex_sessions)
+                for session_dict_raw in codex_sessions:
                     session_dict = {
                         "agent": "codex",
                         "agent_display": agent_config.display_name,
-                        "session_id": session["session_id"],
-                        "mod_time": session["mod_time"],
-                        "create_time": session.get("mod_time"),  # Codex doesn't separate these
-                        "lines": session["lines"],
-                        "project": session["project"],
-                        "preview": session["preview"],
-                        "cwd": session["cwd"],
-                        "branch": session.get("branch", ""),
-                        "file_path": session.get("file_path", ""),
+                        "session_id": session_dict_raw["session_id"],
+                        "mod_time": session_dict_raw["mod_time"],
+                        "create_time": session_dict_raw.get("mod_time"),  # Codex doesn't separate these
+                        "lines": session_dict_raw["lines"],
+                        "project": session_dict_raw["project"],
+                        "preview": session_dict_raw["preview"],
+                        "cwd": session_dict_raw["cwd"],
+                        "branch": session_dict_raw.get("branch", ""),
+                        "file_path": session_dict_raw.get("file_path", ""),
                     }
                     all_sessions.append(session_dict)
 
     # Sort by modification time (newest first) and limit
-    all_sessions.sort(key=lambda x: x["mod_time"], reverse=True)
+    all_sessions.sort(key=lambda x: cast(float, x["mod_time"]), reverse=True)
     return all_sessions[:num_matches]
 
 
