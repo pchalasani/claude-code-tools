@@ -686,7 +686,6 @@ class CLI:
         else:
             # Remote mode - pass pane_id directly
             content = self.controller.capture_pane(pane_id=pane, lines=lines)
-        print(content)
         return content
     
     def interrupt(self, pane: Optional[str] = None):
