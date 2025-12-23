@@ -656,6 +656,7 @@ dseek() {
 }
 
 ccmm() {
+    # See https://platform.minimax.io/docs/guides/text-ai-coding-tools
     (
         export ANTHROPIC_BASE_URL=https://api.minimax.io/anthropic
         export ANTHROPIC_AUTH_TOKEN=$MINIMAX_API_KEY
