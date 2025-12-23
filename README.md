@@ -625,7 +625,7 @@ For complete documentation, see [hooks/README.md](hooks/README.md).
 ## 🤖 Using Claude Code with Open-weight Anthropic API-compatible LLM Providers
 
 You can use Claude Code with alternative LLMs served via Anthropic-compatible
-APIs, e.g. Kimi-k2, GLM4.5 (from zai), Deepseek-v3.1. 
+APIs, e.g. Kimi-k2, GLM4.5 (from zai), Deepseek-v3.1, MiniMax-M2.1.
 Add these functions to your shell config (.bashrc/.zshrc):
 
 ```bash
@@ -650,7 +650,23 @@ dseek() {
         export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
         export ANTHROPIC_AUTH_TOKEN=${DEEPSEEK_API_KEY}
         export ANTHROPIC_MODEL=deepseek-chat
-        export ANTHROPIC_SMALL_FAST_MODEL=deepseek-chat        
+        export ANTHROPIC_SMALL_FAST_MODEL=deepseek-chat
+        claude "$@"
+    )
+}
+
+ccmm() {
+    # See https://platform.minimax.io/docs/guides/text-ai-coding-tools
+    (
+        export ANTHROPIC_BASE_URL=https://api.minimax.io/anthropic
+        export ANTHROPIC_AUTH_TOKEN=$MINIMAX_API_KEY
+        export API_TIMEOUT_MS=3000000
+        export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+        export ANTHROPIC_MODEL=MiniMax-M2.1
+        export ANTHROPIC_SMALL_FAST_MODEL=MiniMax-M2.1
+        export ANTHROPIC_DEFAULT_SONNET_MODEL=MiniMax-M2.1
+        export ANTHROPIC_DEFAULT_OPUS_MODEL=MiniMax-M2.1
+        export ANTHROPIC_DEFAULT_HAIKU_MODEL=MiniMax-M2.1
         claude "$@"
     )
 }
@@ -658,10 +674,12 @@ dseek() {
 
 After adding these functions:
 - Set your API keys: `export KIMI_API_KEY=your-kimi-key`,
-  `export Z_API_KEY=your-z-key`, `export DEEPSEEK_API_KEY=your-deepseek-key`
+  `export Z_API_KEY=your-z-key`, `export DEEPSEEK_API_KEY=your-deepseek-key`,
+  `export MINIMAX_API_KEY=your-minimax-key`
 - Run `kimi` to use Claude Code with the Kimi K2 LLM
 - Run `zai` to use Claude Code with the GLM-4.5 model
 - Run `dseek` to use Claude Code with the DeepSeek model
+- Run `ccmm` to use Claude Code with the MiniMax M2.1 model
 
 The functions use subshells to ensure the environment variables don't affect
 your main shell session, so you could be running multiple instances of Claude Code,
