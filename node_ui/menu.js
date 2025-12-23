@@ -115,7 +115,45 @@ const colorize = {
   branch: (txt) => chalk.cyan(txt),
   lines: (txt) => chalk.yellow(txt),
   date: (txt) => chalk.blue(txt),
+  title: (txt) => chalk.cyan.bold(txt),
 };
+
+/**
+ * Format session header line with optional custom title.
+ * Returns array of spans for use in h(Text, null, ...spans).
+ *
+ * @param {Object} session - Session object with agent_display, session_id, lines, etc.
+ * @param {string} [idOverride] - Optional pre-computed id string (8 chars)
+ * @param {string} [annoOverride] - Optional pre-computed annotation string
+ * @param {string} [dateOverride] - Optional pre-computed date string
+ * @returns {Array} Array of chalk-styled strings/spans
+ */
+function formatSessionHeader(session, idOverride, annoOverride, dateOverride) {
+  const id = idOverride || (session.session_id || '').slice(0, 8);
+  const anno = annoOverride !== undefined ? annoOverride : toAnno(session);
+  const date = dateOverride || formatDateRange(session.create_time, session.mod_time);
+  const customTitle = session.custom_title;
+
+  const spans = [
+    colorize.agent(`[${session.agent_display || 'CLAUDE'}]`), ' ',
+  ];
+
+  // Add custom title if present
+  if (customTitle) {
+    spans.push(colorize.title(`[${customTitle}]`), ' ');
+  }
+
+  spans.push(
+    chalk.white(id),
+    anno ? ` ${chalk.dim(anno)}` : '',
+    ' | ',
+    colorize.lines(formatLines(session.lines)),
+    ' | ',
+    colorize.date(date)
+  );
+
+  return spans;
+}
 
 // Non-TTY fallback: pick first session and resume
 if (!process.stdout.isTTY) {
@@ -606,9 +644,6 @@ function ConfirmView({session, actionLabel, onConfirm, onBack}) {
     if (key.escape) return onBack();
     if (key.return) return onConfirm();
   });
-  const id = (session.session_id || '').slice(0, 8);
-  const anno = toAnno(session);
-  const date = formatDateRange(session.create_time, session.mod_time);
   const branchDisplay = session.branch ? `${BRANCH_ICON} ${session.branch}` : '';
 
   return h(
@@ -619,14 +654,7 @@ function ConfirmView({session, actionLabel, onConfirm, onBack}) {
       colorize.project(session.project || ''), ' ',
       colorize.branch(branchDisplay)
     ),
-    h(
-      Text,
-      null,
-      colorize.agent(`[${session.agent_display || 'CLAUDE'}]`), ' ',
-      chalk.white(id), anno ? ` ${chalk.dim(anno)}` : '', ' | ',
-      colorize.lines(formatLines(session.lines)), ' | ',
-      colorize.date(date)
-    ),
+    h(Text, null, ...formatSessionHeader(session)),
     h(Box, {marginBottom: 1}, renderPreview(session.preview) || null),
     h(Text, {dimColor: true}, 'Enter: run action & exit  Esc: back')
   );
@@ -663,9 +691,7 @@ function ActionView({session, onBack, onDone, clearScreen}) {
     }
   });
 
-  const id = session.session_id || '';  // Show full session ID in actions view
-  const anno = toAnno(session);
-  const date = formatDateRange(session.create_time, session.mod_time);
+  const fullId = session.session_id || '';  // Show full session ID in actions view
   const branchDisplay = session.branch ? `${BRANCH_ICON} ${session.branch}` : '';
 
   return h(
@@ -680,14 +706,7 @@ function ActionView({session, onBack, onDone, clearScreen}) {
         colorize.project(session.project || ''), ' ',
         colorize.branch(branchDisplay)
       ),
-      h(
-        Text,
-        null,
-        colorize.agent(`[${session.agent_display || 'CLAUDE'}]`), ' ',
-        chalk.white(id), anno ? ` ${chalk.dim(anno)}` : '', ' | ',
-        colorize.lines(formatLines(session.lines)), ' | ',
-        colorize.date(date)
-      ),
+      h(Text, null, ...formatSessionHeader(session, fullId)),
       renderPreview(session.preview),
       // Warning for sub-agent sessions
       session.is_sidechain ? h(
@@ -743,9 +762,6 @@ function ResumeView({onBack, onDone, session, clearScreen}) {
     }
   });
 
-  const id = (session.session_id || '').slice(0, 8);
-  const anno = toAnno(session);
-  const date = formatDateRange(session.create_time, session.mod_time);
   const branchDisplay = session.branch ? `${BRANCH_ICON} ${session.branch}` : '';
 
   return h(
@@ -759,14 +775,7 @@ function ResumeView({onBack, onDone, session, clearScreen}) {
         colorize.project(session.project || ''), ' ',
         colorize.branch(branchDisplay)
       ),
-      h(
-        Text,
-        null,
-        colorize.agent(`[${session.agent_display || 'CLAUDE'}]`), ' ',
-        chalk.white(id), anno ? ` ${chalk.dim(anno)}` : '', ' | ',
-        colorize.lines(formatLines(session.lines)), ' | ',
-        colorize.date(date)
-      ),
+      h(Text, null, ...formatSessionHeader(session)),
       renderPreview(session.preview)
     ),
     h(Box, {marginBottom: 1}),
@@ -816,9 +825,6 @@ function TrimView({onBack, onDone, session, clearScreen}) {
     }
   });
 
-  const id = (session.session_id || '').slice(0, 8);
-  const anno = toAnno(session);
-  const date = formatDateRange(session.create_time, session.mod_time);
   const branchDisplay = session.branch ? `${BRANCH_ICON} ${session.branch}` : '';
 
   return h(
@@ -832,14 +838,7 @@ function TrimView({onBack, onDone, session, clearScreen}) {
         colorize.project(session.project || ''), ' ',
         colorize.branch(branchDisplay)
       ),
-      h(
-        Text,
-        null,
-        colorize.agent(`[${session.agent_display || 'CLAUDE'}]`), ' ',
-        chalk.white(id), anno ? ` ${chalk.dim(anno)}` : '', ' | ',
-        colorize.lines(formatLines(session.lines)), ' | ',
-        colorize.date(date)
-      ),
+      h(Text, null, ...formatSessionHeader(session)),
       renderPreview(session.preview)
     ),
     h(Box, {marginBottom: 1}),
@@ -1094,9 +1093,6 @@ function TrimForm({onSubmit, onBack, clearScreen, session}) {
   });
 
   const arrow = figures.pointer;
-  const id = (session.session_id || '').slice(0, 8);
-  const anno = toAnno(session);
-  const date = formatDateRange(session.create_time, session.mod_time);
   const branchDisplay = session.branch ? `${BRANCH_ICON} ${session.branch}` : '';
 
   return h(
@@ -1110,14 +1106,7 @@ function TrimForm({onSubmit, onBack, clearScreen, session}) {
         colorize.project(session.project || ''), ' ',
         colorize.branch(branchDisplay)
       ),
-      h(
-        Text,
-        null,
-        colorize.agent(`[${session.agent_display || 'CLAUDE'}]`), ' ',
-        chalk.white(id), anno ? ` ${chalk.dim(anno)}` : '', ' | ',
-        colorize.lines(formatLines(session.lines)), ' | ',
-        colorize.date(date)
-      ),
+      h(Text, null, ...formatSessionHeader(session)),
       renderPreview(session.preview)
     ),
     h(Box, {marginBottom: 1}),
@@ -1240,9 +1229,6 @@ function LineageView({session, rpcPath, onContinue, onBack, clearScreen}) {
     }
   });
 
-  const id = (session.session_id || '').slice(0, 8);
-  const anno = toAnno(session);
-  const date = formatDateRange(session.create_time, session.mod_time);
   const branchDisplay = session.branch ? `${BRANCH_ICON} ${session.branch}` : '';
 
   return h(
@@ -1256,14 +1242,7 @@ function LineageView({session, rpcPath, onContinue, onBack, clearScreen}) {
         colorize.project(session.project || ''), ' ',
         colorize.branch(branchDisplay)
       ),
-      h(
-        Text,
-        null,
-        colorize.agent(`[${session.agent_display || 'CLAUDE'}]`), ' ',
-        chalk.white(id), anno ? ` ${chalk.dim(anno)}` : '', ' | ',
-        colorize.lines(formatLines(session.lines)), ' | ',
-        colorize.date(date)
-      )
+      h(Text, null, ...formatSessionHeader(session))
     ),
     h(Box, {marginTop: 1}),
     stage === 'loading'
@@ -1372,9 +1351,6 @@ function ContinueForm({onSubmit, onBack, clearScreen, session}) {
   });
 
   const arrow = figures.pointer;
-  const id = (session.session_id || '').slice(0, 8);
-  const anno = toAnno(session);
-  const date = formatDateRange(session.create_time, session.mod_time);
   const branchDisplay = session.branch ? `${BRANCH_ICON} ${session.branch}` : '';
 
   // Build the value display for each field
@@ -1399,14 +1375,7 @@ function ContinueForm({onSubmit, onBack, clearScreen, session}) {
         colorize.project(session.project || ''), ' ',
         colorize.branch(branchDisplay)
       ),
-      h(
-        Text,
-        null,
-        colorize.agent(`[${session.agent_display || 'CLAUDE'}]`), ' ',
-        chalk.white(id), anno ? ` ${chalk.dim(anno)}` : '', ' | ',
-        colorize.lines(formatLines(session.lines)), ' | ',
-        colorize.date(date)
-      ),
+      h(Text, null, ...formatSessionHeader(session)),
       renderPreview(session.preview)
     ),
     h(Box, {marginBottom: 1}),
@@ -1509,9 +1478,6 @@ function SmartTrimForm({onSubmit, onBack, clearScreen, session}) {
     }
   });
 
-  const id = (session.session_id || '').slice(0, 8);
-  const anno = toAnno(session);
-  const date = formatDateRange(session.create_time, session.mod_time);
   const branchDisplay = session.branch ? `${BRANCH_ICON} ${session.branch}` : '';
 
   // Display: show user's input in yellow, or default in dim gray
@@ -1530,14 +1496,7 @@ function SmartTrimForm({onSubmit, onBack, clearScreen, session}) {
         colorize.project(session.project || ''), ' ',
         colorize.branch(branchDisplay)
       ),
-      h(
-        Text,
-        null,
-        colorize.agent(`[${session.agent_display || 'CLAUDE'}]`), ' ',
-        chalk.white(id), anno ? ` ${chalk.dim(anno)}` : '', ' | ',
-        colorize.lines(formatLines(session.lines)), ' | ',
-        colorize.date(date)
-      ),
+      h(Text, null, ...formatSessionHeader(session)),
       renderPreview(session.preview)
     ),
     h(Box, {marginBottom: 1}),
@@ -1917,14 +1876,7 @@ function QueryView({session, rpcPath, onBack, onExit, clearScreen, exitOnBack = 
       colorize.project(session.project || ''), ' ',
       colorize.branch(branchDisplay)
     ),
-    h(
-      Text,
-      null,
-      colorize.agent(`[${session.agent_display || 'CLAUDE'}]`), ' ',
-      chalk.white(id), anno ? ` ${chalk.dim(anno)}` : '', ' | ',
-      colorize.lines(formatLines(session.lines)), ' | ',
-      colorize.date(date)
-    ),
+    h(Text, null, ...formatSessionHeader(session)),
     stage === 'prompt'
       ? h(
           Box,
@@ -2043,9 +1995,6 @@ function NonLaunchView({session, action, rpcPath, onBack, onExit, clearScreen, e
     }
   });
 
-  const id = (session.session_id || '').slice(0, 8);
-  const anno = toAnno(session);
-  const date = formatDateRange(session.create_time, session.mod_time);
   const branchDisplay = session.branch ? `${BRANCH_ICON} ${session.branch}` : '';
 
   return h(
@@ -2056,14 +2005,7 @@ function NonLaunchView({session, action, rpcPath, onBack, onExit, clearScreen, e
       colorize.project(session.project || ''), ' ',
       colorize.branch(branchDisplay)
     ),
-    h(
-      Text,
-      null,
-      colorize.agent(`[${session.agent_display || 'CLAUDE'}]`), ' ',
-      chalk.white(id), anno ? ` ${chalk.dim(anno)}` : '', ' | ',
-      colorize.lines(formatLines(session.lines)), ' | ',
-      colorize.date(date)
-    ),
+    h(Text, null, ...formatSessionHeader(session)),
     renderPreview(session.preview),
     stage === 'prompt'
       ? (() => {

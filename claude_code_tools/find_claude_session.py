@@ -1593,6 +1593,19 @@ To persist directory changes when resuming sessions:
     rpc_path = str(Path(__file__).parent / "action_rpc.py")
 
     if not args.simple_ui:
+        from claude_code_tools.export_session import extract_session_metadata
+
+        def get_custom_title(session_id: str, cwd: str) -> str:
+            """Extract custom title from session file if present."""
+            try:
+                fp = get_session_file_path(session_id, cwd, args.claude_home)
+                if fp:
+                    meta = extract_session_metadata(Path(fp), "claude")
+                    return meta.get("customTitle", "")
+            except Exception:
+                pass
+            return ""
+
         limited = [
             {
                 "agent": "claude",
@@ -1610,6 +1623,7 @@ To persist directory changes when resuming sessions:
                 "is_trimmed": s[8] if len(s) > 8 else False,
                 "derivation_type": None,
                 "is_sidechain": s[9] if len(s) > 9 else False,
+                "custom_title": get_custom_title(s[0], s[6]),
             }
             for s in matching_sessions[: args.num_matches]
         ]

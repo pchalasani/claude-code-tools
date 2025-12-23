@@ -186,6 +186,9 @@ class SessionIndex:
         # Use "raw" tokenizer so paths are indexed as single tokens for exact matching
         self.schema_builder.add_text_field("claude_home", stored=True, tokenizer_name="raw")
 
+        # Custom title field (from /rename command)
+        self.schema_builder.add_text_field("custom_title", stored=True)
+
         # Searchable content field
         self.schema_builder.add_text_field("content", stored=True)
 
@@ -330,6 +333,9 @@ class SessionIndex:
                 "true" if metadata.get("is_sidechain") else "false"
             )
 
+            # Custom title (from /rename command)
+            doc.add_text("custom_title", metadata.get("customTitle", "") or "")
+
             doc.add_text("content", parsed["content"])
 
             writer.add_document(doc)
@@ -413,6 +419,9 @@ class SessionIndex:
                 "true" if metadata.get("is_sidechain") else "false"
             )
 
+            # Custom title (from /rename command)
+            doc.add_text("custom_title", metadata.get("customTitle", "") or "")
+
             doc.add_text("content", parsed["content"])
 
             writer.add_document(doc)
@@ -469,7 +478,7 @@ class SessionIndex:
 
     def _extract_session_content(
         self, jsonl_path: Path, agent: str
-    ) -> tuple[str, int]:
+    ) -> tuple[str, int, str]:
         """
         Extract searchable content from a session file.
 
@@ -480,10 +489,11 @@ class SessionIndex:
             agent: Agent type ('claude' or 'codex')
 
         Returns:
-            Tuple of (content_string, user_message_count)
+            Tuple of (content_string, user_message_count, custom_title)
         """
         messages = []
         user_count = 0  # Count only user messages for the "lines" metric
+        custom_title = ""  # Session name from /rename command
 
         try:
             with open(jsonl_path, "r", encoding="utf-8") as f:
@@ -495,6 +505,11 @@ class SessionIndex:
                     try:
                         data = json.loads(line)
                     except json.JSONDecodeError:
+                        continue
+
+                    # Check for custom-title (from /rename command)
+                    if data.get("type") == "custom-title":
+                        custom_title = data.get("customTitle", "")
                         continue
 
                     role: Optional[str] = None
@@ -575,7 +590,7 @@ class SessionIndex:
         except (OSError, IOError):
             pass
 
-        return "\n\n".join(messages), user_count
+        return "\n\n".join(messages), user_count, custom_title
 
     def _parse_jsonl_session(self, jsonl_path: Path) -> Optional[dict[str, Any]]:
         """
@@ -599,8 +614,14 @@ class SessionIndex:
             from claude_code_tools.export_session import extract_session_metadata
             metadata = extract_session_metadata(jsonl_path, agent)
 
-            # Extract content for full-text search
-            content, msg_count = self._extract_session_content(jsonl_path, agent)
+            # Extract content for full-text search (also extracts custom_title)
+            content, msg_count, custom_title = self._extract_session_content(
+                jsonl_path, agent
+            )
+
+            # Add custom_title to metadata (extracted during content scan)
+            if custom_title:
+                metadata["customTitle"] = custom_title
 
             if msg_count == 0:
                 return {"_skip_reason": "empty"}
@@ -628,6 +649,7 @@ class SessionIndex:
                     "is_sidechain": metadata.get("is_sidechain", False),
                     "derivation_type": metadata.get("derivation_type", "") or "",
                     "session_type": metadata.get("session_type"),
+                    "customTitle": metadata.get("customTitle", "") or "",
                 },
                 "content": content,
                 "first_msg": first_msg,
@@ -766,6 +788,9 @@ class SessionIndex:
                     "is_sidechain",
                     "true" if metadata.get("is_sidechain") else "false"
                 )
+
+                # Custom title (from /rename command)
+                doc.add_text("custom_title", metadata.get("customTitle", "") or "")
 
                 # Source home (for filtering by source directory)
                 # Detect from path whether this is a Claude or Codex session

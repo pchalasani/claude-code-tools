@@ -865,8 +865,11 @@ def info(session, agent, json_output):
     line_count = sum(1 for _ in open(session_file))
 
     # Extract metadata from session
-    cwd = extract_cwd_from_session(session_file)
+    from claude_code_tools.export_session import extract_session_metadata
+    metadata = extract_session_metadata(session_file, detected_agent)
+    cwd = metadata.get("cwd") or extract_cwd_from_session(session_file)
     project = Path(cwd).name if cwd else "unknown"
+    custom_title = metadata.get("customTitle", "")
     user_msg_count = count_user_messages(session_file, detected_agent)
 
     # Get lineage
@@ -881,6 +884,7 @@ def info(session, agent, json_output):
     info_data = {
         "session_id": session_id,
         "agent": detected_agent,
+        "custom_title": custom_title,
         "file_path": str(session_file),
         "project": project,
         "cwd": cwd,
@@ -898,6 +902,8 @@ def info(session, agent, json_output):
     else:
         print(f"\n{'='*60}")
         print(f"Session: {session_id}")
+        if custom_title:
+            print(f"Title:   {custom_title}")
         print(f"{'='*60}")
         print(f"Agent:      {detected_agent}")
         print(f"Project:    {project}")

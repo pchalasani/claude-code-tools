@@ -115,6 +115,7 @@ struct Session {
     derivation_type: String,  // "trimmed", "continued", or ""
     is_sidechain: bool,       // Sub-agent session
     claude_home: String,      // Source Claude home directory
+    custom_title: String,     // User-assigned session name (from /rename)
 }
 
 impl Session {
@@ -1907,25 +1908,49 @@ fn render_session_list(frame: &mut Frame, app: &mut App, t: &Theme, area: Rect) 
             let indent = " ".repeat(row_num_width + 1);
             let snippet_width = available_width.saturating_sub(row_num_width + 1);
 
+            // Build custom title prefix if present
+            let title_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+            let (title_prefix, title_len) = if !s.custom_title.is_empty() {
+                let prefix = format!("[{}] ", s.custom_title);
+                let len = prefix.len();
+                (Some(prefix), len)
+            } else {
+                (None, 0)
+            };
+            let effective_snippet_width = snippet_width.saturating_sub(title_len);
+
             let snippet_line = if app.query.is_empty() {
                 // No query: show last message content
-                let snippet = truncate(&s.last_msg_content, snippet_width);
-                Line::from(Span::styled(format!("{}...{}", indent, snippet), snippet_style))
+                let snippet = truncate(&s.last_msg_content, effective_snippet_width);
+                let mut spans = vec![Span::styled(indent.clone(), snippet_style)];
+                if let Some(ref tp) = title_prefix {
+                    spans.push(Span::styled(tp.clone(), title_style));
+                }
+                spans.push(Span::styled(format!("...{}", snippet), snippet_style));
+                Line::from(spans)
             } else {
                 // With query: use Tantivy snippet with HTML tags for highlighting
                 if let Some(snippet_html) = app.search_snippets.get(&s.session_id) {
                     // Truncate the plain text version but render with HTML tags
                     let snippet_plain = strip_html_tags(snippet_html);
-                    let truncated_plain = truncate(&snippet_plain, snippet_width);
+                    let truncated_plain = truncate(&snippet_plain, effective_snippet_width);
                     // Find how much of the HTML snippet to use based on plain text length
-                    let mut spans = vec![Span::styled(indent, snippet_style)];
+                    let mut spans = vec![Span::styled(indent.clone(), snippet_style)];
+                    if let Some(ref tp) = title_prefix {
+                        spans.push(Span::styled(tp.clone(), title_style));
+                    }
                     // Truncate HTML snippet approximately (allow extra for tags)
-                    let html_truncated: String = snippet_html.chars().take(snippet_width + 50).collect();
+                    let html_truncated: String = snippet_html.chars().take(effective_snippet_width + 50).collect();
                     spans.extend(render_snippet_with_html_tags(&html_truncated, snippet_style, highlight_style));
                     Line::from(spans)
                 } else {
-                    let snippet = truncate(&s.first_msg_content, snippet_width);
-                    Line::from(Span::styled(format!("{}...{}", indent, snippet), snippet_style))
+                    let snippet = truncate(&s.first_msg_content, effective_snippet_width);
+                    let mut spans = vec![Span::styled(indent.clone(), snippet_style)];
+                    if let Some(ref tp) = title_prefix {
+                        spans.push(Span::styled(tp.clone(), title_style));
+                    }
+                    spans.push(Span::styled(format!("...{}", snippet), snippet_style));
+                    Line::from(spans)
                 }
             };
 
@@ -3110,6 +3135,8 @@ fn load_sessions(index_path: &str, limit: usize) -> Result<Vec<Session>> {
     let is_sidechain_field = schema.get_field("is_sidechain").context("missing is_sidechain")?;
     // claude_home may not exist in older indexes, so make it optional
     let claude_home_field = schema.get_field("claude_home").ok();
+    // custom_title may not exist in older indexes, so make it optional
+    let custom_title_field = schema.get_field("custom_title").ok();
 
     let reader = index
         .reader_builder()
@@ -3150,6 +3177,11 @@ fn load_sessions(index_path: &str, limit: usize) -> Result<Vec<Session>> {
             .map(|f| get_text(f))
             .unwrap_or_default();
 
+        // Get custom_title if field exists, otherwise empty string
+        let custom_title = custom_title_field
+            .map(|f| get_text(f))
+            .unwrap_or_default();
+
         sessions.push(Session {
             session_id: get_text(session_id_field),
             agent: get_text(agent_field),
@@ -3168,6 +3200,7 @@ fn load_sessions(index_path: &str, limit: usize) -> Result<Vec<Session>> {
             derivation_type: get_text(derivation_type_field),
             is_sidechain: is_sidechain_str == "true",
             claude_home,
+            custom_title,
         });
     }
 
@@ -3844,6 +3877,7 @@ fn output_json(app: &App, limit: Option<usize>) -> Result<()> {
             "file_path": s.export_path,
             "derivation_type": s.derivation_type,
             "is_sidechain": s.is_sidechain,
+            "custom_title": s.custom_title,
             "snippet": app.search_snippets.get(&s.session_id).map(|s| strip_html_tags(s)),
         });
         println!("{}", serde_json::to_string(&obj)?);

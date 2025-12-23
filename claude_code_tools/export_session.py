@@ -322,6 +322,9 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
     except (OSError, IOError):
         pass
 
+    # Note: customTitle extraction is done in search_index.py's _extract_session_content
+    # during the single-pass content extraction, to avoid an extra file scan here.
+
     # Get modified time from last JSONL entry's timestamp (reflects actual session
     # activity, portable across machines). Fall back to file mtime if not found.
     last_timestamp = _get_last_line_timestamp(session_file)
