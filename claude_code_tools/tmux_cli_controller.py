@@ -288,7 +288,9 @@ class TmuxCLIController:
             cmd.append('-v')
         
         if size:
-            cmd.extend(['-p', str(size)])
+            # Use -l with % suffix instead of -p for tmux 3.4+ compatibility
+            # See tmux/tmux#3836 for the "size missing" error with -p
+            cmd.extend(['-l', f'{size}%'])
         
         cmd.extend(['-P', '-F', '#{pane_id}'])
         
