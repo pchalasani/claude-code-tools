@@ -416,6 +416,19 @@ The search index is powered by [Tantivy](https://github.com/quickwit-oss/tantivy
 - **Version rebuilds**: Index rebuilds automatically when the tool version changes
 - **Manual rebuild**: Use `aichat clear-index && aichat build-index` if needed
 
+**Storage locations:**
+
+| Path | Description |
+|------|-------------|
+| `~/.cctools/search-index/` | Tantivy full-text search index (auto-managed) |
+| `~/.cctools/config.json` | Optional user configuration overrides |
+| `~/.claude/projects/<project>/` | Claude Code session JSONL files |
+| `~/.codex/sessions/YYYY/MM/DD/` | Codex CLI session JSONL files |
+
+The search index indexes all session JSONL files from both Claude Code and Codex
+locations. To free disk space, you can safely delete `~/.cctools/search-index/` —
+it will be rebuilt automatically on the next `aichat` command.
+
 Run `aichat <command> --help` for options
 
 <a id="tmux-cli-terminal-automation"></a>
