@@ -1957,8 +1957,8 @@ def index_stats(index, cwd, claude_home, codex_home):
 @click.option('--json', 'json_output', is_flag=True,
               help='Output as JSONL for AI agents. Fields per line: session_id, '
                    'agent, project, branch, cwd, lines, created, modified, '
-                   'first_msg, last_msg, file_path, derivation_type, '
-                   'is_sidechain, snippet')
+                   'first_msg, last_msg, first_user_msg, total_tokens, '
+                   'file_path, derivation_type, is_sidechain, snippet')
 @click.option('--by-time', 'by_time', is_flag=True,
               help='Sort results by last-modified time (default: sort by relevance)')
 @click.argument('query', required=False)

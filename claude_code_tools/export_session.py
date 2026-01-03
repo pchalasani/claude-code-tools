@@ -141,20 +141,25 @@ def _extract_codex_message_text(data: dict) -> Optional[str]:
 
 def extract_first_last_messages(
     session_file: Path, agent: str
-) -> tuple[Optional[dict[str, str]], Optional[dict[str, str]]]:
+) -> tuple[
+    Optional[dict[str, str]],
+    Optional[dict[str, str]],
+    Optional[dict[str, str]],
+]:
     """
-    Extract first and last user/assistant messages from a session.
+    Extract first/last messages and the first user message from a session.
 
     Args:
         session_file: Path to session JSONL file
         agent: Agent type ('claude' or 'codex')
 
     Returns:
-        Tuple of (first_msg, last_msg) where each is a dict with 'role' and
-        'content' keys, or None if not found
+        Tuple of (first_msg, last_msg, first_user_msg) where each is a dict
+        with 'role' and 'content' keys, or None if not found
     """
     first_msg: Optional[dict[str, str]] = None
     last_msg: Optional[dict[str, str]] = None
+    first_user_msg: Optional[dict[str, str]] = None
 
     try:
         with open(session_file, "r", encoding="utf-8") as f:
@@ -190,13 +195,15 @@ def extract_first_last_messages(
                     }
                     if first_msg is None:
                         first_msg = msg_dict
+                    if role == "user" and first_user_msg is None:
+                        first_user_msg = msg_dict
                     # Always update last_msg to get the last one
                     last_msg = msg_dict
 
     except (OSError, IOError):
         pass
 
-    return first_msg, last_msg
+    return first_msg, last_msg, first_user_msg
 
 
 def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
@@ -236,6 +243,8 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
         "trim_stats": None,
         "first_msg": None,
         "last_msg": None,
+        "first_user_msg": None,
+        "total_tokens": None,
     }
 
     # Track session start timestamp from JSON metadata
@@ -359,10 +368,36 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
         except OSError:
             pass
 
-    # Count lines
+    # Count lines and capture latest total token count (if present)
     try:
+        total_tokens: Optional[int] = None
+        line_count = 0
         with open(session_file, "r", encoding="utf-8") as f:
-            metadata["lines"] = sum(1 for _ in f)
+            for line in f:
+                line_count += 1
+                if "token_count" not in line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if data.get("type") != "event_msg":
+                    continue
+                payload = data.get("payload", {})
+                if payload.get("type") != "token_count":
+                    continue
+                info = payload.get("info", {})
+                total_usage = info.get("total_token_usage", {})
+                total_value = total_usage.get("total_tokens")
+                if total_value is None:
+                    continue
+                try:
+                    total_tokens = int(total_value)
+                except (TypeError, ValueError):
+                    continue
+        metadata["lines"] = line_count
+        if total_tokens is not None:
+            metadata["total_tokens"] = total_tokens
     except (OSError, IOError):
         metadata["lines"] = 0
 
@@ -371,9 +406,12 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
         metadata["project"] = Path(metadata["cwd"]).name
 
     # Extract first and last messages
-    first_msg, last_msg = extract_first_last_messages(session_file, agent)
+    first_msg, last_msg, first_user_msg = extract_first_last_messages(
+        session_file, agent
+    )
     metadata["first_msg"] = first_msg
     metadata["last_msg"] = last_msg
+    metadata["first_user_msg"] = first_user_msg
 
     return metadata
 
@@ -436,6 +474,8 @@ def generate_yaml_frontmatter(metadata: dict[str, Any]) -> str:
     # Stats
     if metadata.get("lines"):
         yaml_data["lines"] = metadata["lines"]
+    if metadata.get("total_tokens") is not None:
+        yaml_data["total_tokens"] = metadata["total_tokens"]
     if metadata.get("created"):
         yaml_data["created"] = metadata["created"]
     if metadata.get("modified"):
@@ -458,6 +498,8 @@ def generate_yaml_frontmatter(metadata: dict[str, Any]) -> str:
         yaml_data["first_msg"] = metadata["first_msg"]
     if metadata.get("last_msg"):
         yaml_data["last_msg"] = metadata["last_msg"]
+    if metadata.get("first_user_msg"):
+        yaml_data["first_user_msg"] = metadata["first_user_msg"]
 
     # Trim stats (only for trimmed sessions)
     if metadata.get("trim_stats"):

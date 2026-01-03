@@ -112,6 +112,8 @@ struct Session {
     first_msg_content: String,
     last_msg_role: String,
     last_msg_content: String,
+    first_user_msg_content: String,
+    total_tokens: i64,
     derivation_type: String,  // "trimmed", "continued", or ""
     is_sidechain: bool,       // Sub-agent session
     claude_home: String,      // Source Claude home directory
@@ -1995,9 +1997,20 @@ fn render_preview(frame: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
     let bubble_width = area.width.saturating_sub(4) as usize;
     let mut lines: Vec<Line> = Vec::new();
 
-    // First message - labeled as "FIRST MESSAGE"
-    if !s.first_msg_content.is_empty() {
-        let (role_label, label_color, bubble_bg) = if s.first_msg_role == "user" {
+    // First user message (fallback to first message) - labeled as "FIRST"
+    // Prefer first_user_msg_content to avoid showing AGENTS.md preload
+    let first_preview_content = if !s.first_user_msg_content.is_empty() {
+        &s.first_user_msg_content
+    } else {
+        &s.first_msg_content
+    };
+    let first_preview_role = if !s.first_user_msg_content.is_empty() {
+        "user"
+    } else {
+        s.first_msg_role.as_str()
+    };
+    if !first_preview_content.is_empty() {
+        let (role_label, label_color, bubble_bg) = if first_preview_role == "user" {
             ("User", t.user_label, t.user_bubble_bg)
         } else if s.agent == "claude" {
             ("Claude", t.claude_source, t.claude_bubble_bg)
@@ -2010,7 +2023,7 @@ fn render_preview(frame: &mut Frame, app: &mut App, t: &Theme, area: Rect) {
             Span::styled(role_label, Style::default().fg(label_color).add_modifier(Modifier::BOLD)),
         ]));
 
-        for wrapped in wrap_text(&s.first_msg_content, bubble_width).iter().take(6) {
+        for wrapped in wrap_text(first_preview_content, bubble_width).iter().take(6) {
             let padding = bubble_width.saturating_sub(wrapped.chars().count());
             lines.push(Line::from(vec![
                 Span::styled(" ", Style::default().bg(bubble_bg)),
@@ -3144,6 +3157,8 @@ fn load_sessions(index_path: &str, limit: usize) -> Result<Vec<Session>> {
     let first_msg_content_field = schema.get_field("first_msg_content").context("missing first_msg_content")?;
     let last_msg_role_field = schema.get_field("last_msg_role").context("missing last_msg_role")?;
     let last_msg_content_field = schema.get_field("last_msg_content").context("missing last_msg_content")?;
+    let first_user_msg_content_field = schema.get_field("first_user_msg_content").ok();
+    let total_tokens_field = schema.get_field("total_tokens").ok();
     let derivation_type_field = schema.get_field("derivation_type").context("missing derivation_type")?;
     let is_sidechain_field = schema.get_field("is_sidechain").context("missing is_sidechain")?;
     // claude_home may not exist in older indexes, so make it optional
@@ -3175,6 +3190,10 @@ fn load_sessions(index_path: &str, limit: usize) -> Result<Vec<Session>> {
 
         let lines = doc
             .get_first(lines_field)
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let total_tokens = total_tokens_field
+            .and_then(|f| doc.get_first(f))
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
 
@@ -3210,6 +3229,10 @@ fn load_sessions(index_path: &str, limit: usize) -> Result<Vec<Session>> {
             first_msg_content: get_text(first_msg_content_field),
             last_msg_role: get_text(last_msg_role_field),
             last_msg_content: get_text(last_msg_content_field),
+            first_user_msg_content: first_user_msg_content_field
+                .map(|f| get_text(f))
+                .unwrap_or_default(),
+            total_tokens,
             derivation_type: get_text(derivation_type_field),
             is_sidechain: is_sidechain_str == "true",
             claude_home,
@@ -3907,6 +3930,8 @@ fn output_json(app: &App, limit: Option<usize>) -> Result<()> {
             "modified": s.modified,
             "first_msg": s.first_msg_content,
             "last_msg": s.last_msg_content,
+            "first_user_msg": s.first_user_msg_content,
+            "total_tokens": s.total_tokens,
             "file_path": s.export_path,
             "derivation_type": s.derivation_type,
             "is_sidechain": s.is_sidechain,
