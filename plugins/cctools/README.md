@@ -4,8 +4,9 @@ Setup wizard for the claude-code-tools suite.
 
 ## What it does
 
-This plugin provides a single skill `/cctools:setup` that walks you through
-installing all CLI tools and plugins from the claude-code-tools repository.
+This plugin provides the `/cctools:setup` command that walks you through
+installing all CLI tools and plugins. Claude explains what each tool does
+and asks permission before installing.
 
 ## Usage
 
@@ -17,16 +18,19 @@ After installing this plugin, run:
 
 Or just ask Claude: "set up my claude-code-tools"
 
-Claude will guide you through:
+## What Gets Installed
 
-1. **Prerequisites** - uv, cargo/brew, Node.js
-2. **CLI tools** - the Python package with `aichat`, `tmux-cli`, `vault`, `env-safe`
-3. **Rust binary** - `aichat-search` for fast session search (optional)
-4. **Plugins** - choose which plugins you want:
-   - `aichat` - session search, resume, context recovery
-   - `tmux-cli` - terminal automation skill
-   - `workflow` - work logging, code walk-through, issue specs
-   - `safety-hooks` - protect against destructive commands
+**CLI tools** (Python package):
+- `aichat` - session search, resume, trim, rollover (continue work without compaction)
+- `tmux-cli` - terminal automation ("Playwright for terminals")
+- `vault` - encrypted .env backup/sync
+- `env-safe` - safely inspect .env files
 
-Each step explains what the tool does and asks for your permission before
-installing.
+**Rust binary** (optional):
+- `aichat-search` - fast full-text session search TUI
+
+**Plugins** (choose which you want):
+- `aichat` - `>resume` hook, session-searcher agent, /recover-context
+- `tmux-cli` - /tmux-cli skill for terminal automation
+- `workflow` - /code-walk-thru, /log-work, /make-issue-spec, ui-tester agent
+- `safety-hooks` - blocks dangerous rm, git add -A, .env access

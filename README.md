@@ -202,7 +202,7 @@ The `cctools` plugin provides the setup wizard:
 
 | Type | Name | What it does |
 |------|------|--------------|
-| Skill | `/setup` | Guided installation of all CLI tools and plugins |
+| Command | `/setup` | Guided installation of all CLI tools and plugins |
 
 <a id="aichat-plugin-details"></a>
 
