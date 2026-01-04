@@ -42,7 +42,7 @@ installing anything.
 
 ### Step 1: Check Current State
 
-Run these checks and summarize for the user:
+Run these checks:
 
 ```bash
 # Prerequisites
@@ -64,28 +64,32 @@ command -v aichat-search && aichat-search --version
 claude plugin list 2>/dev/null | grep cctools || echo "No cctools plugins found"
 ```
 
-Tell the user what's already installed and what's missing.
+**Report to the user:**
+- What's already installed (skip these in later steps)
+- What's missing (offer to install these in later steps)
+
+For all subsequent steps: if a component is already installed, skip it. Only ask
+about components that are missing.
 
 ### Step 2: Install Prerequisites
 
-For each missing prerequisite, explain and ask permission:
+**Node.js 16+** is required for action menus.
 
-**uv** (Python package manager):
-- What: Modern, fast Python package manager from Astral
-- Why needed: Installs the claude-code-tools Python package
-- Install: `curl -LsSf https://astral.sh/uv/install.sh | sh`
-- After: User may need to restart shell or `source ~/.local/bin/env`
+If missing, suggest the user install via their preferred method (e.g., from
+https://nodejs.org/ or their system package manager).
 
-**cargo** (Rust toolchain) - only if user wants aichat-search:
-- What: Rust compiler and package manager
-- Why needed: Compiles aichat-search from source (alternative: homebrew)
-- Install: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-- After: User needs to restart shell or `source "$HOME/.cargo/env"`
+**uv** is required to install the Python package. If missing:
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+After: User may need to restart shell or `source ~/.local/bin/env`
 
-**Node.js 16+**:
-- What: JavaScript runtime
-- Why needed: Powers the action menus in aichat (resume, export, etc.)
-- Install: Suggest `brew install node` or https://nodejs.org/
+**cargo** is only needed if user wants to install aichat-search via cargo
+(homebrew is an alternative). If missing and needed:
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+After: User needs to restart shell or `source "$HOME/.cargo/env"`
 
 ### Step 3: Install CLI Tools
 
@@ -103,17 +107,15 @@ Verify:
 aichat --help | head -3
 ```
 
-### Step 4: Install aichat-search (Optional)
+### Step 4: Install aichat-search
 
-Ask: "Do you want fast full-text session search? This requires the aichat-search
-Rust binary."
+If missing, ask the user: "Do you want fast full-text session search? This
+requires the aichat-search Rust binary. Without it, `aichat search` won't work,
+but other aichat commands (resume, trim, rollover) still function."
 
-Explain: Without this, `aichat search` won't work, but other aichat commands
-(resume, trim, rollover) still function.
+If user says yes, offer these three options:
 
-If yes, offer three options:
-
-**Option A - Homebrew** (easiest if brew is installed):
+**Option A - Homebrew** (macOS/Linux):
 ```bash
 brew install pchalasani/tap/aichat-search
 ```
