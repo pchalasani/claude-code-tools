@@ -51,22 +51,10 @@ When using `--json`, each result line contains:
 
 ## Installation
 
-### Easy Way (Recommended)
+**Easiest:** Install the `cctools` plugin first and run `/cctools:setup` - it will
+guide you through installing everything including this plugin.
 
-After installing this plugin, run the setup skill:
-
-```
-/aichat:setup
-```
-
-Or just ask Claude: "install my aichat tools"
-
-Claude will guide you through installing all dependencies, asking for permission
-before each step.
-
-### Manual Installation
-
-If you prefer to install manually:
+**Manual installation:**
 
 ```bash
 uv tool install claude-code-tools   # Python package

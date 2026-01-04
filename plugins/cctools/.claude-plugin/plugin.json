@@ -1,0 +1,8 @@
+{
+  "name": "cctools",
+  "version": "0.1.0",
+  "description": "Setup wizard for claude-code-tools - guides installation of all CLI tools and plugins",
+  "author": {
+    "name": "Prasad Chalasani"
+  }
+}

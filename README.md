@@ -102,15 +102,16 @@ CLI commands, skills, agents, hooks, plugins. Click on a card below to navigate.
 
 ### Easiest: Let Claude Do It (Claude Code users)
 
-Install the `aichat` plugin and let Claude handle the rest:
+Install the `cctools` plugin and let Claude handle the rest:
 
 ```bash
 claude plugin marketplace add pchalasani/claude-code-tools
-claude plugin install "aichat@cctools-plugins"
+claude plugin install "cctools@cctools-plugins"
 ```
 
-Then in Claude Code, run `/aichat:setup` (or just say "install my aichat tools").
-Claude will guide you through installing all dependencies.
+Then in Claude Code, run `/cctools:setup` (or just say "set up my claude-code-tools").
+Claude will walk you through each tool, explain what it does, and install only
+what you want.
 
 > **Codex CLI users:** Use the manual installation below.
 
@@ -162,6 +163,7 @@ This repo also provides plugins for the
 
 | Plugin | Description |
 |--------|-------------|
+| `cctools` | **Start here!** Setup wizard - guides installation of all tools and plugins |
 | `aichat` | hooks (`>resume`), commands, skills, agents for continuing session work and fast full-text search of sessions|
 | `tmux-cli` | Terminal automation skill for interacting with other tmux panes |
 | `workflow` | Work logging, code walk-through, issue specs, UI testing |
@@ -194,6 +196,14 @@ claude plugin install "safety-hooks@cctools-plugins"
 
 You can also use `/plugin` without arguments to launch a TUI for browsing and installing.
 
+#### cctools Plugin Details
+
+The `cctools` plugin provides the setup wizard:
+
+| Type | Name | What it does |
+|------|------|--------------|
+| Skill | `/setup` | Guided installation of all CLI tools and plugins |
+
 <a id="aichat-plugin-details"></a>
 
 #### aichat Plugin Details
@@ -202,7 +212,6 @@ The `aichat` plugin provides:
 
 | Type | Name | What it does |
 |------|------|--------------|
-| Skill | `/setup` | **Start here!** Guided installation of aichat tools and dependencies |
 | Hook | `>resume` | Type `>resume` (or `>continue`, `>handoff`) to trigger session handoff flow |
 | Skill | `/session-search` | Search past sessions (for agents without sub-agent support, e.g. Codex) |
 | Skill | `/recover-context` | Extract context from parent sessions into current conversation |
