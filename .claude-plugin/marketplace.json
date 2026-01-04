@@ -6,6 +6,11 @@
   },
   "plugins": [
     {
+      "name": "cctools",
+      "source": "./plugins/cctools",
+      "description": "Setup wizard - guides installation of all claude-code-tools CLI commands and plugins"
+    },
+    {
       "name": "safety-hooks",
       "source": "./plugins/safety-hooks",
       "description": "Provides safety guards to block or require confirmation for risky CLI operations (e.g., rm, destructive git actions, .env access, large file operations)"
