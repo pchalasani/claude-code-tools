@@ -51,17 +51,33 @@ When using `--json`, each result line contains:
 
 ## Installation
 
-This plugin requires the `claude-code-tools` and `aichat-search` packages:
+### Easy Way (Recommended)
+
+After installing this plugin, run the setup skill:
+
+```
+/aichat:setup
+```
+
+Or just ask Claude: "install my aichat tools"
+
+Claude will guide you through installing all dependencies, asking for permission
+before each step.
+
+### Manual Installation
+
+If you prefer to install manually:
 
 ```bash
 uv tool install claude-code-tools   # Python package
-cargo install aichat-search         # Rust search TUI
+cargo install aichat-search         # Rust search TUI (or: brew install pchalasani/tap/aichat-search)
 ```
 
 Prerequisites:
 
 - Node.js 16+ - for action menus (resume, export, etc.)
-- Rust/Cargo - for aichat search
+- uv - Python package manager
+- Rust/Cargo OR Homebrew - for aichat-search
 
 If you don't have uv or cargo:
 

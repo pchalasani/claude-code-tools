@@ -100,6 +100,25 @@ CLI commands, skills, agents, hooks, plugins. Click on a card below to navigate.
 <a id="quick-start"></a>
 ## 🚀 Quick Start
 
+### Easiest: Let Claude Do It (Claude Code users)
+
+Install the `aichat` plugin and let Claude handle the rest:
+
+```bash
+claude plugin marketplace add pchalasani/claude-code-tools
+claude plugin install "aichat@cctools-plugins"
+```
+
+Then in Claude Code, run `/aichat:setup` (or just say "install my aichat tools").
+Claude will guide you through installing all dependencies.
+
+> **Codex CLI users:** Use the manual installation below.
+
+### Manual Installation
+
+<details>
+<summary>Click to expand manual steps</summary>
+
 **Prerequisites:** Node.js 16+ (required for action menus)
 
 **Step 1:** Install the Python package (includes Node.js UI components):
@@ -117,6 +136,8 @@ Choose **one** of these methods:
 That's it! No `npm install` needed — the Python package includes pre-installed Node.js dependencies.
 
 Without `aichat-search`, search won't work, but other `aichat` commands (resume, trim, rollover, etc.) still function.
+
+</details>
 
 ### What You Get
 
@@ -181,6 +202,7 @@ The `aichat` plugin provides:
 
 | Type | Name | What it does |
 |------|------|--------------|
+| Skill | `/setup` | **Start here!** Guided installation of aichat tools and dependencies |
 | Hook | `>resume` | Type `>resume` (or `>continue`, `>handoff`) to trigger session handoff flow |
 | Skill | `/session-search` | Search past sessions (for agents without sub-agent support, e.g. Codex) |
 | Skill | `/recover-context` | Extract context from parent sessions into current conversation |
