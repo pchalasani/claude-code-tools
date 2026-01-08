@@ -37,6 +37,7 @@ def _load_alias_cache() -> dict[str, str]:
             text=True,
             timeout=5,
             stdin=subprocess.DEVNULL,  # Explicitly close stdin
+            start_new_session=True,  # Isolate from terminal control
             env={**os.environ, 'PS1': '', 'TERM': 'dumb'},
         )
         output = result.stdout
