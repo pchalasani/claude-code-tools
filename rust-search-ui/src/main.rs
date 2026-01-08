@@ -23,7 +23,8 @@ use ratatui::{
 };
 use serde::Serialize;
 use std::io::{self, stdout};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use std::process::Command;
 use std::collections::{HashMap, HashSet};
 use tantivy::{
     collector::TopDocs,
@@ -308,6 +309,17 @@ impl Session {
 }
 
 // ============================================================================
+// Live Session State
+// ============================================================================
+
+/// Represents the state of a running CLI session process
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum ProcessState {
+    Running,  // R state - actively processing
+    Waiting,  // S state - waiting for user input
+}
+
+// ============================================================================
 // App State
 // ============================================================================
 
@@ -397,6 +409,11 @@ struct App {
 
     // Temporary status message (e.g., "Copied to clipboard")
     status_message: Option<String>,
+
+    // Live session tracking
+    live_sessions: HashMap<String, ProcessState>, // cwd -> ProcessState
+    include_live_only: bool,                      // Filter toggle for ! key
+    last_process_scan: Instant,                   // For auto-refresh timing
 }
 
 #[derive(Clone, PartialEq)]
@@ -677,6 +694,10 @@ impl App {
             confirming_delete: false,
             // Status message
             status_message: None,
+            // Live session tracking
+            live_sessions: scan_running_sessions(),
+            include_live_only: false,
+            last_process_scan: Instant::now(),
         };
         app.filter();
         app
@@ -775,6 +796,10 @@ impl App {
             confirming_delete: false,
             // Status message
             status_message: None,
+            // Live session tracking
+            live_sessions: scan_running_sessions(),
+            include_live_only: false,
+            last_process_scan: Instant::now(),
         };
         app.filter();
 
@@ -794,6 +819,11 @@ impl App {
         }
 
         app
+    }
+
+    /// Get the live state of a session by looking up its session_id in live_sessions
+    fn get_session_live_state(&self, session: &Session) -> Option<ProcessState> {
+        self.live_sessions.get(&session.session_id).copied()
     }
 
     fn filter(&mut self) {
@@ -955,6 +985,14 @@ impl App {
         // Apply max_results limit if specified
         if let Some(limit) = self.max_results {
             self.filtered.truncate(limit);
+        }
+
+        // Filter to live sessions only if enabled
+        if self.include_live_only {
+            self.filtered.retain(|&idx| {
+                let s = &self.sessions[idx];
+                self.live_sessions.contains_key(&s.session_id)
+            });
         }
 
         self.selected = 0;
@@ -1868,6 +1906,19 @@ fn render_session_list(frame: &mut Frame, app: &mut App, t: &Theme, area: Rect) 
                 ("■", "CDX")
             };
 
+            // Determine icon style based on live session state
+            let icon_style = if let Some(state) = app.get_session_live_state(s) {
+                match state {
+                    ProcessState::Running => Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::SLOW_BLINK),
+                    ProcessState::Waiting => Style::default()
+                        .fg(Color::Red),
+                }
+            } else {
+                Style::default().fg(source_color)
+            };
+
             // Format: row# [icon Agent] session_id | project | branch | lines | date
             let row_num_str = format!("{:>width$}", row_num, width = row_num_width);
             let session_display = format!("{:<width$}", s.session_id_display(), width = max_session_id_len);
@@ -1885,7 +1936,7 @@ fn render_session_list(frame: &mut Frame, app: &mut App, t: &Theme, area: Rect) 
 
             let header_spans = vec![
                 Span::styled(format!("{} ", row_num_str), Style::default().fg(t.dim_fg)),
-                Span::styled(format!("{} {} ", agent_icon, agent_abbrev), Style::default().fg(source_color)),
+                Span::styled(format!("{} {} ", agent_icon, agent_abbrev), icon_style),
                 Span::styled(session_display, Style::default().fg(t.dim_fg)),
                 Span::styled(sep, sep_style),
                 Span::styled(project_padded, header_style),
@@ -2129,7 +2180,8 @@ fn render_status_bar(frame: &mut Frame, app: &App, t: &Theme, area: Rect, show_l
         || app.filter_min_lines.is_some()
         || app.filter_after_date.is_some()
         || app.filter_before_date.is_some()
-        || (!app.scope_global && app.filter_branch.is_some());
+        || (!app.scope_global && app.filter_branch.is_some())
+        || app.include_live_only;
 
     let needs_legend_row = show_legend || has_filters;
 
@@ -2207,6 +2259,9 @@ fn render_status_bar(frame: &mut Frame, app: &App, t: &Theme, area: Rect, show_l
             Span::styled(" C-s ", keycap),
             Span::styled(if app.sort_by_time { " match-sort " } else { " time-sort " }, label),
             Span::styled("│ ", dim),
+            Span::styled(" ! ", keycap),
+            Span::styled(" live", label),
+            Span::styled("│ ", dim),
             Span::styled(" Esc ", keycap),
             Span::styled(" quit", label),
         ]);
@@ -2263,6 +2318,10 @@ fn render_status_bar(frame: &mut Frame, app: &App, t: &Theme, area: Rect, show_l
             if let Some(ref branch) = app.filter_branch {
                 row3_spans.push(Span::styled(format!(" [⎇ {}]", branch), filter_active));
             }
+        }
+        // Live sessions filter
+        if app.include_live_only {
+            row3_spans.push(Span::styled(" [LIVE]", Style::default().fg(Color::Green)));
         }
 
         let legend_row = Paragraph::new(Line::from(row3_spans));
@@ -3130,6 +3189,140 @@ fn format_time_ago(modified: &str) -> String {
     } else {
         dt.format("%b %d").to_string()
     }
+}
+
+// ============================================================================
+// Live Session Detection
+// ============================================================================
+
+/// Scan for running claude/codex CLI processes and return a map of session_id -> ProcessState
+fn scan_running_sessions() -> HashMap<String, ProcessState> {
+    let mut result = HashMap::new();
+
+    // First, collect CWD -> ProcessState for all running claude/codex processes
+    let mut cwd_states: HashMap<String, ProcessState> = HashMap::new();
+
+    // Run: ps -eo pid,stat,comm to get PID, status, and command name
+    let ps_output = match Command::new("ps")
+        .args(["-eo", "pid,stat,comm"])
+        .output()
+    {
+        Ok(output) => output,
+        Err(_) => return result,
+    };
+
+    let ps_str = String::from_utf8_lossy(&ps_output.stdout);
+
+    // Parse ps output to find claude/codex processes
+    for line in ps_str.lines().skip(1) {
+        // Skip header
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 3 {
+            continue;
+        }
+
+        let pid = parts[0];
+        let stat = parts[1];
+        let comm = parts[2];
+
+        // Check if it's a claude or codex process
+        // comm might be truncated, so check for partial matches
+        let is_agent = comm.contains("claude") || comm.contains("codex");
+        if !is_agent {
+            continue;
+        }
+
+        // Determine process state from stat column
+        // R = running, S = sleeping (waiting), T = stopped
+        let state = if stat.starts_with('R') {
+            ProcessState::Running
+        } else {
+            ProcessState::Waiting
+        };
+
+        // Get the CWD for this process using lsof (works on macOS and Linux)
+        let cwd = get_process_cwd(pid);
+        if let Some(cwd_path) = cwd {
+            // If we already have this CWD, prefer Running over Waiting
+            cwd_states
+                .entry(cwd_path)
+                .and_modify(|existing| {
+                    if state == ProcessState::Running {
+                        *existing = ProcessState::Running;
+                    }
+                })
+                .or_insert(state);
+        }
+    }
+
+    // Now look up session IDs from ~/.claude/.claude.json
+    // The file has a "projects" map: { "/path/to/dir": { "lastSessionId": "uuid", ... }, ... }
+    if let Some(claude_config) = load_claude_config() {
+        for (cwd, state) in &cwd_states {
+            if let Some(session_id) = claude_config.get(cwd) {
+                result.insert(session_id.clone(), *state);
+            }
+        }
+    }
+
+    // TODO: Add similar lookup for Codex sessions from ~/.codex/ if needed
+
+    result
+}
+
+/// Load the lastSessionId mapping from ~/.claude/.claude.json
+fn load_claude_config() -> Option<HashMap<String, String>> {
+    let home = dirs::home_dir()?;
+    let config_path = home.join(".claude").join(".claude.json");
+
+    let content = std::fs::read_to_string(&config_path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    let projects = json.get("projects")?.as_object()?;
+
+    let mut result = HashMap::new();
+    for (path, project_data) in projects {
+        if let Some(session_id) = project_data.get("lastSessionId").and_then(|v| v.as_str()) {
+            result.insert(path.clone(), session_id.to_string());
+        }
+    }
+
+    Some(result)
+}
+
+/// Get the current working directory of a process by PID
+fn get_process_cwd(pid: &str) -> Option<String> {
+    // Try lsof first (works on macOS and Linux)
+    let lsof_output = Command::new("lsof")
+        .args(["-p", pid, "-Fn"])
+        .output()
+        .ok()?;
+
+    let lsof_str = String::from_utf8_lossy(&lsof_output.stdout);
+
+    // lsof -Fn output format: lines starting with 'n' contain the path
+    // On macOS: 'fcwd' line followed by 'n' line (f = file descriptor type)
+    // On Linux: 'tcwd' line followed by 'n' line (t = type)
+    let mut found_cwd = false;
+    for line in lsof_str.lines() {
+        if line == "fcwd" || line == "tcwd" {
+            found_cwd = true;
+        } else if found_cwd && line.starts_with('n') {
+            return Some(line[1..].to_string());
+        } else if line.starts_with('f') || line.starts_with('t') {
+            found_cwd = false;
+        }
+    }
+
+    // Fallback for Linux: try reading /proc/<pid>/cwd
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(cwd) = std::fs::read_link(format!("/proc/{}/cwd", pid)) {
+            return Some(cwd.to_string_lossy().to_string());
+        }
+    }
+
+    None
 }
 
 // ============================================================================
@@ -4165,6 +4358,8 @@ fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    const PROCESS_REFRESH_INTERVAL_MS: u128 = 2000; // Refresh live session state every 2 seconds
+
     loop {
         terminal.draw(|f| render(f, &mut app))?;
 
@@ -4172,6 +4367,14 @@ fn main() -> Result<()> {
             break;
         }
 
+        // Check if we need to refresh live session state
+        let now = Instant::now();
+        if now.duration_since(app.last_process_scan).as_millis() >= PROCESS_REFRESH_INTERVAL_MS {
+            app.live_sessions = scan_running_sessions();
+            app.last_process_scan = now;
+        }
+
+        // Drain all pending events (non-blocking)
         while event::poll(Duration::from_millis(0))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
@@ -4837,6 +5040,18 @@ fn main() -> Result<()> {
                                 app.sort_by_time = !app.sort_by_time;
                                 app.filter(); // Re-sort results
                             }
+                            KeyCode::Char('!') => {
+                                // Toggle live sessions filter
+                                app.include_live_only = !app.include_live_only;
+                                app.filter();
+                                app.status_message = Some(
+                                    if app.include_live_only {
+                                        "Filter: Live sessions only".to_string()
+                                    } else {
+                                        "Filter: All sessions".to_string()
+                                    }
+                                );
+                            }
                             KeyCode::Char(c) => app.on_char(c),
                             _ => {}
                         }
@@ -4845,7 +5060,8 @@ fn main() -> Result<()> {
             }
         }
 
-        std::thread::sleep(Duration::from_millis(16));
+        // Sleep briefly - short enough to check for live session updates regularly
+        std::thread::sleep(Duration::from_millis(100));
     }
 
     disable_raw_mode()?;
