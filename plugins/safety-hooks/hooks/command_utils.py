@@ -11,7 +11,9 @@ def _load_alias_cache() -> dict[str, str]:
     """
     Load all shell aliases into a cache dict.
 
-    Runs $SHELL -i -c 'alias' once and parses all aliases.
+    Sources the shell rc file and runs 'alias' to get all aliases.
+    Avoids -i (interactive) flag to prevent TTY issues when run as
+    a background process by Claude Code.
     Returns empty dict on failure.
     """
     global _alias_cache
@@ -22,12 +24,20 @@ def _load_alias_cache() -> dict[str, str]:
     shell = os.environ.get('SHELL', '/bin/bash')
 
     try:
+        # Avoid -i (interactive) flag which can cause TTY issues
+        # Source rc file explicitly to get aliases without interactive mode
+        if 'zsh' in shell:
+            cmd = [shell, '-c', 'source ~/.zshrc 2>/dev/null; alias']
+        else:
+            cmd = [shell, '-c', 'source ~/.bashrc 2>/dev/null; alias']
+
         result = subprocess.run(
-            [shell, '-i', '-c', 'alias'],
+            cmd,
             capture_output=True,
             text=True,
             timeout=5,
-            env={**os.environ, 'PS1': ''},
+            stdin=subprocess.DEVNULL,  # Explicitly close stdin
+            env={**os.environ, 'PS1': '', 'TERM': 'dumb'},
         )
         output = result.stdout
 
@@ -67,7 +77,7 @@ def expand_alias(command: str) -> str:
     Expand shell alias in the first token of a command.
 
     Uses cached alias lookups for performance. The cache is populated
-    once per hook invocation by running $SHELL -i -c 'alias'.
+    once per hook invocation by sourcing the shell rc file.
 
     Args:
         command: A single bash command (not compound).
