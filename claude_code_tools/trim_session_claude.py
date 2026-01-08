@@ -216,16 +216,19 @@ def process_claude_session(
                 outfile.write(line)
                 continue
 
-            # Skip "context full" error messages - these are synthetic errors
-            # that indicate the parent session hit context limits. We don't
-            # want these in the trimmed session as they'll block resumption.
+            # Neutralize "context full" error markers - these indicate the parent
+            # session hit context limits. We keep the lines (to preserve UUID chain)
+            # but remove the error signals so Claude Code won't block resumption.
             if data.get("error") == "invalid_request":
-                continue
+                data["error"] = None
             if data.get("isApiErrorMessage") is True:
-                continue
+                data["isApiErrorMessage"] = False
             msg = data.get("message", {})
             if msg.get("model") == "<synthetic>":
-                continue
+                # Replace synthetic error message with a note
+                msg["model"] = "trimmed"
+                if "content" in msg:
+                    msg["content"] = [{"type": "text", "text": "[Context limit reached in parent session - trimmed]"}]
 
             # Trim assistant messages if needed
             if data.get("type") == "assistant" and line_num in assistant_indices_to_trim:
