@@ -216,6 +216,17 @@ def process_claude_session(
                 outfile.write(line)
                 continue
 
+            # Skip "context full" error messages - these are synthetic errors
+            # that indicate the parent session hit context limits. We don't
+            # want these in the trimmed session as they'll block resumption.
+            if data.get("error") == "invalid_request":
+                continue
+            if data.get("isApiErrorMessage") is True:
+                continue
+            msg = data.get("message", {})
+            if msg.get("model") == "<synthetic>":
+                continue
+
             # Trim assistant messages if needed
             if data.get("type") == "assistant" and line_num in assistant_indices_to_trim:
                 content = data.get("message", {}).get("content", [])
