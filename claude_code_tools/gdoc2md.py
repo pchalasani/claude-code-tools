@@ -11,6 +11,7 @@ Prerequisites:
 """
 
 import argparse
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -19,6 +20,65 @@ from rich.console import Console
 from rich.panel import Panel
 
 console = Console()
+
+
+def strip_base64_images(content: str) -> str:
+    """
+    Replace base64-encoded images with placeholder text.
+
+    Handles both:
+    - Inline: ![alt](data:image/...;base64,...)
+    - Reference-style (Google Docs format):
+        ![][image1] in text
+        [image1]: <data:image/...;base64,...> at end
+
+    Replaces with blockquote placeholders visible in rendered markdown.
+    """
+    # Pattern 1: Inline base64 images
+    inline_pattern = r'!\[([^\]]*)\]\(data:image/[^;]+;base64,[^)]+\)'
+
+    counter = [0]
+
+    def inline_replacer(match: re.Match) -> str:
+        counter[0] += 1
+        alt_text = match.group(1).strip()
+        if alt_text:
+            return f'\n> 🖼️ **IMAGE PLACEHOLDER:** {alt_text}\n'
+        else:
+            return f'\n> 🖼️ **IMAGE PLACEHOLDER:** image_{counter[0]:03d}\n'
+
+    content = re.sub(inline_pattern, inline_replacer, content)
+
+    # Pattern 2: Reference-style base64 image definitions at end of doc
+    # Format: [image1]: <data:image/png;base64,...>
+    ref_def_pattern = r'^\[([^\]]+)\]:\s*<data:image/[^;]+;base64,[^>]+>\s*$'
+
+    # Find all base64 image reference names
+    base64_refs = set(re.findall(ref_def_pattern, content, re.MULTILINE))
+
+    # Remove the reference definitions
+    content = re.sub(ref_def_pattern, '', content, flags=re.MULTILINE)
+
+    # Replace usages of those references with placeholders
+    # Format: ![][image1] or ![alt][image1]
+    for ref_name in base64_refs:
+        # Escape ref_name for regex
+        escaped_ref = re.escape(ref_name)
+        usage_pattern = rf'!\[([^\]]*)\]\[{escaped_ref}\]'
+
+        def ref_replacer(match: re.Match) -> str:
+            alt_text = match.group(1).strip()
+            if alt_text:
+                return f'\n> 🖼️ **IMAGE PLACEHOLDER:** {alt_text}\n'
+            else:
+                return f'\n> 🖼️ **IMAGE PLACEHOLDER:** {ref_name}\n'
+
+        content = re.sub(usage_pattern, ref_replacer, content)
+
+    # Clean up extra blank lines that may result from removals
+    content = re.sub(r'\n{3,}', '\n\n', content)
+
+    return content
 
 # Import shared utilities from md2gdoc
 from claude_code_tools.md2gdoc import (
@@ -230,6 +290,7 @@ Examples:
   gdoc2md "My Document"                        # Download from root
   gdoc2md "My Document" --folder "OTA/Reports" # Download from folder
   gdoc2md "My Document" -o report.md           # Save with custom name
+  gdoc2md "My Document" --images               # Keep base64 images
   gdoc2md --list --folder OTA                  # List docs in folder
 
 Credentials (in order of precedence):
@@ -267,6 +328,12 @@ Credentials (in order of precedence):
         "-l",
         action="store_true",
         help="List Google Docs in the folder instead of downloading",
+    )
+
+    parser.add_argument(
+        "--images",
+        action="store_true",
+        help="Keep base64-encoded images (default: replace with placeholders)",
     )
 
     args = parser.parse_args()
@@ -326,6 +393,10 @@ Credentials (in order of precedence):
 
     if content is None:
         sys.exit(1)
+
+    # Strip base64 images unless --images flag is used
+    if not args.images:
+        content = strip_base64_images(content)
 
     # Determine output filename
     if args.output:
