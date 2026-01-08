@@ -1946,6 +1946,7 @@ def index_stats(index, cwd, claude_home, codex_home):
 @click.option('--sub-agent', is_flag=True, help='Include sub-agent sessions (additive)')
 @click.option('--no-trimmed', is_flag=True, help='Exclude trimmed sessions')
 @click.option('--no-rollover', is_flag=True, help='Exclude rollover sessions')
+@click.option('--live', is_flag=True, help='Show only currently running sessions')
 @click.option('--min-lines', type=int, default=None,
               help='Only show sessions with at least N lines')
 @click.option('--after', metavar='DATE',
@@ -1964,7 +1965,7 @@ def index_stats(index, cwd, claude_home, codex_home):
 @click.argument('query', required=False)
 def search(
     claude_home_arg, codex_home_arg, global_search, filter_dir, filter_branch,
-    num_results, no_original, sub_agent, no_trimmed, no_rollover, min_lines,
+    num_results, no_original, sub_agent, no_trimmed, no_rollover, live, min_lines,
     after, before, agent, json_output, by_time, query
 ):
     """Launch interactive TUI for full-text session search.
@@ -2061,6 +2062,8 @@ def search(
         rust_args.append("--no-original")
     if sub_agent:
         rust_args.append("--sub-agent")
+    if live:
+        rust_args.append("--live")
     if no_trimmed:
         rust_args.append("--no-trimmed")
     if no_rollover:
@@ -2237,6 +2240,8 @@ def search(
                 rust_args.append("--no-original")
             if filter_state.get("include_sub"):
                 rust_args.append("--sub-agent")
+            if filter_state.get("include_live_only"):
+                rust_args.append("--live")
             if not filter_state.get("include_trimmed", True):
                 rust_args.append("--no-trimmed")
             if not filter_state.get("include_continued", True):

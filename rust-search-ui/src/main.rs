@@ -439,6 +439,7 @@ enum FilterMenuItem {
     IncludeSub,
     IncludeTrimmed,
     IncludeContinued,  // Internally "continued", displayed as "rollover" to user
+    IncludeLive,       // Only show currently running sessions
     AgentAll,
     AgentClaude,
     AgentCodex,
@@ -455,6 +456,7 @@ impl FilterMenuItem {
             FilterMenuItem::IncludeSub,
             FilterMenuItem::IncludeTrimmed,
             FilterMenuItem::IncludeContinued,
+            FilterMenuItem::IncludeLive,
             FilterMenuItem::AgentAll,
             FilterMenuItem::AgentClaude,
             FilterMenuItem::AgentCodex,
@@ -471,6 +473,7 @@ impl FilterMenuItem {
             FilterMenuItem::IncludeSub => "(s) Include sub-agent sessions",
             FilterMenuItem::IncludeTrimmed => "(t) Include trimmed sessions",
             FilterMenuItem::IncludeContinued => "(r) Include rollover sessions",
+            FilterMenuItem::IncludeLive => "(!) Live sessions only",
             FilterMenuItem::AgentAll => "(a) All agents",
             FilterMenuItem::AgentClaude => "(d) Claude only",
             FilterMenuItem::AgentCodex => "(e) Codex only",
@@ -487,6 +490,7 @@ impl FilterMenuItem {
             FilterMenuItem::IncludeSub => 's',
             FilterMenuItem::IncludeTrimmed => 't',
             FilterMenuItem::IncludeContinued => 'r',
+            FilterMenuItem::IncludeLive => '!',
             FilterMenuItem::AgentAll => 'a',
             FilterMenuItem::AgentClaude => 'd',
             FilterMenuItem::AgentCodex => 'e',
@@ -798,7 +802,7 @@ impl App {
             status_message: None,
             // Live session tracking
             live_sessions: scan_running_sessions(),
-            include_live_only: false,
+            include_live_only: cli.include_live,
             last_process_scan: Instant::now(),
         };
         app.filter();
@@ -1601,6 +1605,7 @@ fn render_filter_modal(frame: &mut Frame, app: &App, t: &Theme, area: Rect) {
             FilterMenuItem::IncludeSub => if app.include_sub { " [ON]" } else { " [off]" }.to_string(),
             FilterMenuItem::IncludeTrimmed => if app.include_trimmed { " [ON]" } else { " [off]" }.to_string(),
             FilterMenuItem::IncludeContinued => if app.include_continued { " [ON]" } else { " [off]" }.to_string(),
+            FilterMenuItem::IncludeLive => if app.include_live_only { " [ON]" } else { " [off]" }.to_string(),
             FilterMenuItem::AgentAll => if app.filter_agent.is_none() { " ●" } else { " ○" }.to_string(),
             FilterMenuItem::AgentClaude => if app.filter_agent.as_deref() == Some("claude") { " ●" } else { " ○" }.to_string(),
             FilterMenuItem::AgentCodex => if app.filter_agent.as_deref() == Some("codex") { " ●" } else { " ○" }.to_string(),
@@ -2258,9 +2263,6 @@ fn render_status_bar(frame: &mut Frame, app: &App, t: &Theme, area: Rect, show_l
             Span::styled("│ ", dim),
             Span::styled(" C-s ", keycap),
             Span::styled(if app.sort_by_time { " match-sort " } else { " time-sort " }, label),
-            Span::styled("│ ", dim),
-            Span::styled(" ! ", keycap),
-            Span::styled(" live", label),
             Span::styled("│ ", dim),
             Span::styled(" Esc ", keycap),
             Span::styled(" quit", label),
@@ -3195,16 +3197,24 @@ fn format_time_ago(modified: &str) -> String {
 // Live Session Detection
 // ============================================================================
 
+/// Information about a running claude/codex process
+struct ProcessInfo {
+    state: ProcessState,
+    start_time: Option<std::time::SystemTime>,
+}
+
 /// Scan for running claude/codex CLI processes and return a map of session_id -> ProcessState
+/// Uses process start time to match with session file modification times.
 fn scan_running_sessions() -> HashMap<String, ProcessState> {
     let mut result = HashMap::new();
 
-    // First, collect CWD -> ProcessState for all running claude/codex processes
-    let mut cwd_states: HashMap<String, ProcessState> = HashMap::new();
+    // Collect CWD -> ProcessInfo for all running claude/codex processes
+    let mut cwd_processes: HashMap<String, ProcessInfo> = HashMap::new();
 
-    // Run: ps -eo pid,stat,comm to get PID, status, and command name
+    // Run: ps -eo pid,stat,etime,comm to get PID, status, elapsed time, and command
+    // etime format: [[DD-]HH:]MM:SS
     let ps_output = match Command::new("ps")
-        .args(["-eo", "pid,stat,comm"])
+        .args(["-eo", "pid,stat,etime,comm"])
         .output()
     {
         Ok(output) => output,
@@ -3212,21 +3222,21 @@ fn scan_running_sessions() -> HashMap<String, ProcessState> {
     };
 
     let ps_str = String::from_utf8_lossy(&ps_output.stdout);
+    let now = std::time::SystemTime::now();
 
     // Parse ps output to find claude/codex processes
     for line in ps_str.lines().skip(1) {
-        // Skip header
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 3 {
+        if parts.len() < 4 {
             continue;
         }
 
         let pid = parts[0];
         let stat = parts[1];
-        let comm = parts[2];
+        let etime = parts[2];
+        let comm = parts[3];
 
         // Check if it's a claude or codex process
-        // comm might be truncated, so check for partial matches
         let is_agent = comm.contains("claude") || comm.contains("codex");
         if !is_agent {
             continue;
@@ -3240,54 +3250,128 @@ fn scan_running_sessions() -> HashMap<String, ProcessState> {
             ProcessState::Waiting
         };
 
-        // Get the CWD for this process using lsof (works on macOS and Linux)
+        // Parse elapsed time to get process start time
+        let start_time = parse_etime_to_start_time(etime, now);
+
+        // Get the CWD for this process
         let cwd = get_process_cwd(pid);
         if let Some(cwd_path) = cwd {
-            // If we already have this CWD, prefer Running over Waiting
-            cwd_states
+            // Track this process, preferring Running state and earliest start time
+            cwd_processes
                 .entry(cwd_path)
                 .and_modify(|existing| {
                     if state == ProcessState::Running {
-                        *existing = ProcessState::Running;
+                        existing.state = ProcessState::Running;
+                    }
+                    // Keep the earliest start time
+                    if let (Some(new_start), Some(existing_start)) = (start_time, existing.start_time) {
+                        if new_start < existing_start {
+                            existing.start_time = Some(new_start);
+                        }
                     }
                 })
-                .or_insert(state);
+                .or_insert(ProcessInfo { state, start_time });
         }
     }
 
-    // Now look up session IDs from ~/.claude/.claude.json
-    // The file has a "projects" map: { "/path/to/dir": { "lastSessionId": "uuid", ... }, ... }
-    if let Some(claude_config) = load_claude_config() {
-        for (cwd, state) in &cwd_states {
-            if let Some(session_id) = claude_config.get(cwd) {
-                result.insert(session_id.clone(), *state);
+    // For each CWD with a running process, find session files modified after process start
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return result,
+    };
+    let projects_dir = home.join(".claude").join("projects");
+
+    for (cwd, proc_info) in &cwd_processes {
+        // Skip root directory - too broad
+        if cwd == "/" {
+            continue;
+        }
+
+        // Encode the CWD path the way Claude does: replace '/' with '-'
+        let encoded_path = encode_project_path(cwd);
+        let project_session_dir = projects_dir.join(&encoded_path);
+
+        // Find session files modified after (or around) the process start time
+        if let Ok(entries) = std::fs::read_dir(&project_session_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+
+                // Only look at .jsonl files that look like session IDs (UUID format)
+                if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
+                    if let Some(filename) = path.file_stem().and_then(|s| s.to_str()) {
+                        // Check if it looks like a UUID (contains hyphens, right length)
+                        if filename.len() >= 32 && filename.contains('-') {
+                            // Check if file was modified after process started
+                            if let Ok(metadata) = entry.metadata() {
+                                if let Ok(modified) = metadata.modified() {
+                                    let is_live = match proc_info.start_time {
+                                        Some(start) => {
+                                            // File modified after process started (with 60s grace)
+                                            let grace = std::time::Duration::from_secs(60);
+                                            modified >= start.checked_sub(grace).unwrap_or(start)
+                                        }
+                                        None => {
+                                            // Couldn't get start time, fall back to recent check
+                                            if let Ok(age) = now.duration_since(modified) {
+                                                age.as_secs() <= 300 // 5 minutes
+                                            } else {
+                                                false
+                                            }
+                                        }
+                                    };
+
+                                    if is_live {
+                                        result.insert(filename.to_string(), proc_info.state);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 
-    // TODO: Add similar lookup for Codex sessions from ~/.codex/ if needed
-
     result
 }
 
-/// Load the lastSessionId mapping from ~/.claude/.claude.json
-fn load_claude_config() -> Option<HashMap<String, String>> {
-    let home = dirs::home_dir()?;
-    let config_path = home.join(".claude").join(".claude.json");
+/// Parse ps etime format [[DD-]HH:]MM:SS to calculate process start time
+fn parse_etime_to_start_time(etime: &str, now: std::time::SystemTime) -> Option<std::time::SystemTime> {
+    let mut total_secs: u64 = 0;
 
-    let content = std::fs::read_to_string(&config_path).ok()?;
-    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    // Handle DD-HH:MM:SS or HH:MM:SS or MM:SS
+    let time_part = if etime.contains('-') {
+        let parts: Vec<&str> = etime.splitn(2, '-').collect();
+        let days = parts[0].parse::<u64>().unwrap_or(0);
+        total_secs += days * 86400;
+        parts.get(1).copied().unwrap_or("")
+    } else {
+        etime
+    };
 
-    let projects = json.get("projects")?.as_object()?;
-
-    let mut result = HashMap::new();
-    for (path, project_data) in projects {
-        if let Some(session_id) = project_data.get("lastSessionId").and_then(|v| v.as_str()) {
-            result.insert(path.clone(), session_id.to_string());
+    let time_parts: Vec<&str> = time_part.split(':').collect();
+    match time_parts.len() {
+        3 => {
+            // HH:MM:SS
+            total_secs += time_parts[0].parse::<u64>().unwrap_or(0) * 3600;
+            total_secs += time_parts[1].parse::<u64>().unwrap_or(0) * 60;
+            total_secs += time_parts[2].parse::<u64>().unwrap_or(0);
         }
+        2 => {
+            // MM:SS
+            total_secs += time_parts[0].parse::<u64>().unwrap_or(0) * 60;
+            total_secs += time_parts[1].parse::<u64>().unwrap_or(0);
+        }
+        _ => return None,
     }
 
-    Some(result)
+    now.checked_sub(std::time::Duration::from_secs(total_secs))
+}
+
+/// Encode a project path the way Claude does: replace '/' with '-'
+/// e.g., "/Users/foo/project" -> "-Users-foo-project"
+fn encode_project_path(path: &str) -> String {
+    path.replace('/', "-")
 }
 
 /// Get the current working directory of a process by PID
@@ -4149,6 +4233,8 @@ struct CliOptions {
     no_rollover: bool,
     // Additive flag: --sub-agent adds sub-agents to defaults
     include_sub: bool,
+    // Live sessions filter: --live shows only currently running sessions
+    include_live: bool,
     min_lines: Option<i64>,
     after_date: Option<String>,
     before_date: Option<String>,
@@ -4248,6 +4334,8 @@ fn parse_cli_args() -> CliOptions {
     let no_rollover = has_flag("--no-rollover");
     // Additive flag: --sub-agent adds sub-agents to defaults
     let include_sub = has_flag("--sub-agent");
+    // Live sessions filter: --live shows only currently running sessions
+    let include_live = has_flag("--live");
 
     let min_lines = get_arg_value("--min-lines")
         .and_then(|s| s.parse().ok());
@@ -4282,6 +4370,7 @@ fn parse_cli_args() -> CliOptions {
         no_trimmed,
         no_rollover,
         include_sub,
+        include_live,
         min_lines,
         after_date,
         before_date,
@@ -4679,6 +4768,10 @@ fn main() -> Result<()> {
                                     app.include_continued = !app.include_continued;
                                     app.filter();
                                 }
+                                FilterMenuItem::IncludeLive => {
+                                    app.include_live_only = !app.include_live_only;
+                                    app.filter();
+                                }
                                 FilterMenuItem::AgentAll => {
                                     app.filter_agent = None;
                                     app.filter();
@@ -5039,18 +5132,6 @@ fn main() -> Result<()> {
                                 // Toggle sort mode: relevance <-> time
                                 app.sort_by_time = !app.sort_by_time;
                                 app.filter(); // Re-sort results
-                            }
-                            KeyCode::Char('!') => {
-                                // Toggle live sessions filter
-                                app.include_live_only = !app.include_live_only;
-                                app.filter();
-                                app.status_message = Some(
-                                    if app.include_live_only {
-                                        "Filter: Live sessions only".to_string()
-                                    } else {
-                                        "Filter: All sessions".to_string()
-                                    }
-                                );
                             }
                             KeyCode::Char(c) => app.on_char(c),
                             _ => {}
