@@ -127,7 +127,7 @@ wheels = [
 
 [[package]]
 name = "claude-code-tools"
-version = "1.4.9"
+version = "1.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "claude-agent-sdk" },
