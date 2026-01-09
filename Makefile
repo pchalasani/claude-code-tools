@@ -1,4 +1,4 @@
-.PHONY: install release patch minor major dev-install help clean all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply prep-node update-homebrew
+.PHONY: install release patch minor major dev-install help clean all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply prep-node update-homebrew
 
 help:
 	@echo "Available commands:"
@@ -18,8 +18,10 @@ help:
 	@echo "  make lmsh-publish - Publish lmsh to crates.io"
 	@echo "  make aichat-search         - Build aichat-search binary (requires Rust)"
 	@echo "  make aichat-search-install - Build and install aichat-search to ~/.cargo/bin"
-	@echo "  make aichat-search-release - Bump version, tag, trigger GitHub Actions build"
-	@echo "  make aichat-search-publish - Release + publish to crates.io"
+	@echo "  make aichat-search-patch   - Bump patch (0.0.X), tag, push"
+	@echo "  make aichat-search-minor   - Bump minor (0.X.0), tag, push"
+	@echo "  make aichat-search-major   - Bump major (X.0.0), tag, push"
+	@echo "  make aichat-search-publish BUMP=patch|minor|major - Bump, tag, push, publish to crates.io"
 	@echo "  make update-homebrew VERSION=x.y.z - Update Homebrew formula manually"
 	@echo "  make fix-session-metadata       - Scan for sessionId mismatches (dry-run)"
 	@echo "  make fix-session-metadata-apply - Actually fix sessionId mismatches"
@@ -169,23 +171,42 @@ aichat-search-install: aichat-search
 		echo "⚠️  Add ~/.cargo/bin to your PATH if not already there"; \
 	fi
 
-aichat-search-release:
+# Helper function for aichat-search release (used by patch/minor/major targets)
+define aichat-search-bump
 	@if ! command -v cargo-bump >/dev/null 2>&1; then \
 		echo "Installing cargo-bump..."; \
 		cargo install cargo-bump; \
 	fi
-	@echo "Bumping aichat-search version..."
-	@cd rust-search-ui && cargo bump patch
+	@echo "Bumping aichat-search $(1) version..."
+	@cd rust-search-ui && cargo bump $(1)
 	@VERSION=$$(grep "^version" rust-search-ui/Cargo.toml | head -1 | cut -d'"' -f2); \
 	echo "Creating tag rust-v$$VERSION..."; \
-	git add rust-search-ui/Cargo.toml; \
+	git add rust-search-ui/Cargo.toml rust-search-ui/Cargo.lock; \
 	git commit -m "bump: aichat-search v$$VERSION"; \
 	git tag "rust-v$$VERSION"; \
 	git push && git push --tags
 	@echo "Tag pushed! GitHub Actions will build and release binaries."
 	@echo "Check progress at: https://github.com/pchalasani/claude-code-tools/actions"
+endef
 
-aichat-search-publish: aichat-search-release
+aichat-search-patch:
+	$(call aichat-search-bump,patch)
+
+aichat-search-minor:
+	$(call aichat-search-bump,minor)
+
+aichat-search-major:
+	$(call aichat-search-bump,major)
+
+# Backwards compatible alias
+aichat-search-release: aichat-search-patch
+
+aichat-search-publish:
+	@if [ -z "$(BUMP)" ]; then \
+		echo "Usage: make aichat-search-publish BUMP=patch|minor|major"; \
+		exit 1; \
+	fi
+	$(MAKE) aichat-search-$(BUMP)
 	@echo "Publishing aichat-search to crates.io..."
 	@cd rust-search-ui && cargo publish --allow-dirty
 	@echo "Published! Users can now install with: cargo install aichat-search"
