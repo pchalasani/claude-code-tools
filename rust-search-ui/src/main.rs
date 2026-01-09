@@ -3242,8 +3242,13 @@ fn scan_running_sessions() -> HashMap<String, ProcessState> {
             continue;
         }
 
+        // Skip stopped/suspended processes (T state) - they're not really "running"
+        if stat.starts_with('T') {
+            continue;
+        }
+
         // Determine process state from stat column
-        // R = running, S = sleeping (waiting), T = stopped
+        // R = running, S = sleeping (waiting)
         let state = if stat.starts_with('R') {
             ProcessState::Running
         } else {
