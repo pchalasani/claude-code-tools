@@ -152,16 +152,20 @@ impl Session {
         format_time_ago(&self.modified)
     }
 
-    /// Session ID display with annotations: abc12345 (t) (r) (s)
-    /// For Codex, extracts UUID (last 36 chars) from session_id
-    fn session_id_display(&self) -> String {
-        // UUIDs are always 36 characters (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
-        // For Codex, extract last 36 chars which is the UUID
-        let clean_id = if self.agent == "codex" && self.session_id.len() >= 36 {
+    /// Extract the clean UUID from session_id
+    /// For Claude: session_id is already the UUID
+    /// For Codex: session_id is "rollout-YYYY-MM-DDTHH-MM-SS-UUID", extract last 36 chars
+    fn clean_session_id(&self) -> &str {
+        if self.agent == "codex" && self.session_id.len() >= 36 {
             &self.session_id[self.session_id.len() - 36..]
         } else {
             &self.session_id
-        };
+        }
+    }
+
+    /// Session ID display with annotations: abc12345 (t) (r) (s)
+    fn session_id_display(&self) -> String {
+        let clean_id = self.clean_session_id();
 
         let id_prefix = if clean_id.len() >= 8 {
             &clean_id[..8]
@@ -825,9 +829,9 @@ impl App {
         app
     }
 
-    /// Get the live state of a session by looking up its session_id in live_sessions
+    /// Get the live state of a session by looking up its UUID in live_sessions
     fn get_session_live_state(&self, session: &Session) -> Option<ProcessState> {
-        self.live_sessions.get(&session.session_id).copied()
+        self.live_sessions.get(session.clean_session_id()).copied()
     }
 
     fn filter(&mut self) {
@@ -995,7 +999,7 @@ impl App {
         if self.include_live_only {
             self.filtered.retain(|&idx| {
                 let s = &self.sessions[idx];
-                self.live_sessions.contains_key(&s.session_id)
+                self.live_sessions.contains_key(s.clean_session_id())
             });
         }
 
@@ -3197,10 +3201,11 @@ fn format_time_ago(modified: &str) -> String {
 // Live Session Detection
 // ============================================================================
 
-/// Information about running processes in a CWD
+/// Information about running processes in a CWD, separated by agent type
 struct CwdProcesses {
-    count: usize,           // Number of processes in this CWD
-    best_state: ProcessState, // Running if any is Running, else Waiting
+    claude_count: usize,
+    codex_count: usize,
+    best_state: ProcessState,
 }
 
 /// Scan for running claude/codex CLI processes and return a map of session_id -> ProcessState
@@ -3208,7 +3213,7 @@ struct CwdProcesses {
 fn scan_running_sessions() -> HashMap<String, ProcessState> {
     let mut result = HashMap::new();
 
-    // Collect CWD -> process count and best state
+    // Collect CWD -> process counts (separated by agent type)
     let mut cwd_processes: HashMap<String, CwdProcesses> = HashMap::new();
 
     // Run: ps -eo pid,stat,comm to get PID, status, and command
@@ -3233,19 +3238,21 @@ fn scan_running_sessions() -> HashMap<String, ProcessState> {
         let stat = parts[1];
         let comm = parts[2];
 
-        // Check if it's a claude or codex process
-        let is_agent = comm.contains("claude") || comm.contains("codex");
-        if !is_agent {
+        // Check if it's a claude or codex CLI process
+        // Be specific to avoid matching other tools (like aichat-search)
+        let comm_lower = comm.to_lowercase();
+        let is_claude = comm_lower == "claude" || comm_lower.ends_with("/claude");
+        let is_codex = comm_lower.contains("/codex/codex") || comm_lower == "codex";
+        if !is_claude && !is_codex {
             continue;
         }
 
-        // Skip stopped/suspended processes (T state) - they're not really "running"
+        // Skip stopped/suspended processes (T state)
         if stat.starts_with('T') {
             continue;
         }
 
-        // Determine process state from stat column
-        // R = running, S = sleeping (waiting)
+        // Determine process state
         let state = if stat.starts_with('R') {
             ProcessState::Running
         } else {
@@ -3255,47 +3262,48 @@ fn scan_running_sessions() -> HashMap<String, ProcessState> {
         // Get the CWD for this process
         let cwd = get_process_cwd(pid);
         if let Some(cwd_path) = cwd {
-            // Track process count per CWD
             cwd_processes
                 .entry(cwd_path)
                 .and_modify(|existing| {
-                    existing.count += 1;
+                    if is_claude {
+                        existing.claude_count += 1;
+                    }
+                    if is_codex {
+                        existing.codex_count += 1;
+                    }
                     if state == ProcessState::Running {
                         existing.best_state = ProcessState::Running;
                     }
                 })
-                .or_insert(CwdProcesses { count: 1, best_state: state });
+                .or_insert(CwdProcesses {
+                    claude_count: if is_claude { 1 } else { 0 },
+                    codex_count: if is_codex { 1 } else { 0 },
+                    best_state: state,
+                });
         }
     }
 
-    // For each CWD with running processes, find the N most recently modified sessions
     let home = match dirs::home_dir() {
         Some(h) => h,
         None => return result,
     };
-    let projects_dir = home.join(".claude").join("projects");
 
+    // Process Claude sessions
+    let claude_projects_dir = home.join(".claude").join("projects");
     for (cwd, procs) in &cwd_processes {
-        // Skip root directory - too broad
-        if cwd == "/" {
+        if cwd == "/" || procs.claude_count == 0 {
             continue;
         }
 
-        // Encode the CWD path the way Claude does: replace '/' with '-'
         let encoded_path = encode_project_path(cwd);
-        let project_session_dir = projects_dir.join(&encoded_path);
+        let project_session_dir = claude_projects_dir.join(&encoded_path);
 
-        // Collect all session files with their modification times
         let mut sessions: Vec<(String, std::time::SystemTime)> = Vec::new();
-
         if let Ok(entries) = std::fs::read_dir(&project_session_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-
-                // Only look at .jsonl files that look like session IDs (UUID format)
                 if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
                     if let Some(filename) = path.file_stem().and_then(|s| s.to_str()) {
-                        // Check if it looks like a UUID (contains hyphens, right length)
                         if filename.len() >= 32 && filename.contains('-') {
                             if let Ok(metadata) = entry.metadata() {
                                 if let Ok(modified) = metadata.modified() {
@@ -3308,16 +3316,108 @@ fn scan_running_sessions() -> HashMap<String, ProcessState> {
             }
         }
 
-        // Sort by modification time (most recent first)
         sessions.sort_by(|a, b| b.1.cmp(&a.1));
-
-        // Take the N most recently modified sessions (where N = process count)
-        for (session_id, _) in sessions.into_iter().take(procs.count) {
+        for (session_id, _) in sessions.into_iter().take(procs.claude_count) {
             result.insert(session_id, procs.best_state);
         }
     }
 
+    // Process Codex sessions - they're organized by date, not CWD
+    // We need to find recent sessions and match them to CWDs
+    let codex_sessions_dir = home.join(".codex").join("sessions");
+    let mut codex_sessions: Vec<(String, String, std::time::SystemTime)> = Vec::new(); // (session_id, cwd, mtime)
+
+    // Scan recent years/months/days for Codex sessions
+    if let Ok(years) = std::fs::read_dir(&codex_sessions_dir) {
+        for year_entry in years.flatten() {
+            if !year_entry.path().is_dir() {
+                continue;
+            }
+            if let Ok(months) = std::fs::read_dir(year_entry.path()) {
+                for month_entry in months.flatten() {
+                    if !month_entry.path().is_dir() {
+                        continue;
+                    }
+                    if let Ok(days) = std::fs::read_dir(month_entry.path()) {
+                        for day_entry in days.flatten() {
+                            if !day_entry.path().is_dir() {
+                                continue;
+                            }
+                            if let Ok(sessions) = std::fs::read_dir(day_entry.path()) {
+                                for session_entry in sessions.flatten() {
+                                    let path = session_entry.path();
+                                    if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
+                                        if let Some(filename) = path.file_stem().and_then(|s| s.to_str()) {
+                                            // Extract UUID (last 36 chars) from filename
+                                            // Format: rollout-YYYY-MM-DDTHH-MM-SS-UUID
+                                            if filename.len() >= 36 {
+                                                let uuid = &filename[filename.len() - 36..];
+                                                // Read CWD from session_meta
+                                                if let Some(cwd) = read_codex_session_cwd(&path) {
+                                                    if let Ok(metadata) = session_entry.metadata() {
+                                                        if let Ok(modified) = metadata.modified() {
+                                                            codex_sessions.push((
+                                                                uuid.to_string(),
+                                                                cwd,
+                                                                modified,
+                                                            ));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Match Codex sessions to CWDs with running Codex processes
+    for (cwd, procs) in &cwd_processes {
+        if cwd == "/" || procs.codex_count == 0 {
+            continue;
+        }
+
+        // Filter to sessions matching this CWD, sort by mtime
+        let mut matching: Vec<_> = codex_sessions
+            .iter()
+            .filter(|(_, session_cwd, _)| session_cwd == cwd)
+            .collect();
+        matching.sort_by(|a, b| b.2.cmp(&a.2));
+
+        for (session_id, _, _) in matching.into_iter().take(procs.codex_count) {
+            result.insert(session_id.clone(), procs.best_state);
+        }
+    }
+
     result
+}
+
+/// Read the CWD from a Codex session file's session_meta record
+fn read_codex_session_cwd(path: &std::path::Path) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let reader = std::io::BufReader::new(file);
+    use std::io::BufRead;
+
+    for line in reader.lines().take(10) {
+        // Check first few lines for session_meta
+        if let Ok(line) = line {
+            if line.contains("session_meta") {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
+                    return json
+                        .get("payload")
+                        .and_then(|p| p.get("cwd"))
+                        .and_then(|c| c.as_str())
+                        .map(|s| s.to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Parse ps etime format [[DD-]HH:]MM:SS to calculate process start time
