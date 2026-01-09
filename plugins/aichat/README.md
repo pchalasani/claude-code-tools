@@ -1,40 +1,95 @@
 # aichat
 
-Provides session search capability for CLI coding agents using the `aichat search`
-command.
+Tools for searching, resuming, and recovering context from CLI coding agent
+sessions (Claude Code, Codex CLI).
 
-## What it does
+## Components
 
-This plugin enables searching through previous code-agent session JSONL files (from
-Claude Code or Codex CLI) to find details of specific work done in past sessions.
+### Agent: `session-searcher`
 
-- **Claude Code**: Uses the `session-searcher` subagent (auto-invoked, returns concise
-  summaries without polluting main context)
-- **Codex CLI and other agents**: Uses the `session-search` skill (instructions
-  injected into context)
+Searches previous sessions for specific work, decisions, or code patterns.
+Auto-invoked by Claude when you ask about past sessions. Returns concise
+summaries without polluting main context.
 
-## Usage
+**Triggers:** Ask naturally:
 
-Just ask naturally:
 - "What did we work on yesterday?"
 - "Find sessions where we discussed authentication"
 - "What design decisions did we make for the API?"
 
-Claude will automatically invoke the `session-searcher` subagent.
+**How it works:**
 
-### Manual CLI usage
+1. Runs `aichat search --json` to find matching sessions
+2. Reads up to 3 session files for details
+3. Returns formatted markdown summary
 
-The `aichat search` command with `--json` flag returns JSONL-formatted results:
+### Skills
 
-Example - find and examine the top matching session:
+#### `recover-context`
+
+Extracts context from a parent session when resuming work. Uses session lineage
+(shown in first user message) to find the most recent parent session.
+
+**What it extracts:**
+
+- Last task being worked on
+- Current state (completed, in-progress, blocked)
+- Pending items or next steps
+- Associated docs (issue specs, work logs, design docs)
+
+#### `session-search`
+
+For CLI agents WITHOUT subagent support (e.g., Codex CLI). Provides the same
+session search capability as the `session-searcher` agent, but as inline
+instructions.
+
+> **Claude Code users:** Don't use this directly. The `session-searcher` agent
+> is more efficient.
+
+### Command: `/recover-context`
+
+Slash command that invokes the `recover-context` skill. Use when you've resumed
+a session and want to quickly recover what you were working on.
+
+### Hooks (Quick Commands)
+
+Type these directly in Claude to trigger special actions:
+
+| Command | What it does |
+|---------|--------------|
+| `>resume` | Copy session ID to clipboard + show resume instructions |
+| `>continue` | Same as `>resume` |
+| `>handoff` | Same as `>resume` |
+| `>session` | Copy session ID to clipboard (simple confirmation) |
+| `>session-id` | Same as `>session` |
+
+The resume commands guide you through continuing work in a new session using
+`aichat resume <paste>`.
+
+## CLI Usage
+
+### Searching sessions
+
 ```bash
-# Get the file path of the top matching session
-aichat search --json "authentication bug fix" | head -1 | jq -r '.file_path'
+# Interactive TUI search
+aichat search "authentication bug fix"
 
-# Then read/search through that session JSONL to understand what was done
+# JSON output for scripting
+aichat search --json -n 10 "authentication"
+
+# Filter by project
+aichat search --json -g "my-project" "query"
+
+# See all options
+aichat search --help
 ```
 
-Run `aichat search --help` to see all available options.
+### Resuming sessions
+
+```bash
+# Resume a session (paste session ID from >resume command)
+aichat resume <session-id>
+```
 
 ### JSON output fields
 

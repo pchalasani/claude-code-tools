@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """
-Hook to handle '>resume' trigger in Claude Code.
+Hook to handle session-related triggers in Claude Code.
 
-When user types '>resume' in Claude:
-1. Copies the current session ID to the clipboard
-2. Blocks the prompt (Claude doesn't process it)
-3. User can then quit Claude and run: aichat resume <paste>
+Triggers:
+- '>resume', '>continue', '>handoff': Copy session ID + show resume instructions
+- '>session', '>session-id': Copy session ID + show simple confirmation
 """
 import json
 import subprocess
 import sys
 
-# Trigger patterns that activate this hook
-TRIGGERS = (">resume", ">continue", ">handoff")
+# Trigger patterns for resume workflow (copy + show resume instructions)
+RESUME_TRIGGERS = (">resume", ">continue", ">handoff")
+
+# Trigger patterns for just copying session ID (simple confirmation)
+SESSION_ID_TRIGGERS = (">session", ">session-id")
 
 
 def copy_to_clipboard(text: str) -> bool:
@@ -45,25 +47,21 @@ def copy_to_clipboard(text: str) -> bool:
     return False
 
 
-def main():
-    data = json.load(sys.stdin)
-    session_id = data.get("session_id", "")
-    prompt = data.get("prompt", "").strip()
+def copy_session_id_and_format_message(
+    session_id: str,
+    show_resume_instructions: bool = False,
+) -> str:
+    """
+    Copy session ID to clipboard and return a formatted message.
 
-    if not any(prompt.startswith(t) for t in TRIGGERS):
-        # Not our trigger, let it pass through
-        sys.exit(0)
+    Args:
+        session_id: The session ID to copy.
+        show_resume_instructions: If True, show full resume instructions.
+            If False, show simple confirmation.
 
-    if not session_id:
-        # No session ID available
-        result = {
-            "decision": "block",
-            "reason": "No session ID available. Cannot set up resume.",
-        }
-        print(json.dumps(result))
-        sys.exit(0)
-
-    # Try to copy session ID to clipboard
+    Returns:
+        Formatted message string with ANSI colors.
+    """
     copied = copy_to_clipboard(session_id)
 
     # ANSI escape codes for bright blue color and code style
@@ -71,27 +69,70 @@ def main():
     CODE = "\033[37m"  # Regular white for code-like appearance
     RESET = "\033[0m"
 
-    if copied:
-        message = (
-            f"{BLUE}Session ID copied to clipboard!{RESET}\n\n"
-            f"{BLUE}To continue your work in a new session:{RESET}\n"
-            f"{BLUE}  1. Quit Claude (Ctrl+D twice){RESET}\n"
-            f"{BLUE}  2. Run: {CODE}`aichat resume <paste>`{RESET}\n\n"
-            f"{BLUE}You can then choose between a few different ways of{RESET}\n"
-            f"{BLUE}continuing your work.{RESET}\n\n"
-            f"{BLUE}Session ID: {session_id}{RESET}"
-        )
+    if show_resume_instructions:
+        # Full resume workflow message
+        if copied:
+            return (
+                f"{BLUE}Session ID copied to clipboard!{RESET}\n\n"
+                f"{BLUE}To continue your work in a new session:{RESET}\n"
+                f"{BLUE}  1. Quit Claude (Ctrl+D twice){RESET}\n"
+                f"{BLUE}  2. Run: {CODE}`aichat resume <paste>`{RESET}\n\n"
+                f"{BLUE}You can then choose between a few different ways of{RESET}\n"
+                f"{BLUE}continuing your work.{RESET}\n\n"
+                f"{BLUE}Session ID: {session_id}{RESET}"
+            )
+        else:
+            return (
+                f"{BLUE}Could not copy to clipboard. Here's your session ID:{RESET}\n\n"
+                f"{BLUE}  {session_id}{RESET}\n\n"
+                f"{BLUE}To continue your work in a new session:{RESET}\n"
+                f"{BLUE}  1. Copy the session ID above{RESET}\n"
+                f"{BLUE}  2. Quit Claude (Ctrl+D twice){RESET}\n"
+                f"{BLUE}  3. Run: {CODE}`aichat resume <session-id>`{RESET}\n\n"
+                f"{BLUE}You can then choose between a few different ways of{RESET}\n"
+                f"{BLUE}continuing your work.{RESET}"
+            )
     else:
-        message = (
-            f"{BLUE}Could not copy to clipboard. Here's your session ID:{RESET}\n\n"
-            f"{BLUE}  {session_id}{RESET}\n\n"
-            f"{BLUE}To continue your work in a new session:{RESET}\n"
-            f"{BLUE}  1. Copy the session ID above{RESET}\n"
-            f"{BLUE}  2. Quit Claude (Ctrl+D twice){RESET}\n"
-            f"{BLUE}  3. Run: {CODE}`aichat resume <session-id>`{RESET}\n\n"
-            f"{BLUE}You can then choose between a few different ways of{RESET}\n"
-            f"{BLUE}continuing your work.{RESET}"
-        )
+        # Simple confirmation message
+        if copied:
+            return (
+                f"{BLUE}Session ID copied to clipboard!{RESET}\n\n"
+                f"{BLUE}Session ID: {session_id}{RESET}"
+            )
+        else:
+            return (
+                f"{BLUE}Could not copy to clipboard. Here's your session ID:{RESET}\n\n"
+                f"{BLUE}  {session_id}{RESET}"
+            )
+
+
+def main():
+    data = json.load(sys.stdin)
+    session_id = data.get("session_id", "")
+    prompt = data.get("prompt", "").strip()
+
+    # Check which trigger type (if any)
+    is_resume_trigger = any(prompt.startswith(t) for t in RESUME_TRIGGERS)
+    is_session_id_trigger = any(prompt.startswith(t) for t in SESSION_ID_TRIGGERS)
+
+    if not is_resume_trigger and not is_session_id_trigger:
+        # Not our trigger, let it pass through
+        sys.exit(0)
+
+    if not session_id:
+        # No session ID available
+        result = {
+            "decision": "block",
+            "reason": "No session ID available.",
+        }
+        print(json.dumps(result))
+        sys.exit(0)
+
+    # Copy session ID and get formatted message
+    message = copy_session_id_and_format_message(
+        session_id,
+        show_resume_instructions=is_resume_trigger,
+    )
 
     # Block the prompt and show the message
     result = {

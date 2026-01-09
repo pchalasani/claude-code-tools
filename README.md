@@ -184,7 +184,8 @@ The `aichat` plugin provides:
 
 | Type | Name | What it does |
 |------|------|--------------|
-| Hook | `>resume` | Type `>resume` (or `>continue`, `>handoff`) to trigger session handoff flow |
+| Hook | `>resume` | Type `>resume` (or `>continue`, `>handoff`) to copy session ID + show resume instructions |
+| Hook | `>session` | Type `>session` (or `>session-id`) to copy session ID to clipboard |
 | Skill | `/session-search` | Search past sessions (for agents without sub-agent support, e.g. Codex) |
 | Skill | `/recover-context` | Extract context from parent sessions into current conversation |
 | Agent | `session-searcher` | Sub-agent to search/retrieve context from past sessions |
