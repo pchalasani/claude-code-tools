@@ -21,7 +21,7 @@ help:
 	@echo "  make aichat-search-patch   - Bump patch (0.0.X), tag, push"
 	@echo "  make aichat-search-minor   - Bump minor (0.X.0), tag, push"
 	@echo "  make aichat-search-major   - Bump major (X.0.0), tag, push"
-	@echo "  make aichat-search-publish BUMP=patch|minor|major - Bump, tag, push, publish to crates.io"
+	@echo "  make aichat-search-publish [BUMP=patch|minor|major] - Bump (default: patch), tag, push, publish"
 	@echo "  make update-homebrew VERSION=x.y.z - Update Homebrew formula manually"
 	@echo "  make fix-session-metadata       - Scan for sessionId mismatches (dry-run)"
 	@echo "  make fix-session-metadata-apply - Actually fix sessionId mismatches"
@@ -202,11 +202,9 @@ aichat-search-major:
 aichat-search-release: aichat-search-patch
 
 aichat-search-publish:
-	@if [ -z "$(BUMP)" ]; then \
-		echo "Usage: make aichat-search-publish BUMP=patch|minor|major"; \
-		exit 1; \
-	fi
-	$(MAKE) aichat-search-$(BUMP)
+	@BUMP_TYPE=$${BUMP:-patch}; \
+	echo "Bumping $$BUMP_TYPE version..."; \
+	$(MAKE) aichat-search-$$BUMP_TYPE
 	@echo "Publishing aichat-search to crates.io..."
 	@cd rust-search-ui && cargo publish --allow-dirty
 	@echo "Published! Users can now install with: cargo install aichat-search"
