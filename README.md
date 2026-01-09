@@ -614,6 +614,7 @@ Installing the `aichat` plugin mentioned above provides two ways to search past 
 | `aichat info [session]` | Show session metadata, path, and lineage |
 | `aichat export [session]` | Export session to text |
 | `aichat copy [session]` | Copy session file to new location |
+| `aichat move <session> <new-project>` | Move session to a different project directory |
 | `aichat query [session] [question]` | Query session with AI |
 | `aichat clone [session]` | Clone session and resume the clone |
 | `aichat rollover [session]` | Hand off to fresh session with lineage |
