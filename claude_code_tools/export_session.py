@@ -222,6 +222,9 @@ def extract_first_last_messages(
     last_msg: Optional[dict[str, str]] = None
     first_user_msg: Optional[dict[str, str]] = None
 
+    # For Codex: track first user message timestamp to detect system-injected msgs
+    codex_first_user_timestamp: Optional[str] = None
+
     try:
         with open(session_file, "r", encoding="utf-8") as f:
             for line in f:
@@ -236,6 +239,7 @@ def extract_first_last_messages(
 
                 role: Optional[str] = None
                 text: Optional[str] = None
+                timestamp: Optional[str] = None
 
                 if agent == "claude":
                     msg_type = data.get("type")
@@ -248,6 +252,7 @@ def extract_first_last_messages(
                         if payload.get("type") == "message":
                             role = payload.get("role")
                             text = _extract_codex_message_text(data)
+                            timestamp = data.get("timestamp")
 
                 if role and text:
                     msg_dict = {
@@ -256,13 +261,25 @@ def extract_first_last_messages(
                     }
                     if first_msg is None:
                         first_msg = msg_dict
+
                     # Track first real user message (skip meta messages)
-                    if (
-                        role == "user"
-                        and first_user_msg is None
-                        and not _is_meta_user_message(data, text)
-                    ):
-                        first_user_msg = msg_dict
+                    if role == "user" and first_user_msg is None:
+                        if agent == "codex":
+                            # For Codex: system messages share the same timestamp
+                            # as the first user message (injected at session start).
+                            # Real user messages have different timestamps.
+                            if codex_first_user_timestamp is None:
+                                codex_first_user_timestamp = timestamp
+                            if (
+                                timestamp != codex_first_user_timestamp
+                                and not _is_meta_user_message(data, text)
+                            ):
+                                first_user_msg = msg_dict
+                        else:
+                            # For Claude: use pattern-based filtering
+                            if not _is_meta_user_message(data, text):
+                                first_user_msg = msg_dict
+
                     # Always update last_msg to get the last one
                     last_msg = msg_dict
 

@@ -500,6 +500,7 @@ class SessionIndex:
         messages = []
         user_count = 0  # Count only user messages for the "lines" metric
         custom_title = ""  # Session name from /rename command
+        codex_first_user_ts = None  # For Codex: track first user msg timestamp
 
         try:
             with open(jsonl_path, "r", encoding="utf-8") as f:
@@ -588,6 +589,7 @@ class SessionIndex:
 
                         role = payload.get("role")
                         content = payload.get("content", [])
+                        timestamp = data.get("timestamp")
 
                         if not isinstance(content, list):
                             continue
@@ -600,8 +602,15 @@ class SessionIndex:
                                     codex_text += block.get("text", "")
 
                         # Count user messages, but exclude non-genuine messages
+                        # For Codex: system messages share the same timestamp
+                        # (injected at session start). Real user messages differ.
                         if role == "user":
-                            if not _is_meta_user_message({}, codex_text):
+                            if codex_first_user_ts is None:
+                                codex_first_user_ts = timestamp
+                            if (
+                                timestamp != codex_first_user_ts
+                                and not _is_meta_user_message({}, codex_text)
+                            ):
                                 user_count += 1
 
                         for block in content:
