@@ -3197,24 +3197,23 @@ fn format_time_ago(modified: &str) -> String {
 // Live Session Detection
 // ============================================================================
 
-/// Information about a running claude/codex process
-struct ProcessInfo {
-    state: ProcessState,
-    start_time: Option<std::time::SystemTime>,
+/// Information about running processes in a CWD
+struct CwdProcesses {
+    count: usize,           // Number of processes in this CWD
+    best_state: ProcessState, // Running if any is Running, else Waiting
 }
 
 /// Scan for running claude/codex CLI processes and return a map of session_id -> ProcessState
-/// Uses process start time to match with session file modification times.
+/// For each CWD with N processes, marks the N most recently modified sessions as live.
 fn scan_running_sessions() -> HashMap<String, ProcessState> {
     let mut result = HashMap::new();
 
-    // Collect CWD -> ProcessInfo for all running claude/codex processes
-    let mut cwd_processes: HashMap<String, ProcessInfo> = HashMap::new();
+    // Collect CWD -> process count and best state
+    let mut cwd_processes: HashMap<String, CwdProcesses> = HashMap::new();
 
-    // Run: ps -eo pid,stat,etime,comm to get PID, status, elapsed time, and command
-    // etime format: [[DD-]HH:]MM:SS
+    // Run: ps -eo pid,stat,comm to get PID, status, and command
     let ps_output = match Command::new("ps")
-        .args(["-eo", "pid,stat,etime,comm"])
+        .args(["-eo", "pid,stat,comm"])
         .output()
     {
         Ok(output) => output,
@@ -3222,19 +3221,17 @@ fn scan_running_sessions() -> HashMap<String, ProcessState> {
     };
 
     let ps_str = String::from_utf8_lossy(&ps_output.stdout);
-    let now = std::time::SystemTime::now();
 
     // Parse ps output to find claude/codex processes
     for line in ps_str.lines().skip(1) {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 4 {
+        if parts.len() < 3 {
             continue;
         }
 
         let pid = parts[0];
         let stat = parts[1];
-        let etime = parts[2];
-        let comm = parts[3];
+        let comm = parts[2];
 
         // Check if it's a claude or codex process
         let is_agent = comm.contains("claude") || comm.contains("codex");
@@ -3255,38 +3252,30 @@ fn scan_running_sessions() -> HashMap<String, ProcessState> {
             ProcessState::Waiting
         };
 
-        // Parse elapsed time to get process start time
-        let start_time = parse_etime_to_start_time(etime, now);
-
         // Get the CWD for this process
         let cwd = get_process_cwd(pid);
         if let Some(cwd_path) = cwd {
-            // Track this process, preferring Running state and earliest start time
+            // Track process count per CWD
             cwd_processes
                 .entry(cwd_path)
                 .and_modify(|existing| {
+                    existing.count += 1;
                     if state == ProcessState::Running {
-                        existing.state = ProcessState::Running;
-                    }
-                    // Keep the earliest start time
-                    if let (Some(new_start), Some(existing_start)) = (start_time, existing.start_time) {
-                        if new_start < existing_start {
-                            existing.start_time = Some(new_start);
-                        }
+                        existing.best_state = ProcessState::Running;
                     }
                 })
-                .or_insert(ProcessInfo { state, start_time });
+                .or_insert(CwdProcesses { count: 1, best_state: state });
         }
     }
 
-    // For each CWD with a running process, find session files modified after process start
+    // For each CWD with running processes, find the N most recently modified sessions
     let home = match dirs::home_dir() {
         Some(h) => h,
         None => return result,
     };
     let projects_dir = home.join(".claude").join("projects");
 
-    for (cwd, proc_info) in &cwd_processes {
+    for (cwd, procs) in &cwd_processes {
         // Skip root directory - too broad
         if cwd == "/" {
             continue;
@@ -3296,7 +3285,9 @@ fn scan_running_sessions() -> HashMap<String, ProcessState> {
         let encoded_path = encode_project_path(cwd);
         let project_session_dir = projects_dir.join(&encoded_path);
 
-        // Find session files modified after (or around) the process start time
+        // Collect all session files with their modification times
+        let mut sessions: Vec<(String, std::time::SystemTime)> = Vec::new();
+
         if let Ok(entries) = std::fs::read_dir(&project_session_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -3306,34 +3297,23 @@ fn scan_running_sessions() -> HashMap<String, ProcessState> {
                     if let Some(filename) = path.file_stem().and_then(|s| s.to_str()) {
                         // Check if it looks like a UUID (contains hyphens, right length)
                         if filename.len() >= 32 && filename.contains('-') {
-                            // Check if file was modified after process started
                             if let Ok(metadata) = entry.metadata() {
                                 if let Ok(modified) = metadata.modified() {
-                                    let is_live = match proc_info.start_time {
-                                        Some(start) => {
-                                            // File modified after process started (with 60s grace)
-                                            let grace = std::time::Duration::from_secs(60);
-                                            modified >= start.checked_sub(grace).unwrap_or(start)
-                                        }
-                                        None => {
-                                            // Couldn't get start time, fall back to recent check
-                                            if let Ok(age) = now.duration_since(modified) {
-                                                age.as_secs() <= 300 // 5 minutes
-                                            } else {
-                                                false
-                                            }
-                                        }
-                                    };
-
-                                    if is_live {
-                                        result.insert(filename.to_string(), proc_info.state);
-                                    }
+                                    sessions.push((filename.to_string(), modified));
                                 }
                             }
                         }
                     }
                 }
             }
+        }
+
+        // Sort by modification time (most recent first)
+        sessions.sort_by(|a, b| b.1.cmp(&a.1));
+
+        // Take the N most recently modified sessions (where N = process count)
+        for (session_id, _) in sessions.into_iter().take(procs.count) {
+            result.insert(session_id, procs.best_state);
         }
     }
 
