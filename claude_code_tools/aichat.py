@@ -1063,6 +1063,152 @@ def copy_session(session, dest, agent):
     copy_session_file(str(session_file), dest)
 
 
+@main.command("move")
+@click.argument("session", required=True)
+@click.argument("new_project", required=True)
+@click.option("--agent", type=click.Choice(["claude", "codex"], case_sensitive=False),
+              help="Force agent type (auto-detected if not specified)")
+def move_session(session, new_project, agent):
+    """Move a session to a different project directory.
+
+    Updates the cwd metadata in all lines and moves the session file
+    to the appropriate project directory.
+
+    \b
+    Examples:
+        aichat move abc123 /path/to/new/project
+        aichat move abc123 ~/Git/other-repo
+    """
+    import json
+    import sys
+    from pathlib import Path
+
+    from claude_code_tools.session_utils import (
+        find_session_file,
+        detect_agent_from_path,
+        get_claude_home,
+    )
+
+    # Resolve new project path
+    new_project_path = Path(new_project).expanduser().resolve()
+    if not new_project_path.exists():
+        print(f"Error: Project directory does not exist: {new_project_path}",
+              file=sys.stderr)
+        sys.exit(1)
+    if not new_project_path.is_dir():
+        print(f"Error: Not a directory: {new_project_path}", file=sys.stderr)
+        sys.exit(1)
+
+    # Find session file
+    input_path = Path(session).expanduser()
+    if input_path.exists() and input_path.is_file():
+        session_file = input_path
+        detected_agent = agent or detect_agent_from_path(session_file)
+    else:
+        result = find_session_file(session)
+        if not result:
+            print(f"Error: Session not found: {session}", file=sys.stderr)
+            sys.exit(1)
+        detected_agent, session_file, _, _ = result
+        if agent:
+            detected_agent = agent
+
+    # Read and update the session file
+    print(f"Reading session: {session_file}")
+    lines = []
+    old_cwd = None
+    with open(session_file, "r") as f:
+        for line in f:
+            try:
+                data = json.loads(line)
+                if detected_agent == "claude":
+                    # Claude: cwd is at top level
+                    if old_cwd is None and "cwd" in data:
+                        old_cwd = data["cwd"]
+                    if "cwd" in data:
+                        data["cwd"] = str(new_project_path)
+                else:
+                    # Codex: cwd is in session_meta payload or response_item payload
+                    if data.get("type") == "session_meta":
+                        payload = data.get("payload", {})
+                        if old_cwd is None and "cwd" in payload:
+                            old_cwd = payload["cwd"]
+                        if "cwd" in payload:
+                            payload["cwd"] = str(new_project_path)
+                    # Also check response_item with message payloads
+                    elif data.get("type") == "response_item":
+                        payload = data.get("payload", {})
+                        if "cwd" in payload:
+                            payload["cwd"] = str(new_project_path)
+                lines.append(json.dumps(data) + "\n")
+            except json.JSONDecodeError:
+                lines.append(line)
+
+    if detected_agent == "claude":
+        # Claude: move file to new project directory
+        # Claude stores sessions in: ~/.claude/projects/<encoded-path>/<session-id>.jsonl
+        encoded_path = str(new_project_path).replace("/", "-").replace("_", "-").replace(".", "-")
+        claude_home = get_claude_home()
+        new_project_dir = claude_home / "projects" / encoded_path
+        new_project_dir.mkdir(parents=True, exist_ok=True)
+        new_file_path = new_project_dir / session_file.name
+
+        # Check if destination already exists
+        if new_file_path.exists() and new_file_path != session_file:
+            print(f"Error: Session already exists at destination: {new_file_path}",
+                  file=sys.stderr)
+            sys.exit(1)
+
+        # Write updated content to new location
+        print(f"Moving session to: {new_file_path}")
+        with open(new_file_path, "w") as f:
+            f.writelines(lines)
+
+        # Remove old file if different location
+        if new_file_path != session_file:
+            session_file.unlink()
+            print(f"Removed old file: {session_file}")
+
+        print(f"\n[green]Session moved successfully![/green]")
+        print(f"  From: {old_cwd}")
+        print(f"  To:   {new_project_path}")
+        session_id = session_file.stem
+        agent_cmd = "claude"
+        resume_cmd = f"cd {new_project_path} && claude --resume {session_id}"
+    else:
+        # Codex: just update file in place (sessions organized by date, not project)
+        print(f"Updating session in place: {session_file}")
+        with open(session_file, "w") as f:
+            f.writelines(lines)
+
+        print(f"\n[green]Session updated successfully![/green]")
+        print(f"  From: {old_cwd}")
+        print(f"  To:   {new_project_path}")
+        session_id = session_file.stem
+        agent_cmd = "codex"
+        resume_cmd = f"cd {new_project_path} && codex resume {session_id}"
+
+    # Ask user if they want to switch directory and resume
+    from rich.prompt import Confirm
+    from rich.console import Console
+    console = Console()
+
+    console.print()
+    if Confirm.ask(f"[cyan]Switch to {new_project_path} and resume session?[/cyan]",
+                   default=True):
+        import os
+        import subprocess
+        os.chdir(new_project_path)
+        console.print(f"\n[green]Switching to {new_project_path}...[/green]")
+        if detected_agent == "claude":
+            os.execvp("claude", ["claude", "--resume", session_id])
+        else:
+            os.execvp("codex", ["codex", "resume", session_id])
+    else:
+        console.print(f"\n[dim]To resume later:[/dim]")
+        console.print(f"  [cyan]{resume_cmd}[/cyan]")
+
+
 @main.command("query")
 @click.argument("session", required=False)
 @click.argument("question", required=False)
