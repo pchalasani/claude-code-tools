@@ -1,0 +1,14 @@
+---
+description: {{ command.description }}
+{% if command.agent %}
+agent: {{ command.agent }}
+{% endif %}
+{% if command.model %}
+model: {{ command.model }}
+{% endif %}
+{% if command.subtask %}
+subtask: true
+{% endif %}
+---
+
+{{ command.template }}

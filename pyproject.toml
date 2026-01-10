@@ -9,12 +9,16 @@ dependencies = [
     "click>=8.0.0",
     "commitizen>=4.8.3",
     "fire>=0.5.0",
+    "jinja2>=3.0",
     "mcp>=1.13.0",
+    "pydantic>=2.0",
     "pytest>=9.0.1",
+    "python-frontmatter>=1.0.0",
     "pyyaml>=6.0",
     "rich>=13.0.0",
     "tantivy>=0.22.0",
     "tqdm>=4.67.1",
+    "typer>=0.9.0",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +32,9 @@ gdocs = [
 # Unified session management interface
 # All session commands accessible via: aichat <subcommand>
 aichat = "claude_code_tools.aichat:main"
+
+# Claude Code to OpenCode migration tool
+cc2opencode = "claude_code_tools.cc2opencode.cli:main"
 
 # Non-session utilities
 vault = "claude_code_tools.dotenv_vault:main"
@@ -45,6 +52,7 @@ build-backend = "hatchling.build"
 ignore-vcs = true
 include = [
     "claude_code_tools/**/*.py",
+    "claude_code_tools/**/*.j2",
     "docs/*.md",
     "node_ui/menu.js",
     "node_ui/action_config.js",

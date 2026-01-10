@@ -76,6 +76,13 @@ CLI commands, skills, agents, hooks, plugins. Click on a card below to navigate.
 </a>
 </td>
 </tr>
+<tr>
+<td align="center" colspan="3">
+<a href="#cc2opencode">
+<img src="assets/card-cc2opencode.svg" alt="cc2opencode" width="300"/>
+</a>
+</td>
+</tr>
 </table>
 
 <table>
@@ -120,11 +127,12 @@ Without `aichat-search`, search won't work, but other `aichat` commands (resume,
 
 ### What You Get
 
-Four commands are installed:
+Five commands are installed:
 
 | Command | Description |
 |---------|-------------|
 | [`aichat`](#aichat-session-management) | Continue work with session lineage and truncation, avoiding compaction;<br>fast (Rust/Tantivy) full-text session search TUI for humans, CLI for agents  |
+| [`cc2opencode`](#cc2opencode) | Migrate Claude Code configs (agents, commands, hooks, MCP) to OpenCode format |
 | [`tmux-cli`](#tmux-cli-terminal-automation) | Terminal automation for AI agents ("Playwright for terminals") |
 | [`vault`](#vault) | Encrypted .env backup and sync |
 | [`env-safe`](#env-safe) | Safe .env inspection without exposing values |
@@ -819,6 +827,184 @@ env-safe --help                  # See all options
 
 The [`safety-hooks` plugin](#claude-code-safety-hooks) in this repo blocks Claude Code from directly accessing .env files — no reading, writing, or editing allowed. This prevents both accidental exposure of API keys and unintended modifications. The `env-safe` command provides the only approved way for Claude Code to inspect environment configuration safely, while any modifications must be done manually outside of Claude Code.
 
+
+<a id="cc2opencode"></a>
+# 🔄 cc2opencode — Migrate Claude Code to OpenCode
+
+Migrate your Claude Code configuration (agents, commands, hooks, MCP servers) to
+[OpenCode](https://github.com/AnomalyInnovations/opencode) format with a single command.
+
+## Why cc2opencode?
+
+[OpenCode](https://github.com/AnomalyInnovations/opencode) is an open-source alternative
+to Claude Code with similar extensibility features. If you've built custom agents,
+commands, or hooks for Claude Code, `cc2opencode` helps you port them to OpenCode
+without manual conversion.
+
+## What Gets Migrated
+
+| Claude Code | OpenCode | Notes |
+|-------------|----------|-------|
+| `.claude/agents/*.md` | `.opencode/agent/*.md` | Format converted (YAML frontmatter) |
+| `.claude/commands/*.md` | `.opencode/command/*.md` | Placeholders compatible ($ARGUMENTS, etc.) |
+| `settings.json` hooks | `.opencode/plugin/*.ts` | Bash → TypeScript (may need manual review) |
+| `.mcp.json` / `.claude.json` | `opencode.json` | MCP server config translated |
+| `.claude/skills/` | (no change needed) | OpenCode reads `.claude/skills/` natively! |
+
+## Usage
+
+```bash
+# Scan a project and see what would be migrated
+cc2opencode detect ~/myproject
+
+# Preview migration (dry run)
+cc2opencode migrate ~/myproject --dry-run
+
+# Perform the migration
+cc2opencode migrate ~/myproject
+
+# Migrate with custom output directory
+cc2opencode migrate ~/myproject --output ~/myproject/.opencode
+
+# Skip specific components
+cc2opencode migrate ~/myproject --skip-hooks --skip-mcp
+```
+
+## Example Output
+
+Running `cc2opencode migrate` creates this structure:
+
+```
+.opencode/
+├── agent/
+│   ├── code-reviewer.md      # Converted from .claude/agents/
+│   └── ui-tester.md
+├── command/
+│   ├── commit.md             # Converted from .claude/commands/
+│   ├── review-pr.md
+│   └── frontend/             # Namespaced commands preserved
+│       └── component.md
+├── plugin/
+│   └── migrated_hooks.ts     # Hooks converted to TypeScript
+└── opencode.json             # MCP servers + config
+```
+
+## CLI Reference
+
+```
+cc2opencode [OPTIONS] COMMAND [ARGS]
+
+Commands:
+  detect    Scan for Claude Code config without migrating
+  migrate   Convert Claude Code config to OpenCode format
+
+Options (migrate):
+  -o, --output DIR      Output directory (default: .opencode/)
+  -d, --dry-run         Show what would be created
+  -v, --verbose         Verbose output
+  --skip-hooks          Skip hook migration
+  --skip-agents         Skip agent migration
+  --skip-commands       Skip command migration
+  --skip-mcp            Skip MCP config migration
+```
+
+## Translation Details
+
+### Agents
+
+Claude Code agents use frontmatter like:
+
+```yaml
+---
+name: code-reviewer
+description: Reviews code for quality
+tools: Read, Grep, Glob
+model: sonnet
+permissionMode: plan
+---
+```
+
+This becomes OpenCode format:
+
+```yaml
+---
+description: Reviews code for quality
+mode: subagent
+model: anthropic/claude-sonnet-4-20250514
+permission:
+  edit: deny
+  bash: deny
+  read: allow
+---
+```
+
+### Commands
+
+Command placeholders are compatible between Claude Code and OpenCode:
+
+- `$ARGUMENTS` — All arguments after command name
+- `$1`, `$2`, etc. — Positional arguments
+- `@filepath` — Include file contents
+- `` !`command` `` — Execute bash and include output
+
+### Hooks → TypeScript Plugins
+
+Claude Code hooks (JSON in `settings.json`):
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [{
+      "matcher": "Edit|Write",
+      "hooks": [{
+        "type": "command",
+        "command": "prettier --write \"$CLAUDE_FILE_PATHS\""
+      }]
+    }]
+  }
+}
+```
+
+Become OpenCode TypeScript plugins:
+
+```typescript
+import type { Plugin } from "@opencode-ai/plugin"
+
+export const MigratedHooksPlugin: Plugin = async (ctx) => {
+  return {
+    "tool.execute.after": async (input, output) => {
+      if (["Edit", "Write"].includes(input.tool)) {
+        await ctx.$`prettier --write ${output.metadata?.filePath}`
+      }
+    },
+  }
+}
+```
+
+**Note:** Prompt-based hooks (using LLM for decisions) require manual implementation
+in the generated TypeScript.
+
+### MCP Servers
+
+MCP config is translated with type mapping:
+
+| Claude Code | OpenCode |
+|-------------|----------|
+| `type: "stdio"` | `type: "local"` |
+| `type: "http"` | `type: "remote"` |
+| `command` + `args` | `command: [cmd, ...args]` |
+| `env` | `environment` |
+
+## Limitations
+
+Some Claude Code features don't have direct OpenCode equivalents:
+
+- `allowed-tools` in commands — Not supported (noted in generated file)
+- `disable-model-invocation` — Not supported
+- Inline hooks in agents — Converted to separate plugin file
+- Prompt hooks — Generated as stubs requiring manual implementation
+
+---
 
 <a id="claude-code-safety-hooks"></a>
 # 🛡️ Claude Code Safety Hooks

@@ -1,0 +1,30 @@
+---
+description: {{ agent.description }}
+mode: {{ agent.mode }}
+{% if agent.model %}
+model: {{ agent.model }}
+{% endif %}
+{% if agent.temperature is not none %}
+temperature: {{ agent.temperature }}
+{% endif %}
+{% if agent.top_p is not none %}
+top_p: {{ agent.top_p }}
+{% endif %}
+{% if agent.color %}
+color: "{{ agent.color }}"
+{% endif %}
+{% if agent.hidden %}
+hidden: true
+{% endif %}
+{% if agent.steps is not none %}
+steps: {{ agent.steps }}
+{% endif %}
+{% if agent.permission %}
+permission:
+{% for key, value in agent.permission.items() %}
+  {{ key }}: {{ value }}
+{% endfor %}
+{% endif %}
+---
+
+{{ agent.prompt }}
