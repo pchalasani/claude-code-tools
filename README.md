@@ -145,7 +145,7 @@ This repo also provides plugins for the
 | `tmux-cli` | Terminal automation skill for interacting with other tmux panes |
 | `workflow` | Work logging, code walk-through, issue specs, UI testing |
 | `safety-hooks` | Prevent destructive git/docker/rm commands |
-| `langroid` | Design patterns for the Langroid multi-agent LLM framework |
+| `langroid` | Design patterns for the [Langroid](https://github.com/langroid/langroid) multi-agent LLM framework |
 
 **Install the plugins:**
 
