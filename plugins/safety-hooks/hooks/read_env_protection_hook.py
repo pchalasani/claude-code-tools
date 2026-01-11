@@ -19,8 +19,8 @@ def check_env_file_path(file_path):
     basename = os.path.basename(file_path).lower()
 
     # Check for .env files (including .env.local, .ENV, .Env, etc.)
-    # Also check for bare "env" file without the dot
-    if basename == '.env' or basename.startswith('.env.') or basename == 'env':
+    # Note: We don't block bare "env" files as they're often unrelated (e.g., virtualenv dirs)
+    if basename == '.env' or basename.startswith('.env.'):
         reason_text = (
             "Blocked: Direct access to .env files is not allowed for security reasons.\n\n"
             "Reading .env files could expose sensitive API keys, passwords, and secrets.\n\n"
@@ -51,11 +51,8 @@ def main():
 
     if should_block:
         print(json.dumps({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": reason
-            }
+            "decision": "block",
+            "reason": reason
         }, ensure_ascii=False))
     else:
         print(json.dumps({"decision": "approve"}))
