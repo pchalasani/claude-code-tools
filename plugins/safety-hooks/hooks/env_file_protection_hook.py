@@ -12,7 +12,21 @@ def check_env_file_access(command):
     """
     # Normalize the command
     normalized_cmd = ' '.join(command.strip().split())
-    
+
+    # Safe commands that may mention .env in text but don't access files
+    # These commands only pass .env as string content, not as file operations
+    safe_command_patterns = [
+        r'^git\s+commit\b',      # git commit -m "message about .env"
+        r'^git\s+tag\b',         # git tag -m "message"
+        r'^gh\s+pr\s+create\b',  # gh pr create --body "..."
+        r'^gh\s+issue\s+create\b',  # gh issue create --body "..."
+        r'^gh\s+release\s+create\b',  # gh release create
+    ]
+
+    for pattern in safe_command_patterns:
+        if re.match(pattern, normalized_cmd, re.IGNORECASE):
+            return False, None
+
     # Patterns that indicate reading, writing, or editing .env files
     env_patterns = [
         # Direct file reading
