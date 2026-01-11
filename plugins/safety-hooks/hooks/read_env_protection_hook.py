@@ -15,11 +15,12 @@ def check_env_file_path(file_path):
     if not file_path:
         return False, None
 
-    # Get the basename
-    basename = os.path.basename(file_path)
+    # Get the basename and normalize to lowercase for case-insensitive matching
+    basename = os.path.basename(file_path).lower()
 
-    # Check for .env files (including .env.local, .env.production, etc.)
-    if basename == '.env' or basename.startswith('.env.'):
+    # Check for .env files (including .env.local, .ENV, .Env, etc.)
+    # Also check for bare "env" file without the dot
+    if basename == '.env' or basename.startswith('.env.') or basename == 'env':
         reason_text = (
             "Blocked: Direct access to .env files is not allowed for security reasons.\n\n"
             "Reading .env files could expose sensitive API keys, passwords, and secrets.\n\n"
