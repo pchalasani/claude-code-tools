@@ -41,7 +41,11 @@ def main():
     # Check if this is a Read tool call
     tool_name = data.get("tool_name")
     if tool_name != "Read":
-        print(json.dumps({"decision": "approve"}))
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "permissionDecision": "allow"
+            }
+        }))
         sys.exit(0)
 
     # Get the file path being read
@@ -51,11 +55,18 @@ def main():
 
     if should_block:
         print(json.dumps({
-            "decision": "block",
-            "reason": reason
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason
+            }
         }, ensure_ascii=False))
     else:
-        print(json.dumps({"decision": "approve"}))
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "permissionDecision": "allow"
+            }
+        }))
 
     sys.exit(0)
 
