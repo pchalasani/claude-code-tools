@@ -101,7 +101,20 @@ decisions to Claude Code.
 - **Alternative**: Suggests using `env-safe` command for safe inspection
 - **Purpose**: Prevent exposure of secrets and sensitive environment variables
 
-### 2. file_length_limit_hook.py (PreToolUse for Edit and Write)
+### 2. read_env_protection_hook.py (PreToolUse for Read)
+
+- **Decision**: block
+- **Trigger**: Read tool calls targeting `.env` files
+- **Blocked patterns**:
+
+  - `.env` - exact match
+  - `.env.*` - variants like `.env.local`, `.env.production`, etc.
+
+- **Alternative**: Suggests using `env-safe` command for safe inspection
+- **Purpose**: Closes the gap where the Read tool could bypass Bash-level .env
+  protections
+
+### 3. file_length_limit_hook.py (PreToolUse for Edit and Write)
 
 - **Decision**: block (with speed bump pattern)
 - **Trigger**: Edit or Write operations on source code files that would exceed
@@ -122,5 +135,6 @@ decisions to Claude Code.
 | git_add_block_hook.py | block/ask/allow | Blocks dangerous patterns; asks for modified files; allows new files |
 | git_checkout_safety_hook.py | block | Protects uncommitted changes |
 | git_commit_block_hook.py | ask | Prompts user for commit approval |
-| env_file_protection_hook.py | block | Protects .env files |
+| env_file_protection_hook.py | block | Protects .env files from Bash commands |
+| read_env_protection_hook.py | block | Protects .env files from Read tool |
 | file_length_limit_hook.py | block (speed bump) | Limits source file size |

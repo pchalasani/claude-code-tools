@@ -31,6 +31,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/read_env_protection_hook.py",
+            "timeout": 10
+          }
+        ]
       }
     ]
   }
