@@ -96,49 +96,43 @@ else
     next_bg=$BG_CYAN
 fi
 
-# Context progress bar
+# Context progress bar (uses built-in used_percentage from Claude Code 2.1.6+)
 context_segment=""
-usage=$(echo "$input" | jq '.context_window.current_usage // empty' 2>/dev/null)
-if [ -n "$usage" ] && [ "$usage" != "null" ]; then
-    current=$(echo "$usage" | jq '.input_tokens + .cache_creation_input_tokens + .cache_read_input_tokens' 2>/dev/null)
-    size=$(echo "$input" | jq '.context_window.context_window_size // 0' 2>/dev/null)
-    if [ -n "$current" ] && [ "$current" != "null" ] && [ -n "$size" ] && [ "$size" != "null" ] && [ "$size" -gt 0 ] 2>/dev/null; then
-        pct=$((current * 100 / size))
+pct=$(echo "$input" | jq '.context_window.used_percentage // empty' 2>/dev/null)
+if [ -n "$pct" ] && [ "$pct" != "null" ] && [ "$pct" -ge 0 ] 2>/dev/null; then
+    # Build progress bar (10 chars wide)
+    bar_width=10
+    filled=$((pct * bar_width / 100))
+    [ "$filled" -gt "$bar_width" ] && filled=$bar_width
+    empty=$((bar_width - filled))
 
-        # Build progress bar (10 chars wide)
-        bar_width=10
-        filled=$((pct * bar_width / 100))
-        [ "$filled" -gt "$bar_width" ] && filled=$bar_width
-        empty=$((bar_width - filled))
-
-        # Colors for filled portion based on level
-        if [ "$pct" -gt 95 ]; then
-            fill_color=$'\033[38;5;196m'  # bright red
-            bar_blink=$BLINK
-        elif [ "$pct" -gt 85 ]; then
-            fill_color=$'\033[38;5;208m'  # orange
-            bar_blink=""
-        elif [ "$pct" -gt 70 ]; then
-            fill_color=$'\033[38;5;220m'  # yellow
-            bar_blink=""
-        else
-            fill_color=$'\033[38;5;29m'   # forest green
-            bar_blink=""
-        fi
-        empty_color=$'\033[38;5;240m'     # dark gray
-
-        # Build the bar string
-        filled_bar=""
-        empty_bar=""
-        for ((i=0; i<filled; i++)); do filled_bar+="█"; done
-        for ((i=0; i<empty; i++)); do empty_bar+="░"; done
-
-        # Segment with dark background
-        BG_DARK=$'\033[48;5;236m'
-        FG_DARK=$'\033[38;5;236m'
-        context_segment="${next_fg}${BG_DARK}${SEP}${bar_blink}${fill_color}${filled_bar}${RESET}${BG_DARK}${empty_color}${empty_bar}${FG_WHITE} ${pct}%${RESET}"
-        next_fg=$FG_DARK
+    # Colors for filled portion based on level
+    if [ "$pct" -gt 95 ]; then
+        fill_color=$'\033[38;5;196m'  # bright red
+        bar_blink=$BLINK
+    elif [ "$pct" -gt 85 ]; then
+        fill_color=$'\033[38;5;208m'  # orange
+        bar_blink=""
+    elif [ "$pct" -gt 70 ]; then
+        fill_color=$'\033[38;5;220m'  # yellow
+        bar_blink=""
+    else
+        fill_color=$'\033[38;5;29m'   # forest green
+        bar_blink=""
     fi
+    empty_color=$'\033[38;5;240m'     # dark gray
+
+    # Build the bar string
+    filled_bar=""
+    empty_bar=""
+    for ((i=0; i<filled; i++)); do filled_bar+="█"; done
+    for ((i=0; i<empty; i++)); do empty_bar+="░"; done
+
+    # Segment with dark background
+    BG_DARK=$'\033[48;5;236m'
+    FG_DARK=$'\033[38;5;236m'
+    context_segment="${next_fg}${BG_DARK}${SEP}${bar_blink}${fill_color}${filled_bar}${RESET}${BG_DARK}${empty_color}${empty_bar}${FG_WHITE} ${pct}%${RESET}"
+    next_fg=$FG_DARK
 fi
 
 # Fallback if no context data

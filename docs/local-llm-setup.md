@@ -284,3 +284,67 @@ llama-server --fim-qwen-30b-default --port 8127
   `/v1/messages` (Anthropic format)
 - Both endpoints are served by llama-server simultaneously
 - The same model can serve both Claude Code and Codex at the same time
+
+---
+
+# Vision Models with Codex CLI
+
+Codex CLI supports image inputs (`-i`/`--image` flags), and llama-server can serve
+vision-language models like Qwen3-VL. This enables local multimodal inference.
+
+> **Note:** Vision only works via the OpenAI-compatible `/v1/chat/completions`
+> endpoint (Codex), not the Anthropic `/v1/messages` endpoint (Claude Code).
+
+## Qwen3-VL-30B-A3B Setup
+
+Vision models require two GGUF files: the main model + a multimodal projector
+(mmproj).
+
+**One-time setup** (download the mmproj file):
+
+```bash
+just qwen3-vl-download
+# Or manually:
+mkdir -p ~/models
+hf download Qwen/Qwen3-VL-30B-A3B-Instruct-GGUF \
+  mmproj-Qwen3-VL-30B-A3B-Instruct-f16.gguf \
+  --local-dir ~/models
+```
+
+**Start the server** (port 8128):
+
+```bash
+just qwen3-vl
+# Or manually:
+llama-server -hf Qwen/Qwen3-VL-30B-A3B-Instruct-GGUF:Q4_K_M \
+  --mmproj ~/models/mmproj-Qwen3-VL-30B-A3B-Instruct-f16.gguf \
+  --port 8128 \
+  -c 32768 \
+  -b 2048 \
+  -ub 2048 \
+  --parallel 1 \
+  --jinja
+```
+
+**Use with Codex:**
+
+First, add the provider to `~/.codex/config.toml`:
+
+```toml
+[model_providers.llama-8128]
+name = "Qwen3-VL Vision"
+base_url = "http://localhost:8128/v1"
+wire_api = "chat"
+```
+
+Then run Codex with an image:
+
+```bash
+codex --model qwen3-vl -c model_provider=llama-8128 -i screenshot.png "describe this"
+```
+
+## Quick Reference
+
+| Model | Port | Command |
+|-------|------|---------|
+| Qwen3-VL-30B-A3B | 8128 | `just qwen3-vl` (after `just qwen3-vl-download`) |
