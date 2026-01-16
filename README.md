@@ -920,14 +920,13 @@ Once installed, the plugin works automatically:
 
 ### Configuration
 
-Use the `/say-voice` command to configure:
+Use the `/voice:speak` command to configure:
 
 ```bash
-/say-voice              # Show current voice and enabled status
-/say-voice alba         # Set voice to "alba" and enable feedback
-/say-voice azure        # Set voice to "azure"
-/say-voice stop         # Disable voice feedback
-/say-voice start        # Re-enable voice feedback
+/voice:speak            # Enable voice feedback with current voice
+/voice:speak alba       # Set voice to "alba" and enable feedback
+/voice:speak azure      # Set voice to "azure" and enable
+/voice:speak stop       # Disable voice feedback
 ```
 
 Available voices depend on pocket-tts. Common options: `alba`, `azure`,
