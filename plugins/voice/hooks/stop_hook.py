@@ -106,7 +106,7 @@ def main():
 
     # Debug: log received data to see what fields are available
     import logging
-    logging.basicConfig(filename="/tmp/voice-feedback-debug.log", level=logging.DEBUG)
+    logging.basicConfig(filename="/tmp/voice-debug.log", level=logging.DEBUG)
     logging.debug(f"Stop hook received: {json.dumps(data, indent=2)}")
 
     # Extract relevant information from Stop event

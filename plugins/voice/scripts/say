@@ -51,7 +51,7 @@ if [[ -z "$TEXT" ]]; then
 fi
 
 # Check config file for voice and enabled status
-CONFIG_FILE="$HOME/.claude/voice-feedback.local.md"
+CONFIG_FILE="$HOME/.claude/voice.local.md"
 if [[ -f "$CONFIG_FILE" ]]; then
     # Extract enabled status from YAML frontmatter
     ENABLED=$(sed -n '/^---$/,/^---$/p' "$CONFIG_FILE" | grep "^enabled:" | sed 's/enabled:[[:space:]]*//')

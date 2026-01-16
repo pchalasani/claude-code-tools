@@ -3,12 +3,12 @@ allowed-tools: Bash, Read, Write, Edit
 arguments: voice
 ---
 
-Set the voice for voice plugin, or disable/enable voice feedback.
+Enable, disable, or configure voice feedback.
 
 **Commands:**
-- `/say-voice` - Show current voice and enabled status
-- `/say-voice <voice>` - Set voice (e.g., azure, alba) and enable feedback
-- `/say-voice stop` - Disable voice feedback
+- `/voice` - Enable voice feedback with current voice
+- `/voice <voice>` - Set voice (e.g., azure, alba) and enable feedback
+- `/voice stop` - Disable voice feedback
 
 **Config file:** `~/.claude/voice.local.md`
 
@@ -19,6 +19,12 @@ enabled: true
 ---
 ```
 
-When setting a voice, also set `enabled: true`.
-When using `stop`, set `enabled: false` (voice unchanged).
-Create the config file if it doesn't exist.
+**Behavior:**
+- When no argument: Set `enabled: true` and tell user:
+  "Voice feedback enabled. Use `/voice stop` to disable, or `/voice <name>` to change voice."
+- When voice name given: Set `voice: <name>` and `enabled: true`, tell user:
+  "Voice set to <name> and enabled. Use `/voice stop` to disable."
+- When `stop`: Set `enabled: false` (voice unchanged), tell user:
+  "Voice feedback disabled. Use `/voice` to re-enable."
+
+Create the config file if it doesn't exist (default voice: azure).

@@ -2,6 +2,17 @@
 # Stop hook - require voice feedback before stopping (session-aware)
 # Works with post_bash_hook.sh which creates the flag when say is called
 
+# Check if voice feedback is disabled in config
+CONFIG_FILE="$HOME/.claude/voice.local.md"
+if [[ -f "$CONFIG_FILE" ]]; then
+    ENABLED=$(sed -n '/^---$/,/^---$/p' "$CONFIG_FILE" | grep "^enabled:" | sed 's/enabled:[[:space:]]*//')
+    if [[ "$ENABLED" == "false" ]]; then
+        # Voice feedback is disabled, approve immediately
+        echo '{"decision": "approve"}'
+        exit 0
+    fi
+fi
+
 # Read input to get session_id
 INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*: *"//' | sed 's/"$//')
