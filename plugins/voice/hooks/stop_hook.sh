@@ -8,7 +8,7 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
     # Create default config file
     cat > "$CONFIG_FILE" << 'CONFIGEOF'
 ---
-voice: azure
+voice: azelma
 enabled: true
 ---
 
