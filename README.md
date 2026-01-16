@@ -929,8 +929,8 @@ Use the `/voice:speak` command to configure:
 /voice:speak stop       # Disable voice feedback
 ```
 
-Available voices: `alba`, `marius`, `javert`, `jean`, `fantine`, `cosette`,
-`eponine`, `azelma`.
+See the [pocket-tts repo](https://github.com/kyutai-labs/pocket-tts) for the
+latest available voices.
 
 ### Architecture
 
