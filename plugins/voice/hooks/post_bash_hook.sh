@@ -14,7 +14,7 @@ if [[ "$COMMAND" == *"/scripts/say "* ]] || [[ "$COMMAND" == *"/scripts/say\""* 
 
     if [[ -n "$SESSION_ID" ]]; then
         # Create the flag file
-        touch "/tmp/voice-feedback-${SESSION_ID}-done"
+        touch "/tmp/voice-${SESSION_ID}-done"
     fi
 fi
 

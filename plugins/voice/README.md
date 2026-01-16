@@ -1,4 +1,4 @@
-# Voice Feedback Plugin
+# Voice Plugin
 
 Audio feedback for Claude Code using [pocket-tts](https://github.com/kyutai-labs/pocket-tts).
 
@@ -18,10 +18,10 @@ Copy or symlink this plugin to your Claude Code plugins directory:
 
 ```bash
 # Option 1: Symlink (recommended for development)
-ln -s /path/to/claude-code-tools/plugins/voice-feedback ~/.claude/plugins/voice-feedback
+ln -s /path/to/claude-code-tools/plugins/voice ~/.claude/plugins/voice
 
 # Option 2: Copy
-cp -r /path/to/claude-code-tools/plugins/voice-feedback ~/.claude/plugins/
+cp -r /path/to/claude-code-tools/plugins/voice ~/.claude/plugins/
 ```
 
 ## How It Works
@@ -68,7 +68,7 @@ You can use the `say` script directly from the command line:
 To disable voice feedback, simply remove or uninstall the plugin:
 
 ```bash
-rm -rf ~/.claude/plugins/voice-feedback
+rm -rf ~/.claude/plugins/voice
 ```
 
 ## Troubleshooting

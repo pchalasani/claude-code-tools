@@ -78,8 +78,8 @@ CLI commands, skills, agents, hooks, plugins. Click on a card below to navigate.
 </tr>
 <tr>
 <td align="center">
-<a href="#voice-feedback">
-<img src="assets/card-voice.svg" alt="voice-feedback" width="200"/>
+<a href="#voice">
+<img src="assets/card-voice.svg" alt="voice" width="200"/>
 </a>
 </td>
 <td align="center">
@@ -157,7 +157,7 @@ This repo also provides plugins for the
 | `workflow` | Work logging, code walk-through, issue specs, UI testing |
 | `safety-hooks` | Prevent destructive git/docker/rm commands |
 | `langroid` | Design patterns for the [Langroid](https://github.com/langroid/langroid) multi-agent LLM framework |
-| `voice-feedback` | Spoken audio summaries when agent stops; uses [pocket-tts](https://github.com/souzatharsis/pocket-tts) |
+| `voice` | Spoken audio summaries when agent stops; uses [pocket-tts](https://github.com/souzatharsis/pocket-tts) |
 
 **Install the plugins:**
 
@@ -177,7 +177,7 @@ claude plugin install "tmux-cli@cctools-plugins"
 claude plugin install "workflow@cctools-plugins"
 claude plugin install "safety-hooks@cctools-plugins"
 claude plugin install "langroid@cctools-plugins"
-claude plugin install "voice-feedback@cctools-plugins"
+claude plugin install "voice@cctools-plugins"
 
 # Or in-session
 /plugin install aichat@cctools-plugins
@@ -185,7 +185,7 @@ claude plugin install "voice-feedback@cctools-plugins"
 /plugin install workflow@cctools-plugins
 /plugin install safety-hooks@cctools-plugins
 /plugin install langroid@cctools-plugins
-/plugin install voice-feedback@cctools-plugins
+/plugin install voice@cctools-plugins
 ```
 
 You can also use `/plugin` without arguments to launch a TUI for browsing and installing.
@@ -876,8 +876,8 @@ Install the `safety-hooks` plugin as described in
 
 For complete documentation, see [hooks/README.md](hooks/README.md).
 
-<a id="voice-feedback"></a>
-# 🔊 Voice Feedback Plugin
+<a id="voice"></a>
+# 🔊 Voice Plugin
 
 Get spoken audio feedback when Claude Code completes a task. The agent
 automatically speaks a 1-2 sentence summary before stopping, so you can
@@ -906,7 +906,7 @@ are instant.
 claude plugin marketplace add pchalasani/claude-code-tools
 
 # Install the plugin
-claude plugin install voice-feedback@cctools-plugins
+claude plugin install voice@cctools-plugins
 ```
 
 ### Usage

@@ -1,5 +1,5 @@
 {
-  "description": "Voice feedback hooks - track say invocations and remind agent to speak when stopping",
+  "description": "Voice hooks - track say invocations and remind agent to speak when stopping",
   "hooks": {
     "PostToolUse": [
       {

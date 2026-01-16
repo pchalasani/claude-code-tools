@@ -7,7 +7,7 @@ INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*: *"//' | sed 's/"$//')
 
 # Session-specific flag file (created by post_bash_hook.sh when say is invoked)
-FLAG_FILE="/tmp/voice-feedback-${SESSION_ID}-done"
+FLAG_FILE="/tmp/voice-${SESSION_ID}-done"
 SAY_SCRIPT="${CLAUDE_PLUGIN_ROOT}/scripts/say"
 
 if [[ -f "$FLAG_FILE" ]]; then
