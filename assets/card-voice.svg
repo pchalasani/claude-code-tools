@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <defs>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a0a2a"/>
+      <stop offset="100%" style="stop-color:#0f0518"/>
+    </linearGradient>
+  </defs>
+  <rect width="200" height="100" rx="8" fill="url(#bg)"/>
+  <text x="100" y="37" font-family="monospace" font-size="26" font-weight="bold" fill="#cc33ff" text-anchor="middle" filter="url(#glow)">voice</text>
+  <text x="100" y="60" font-family="monospace" font-size="14" fill="#dd77ff" text-anchor="middle">Spoken Audio</text>
+  <text x="100" y="75" font-family="monospace" font-size="14" fill="#dd77ff" text-anchor="middle">Feedback</text>
+</svg>
