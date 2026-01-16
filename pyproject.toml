@@ -1,6 +1,6 @@
 [project]
 name = "claude-code-tools"
-version = "1.6.0"
+version = "1.7.0"
 description = "Collection of tools for working with Claude Code"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -79,7 +79,7 @@ markers = [
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "1.6.0"
+version = "1.7.0"
 tag_format = "v$version"
 version_files = [
     "pyproject.toml:version",
