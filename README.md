@@ -246,6 +246,10 @@ The `langroid` plugin provides design pattern knowledge for the
 | `/patterns` | Index of Langroid design patterns (agent config, tools, task control, MCP integration) |
 | `/add-pattern` | Record new patterns as you learn them from the Langroid codebase |
 
+#### Voice Plugin Details
+
+See the [Voice Plugin](#voice) section below for details.
+
 </details>
 
 ---
