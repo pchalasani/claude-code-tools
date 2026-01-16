@@ -929,8 +929,8 @@ Use the `/voice:speak` command to configure:
 /voice:speak stop       # Disable voice feedback
 ```
 
-Available voices depend on pocket-tts. Common options: `alba`, `azure`,
-`azelma`, `cori`, `jenny`.
+Available voices: `alba`, `marius`, `javert`, `jean`, `fantine`, `cosette`,
+`eponine`, `azelma`.
 
 ### Architecture
 
