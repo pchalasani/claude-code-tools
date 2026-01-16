@@ -2,10 +2,8 @@
 
 Audio feedback for Claude Code using [pocket-tts](https://github.com/kyutai-labs/pocket-tts).
 
-When the Claude Code agent completes a task, this plugin:
-
-1. Summarizes the agent's output using Haiku
-2. Speaks the summary aloud using pocket-tts
+When the Claude Code agent completes a task, it provides a spoken summary of what
+was accomplished.
 
 ## Requirements
 
@@ -14,25 +12,32 @@ When the Claude Code agent completes a task, this plugin:
 
 ## Installation
 
-Copy or symlink this plugin to your Claude Code plugins directory:
+Install from the cctools-plugins marketplace:
 
 ```bash
-# Option 1: Symlink (recommended for development)
-ln -s /path/to/claude-code-tools/plugins/voice ~/.claude/plugins/voice
-
-# Option 2: Copy
-cp -r /path/to/claude-code-tools/plugins/voice ~/.claude/plugins/
+claude plugin add voice
 ```
 
 ## How It Works
 
 ### Stop Hook
 
-When the agent stops, the `stop_hook.py`:
+When the agent tries to stop, the `stop_hook.sh`:
 
-1. Receives the agent's output/transcript
-2. Sends it to Haiku for summarization into 1-2 short sentences
-3. Calls the `say` script to speak the summary
+1. Checks if voice feedback is enabled (via config file)
+2. If enabled, blocks the agent and asks it to provide a voice summary
+3. The agent calls the `say` script with a brief summary
+4. Once spoken, the agent is allowed to stop
+
+### The `/voice:speak` Command
+
+Control voice feedback with the slash command:
+
+- `/voice:speak` - Enable voice feedback
+- `/voice:speak <voice>` - Set voice (e.g., azure, alba) and enable
+- `/voice:speak stop` - Disable voice feedback
+
+Config is stored in `~/.claude/voice.local.md`.
 
 ### The `say` Script
 
@@ -65,10 +70,16 @@ You can use the `say` script directly from the command line:
 
 ## Disabling
 
-To disable voice feedback, simply remove or uninstall the plugin:
+Disable voice feedback temporarily:
+
+```
+/voice:speak stop
+```
+
+Or uninstall the plugin entirely:
 
 ```bash
-rm -rf ~/.claude/plugins/voice
+claude plugin remove voice
 ```
 
 ## Troubleshooting
@@ -85,8 +96,3 @@ cat /tmp/pocket-tts-server.log
 
 - **macOS**: Ensure `afplay` is available (built-in)
 - **Linux**: Ensure `aplay` or `paplay` is installed
-
-### Summary not working
-
-The plugin uses `claude -p --model haiku` for summarization. Ensure Claude CLI
-is installed and configured.

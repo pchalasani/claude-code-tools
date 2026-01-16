@@ -4,13 +4,25 @@
 
 # Check if voice feedback is disabled in config
 CONFIG_FILE="$HOME/.claude/voice.local.md"
-if [[ -f "$CONFIG_FILE" ]]; then
-    ENABLED=$(sed -n '/^---$/,/^---$/p' "$CONFIG_FILE" | grep "^enabled:" | sed 's/enabled:[[:space:]]*//')
-    if [[ "$ENABLED" == "false" ]]; then
-        # Voice feedback is disabled, approve immediately
-        echo '{"decision": "approve"}'
-        exit 0
-    fi
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    # Create default config file
+    cat > "$CONFIG_FILE" << 'CONFIGEOF'
+---
+voice: azure
+enabled: true
+---
+
+# Voice Feedback Configuration
+
+Use `/voice:speak stop` to disable, `/voice:speak <name>` to change voice.
+CONFIGEOF
+fi
+
+ENABLED=$(sed -n '/^---$/,/^---$/p' "$CONFIG_FILE" | grep "^enabled:" | sed 's/enabled:[[:space:]]*//')
+if [[ "$ENABLED" == "false" ]]; then
+    # Voice feedback is disabled, approve immediately
+    echo '{"decision": "approve"}'
+    exit 0
 fi
 
 # Read input to get session_id
