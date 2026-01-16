@@ -157,7 +157,7 @@ This repo also provides plugins for the
 | `workflow` | Work logging, code walk-through, issue specs, UI testing |
 | `safety-hooks` | Prevent destructive git/docker/rm commands |
 | `langroid` | Design patterns for the [Langroid](https://github.com/langroid/langroid) multi-agent LLM framework |
-| `voice` | Spoken audio summaries when agent stops; uses [pocket-tts](https://github.com/souzatharsis/pocket-tts) |
+| `voice` | Spoken audio summaries when agent stops; uses [pocket-tts](https://github.com/kyutai-labs/pocket-tts) |
 
 **Install the plugins:**
 
@@ -890,7 +890,7 @@ multitask while Claude works.
 
 ### How It Works
 
-The plugin uses [pocket-tts](https://github.com/souzatharsis/pocket-tts), a
+The plugin uses [pocket-tts](https://github.com/kyutai-labs/pocket-tts), a
 lightweight text-to-speech library. On first use, it automatically:
 
 1. Starts a pocket-tts server (via `uvx pocket-tts serve`)
