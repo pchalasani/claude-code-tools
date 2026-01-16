@@ -76,6 +76,17 @@ CLI commands, skills, agents, hooks, plugins. Click on a card below to navigate.
 </a>
 </td>
 </tr>
+<tr>
+<td align="center">
+<a href="#voice-feedback">
+<img src="assets/card-voice.svg" alt="voice-feedback" width="200"/>
+</a>
+</td>
+<td align="center">
+</td>
+<td align="center">
+</td>
+</tr>
 </table>
 
 <table>
@@ -146,6 +157,7 @@ This repo also provides plugins for the
 | `workflow` | Work logging, code walk-through, issue specs, UI testing |
 | `safety-hooks` | Prevent destructive git/docker/rm commands |
 | `langroid` | Design patterns for the [Langroid](https://github.com/langroid/langroid) multi-agent LLM framework |
+| `voice-feedback` | Spoken audio summaries when agent stops; uses [pocket-tts](https://github.com/souzatharsis/pocket-tts) |
 
 **Install the plugins:**
 
@@ -165,6 +177,7 @@ claude plugin install "tmux-cli@cctools-plugins"
 claude plugin install "workflow@cctools-plugins"
 claude plugin install "safety-hooks@cctools-plugins"
 claude plugin install "langroid@cctools-plugins"
+claude plugin install "voice-feedback@cctools-plugins"
 
 # Or in-session
 /plugin install aichat@cctools-plugins
@@ -172,6 +185,7 @@ claude plugin install "langroid@cctools-plugins"
 /plugin install workflow@cctools-plugins
 /plugin install safety-hooks@cctools-plugins
 /plugin install langroid@cctools-plugins
+/plugin install voice-feedback@cctools-plugins
 ```
 
 You can also use `/plugin` without arguments to launch a TUI for browsing and installing.
@@ -861,6 +875,78 @@ Install the `safety-hooks` plugin as described in
 - `notification_hook.sh` - Sends ntfy.sh notifications
 
 For complete documentation, see [hooks/README.md](hooks/README.md).
+
+<a id="voice-feedback"></a>
+# 🔊 Voice Feedback Plugin
+
+Get spoken audio feedback when Claude Code completes a task. The agent
+automatically speaks a 1-2 sentence summary before stopping, so you can
+multitask while Claude works.
+
+### Prerequisites
+
+- **UV** - Required for running pocket-tts. Install via:
+  `curl -LsSf https://astral.sh/uv/install.sh | sh`
+
+### How It Works
+
+The plugin uses [pocket-tts](https://github.com/souzatharsis/pocket-tts), a
+lightweight text-to-speech library. On first use, it automatically:
+
+1. Starts a pocket-tts server (via `uvx pocket-tts serve`)
+2. Downloads the voice model (~50MB, one-time)
+
+The server persists in a tmux session (`pocket-tts`) so subsequent requests
+are instant.
+
+### Installation
+
+```bash
+# Add the marketplace (if not already added)
+claude plugin marketplace add pchalasani/claude-code-tools
+
+# Install the plugin
+claude plugin install voice-feedback@cctools-plugins
+```
+
+### Usage
+
+Once installed, the plugin works automatically:
+
+- **Automatic feedback**: When the agent finishes a task, it speaks a summary
+  before stopping
+- **Explicit requests**: Ask Claude to "use your voice" and it will speak
+  its response
+
+### Configuration
+
+Use the `/say-voice` command to configure:
+
+```bash
+/say-voice              # Show current voice and enabled status
+/say-voice alba         # Set voice to "alba" and enable feedback
+/say-voice azure        # Set voice to "azure"
+/say-voice stop         # Disable voice feedback
+/say-voice start        # Re-enable voice feedback
+```
+
+Available voices depend on pocket-tts. Common options: `alba`, `azure`,
+`azelma`, `cori`, `jenny`.
+
+### Architecture
+
+The plugin uses two hooks working together:
+
+- **Stop hook**: Blocks the agent from stopping until voice feedback is
+  provided
+- **PostToolUse hook**: Tracks when the `say` script is called and creates
+  session-specific flags to prevent double-voice
+
+This ensures:
+
+- Normal Q&A gets voice feedback when the agent stops
+- Explicit "use your voice" requests don't trigger double feedback
+- Multiple concurrent sessions don't interfere with each other
 
 <a id="using-claude-code-with-open-weight-anthropic-api-compatible-llm-providers"></a>
 ## 🤖 Using Claude Code with Open-weight Anthropic API-compatible LLM Providers
