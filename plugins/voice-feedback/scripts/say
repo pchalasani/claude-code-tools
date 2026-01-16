@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+#
+# say - Text-to-speech using pocket-tts
+#
+# Usage: say [--voice <voice>] <text>
+# Example: say hello world
+# Example: say --voice azure "Hello, how are you?"
+#
+
+set -e
+
+VOICE=""
+TEXT=""
+TTS_HOST="${TTS_HOST:-localhost}"
+TTS_PORT="${TTS_PORT:-8000}"
+TTS_URL="http://${TTS_HOST}:${TTS_PORT}"
+OUTPUT_FILE="/tmp/tts_output_$$.wav"
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --voice)
+            VOICE="$2"
+            shift 2
+            ;;
+        --help|-h)
+            echo "Usage: say [--voice <voice>] <text>"
+            echo ""
+            echo "Options:"
+            echo "  --voice <voice>  Voice to use (e.g., alba, azure)"
+            echo "  --help, -h       Show this help message"
+            echo ""
+            echo "Environment variables:"
+            echo "  TTS_HOST         TTS server host (default: localhost)"
+            echo "  TTS_PORT         TTS server port (default: 8000)"
+            exit 0
+            ;;
+        *)
+            TEXT="$TEXT $1"
+            shift
+            ;;
+    esac
+done
+
+# Trim leading space from text
+TEXT="${TEXT## }"
+
+if [[ -z "$TEXT" ]]; then
+    echo "Error: No text provided" >&2
+    exit 1
+fi
+
+# Check config file for voice and enabled status
+CONFIG_FILE="$HOME/.claude/voice-feedback.local.md"
+if [[ -f "$CONFIG_FILE" ]]; then
+    # Extract enabled status from YAML frontmatter
+    ENABLED=$(sed -n '/^---$/,/^---$/p' "$CONFIG_FILE" | grep "^enabled:" | sed 's/enabled:[[:space:]]*//')
+    # If explicitly disabled, exit silently
+    if [[ "$ENABLED" == "false" ]]; then
+        exit 0
+    fi
+    # Extract voice if not specified via --voice
+    if [[ -z "$VOICE" ]]; then
+        VOICE=$(sed -n '/^---$/,/^---$/p' "$CONFIG_FILE" | grep "^voice:" | sed 's/voice:[[:space:]]*//')
+    fi
+fi
+
+# Function to check if server is running
+check_server() {
+    curl -s -f "${TTS_URL}/health" > /dev/null 2>&1
+}
+
+# Function to start server
+start_server() {
+    echo "Starting pocket-tts server..." >&2
+    # Start server in background, redirect output to avoid cluttering terminal
+    nohup uvx pocket-tts serve --host "$TTS_HOST" --port "$TTS_PORT" \
+        > /tmp/pocket-tts-server.log 2>&1 &
+
+    # Wait for server to be ready (max 60 seconds)
+    local max_wait=60
+    local waited=0
+    while ! check_server; do
+        if [[ $waited -ge $max_wait ]]; then
+            echo "Error: Server failed to start within ${max_wait} seconds" >&2
+            echo "Check /tmp/pocket-tts-server.log for details" >&2
+            exit 1
+        fi
+        sleep 1
+        waited=$((waited + 1))
+        if [[ $((waited % 5)) -eq 0 ]]; then
+            echo "Waiting for server to start... (${waited}s)" >&2
+        fi
+    done
+    echo "Server started!" >&2
+}
+
+# Function to play audio (cross-platform)
+play_audio() {
+    local file="$1"
+    if [[ "$(uname)" == "Darwin" ]]; then
+        afplay "$file"
+    elif command -v aplay > /dev/null 2>&1; then
+        aplay -q "$file"
+    elif command -v paplay > /dev/null 2>&1; then
+        paplay "$file"
+    else
+        echo "Error: No audio player found (tried afplay, aplay, paplay)" >&2
+        exit 1
+    fi
+}
+
+# Ensure server is running
+if ! check_server; then
+    start_server
+fi
+
+# Build curl command
+CURL_ARGS=(-s -X POST "${TTS_URL}/tts" -F "text=${TEXT}" -o "$OUTPUT_FILE")
+if [[ -n "$VOICE" ]]; then
+    CURL_ARGS+=(-F "voice_url=${VOICE}")
+fi
+
+# Generate audio
+if ! curl "${CURL_ARGS[@]}"; then
+    echo "Error: Failed to generate audio" >&2
+    exit 1
+fi
+
+# Check if output file exists and has content
+if [[ ! -s "$OUTPUT_FILE" ]]; then
+    echo "Error: Generated audio file is empty" >&2
+    exit 1
+fi
+
+# Play audio
+play_audio "$OUTPUT_FILE"
+
+# Cleanup
+rm -f "$OUTPUT_FILE"

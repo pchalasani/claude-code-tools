@@ -29,6 +29,11 @@
       "name": "langroid",
       "source": "./plugins/langroid",
       "description": "Design patterns for the Langroid multi-agent LLM framework, with a skill to add new patterns as you learn them"
+    },
+    {
+      "name": "voice-feedback",
+      "source": "./plugins/voice-feedback",
+      "description": "Audio feedback when Claude Code agent completes tasks using pocket-tts"
     }
   ]
 }
