@@ -903,6 +903,12 @@ lightweight text-to-speech library. On first use, it automatically:
 The server persists in the background (via `nohup`) so subsequent requests
 are instant. Server logs are written to `/tmp/pocket-tts-server.log`.
 
+To stop the server manually (works on both macOS and Linux):
+
+```bash
+pkill -f "pocket-tts serve"
+```
+
 ### Installation
 
 ```bash
