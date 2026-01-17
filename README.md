@@ -900,8 +900,8 @@ lightweight text-to-speech library. On first use, it automatically:
 1. Starts a pocket-tts server (via `uvx pocket-tts serve`)
 2. Downloads the voice model (~50MB, one-time)
 
-The server persists in a tmux session (`pocket-tts`) so subsequent requests
-are instant.
+The server persists in the background (via `nohup`) so subsequent requests
+are instant. Server logs are written to `/tmp/pocket-tts-server.log`.
 
 ### Installation
 
