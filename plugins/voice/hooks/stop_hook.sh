@@ -29,16 +29,22 @@ fi
 INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*: *"//' | sed 's/"$//')
 
-# Session-specific flag file (created by post_bash_hook.sh when say is invoked)
-FLAG_FILE="/tmp/voice-${SESSION_ID}-done"
+# Session-specific flag files
+FLAG_FILE="/tmp/voice-${SESSION_ID}-done"      # Created by post_bash_hook.sh when say is invoked
+BLOCK_FLAG="/tmp/voice-${SESSION_ID}-blocked"  # Tracks if we already blocked once
 SAY_SCRIPT="${CLAUDE_PLUGIN_ROOT}/scripts/say"
 
 if [[ -f "$FLAG_FILE" ]]; then
     # Voice feedback was provided for this session, approve and clean up
-    rm -f "$FLAG_FILE"
+    rm -f "$FLAG_FILE" "$BLOCK_FLAG"
+    echo '{"decision": "approve"}'
+elif [[ -f "$BLOCK_FLAG" ]]; then
+    # Already blocked once, approve to prevent infinite loop
+    rm -f "$BLOCK_FLAG"
     echo '{"decision": "approve"}'
 else
-    # Block until voice feedback is provided
+    # First time - block and ask for voice feedback
+    touch "$BLOCK_FLAG"
     cat << EOF
 {
   "decision": "block",
