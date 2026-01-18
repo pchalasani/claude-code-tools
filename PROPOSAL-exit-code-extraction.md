@@ -73,6 +73,8 @@ I've tested against live tmux sessions with:
 
 **Key implementation learning:** During testing, we discovered that markers can scroll off the visible screen in panes with command history. The solution is to capture pane history (last 100 lines) rather than just the visible viewport. This makes execute() reliable even in long-running sessions with significant scrollback.
 
+**Future optimization:** Consider implementing reverse-pagination for scrollback capture - start with 100 lines, and if markers aren't found, progressively capture more (200, 500, 1000) until found. This would be efficient for short outputs (most common case) while remaining robust for long outputs. Since parsing uses simple Python string operations (not LLM processing), larger captures have minimal performance impact.
+
 ## Friction Analysis & Debug Tooling
 
 My existing toolkit includes debug options that record Claude's failing attempts while driving tmux. This captures common mis-cues that LLMs make - things like:
