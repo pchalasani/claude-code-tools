@@ -599,7 +599,8 @@ class TmuxCLIController:
         # Poll for completion
         start_time = time.time()
         while time.time() - start_time < timeout:
-            captured = self.capture_pane(pane_id=target)
+            # Capture more lines to handle scrollback
+            captured = self.capture_pane(pane_id=target, lines=100)
 
             # Check if end marker is present
             if end_marker in captured:
@@ -610,7 +611,7 @@ class TmuxCLIController:
             time.sleep(0.5)
 
         # Timeout - return what we have
-        captured = self.capture_pane(pane_id=target)
+        captured = self.capture_pane(pane_id=target, lines=100)
         result = parse_marked_output(captured, start_marker, end_marker)
         return result
 
