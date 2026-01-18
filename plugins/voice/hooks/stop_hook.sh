@@ -34,14 +34,33 @@ FLAG_FILE="/tmp/voice-${SESSION_ID}-done"      # Created by post_bash_hook.sh wh
 BLOCK_FLAG="/tmp/voice-${SESSION_ID}-blocked"  # Tracks if we already blocked once
 SAY_SCRIPT="${CLAUDE_PLUGIN_ROOT}/scripts/say"
 
+# Cooldown: don't block if we blocked within the last 30 seconds (handles API error retries)
+COOLDOWN_SECONDS=30
+
 if [[ -f "$FLAG_FILE" ]]; then
     # Voice feedback was provided for this session, approve and clean up
     rm -f "$FLAG_FILE" "$BLOCK_FLAG"
     echo '{"decision": "approve"}'
 elif [[ -f "$BLOCK_FLAG" ]]; then
-    # Already blocked once, approve to prevent infinite loop
-    rm -f "$BLOCK_FLAG"
-    echo '{"decision": "approve"}'
+    # Check if block flag is recent (within cooldown period)
+    BLOCK_TIME=$(stat -f %m "$BLOCK_FLAG" 2>/dev/null || echo 0)
+    NOW=$(date +%s)
+    AGE=$((NOW - BLOCK_TIME))
+
+    if [[ $AGE -lt $COOLDOWN_SECONDS ]]; then
+        # Recently blocked, approve to prevent loop (don't delete flag yet)
+        echo '{"decision": "approve"}'
+    else
+        # Old block flag, clean up and allow a fresh block
+        rm -f "$BLOCK_FLAG"
+        touch "$BLOCK_FLAG"
+        cat << EOF
+{
+  "decision": "block",
+  "reason": "Provide a 1-2 sentence voice summary before stopping. Call: ${SAY_SCRIPT} \"your summary\""
+}
+EOF
+    fi
 else
     # First time - block and ask for voice feedback
     touch "$BLOCK_FLAG"
