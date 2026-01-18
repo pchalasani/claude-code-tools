@@ -11,7 +11,7 @@ Enables tmux-cli to work when run outside of tmux by:
 import subprocess
 import time
 import hashlib
-from typing import Optional, List, Dict, Tuple, Union
+from typing import Optional, List, Dict, Tuple, Union, Any
 
 
 class RemoteTmuxController:
@@ -185,7 +185,58 @@ class RemoteTmuxController:
     def send_escape(self, pane_id: Optional[str] = None):
         target = self._active_pane_in_window(self._window_target(pane_id))
         self._run_tmux(['send-keys', '-t', target, 'Escape'])
-    
+
+    def execute(self, command: str, pane_id: Optional[str] = None, timeout: int = 30) -> Dict[str, Any]:
+        """
+        Execute a command and return output with exit code.
+
+        Uses unique markers to capture the command's exit status reliably.
+
+        Args:
+            command: Shell command to execute
+            pane_id: Target window/pane (uses self.target_window if not specified)
+            timeout: Maximum seconds to wait for completion (default: 30)
+
+        Returns:
+            Dict with keys:
+                - output (str): Command output (stdout + stderr)
+                - exit_code (int): Command exit status, or -1 on timeout
+        """
+        from .tmux_execution_helpers import (
+            generate_execution_markers,
+            wrap_command_with_markers,
+            parse_marked_output
+        )
+
+        target = self._active_pane_in_window(self._window_target(pane_id))
+
+        # Generate unique markers for this execution
+        start_marker, end_marker = generate_execution_markers()
+
+        # Wrap command with markers
+        wrapped_command = wrap_command_with_markers(command, start_marker, end_marker)
+
+        # Send wrapped command to pane
+        self.send_keys(wrapped_command, pane_id=pane_id, enter=True, delay_enter=False)
+
+        # Poll for completion
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            captured = self.capture_pane(pane_id=pane_id)
+
+            # Check if end marker is present
+            if end_marker in captured:
+                # Command completed
+                result = parse_marked_output(captured, start_marker, end_marker)
+                return result
+
+            time.sleep(0.5)
+
+        # Timeout - return what we have
+        captured = self.capture_pane(pane_id=pane_id)
+        result = parse_marked_output(captured, start_marker, end_marker)
+        return result
+
     def kill_window(self, window_id: Optional[str] = None):
         target = self._window_target(window_id)
         # Ensure the target refers to a window (not a %pane id)

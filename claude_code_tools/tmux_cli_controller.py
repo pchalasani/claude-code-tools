@@ -7,7 +7,7 @@ This script provides functions to interact with CLI applications running in tmux
 import subprocess
 import time
 import re
-from typing import Optional, List, Dict, Tuple, Callable, Union
+from typing import Optional, List, Dict, Tuple, Callable, Union, Any
 import json
 import os
 import hashlib
@@ -548,16 +548,72 @@ class TmuxCLIController:
     def clear_pane(self, pane_id: Optional[str] = None):
         """
         Clear the pane screen.
-        
+
         Args:
             pane_id: Target pane
         """
         target = pane_id or self.target_pane
         if not target:
             raise ValueError("No target pane specified")
-        
+
         self._run_tmux_command(['send-keys', '-t', target, 'C-l'])
-    
+
+    def execute(self, command: str, pane_id: Optional[str] = None, timeout: int = 30) -> Dict[str, Any]:
+        """
+        Execute a command and return output with exit code.
+
+        Uses unique markers to capture the command's exit status reliably.
+
+        Args:
+            command: Shell command to execute
+            pane_id: Target pane (uses self.target_pane if not specified)
+            timeout: Maximum seconds to wait for completion (default: 30)
+
+        Returns:
+            Dict with keys:
+                - output (str): Command output (stdout + stderr)
+                - exit_code (int): Command exit status, or -1 on timeout
+
+        Raises:
+            ValueError: If no target pane specified
+        """
+        from .tmux_execution_helpers import (
+            generate_execution_markers,
+            wrap_command_with_markers,
+            parse_marked_output
+        )
+
+        target = pane_id or self.target_pane
+        if not target:
+            raise ValueError("No target pane specified")
+
+        # Generate unique markers for this execution
+        start_marker, end_marker = generate_execution_markers()
+
+        # Wrap command with markers
+        wrapped_command = wrap_command_with_markers(command, start_marker, end_marker)
+
+        # Send wrapped command to pane
+        self.send_keys(wrapped_command, pane_id=target, enter=True, delay_enter=False)
+
+        # Poll for completion
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            captured = self.capture_pane(pane_id=target)
+
+            # Check if end marker is present
+            if end_marker in captured:
+                # Command completed
+                result = parse_marked_output(captured, start_marker, end_marker)
+                return result
+
+            time.sleep(0.5)
+
+        # Timeout - return what we have
+        captured = self.capture_pane(pane_id=target)
+        result = parse_marked_output(captured, start_marker, end_marker)
+        return result
+
     def launch_cli(self, command: str, vertical: bool = True, size: int = 50) -> Optional[str]:
         """
         Convenience method to launch a CLI application in a new pane.
@@ -698,7 +754,34 @@ class CLI:
             # Remote mode - pass pane_id directly
             content = self.controller.capture_pane(pane_id=pane, lines=lines)
         return content
-    
+
+    def execute(self, command: str, pane: Optional[str] = None, timeout: int = 30):
+        """Execute command and return structured output with exit code.
+
+        Args:
+            command: Shell command to execute
+            pane: Target pane identifier (session:window.pane, %id, or index)
+            timeout: Maximum seconds to wait (default: 30)
+        """
+        if self.mode == 'local':
+            # Local mode - resolve pane identifier
+            if pane:
+                resolved_pane = self.controller.resolve_pane_identifier(pane)
+                if not resolved_pane:
+                    print(f"Could not resolve pane identifier: {pane}")
+                    return
+            else:
+                resolved_pane = None
+
+            result = self.controller.execute(command, pane_id=resolved_pane, timeout=timeout)
+        else:
+            # Remote mode - pass pane directly
+            result = self.controller.execute(command, pane_id=pane, timeout=timeout)
+
+        # Print JSON for easy parsing
+        print(json.dumps(result, indent=2))
+        return result
+
     def interrupt(self, pane: Optional[str] = None):
         """Send Ctrl+C to a pane."""
         if self.mode == 'local':

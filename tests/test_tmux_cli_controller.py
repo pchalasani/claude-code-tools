@@ -1,5 +1,6 @@
 """Tests for tmux_cli_controller."""
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call
+import time
 
 import pytest
 
@@ -125,3 +126,64 @@ class TestCreatePane:
         result = controller.create_pane()
 
         assert result is None
+
+class TestExecute:
+    """Tests for execute method."""
+
+    @patch.object(TmuxCLIController, 'capture_pane')
+    @patch.object(TmuxCLIController, 'send_keys')
+    def test_execute_successful_command(self, mock_send, mock_capture):
+        """Execute returns output and exit code for successful command."""
+        # Simulate captured output with markers
+        mock_capture.return_value = """__TMUX_EXEC_START_12345__
+hello world
+__TMUX_EXEC_END_12345__:0"""
+
+        controller = TmuxCLIController()
+        controller.target_pane = "%1"
+
+        result = controller.execute("echo 'hello world'", timeout=5)
+
+        assert result["output"] == "hello world"
+        assert result["exit_code"] == 0
+        # Should have called send_keys with wrapped command
+        assert mock_send.called
+
+    @patch.object(TmuxCLIController, 'capture_pane')
+    @patch.object(TmuxCLIController, 'send_keys')
+    def test_execute_failed_command(self, mock_send, mock_capture):
+        """Execute returns non-zero exit code for failed command."""
+        mock_capture.return_value = """__TMUX_EXEC_START_12345__
+ls: cannot access '/nonexistent': No such file or directory
+__TMUX_EXEC_END_12345__:2"""
+
+        controller = TmuxCLIController()
+        controller.target_pane = "%1"
+
+        result = controller.execute("ls /nonexistent", timeout=5)
+
+        assert "No such file or directory" in result["output"]
+        assert result["exit_code"] == 2
+
+    @patch('time.sleep')  # Speed up test
+    @patch.object(TmuxCLIController, 'capture_pane')
+    @patch.object(TmuxCLIController, 'send_keys')
+    def test_execute_timeout(self, mock_send, mock_capture, mock_sleep):
+        """Execute returns exit_code=-1 on timeout."""
+        # Simulate output without end marker (command still running)
+        mock_capture.return_value = """__TMUX_EXEC_START_12345__
+partial output..."""
+
+        controller = TmuxCLIController()
+        controller.target_pane = "%1"
+
+        result = controller.execute("sleep 100", timeout=1)
+
+        assert result["exit_code"] == -1
+
+    def test_execute_requires_target_pane(self):
+        """Execute raises ValueError if no target pane specified."""
+        controller = TmuxCLIController()
+
+        with pytest.raises(ValueError, match="No target pane specified"):
+            controller.execute("pwd")
