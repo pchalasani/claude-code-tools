@@ -54,7 +54,7 @@ if result["exit_code"] != 0:
 
 I've implemented this feature in my fork and have it working in both local and remote modes:
 
-**Branch:** [link to your branch once pushed]
+**Branch:** https://github.com/ryancnelson/claude-code-tools/tree/feature/exit-code-extraction
 
 **Key design decisions:**
 1. **New `execute()` method** - Doesn't modify existing `send_keys()` / `capture()` for backward compatibility
@@ -70,6 +70,8 @@ I've tested against live tmux sessions with:
 - Various failure cases (exit_code=1, 127, etc.)
 - Timeout scenarios
 - Edge cases (output containing marker-like strings)
+
+**Key implementation learning:** During testing, we discovered that markers can scroll off the visible screen in panes with command history. The solution is to capture pane history (last 100 lines) rather than just the visible viewport. This makes execute() reliable even in long-running sessions with significant scrollback.
 
 ## Friction Analysis & Debug Tooling
 
