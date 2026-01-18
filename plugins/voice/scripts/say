@@ -14,7 +14,6 @@ TEXT=""
 TTS_HOST="${TTS_HOST:-localhost}"
 TTS_PORT="${TTS_PORT:-8000}"
 TTS_URL="http://${TTS_HOST}:${TTS_PORT}"
-OUTPUT_FILE="/tmp/tts_output_$$.wav"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -95,8 +94,14 @@ start_server() {
     echo "Server started!" >&2
 }
 
-# Function to play audio (cross-platform)
-play_audio() {
+# Check if ffplay is available for streaming mode
+HAS_FFPLAY=false
+if command -v ffplay > /dev/null 2>&1; then
+    HAS_FFPLAY=true
+fi
+
+# Function to play audio from file (cross-platform fallback)
+play_audio_file() {
     local file="$1"
     if [[ "$(uname)" == "Darwin" ]]; then
         afplay "$file"
@@ -110,31 +115,43 @@ play_audio() {
     fi
 }
 
+# Function to play audio via streaming (lower latency)
+play_audio_stream() {
+    ffplay -nodisp -autoexit -loglevel quiet -i pipe:0
+}
+
 # Ensure server is running
 if ! check_server; then
     start_server
 fi
 
-# Build curl command
-CURL_ARGS=(-s -X POST "${TTS_URL}/tts" -F "text=${TEXT}" -o "$OUTPUT_FILE")
+# Build base curl args
+CURL_ARGS=(-s -X POST "${TTS_URL}/tts" -F "text=${TEXT}")
 if [[ -n "$VOICE" ]]; then
     CURL_ARGS+=(-F "voice_url=${VOICE}")
 fi
 
-# Generate audio
-if ! curl "${CURL_ARGS[@]}"; then
-    echo "Error: Failed to generate audio" >&2
-    exit 1
+if [[ "$HAS_FFPLAY" == "true" ]]; then
+    # Streaming mode: pipe directly to ffplay (lower latency)
+    if ! curl "${CURL_ARGS[@]}" | play_audio_stream; then
+        echo "Error: Failed to generate or play audio" >&2
+        exit 1
+    fi
+else
+    # Fallback mode: write to temp file then play
+    OUTPUT_FILE="/tmp/tts_output_$$.wav"
+    CURL_ARGS+=(-o "$OUTPUT_FILE")
+
+    if ! curl "${CURL_ARGS[@]}"; then
+        echo "Error: Failed to generate audio" >&2
+        exit 1
+    fi
+
+    if [[ ! -s "$OUTPUT_FILE" ]]; then
+        echo "Error: Generated audio file is empty" >&2
+        exit 1
+    fi
+
+    play_audio_file "$OUTPUT_FILE"
+    rm -f "$OUTPUT_FILE"
 fi
-
-# Check if output file exists and has content
-if [[ ! -s "$OUTPUT_FILE" ]]; then
-    echo "Error: Generated audio file is empty" >&2
-    exit 1
-fi
-
-# Play audio
-play_audio "$OUTPUT_FILE"
-
-# Cleanup
-rm -f "$OUTPUT_FILE"
