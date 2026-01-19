@@ -891,6 +891,8 @@ multitask while Claude works.
 
 - **UV** - Required for running pocket-tts. Install via:
   `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- **FFmpeg** (recommended) - Enables streaming audio for lower latency. Install
+  via `brew install ffmpeg` (macOS) or `sudo apt install ffmpeg` (Linux)
 
 ### How It Works
 

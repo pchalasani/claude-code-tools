@@ -9,6 +9,8 @@ was accomplished.
 
 - [uv](https://docs.astral.sh/uv/) (for running pocket-tts via `uvx`)
 - macOS (with `afplay`) or Linux (with `aplay` or `paplay`)
+- **Recommended**: [FFmpeg](https://ffmpeg.org/) (provides `ffplay` for lower-latency
+  streaming audio)
 
 ## Installation
 
@@ -96,3 +98,20 @@ cat /tmp/pocket-tts-server.log
 
 - **macOS**: Ensure `afplay` is available (built-in)
 - **Linux**: Ensure `aplay` or `paplay` is installed
+
+### Slow audio playback
+
+If there's a noticeable delay before audio starts, install FFmpeg to enable
+streaming mode:
+
+```bash
+# macOS
+brew install ffmpeg
+
+# Ubuntu/Debian
+sudo apt install ffmpeg
+```
+
+With FFmpeg installed, audio streams directly to `ffplay` as it's generated,
+reducing latency. Without it, the script waits for the full audio file before
+playing.
