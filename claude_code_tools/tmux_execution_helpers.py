@@ -1,7 +1,7 @@
 """Helper functions for tmux command execution with exit code capture."""
 import os
 import time
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Callable, Optional, List
 
 
 def generate_execution_markers() -> Tuple[str, str]:
@@ -117,3 +117,66 @@ def parse_marked_output(captured_output: str, start_marker: str, end_marker: str
         "output": output,
         "exit_code": exit_code
     }
+
+
+# Default expansion levels for progressive capture
+EXPANSION_LEVELS: List[Optional[int]] = [100, 500, 2000, None]
+
+
+def poll_for_completion(
+    capture_fn: Callable[[Optional[int]], str],
+    start_marker: str,
+    end_marker: str,
+    timeout: int = 30,
+    expansion_levels: Optional[List[Optional[int]]] = None,
+) -> Dict[str, Any]:
+    """Poll for command completion with progressive expansion.
+
+    Progressively expands capture size if end marker is found but start marker
+    has scrolled off screen.
+
+    Args:
+        capture_fn: Function that captures pane output. Takes optional line count,
+            returns captured text.
+        start_marker: Start marker to look for
+        end_marker: End marker to look for
+        timeout: Maximum seconds to wait for completion (default: 30)
+        expansion_levels: List of line counts to try (None = capture all).
+            Defaults to [100, 500, 2000, None].
+
+    Returns:
+        Dict with keys:
+            - output (str): Command output between markers
+            - exit_code (int): Exit code from command, or -1 if markers not found
+    """
+    if expansion_levels is None:
+        expansion_levels = EXPANSION_LEVELS
+
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        # Try progressive expansion to find both markers
+        for lines in expansion_levels:
+            captured = capture_fn(lines)
+            markers = find_markers_in_output(captured, start_marker, end_marker)
+
+            if markers["has_end"]:
+                if markers["has_start"]:
+                    # Both markers found - parse and return
+                    return parse_marked_output(captured, start_marker, end_marker)
+                # End found but start missing - try more lines
+                continue
+            else:
+                # End marker not found yet - command still running
+                break
+
+        time.sleep(0.5)
+
+    # Timeout - capture with full expansion and return what we have
+    captured = ""
+    for lines in expansion_levels:
+        captured = capture_fn(lines)
+        markers = find_markers_in_output(captured, start_marker, end_marker)
+        if markers["has_start"] or lines is None:
+            break
+
+    return parse_marked_output(captured, start_marker, end_marker)

@@ -580,8 +580,7 @@ class TmuxCLIController:
         from .tmux_execution_helpers import (
             generate_execution_markers,
             wrap_command_with_markers,
-            parse_marked_output,
-            find_markers_in_output,
+            poll_for_completion,
         )
 
         target = pane_id or self.target_pane
@@ -597,38 +596,13 @@ class TmuxCLIController:
         # Send wrapped command to pane
         self.send_keys(wrapped_command, pane_id=target, enter=True, delay_enter=False)
 
-        # Progressive expansion: start small, expand if start marker scrolls off
-        expansion_levels = [100, 500, 2000, None]  # None = capture all
-
-        # Poll for completion
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            # Try progressive expansion to find both markers
-            for lines in expansion_levels:
-                captured = self.capture_pane(pane_id=target, lines=lines)
-                markers = find_markers_in_output(captured, start_marker, end_marker)
-
-                if markers["has_end"]:
-                    if markers["has_start"]:
-                        # Both markers found - parse and return
-                        return parse_marked_output(captured, start_marker, end_marker)
-                    # End found but start missing - try more lines
-                    continue
-                else:
-                    # End marker not found yet - command still running
-                    break
-
-            time.sleep(0.5)
-
-        # Timeout - capture with full expansion and return what we have
-        captured = ""
-        for lines in expansion_levels:
-            captured = self.capture_pane(pane_id=target, lines=lines)
-            markers = find_markers_in_output(captured, start_marker, end_marker)
-            if markers["has_start"] or lines is None:
-                break
-
-        return parse_marked_output(captured, start_marker, end_marker)
+        # Poll for completion with progressive expansion
+        return poll_for_completion(
+            capture_fn=lambda lines: self.capture_pane(pane_id=target, lines=lines),
+            start_marker=start_marker,
+            end_marker=end_marker,
+            timeout=timeout,
+        )
 
     def launch_cli(self, command: str, vertical: bool = True, size: int = 50) -> Optional[str]:
         """
