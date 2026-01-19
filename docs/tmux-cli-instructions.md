@@ -110,6 +110,45 @@ tmux-cli wait_idle --pane=PANE_ID
 tmux-cli wait_idle --pane=2 --idle-time=3.0 --timeout=60
 ```
 
+### Execute command and get exit code (Python API)
+
+> **Note**: This is a Python API method, not a CLI command. Use it when you need
+> reliable success/failure detection for shell commands.
+
+```python
+from claude_code_tools.tmux_cli_controller import TmuxCLIController
+
+ctrl = TmuxCLIController()
+
+# Execute a command and get structured result
+result = ctrl.execute("make test", pane_id="ops:1.2")
+# Returns: {"output": "...", "exit_code": 0}
+
+if result["exit_code"] != 0:
+    print(f"Command failed with exit code {result['exit_code']}")
+    print(f"Error output: {result['output']}")
+
+# With custom timeout (default is 30 seconds)
+result = ctrl.execute("long_running_script.sh", pane_id="2", timeout=120)
+
+# Timeout returns exit_code=-1
+if result["exit_code"] == -1:
+    print("Command timed out")
+```
+
+**Why use `execute()` instead of `send_keys()` + `capture_pane()`?**
+
+- **Reliable exit codes**: Know definitively if a command succeeded or failed
+- **No output parsing**: Don't guess success by looking for "error" in text
+- **Proper automation**: Build pipelines that abort on failure, retry on transient
+  errors, or continue on success
+
+**When NOT to use `execute()`:**
+
+- Agent-to-agent communication (Claude Code doesn't return exit codes)
+- Interactive REPL sessions (use `send_keys()` + `wait_for_idle()` instead)
+- Long-running processes you want to monitor incrementally
+
 ### Get help
 ```bash
 tmux-cli help
