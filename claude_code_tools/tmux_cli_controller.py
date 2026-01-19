@@ -580,7 +580,8 @@ class TmuxCLIController:
         from .tmux_execution_helpers import (
             generate_execution_markers,
             wrap_command_with_markers,
-            parse_marked_output
+            parse_marked_output,
+            find_markers_in_output,
         )
 
         target = pane_id or self.target_pane
@@ -596,24 +597,38 @@ class TmuxCLIController:
         # Send wrapped command to pane
         self.send_keys(wrapped_command, pane_id=target, enter=True, delay_enter=False)
 
+        # Progressive expansion: start small, expand if start marker scrolls off
+        expansion_levels = [100, 500, 2000, None]  # None = capture all
+
         # Poll for completion
         start_time = time.time()
         while time.time() - start_time < timeout:
-            # Capture more lines to handle scrollback
-            captured = self.capture_pane(pane_id=target, lines=100)
+            # Try progressive expansion to find both markers
+            for lines in expansion_levels:
+                captured = self.capture_pane(pane_id=target, lines=lines)
+                markers = find_markers_in_output(captured, start_marker, end_marker)
 
-            # Check if end marker is present
-            if end_marker in captured:
-                # Command completed
-                result = parse_marked_output(captured, start_marker, end_marker)
-                return result
+                if markers["has_end"]:
+                    if markers["has_start"]:
+                        # Both markers found - parse and return
+                        return parse_marked_output(captured, start_marker, end_marker)
+                    # End found but start missing - try more lines
+                    continue
+                else:
+                    # End marker not found yet - command still running
+                    break
 
             time.sleep(0.5)
 
-        # Timeout - return what we have
-        captured = self.capture_pane(pane_id=target, lines=100)
-        result = parse_marked_output(captured, start_marker, end_marker)
-        return result
+        # Timeout - capture with full expansion and return what we have
+        captured = ""
+        for lines in expansion_levels:
+            captured = self.capture_pane(pane_id=target, lines=lines)
+            markers = find_markers_in_output(captured, start_marker, end_marker)
+            if markers["has_start"] or lines is None:
+                break
+
+        return parse_marked_output(captured, start_marker, end_marker)
 
     def launch_cli(self, command: str, vertical: bool = True, size: int = 50) -> Optional[str]:
         """

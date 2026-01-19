@@ -4,6 +4,7 @@ from claude_code_tools.tmux_execution_helpers import (
     generate_execution_markers,
     wrap_command_with_markers,
     parse_marked_output,
+    find_markers_in_output,
 )
 
 
@@ -144,3 +145,67 @@ __END__:0"""
         # Should extract from first __START__ to last __END__
         assert "__START__" in result["output"]
         assert result["exit_code"] == 0
+
+
+class TestFindMarkersInOutput:
+    """Tests for find_markers_in_output function."""
+
+    def test_finds_both_markers(self):
+        """Detects when both markers are present."""
+        captured = """__START__
+some output
+__END__:0"""
+
+        result = find_markers_in_output(captured, "__START__", "__END__")
+
+        assert result["has_start"] is True
+        assert result["has_end"] is True
+
+    def test_finds_only_end_marker(self):
+        """Detects when only end marker is present (start scrolled off)."""
+        captured = """some output that scrolled
+more output
+__END__:0"""
+
+        result = find_markers_in_output(captured, "__START__", "__END__")
+
+        assert result["has_start"] is False
+        assert result["has_end"] is True
+
+    def test_finds_only_start_marker(self):
+        """Detects when only start marker is present (command still running)."""
+        captured = """__START__
+command output in progress..."""
+
+        result = find_markers_in_output(captured, "__START__", "__END__")
+
+        assert result["has_start"] is True
+        assert result["has_end"] is False
+
+    def test_finds_neither_marker(self):
+        """Detects when neither marker is present."""
+        captured = "some unrelated output"
+
+        result = find_markers_in_output(captured, "__START__", "__END__")
+
+        assert result["has_start"] is False
+        assert result["has_end"] is False
+
+    def test_requires_colon_suffix_for_end_marker(self):
+        """End marker detection requires the :exit_code suffix."""
+        # End marker without colon should not be detected
+        captured = """__START__
+output
+__END__"""
+
+        result = find_markers_in_output(captured, "__START__", "__END__")
+
+        assert result["has_start"] is True
+        assert result["has_end"] is False  # No colon suffix
+
+    def test_detects_end_marker_with_various_exit_codes(self):
+        """End marker is detected regardless of exit code value."""
+        for exit_code in [0, 1, 127, 255]:
+            captured = f"__END__:{exit_code}"
+            result = find_markers_in_output(captured, "__START__", "__END__")
+            assert result["has_end"] is True

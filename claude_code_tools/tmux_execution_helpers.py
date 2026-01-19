@@ -43,6 +43,25 @@ def wrap_command_with_markers(command: str, start_marker: str, end_marker: str) 
     return wrapped
 
 
+def find_markers_in_output(
+    captured: str, start_marker: str, end_marker: str
+) -> Dict[str, bool]:
+    """Check if markers are present in captured output.
+
+    Args:
+        captured: Text captured from pane
+        start_marker: Start marker to look for
+        end_marker: End marker to look for
+
+    Returns:
+        Dict with keys: has_start (bool), has_end (bool)
+    """
+    return {
+        "has_start": start_marker in captured,
+        "has_end": f"{end_marker}:" in captured,
+    }
+
+
 def parse_marked_output(captured_output: str, start_marker: str, end_marker: str) -> Dict[str, Any]:
     """Parse marked output to extract command output and exit code.
 
