@@ -1,5 +1,27 @@
 # Plugin Changelog
 
+## 2026-01-19
+
+### voice
+
+- fix: use session-aware flag files (SESSION_ID) to avoid cross-session conflicts
+- fix: queue audio playback with mkdir lock to prevent overlapping voices
+- refactor: stop hook directly instructs agent with explicit script path instead
+  of relying on PostToolUse hooks (avoids race conditions)
+
+### tmux-cli
+
+- feat: add `execute()` method for reliable exit code extraction (#42)
+  - Returns `{"output": str, "exit_code": int}` for shell commands
+  - Uses unique markers to capture command boundaries and exit status
+  - 30-second default timeout (configurable), returns `exit_code=-1` on timeout
+- feat: progressive expansion polling for scrollback capture
+  - Starts with 100 lines, expands to [500, 2000, unlimited] if markers scroll off
+- fix: marker parsing now finds echoed output instead of typed command text
+- docs: add `execute()` documentation to tmux-cli-instructions.md
+
+Credit to @ryancnelson for the original execute() proposal and implementation approach.
+
 ## 2026-01-18
 
 ### voice
