@@ -1,5 +1,6 @@
 """Helper functions for tmux command execution with exit code capture."""
 import os
+import re
 import time
 from typing import Tuple, Dict, Any, Callable, Optional, List
 
@@ -83,18 +84,36 @@ def parse_marked_output(captured_output: str, start_marker: str, end_marker: str
             "exit_code": -1
         }
 
-    # Find marker positions
-    start_idx = captured_output.find(start_marker)
-    end_search = end_marker + ":"
+    # Find the ECHOED start marker (on its own line), not the one in the typed command.
+    # The echoed marker appears after a newline, while the typed command has it inline.
+    # Search for "\n{start_marker}" to find the echoed version.
+    newline_start_marker = "\n" + start_marker
+    start_idx = captured_output.find(newline_start_marker)
+    if start_idx != -1:
+        # Found it after a newline - adjust index to point to the marker itself
+        start_idx += 1  # Skip the newline
+    else:
+        # Fallback: marker might be at the very beginning (no preceding newline)
+        if captured_output.startswith(start_marker):
+            start_idx = 0
+        else:
+            # Last resort: use first occurrence (may include command text)
+            start_idx = captured_output.find(start_marker)
 
-    # Find last occurrence of end marker (in case output contains marker-like strings)
-    end_idx = captured_output.rfind(end_search)
+    # Find the ECHOED end marker with exit code (e.g., "__END__:0")
+    # The echoed end marker has a numeric exit code, while the typed command has "$?"
+    # Search for end_marker followed by ":" and a digit
+    end_pattern = re.escape(end_marker) + r":(\d+)"
+    end_match = re.search(end_pattern, captured_output)
 
-    if start_idx == -1 or end_idx == -1:
+    if start_idx == -1 or end_match is None:
         return {
             "output": captured_output,
             "exit_code": -1
         }
+
+    end_idx = end_match.start()
+    exit_code = int(end_match.group(1))
 
     # Extract output between markers
     output_start = start_idx + len(start_marker)
@@ -103,15 +122,6 @@ def parse_marked_output(captured_output: str, start_marker: str, end_marker: str
         output_start += 1
 
     output = captured_output[output_start:end_idx].rstrip('\n')
-
-    # Extract exit code from end marker line
-    end_marker_line = captured_output[end_idx:].split('\n')[0]
-    exit_code_str = end_marker_line.split(':')[-1]
-
-    try:
-        exit_code = int(exit_code_str)
-    except ValueError:
-        exit_code = -1
 
     return {
         "output": output,
