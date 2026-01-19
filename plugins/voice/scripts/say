@@ -131,6 +131,15 @@ if [[ -n "$VOICE" ]]; then
     CURL_ARGS+=(-F "voice_url=${VOICE}")
 fi
 
+# Queue audio playback using mkdir lock (prevents overlapping voices from multiple sessions)
+LOCK_DIR="/tmp/voice-playback.lockdir"
+
+# Wait for lock (mkdir is atomic)
+while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+    sleep 0.2
+done
+trap "rmdir '$LOCK_DIR' 2>/dev/null" EXIT
+
 if [[ "$HAS_FFPLAY" == "true" ]]; then
     # Streaming mode: pipe directly to ffplay (lower latency)
     if ! curl "${CURL_ARGS[@]}" | play_audio_stream; then
