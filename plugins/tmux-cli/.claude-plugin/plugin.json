@@ -1,6 +1,6 @@
 {
   "name": "tmux-cli",
-  "version": "0.1.0",
+  "version": "1.8.1",
   "description": "Provides tmux-cli skill, to allow Claude-Code to interact with CLI scripts or other code-agents in tmux panes, using the `tmux-cli` command",
   "author": {
     "name": "Prasad Chalasani"

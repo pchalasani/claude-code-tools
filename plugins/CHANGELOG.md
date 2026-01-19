@@ -4,10 +4,16 @@
 
 ### voice
 
+- feat: smarter interrupt handling with state tracking
+  - User interrupts now trigger immediate re-prompting (not 30s cooldown)
+  - Tracks `-running` (with PID), `-done`, and `-failed` states
+  - Distinguishes user interrupts (should retry) from TTS failures (give up)
 - fix: use session-aware flag files (SESSION_ID) to avoid cross-session conflicts
 - fix: queue audio playback with mkdir lock to prevent overlapping voices
+- fix: robust PID-based locking prevents hangs after interrupted playback
 - refactor: stop hook directly instructs agent with explicit script path instead
   of relying on PostToolUse hooks (avoids race conditions)
+- refactor: say script handles session tracking directly via `--session` flag
 
 ### tmux-cli
 
