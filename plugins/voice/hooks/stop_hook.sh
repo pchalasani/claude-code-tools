@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Stop hook - require voice feedback before stopping (session-aware)
-# Works with post_bash_hook.sh which creates the flag when say is called
+# The say script creates the flag file when called with --session
 
 # Check if voice feedback is disabled in config
 CONFIG_FILE="$HOME/.claude/voice.local.md"
@@ -30,9 +30,10 @@ INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*: *"//' | sed 's/"$//')
 
 # Session-specific flag files
-FLAG_FILE="/tmp/voice-${SESSION_ID}-done"      # Created by post_bash_hook.sh when say is invoked
+FLAG_FILE="/tmp/voice-${SESSION_ID}-done"      # Created by say script when called with --session
 BLOCK_FLAG="/tmp/voice-${SESSION_ID}-blocked"  # Tracks if we already blocked once
 SAY_SCRIPT="${CLAUDE_PLUGIN_ROOT}/scripts/say"
+SAY_CMD="${SAY_SCRIPT} --session ${SESSION_ID}"
 
 # Cooldown: don't block if we blocked within the last 30 seconds (handles API error retries)
 COOLDOWN_SECONDS=30
@@ -57,7 +58,7 @@ elif [[ -f "$BLOCK_FLAG" ]]; then
         cat << EOF
 {
   "decision": "block",
-  "reason": "Provide a 1-2 sentence voice summary before stopping. Call: ${SAY_SCRIPT} \"your summary\""
+  "reason": "Provide a 1-2 sentence voice summary before stopping. Call: ${SAY_CMD} \"your summary\""
 }
 EOF
     fi
@@ -67,7 +68,7 @@ else
     cat << EOF
 {
   "decision": "block",
-  "reason": "Provide a 1-2 sentence voice summary before stopping. Call: ${SAY_SCRIPT} \"your summary\""
+  "reason": "Provide a 1-2 sentence voice summary before stopping. Call: ${SAY_CMD} \"your summary\""
 }
 EOF
 fi

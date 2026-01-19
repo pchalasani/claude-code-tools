@@ -11,6 +11,7 @@ set -e
 
 VOICE=""
 TEXT=""
+SESSION_ID=""
 TTS_HOST="${TTS_HOST:-localhost}"
 TTS_PORT="${TTS_PORT:-8000}"
 TTS_URL="http://${TTS_HOST}:${TTS_PORT}"
@@ -22,16 +23,21 @@ while [[ $# -gt 0 ]]; do
             VOICE="$2"
             shift 2
             ;;
+        --session)
+            SESSION_ID="$2"
+            shift 2
+            ;;
         --help|-h)
-            echo "Usage: say [--voice <voice>] <text>"
+            echo "Usage: say [--voice <voice>] [--session <id>] <text>"
             echo ""
             echo "Options:"
-            echo "  --voice <voice>  Voice to use (e.g., alba, azure)"
-            echo "  --help, -h       Show this help message"
+            echo "  --voice <voice>    Voice to use (e.g., alba, azure)"
+            echo "  --session <id>     Session ID for stop hook integration"
+            echo "  --help, -h         Show this help message"
             echo ""
             echo "Environment variables:"
-            echo "  TTS_HOST         TTS server host (default: localhost)"
-            echo "  TTS_PORT         TTS server port (default: 8000)"
+            echo "  TTS_HOST           TTS server host (default: localhost)"
+            echo "  TTS_PORT           TTS server port (default: 8000)"
             exit 0
             ;;
         *)
@@ -133,12 +139,62 @@ fi
 
 # Queue audio playback using mkdir lock (prevents overlapping voices from multiple sessions)
 LOCK_DIR="/tmp/voice-playback.lockdir"
+LOCK_PID_FILE="$LOCK_DIR/pid"
 
-# Wait for lock (mkdir is atomic)
+# Function to check if lock is stale (owner process is dead)
+is_lock_stale() {
+    if [[ ! -d "$LOCK_DIR" ]]; then
+        return 1  # No lock exists
+    fi
+    if [[ ! -f "$LOCK_PID_FILE" ]]; then
+        return 0  # Lock exists but no PID file = stale
+    fi
+    local lock_pid
+    lock_pid=$(cat "$LOCK_PID_FILE" 2>/dev/null)
+    if [[ -z "$lock_pid" ]]; then
+        return 0  # Empty PID file = stale
+    fi
+    # Check if process is still running
+    if ! kill -0 "$lock_pid" 2>/dev/null; then
+        return 0  # Process is dead = stale
+    fi
+    return 1  # Process is alive = not stale
+}
+
+# Function to clean up stale lock
+cleanup_stale_lock() {
+    rm -f "$LOCK_PID_FILE" 2>/dev/null
+    rmdir "$LOCK_DIR" 2>/dev/null
+}
+
+# Function to release our lock
+release_lock() {
+    rm -f "$LOCK_PID_FILE" 2>/dev/null
+    rmdir "$LOCK_DIR" 2>/dev/null
+}
+
+# Acquire lock with stale detection
+MAX_WAIT=30
+WAITED=0
 while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+    if is_lock_stale; then
+        echo "Removing stale lock (owner process dead)" >&2
+        cleanup_stale_lock
+        continue
+    fi
     sleep 0.2
+    WAITED=$((WAITED + 1))
+    if [[ $WAITED -ge $((MAX_WAIT * 5)) ]]; then  # 5 iterations per second
+        echo "Error: Timeout waiting for audio lock after ${MAX_WAIT}s" >&2
+        exit 1
+    fi
 done
-trap "rmdir '$LOCK_DIR' 2>/dev/null" EXIT
+
+# Write our PID to the lock
+echo $$ > "$LOCK_PID_FILE"
+
+# Set trap to clean up on exit (normal, error, or signal)
+trap release_lock EXIT INT TERM
 
 if [[ "$HAS_FFPLAY" == "true" ]]; then
     # Streaming mode: pipe directly to ffplay (lower latency)
@@ -163,4 +219,9 @@ else
 
     play_audio_file "$OUTPUT_FILE"
     rm -f "$OUTPUT_FILE"
+fi
+
+# Create session flag file if session ID provided (for stop hook integration)
+if [[ -n "$SESSION_ID" ]]; then
+    touch "/tmp/voice-${SESSION_ID}-done"
 fi

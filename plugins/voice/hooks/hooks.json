@@ -1,18 +1,6 @@
 {
-  "description": "Voice hooks - track say invocations and remind agent to speak when stopping",
+  "description": "Voice hooks - remind agent to speak when stopping",
   "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/post_bash_hook.sh",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "matcher": "*",
