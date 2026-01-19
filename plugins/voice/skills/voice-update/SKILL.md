@@ -40,6 +40,7 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/say --voice azure "Task completed successfully."
 
 - Keep it to 1-2 sentences maximum
 - Be conversational, not robotic
+- Match the user's communication style - if they're casual or use colorful language, mirror that tone
 - Focus on what was accomplished, not technical details
 - Avoid code snippets, file paths, or technical jargon
 - Examples:

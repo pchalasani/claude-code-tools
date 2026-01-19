@@ -54,7 +54,7 @@ block_response() {
     cat << EOF
 {
   "decision": "block",
-  "reason": "Provide a 1-2 sentence voice summary before stopping. Call: ${SAY_CMD} \"your summary\""
+  "reason": "Provide a 1-2 sentence voice summary before stopping. Match the user's tone - if they're casual or use colorful language, mirror that. Call: ${SAY_CMD} \"your summary\""
 }
 EOF
 }
