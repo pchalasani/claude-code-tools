@@ -418,6 +418,16 @@ struct App {
     live_sessions: HashMap<String, ProcessState>, // cwd -> ProcessState
     include_live_only: bool,                      // Filter toggle for ! key
     last_process_scan: Instant,                   // For auto-refresh timing
+
+    // Search debouncing - wait for typing to pause before searching
+    last_query_change: Option<Instant>,           // Timestamp of last keystroke in search
+    pending_filter: bool,                         // Whether filter() needs to run
+
+    // Cached column widths for rendering (updated when filter() runs, not every frame)
+    cached_max_session_id_len: usize,
+    cached_max_project_len: usize,
+    cached_max_branch_len: usize,
+    cached_max_lines_len: usize,
 }
 
 #[derive(Clone, PartialEq)]
@@ -706,6 +716,14 @@ impl App {
             live_sessions: scan_running_sessions(),
             include_live_only: false,
             last_process_scan: Instant::now(),
+            // Search debouncing
+            last_query_change: None,
+            pending_filter: false,
+            // Cached column widths (will be set by filter())
+            cached_max_session_id_len: 8,
+            cached_max_project_len: 10,
+            cached_max_branch_len: 8,
+            cached_max_lines_len: 4,
         };
         app.filter();
         app
@@ -808,6 +826,14 @@ impl App {
             live_sessions: scan_running_sessions(),
             include_live_only: cli.include_live,
             last_process_scan: Instant::now(),
+            // Search debouncing
+            last_query_change: None,
+            pending_filter: false,
+            // Cached column widths (will be set by filter())
+            cached_max_session_id_len: 8,
+            cached_max_project_len: 10,
+            cached_max_branch_len: 8,
+            cached_max_lines_len: 4,
         };
         app.filter();
 
@@ -1006,6 +1032,23 @@ impl App {
         self.selected = 0;
         self.list_scroll = 0;
         self.preview_scroll = 0;
+
+        // Cache column widths for rendering (avoid recalculating on every frame)
+        self.cached_max_session_id_len = 8;
+        self.cached_max_project_len = 10;
+        self.cached_max_branch_len = 8;
+        self.cached_max_lines_len = 4;
+        for &idx in &self.filtered {
+            let s = &self.sessions[idx];
+            self.cached_max_session_id_len = self.cached_max_session_id_len.max(s.session_id_display().len());
+            self.cached_max_project_len = self.cached_max_project_len.max(s.project_name().len());
+            self.cached_max_branch_len = self.cached_max_branch_len.max(s.branch_display().len());
+            self.cached_max_lines_len = self.cached_max_lines_len.max(format!("{}L", s.lines).len());
+        }
+        // Apply reasonable limits
+        self.cached_max_session_id_len = self.cached_max_session_id_len.min(18);
+        self.cached_max_project_len = self.cached_max_project_len.min(40);
+        self.cached_max_branch_len = self.cached_max_branch_len.min(35);
     }
 
     fn selected_session(&self) -> Option<&Session> {
@@ -1016,12 +1059,16 @@ impl App {
 
     fn on_char(&mut self, c: char) {
         self.query.push(c);
-        self.filter();
+        // Don't filter immediately - mark as pending for debounced execution
+        self.last_query_change = Some(Instant::now());
+        self.pending_filter = true;
     }
 
     fn on_backspace(&mut self) {
         self.query.pop();
-        self.filter();
+        // Don't filter immediately - mark as pending for debounced execution
+        self.last_query_change = Some(Instant::now());
+        self.pending_filter = true;
     }
 
     fn has_active_filters(&self) -> bool {
@@ -1828,27 +1875,13 @@ fn render_session_list(frame: &mut Frame, app: &mut App, t: &Theme, area: Rect) 
         return;
     }
 
-    // Calculate field widths based on max values
+    // Use cached column widths (calculated in filter(), not every frame)
     let row_num_width = app.filtered.len().to_string().len().max(2);
     let sep = " | ";
-
-    // Calculate max widths for each field - no artificial caps, show full names
-    let mut max_session_id_len = 0usize;
-    let mut max_project_len = 0usize;
-    let mut max_branch_len = 0usize;
-    let mut max_lines_len = 0usize;
-    for &idx in &app.filtered {
-        let s = &app.sessions[idx];
-        max_session_id_len = max_session_id_len.max(s.session_id_display().len());
-        max_project_len = max_project_len.max(s.project_name().len());
-        max_branch_len = max_branch_len.max(s.branch_display().len());
-        max_lines_len = max_lines_len.max(format!("{}L", s.lines).len());
-    }
-    // Ensure minimums and reasonable maximums
-    max_session_id_len = max_session_id_len.max(8).min(18);
-    max_project_len = max_project_len.max(10).min(40);
-    max_branch_len = max_branch_len.max(8).min(35);
-    max_lines_len = max_lines_len.max(4);
+    let max_session_id_len = app.cached_max_session_id_len;
+    let max_project_len = app.cached_max_project_len;
+    let max_branch_len = app.cached_max_branch_len;
+    let max_lines_len = app.cached_max_lines_len;
 
     // Calculate available width and determine date format
     // Fixed overhead: row_num + space + icon/agent (8) + 4 separators (12) + padding (2)
@@ -4534,21 +4567,22 @@ fn main() -> Result<()> {
 
     const PROCESS_REFRESH_INTERVAL_MS: u128 = 2000; // Refresh live session state every 2 seconds
 
-    loop {
-        terminal.draw(|f| render(f, &mut app))?;
+    // Initial draw before entering the loop
+    terminal.draw(|f| render(f, &mut app))?;
 
+    const SEARCH_DEBOUNCE_MS: u128 = 200;
+
+    loop {
         if app.should_quit {
             break;
         }
 
-        // Check if we need to refresh live session state
-        let now = Instant::now();
-        if now.duration_since(app.last_process_scan).as_millis() >= PROCESS_REFRESH_INTERVAL_MS {
-            app.live_sessions = scan_running_sessions();
-            app.last_process_scan = now;
-        }
+        // Wait for events with 50ms timeout (responsive input + periodic checks)
+        let has_events = event::poll(Duration::from_millis(50))?;
 
-        // Drain all pending events (non-blocking)
+        // Process events FIRST - characters must appear immediately
+        if has_events {
+            // Drain all pending events (non-blocking)
         while event::poll(Duration::from_millis(0))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
@@ -5226,8 +5260,30 @@ fn main() -> Result<()> {
             }
         }
 
-        // Sleep briefly - short enough to check for live session updates regularly
-        std::thread::sleep(Duration::from_millis(100));
+            // Draw immediately after processing events (responsive typing)
+            terminal.draw(|f| render(f, &mut app))?;
+        }
+
+        // Periodic checks - do these AFTER event processing so they don't block input
+
+        // Check if we need to refresh live session state
+        let now = Instant::now();
+        if now.duration_since(app.last_process_scan).as_millis() >= PROCESS_REFRESH_INTERVAL_MS {
+            app.live_sessions = scan_running_sessions();
+            app.last_process_scan = now;
+        }
+
+        // Debounced search: run filter() after 200ms of no typing
+        if app.pending_filter {
+            if let Some(last_change) = app.last_query_change {
+                if Instant::now().duration_since(last_change).as_millis() >= SEARCH_DEBOUNCE_MS {
+                    app.filter();
+                    app.pending_filter = false;
+                    // Redraw to show search results
+                    terminal.draw(|f| render(f, &mut app))?;
+                }
+            }
+        }
     }
 
     disable_raw_mode()?;
