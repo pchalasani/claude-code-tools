@@ -4567,22 +4567,33 @@ fn main() -> Result<()> {
 
     const PROCESS_REFRESH_INTERVAL_MS: u128 = 2000; // Refresh live session state every 2 seconds
 
-    // Initial draw before entering the loop
-    terminal.draw(|f| render(f, &mut app))?;
-
     const SEARCH_DEBOUNCE_MS: u128 = 200;
 
     loop {
+        terminal.draw(|f| render(f, &mut app))?;
+
         if app.should_quit {
             break;
         }
 
-        // Wait for events with 50ms timeout (responsive input + periodic checks)
-        let has_events = event::poll(Duration::from_millis(50))?;
+        // Check if we need to refresh live session state
+        let now = Instant::now();
+        if now.duration_since(app.last_process_scan).as_millis() >= PROCESS_REFRESH_INTERVAL_MS {
+            app.live_sessions = scan_running_sessions();
+            app.last_process_scan = now;
+        }
 
-        // Process events FIRST - characters must appear immediately
-        if has_events {
-            // Drain all pending events (non-blocking)
+        // Debounced search: run filter() after 200ms of no typing
+        if app.pending_filter {
+            if let Some(last_change) = app.last_query_change {
+                if Instant::now().duration_since(last_change).as_millis() >= SEARCH_DEBOUNCE_MS {
+                    app.filter();
+                    app.pending_filter = false;
+                }
+            }
+        }
+
+        // Drain all pending events (non-blocking)
         while event::poll(Duration::from_millis(0))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
@@ -5260,30 +5271,8 @@ fn main() -> Result<()> {
             }
         }
 
-            // Draw immediately after processing events (responsive typing)
-            terminal.draw(|f| render(f, &mut app))?;
-        }
-
-        // Periodic checks - do these AFTER event processing so they don't block input
-
-        // Check if we need to refresh live session state
-        let now = Instant::now();
-        if now.duration_since(app.last_process_scan).as_millis() >= PROCESS_REFRESH_INTERVAL_MS {
-            app.live_sessions = scan_running_sessions();
-            app.last_process_scan = now;
-        }
-
-        // Debounced search: run filter() after 200ms of no typing
-        if app.pending_filter {
-            if let Some(last_change) = app.last_query_change {
-                if Instant::now().duration_since(last_change).as_millis() >= SEARCH_DEBOUNCE_MS {
-                    app.filter();
-                    app.pending_filter = false;
-                    // Redraw to show search results
-                    terminal.draw(|f| render(f, &mut app))?;
-                }
-            }
-        }
+        // Sleep briefly - short enough to check for debounce timer and live session updates
+        std::thread::sleep(Duration::from_millis(50));
     }
 
     disable_raw_mode()?;
