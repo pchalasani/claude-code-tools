@@ -10,11 +10,11 @@ Enable, disable, or configure voice feedback.
 - `/speak <voice>` - Set voice (e.g., azure, alba) and enable feedback
 - `/speak stop` - Disable voice feedback
 
-**Config file:** `~/.claude/speak.local.md`
+**Config file:** `~/.claude/voice.local.md`
 
 ```yaml
 ---
-voice: azure
+voice: azelma
 enabled: true
 ---
 ```
@@ -27,4 +27,4 @@ enabled: true
 - When `stop`: Set `enabled: false` (voice unchanged), tell user:
   "Voice feedback disabled. Use `/speak` to re-enable."
 
-Create the config file if it doesn't exist (default voice: azure).
+Create the config file if it doesn't exist (default voice: azelma).
