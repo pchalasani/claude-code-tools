@@ -167,15 +167,79 @@ llama-server -hf unsloth/Nemotron-3-Nano-30B-A3B-GGUF:Q4_K_XL \
 - Tool calling: `temp=0.6`, `top_p=0.95`
 - Reasoning tasks: `temp=1.0`, `top_p=1.0`
 
+### GLM-4.7-Flash (Zhipu AI 30B-A3B MoE)
+
+A capable 30B MoE model from Zhipu AI. Requires several specific settings:
+
+```bash
+llama-server -hf unsloth/GLM-4.7-Flash-GGUF:Q4_K_XL \
+  --port 8129 \
+  -c 131072 \
+  -b 32768 \
+  -ub 1024 \
+  --parallel 1 \
+  --jinja \
+  --reasoning-budget 0 \
+  --temp 1.0 \
+  --top-p 0.95 \
+  --min-p 0.01 \
+  --override-kv deepseek2.expert_gating_func=int:2
+```
+
+For higher quality, use Q8_0 (~32GB, 20-40% slower):
+
+```bash
+llama-server -hf unsloth/GLM-4.7-Flash-GGUF:Q8_0 \
+  --port 8129 \
+  -c 131072 \
+  -b 32768 \
+  -ub 1024 \
+  --parallel 1 \
+  --jinja \
+  --reasoning-budget 0 \
+  --temp 1.0 \
+  --top-p 0.95 \
+  --min-p 0.01 \
+  --override-kv deepseek2.expert_gating_func=int:2
+```
+
+**Critical settings explained:**
+
+| Setting | Why |
+|---------|-----|
+| `--jinja` | Required for correct chat template |
+| `--reasoning-budget 0` | Disables thinking mode (conflicts with Claude Code's assistant prefill) |
+| `--min-p 0.01` | llama.cpp defaults to 0.1 which causes issues with this model |
+| `--override-kv deepseek2.expert_gating_func=int:2` | Forces SIGMOID gating (model uses SIGMOID, not SOFTMAX like DeepSeek) |
+
+**Prerequisites:**
+
+- llama.cpp build from **Jan 21, 2026 or later** (fixes looping bug)
+- Update via: `brew upgrade llama.cpp`
+
+**Quantization options:**
+
+| Quant | Size | Notes |
+|-------|------|-------|
+| Q4_K_XL | 17.5 GB | Good balance (default) |
+| Q8_0 | 31.8 GB | Higher quality, 20-40% slower |
+
+> [!NOTE]
+> Disabling thinking (`--reasoning-budget 0`) doesn't significantly impact coding
+> tasks. The model still reasons internally—you just don't see explicit
+> `<think>...</think>` blocks. Thinking mode is more useful for math proofs and
+> logic puzzles where you want to verify step-by-step reasoning.
+
 ## Quick Reference
 
 | Model | Port | Command |
 |-------|------|---------|
-| GPT-OSS-20B | 8123 | `llama-server --gpt-oss-20b-default --port 8123|
+| GPT-OSS-20B | 8123 | `llama-server --gpt-oss-20b-default --port 8123` |
 | Qwen3-30B-A3B | 8124 | See full command above |
 | Nemotron-3-Nano | 8125 | See full command above |
 | Qwen3-Next-80B-A3B | 8126 | See full command above |
-| Qwen3-Coder-30B | 8127 | `llama-server --fim-qwen-30b-default --port 8127 |
+| Qwen3-Coder-30B | 8127 | `llama-server --fim-qwen-30b-default --port 8127` |
+| GLM-4.7-Flash | 8129 | See full command above |
 
 ## Usage
 
