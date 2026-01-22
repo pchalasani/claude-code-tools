@@ -2,19 +2,13 @@
 """
 Hook to handle session-related triggers in Claude Code.
 
-Triggers:
+Triggers (matched by hooks.json):
 - '>resume', '>continue', '>handoff': Copy session ID + show resume instructions
 - '>session', '>session-id': Copy session ID + show simple confirmation
 """
 import json
 import subprocess
 import sys
-
-# Trigger patterns for resume workflow (copy + show resume instructions)
-RESUME_TRIGGERS = (">resume", ">continue", ">handoff")
-
-# Trigger patterns for just copying session ID (simple confirmation)
-SESSION_ID_TRIGGERS = (">session", ">session-id")
 
 
 def copy_to_clipboard(text: str) -> bool:
@@ -109,15 +103,11 @@ def copy_session_id_and_format_message(
 def main():
     data = json.load(sys.stdin)
     session_id = data.get("session_id", "")
-    prompt = data.get("prompt", "").strip()
+    prompt = data.get("prompt", "").strip().lower()
 
-    # Check which trigger type (if any)
-    is_resume_trigger = any(prompt.startswith(t) for t in RESUME_TRIGGERS)
-    is_session_id_trigger = any(prompt.startswith(t) for t in SESSION_ID_TRIGGERS)
-
-    if not is_resume_trigger and not is_session_id_trigger:
-        # Not our trigger, let it pass through
-        sys.exit(0)
+    # Matcher in hooks.json guarantees we only get valid triggers
+    # Just need to distinguish: >session* = simple, everything else = full resume
+    is_session_trigger = prompt.startswith(">session")
 
     if not session_id:
         # No session ID available
@@ -131,7 +121,7 @@ def main():
     # Copy session ID and get formatted message
     message = copy_session_id_and_format_message(
         session_id,
-        show_resume_instructions=is_resume_trigger,
+        show_resume_instructions=not is_session_trigger,
     )
 
     # Block the prompt and show the message
