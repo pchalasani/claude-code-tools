@@ -1,5 +1,5 @@
 {
-  "description": "Voice hooks - remind agent to speak when stopping",
+  "description": "Voice hooks - auto-generate voice summary when stopping",
   "hooks": {
     "Stop": [
       {
@@ -7,8 +7,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/stop_hook.sh",
-            "timeout": 10
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/stop_hook.py",
+            "timeout": 60
           }
         ]
       }
