@@ -3,7 +3,6 @@
   "hooks": {
     "UserPromptSubmit": [
       {
-        "matcher": ">resume*|>continue*|>handoff*|>session*",
         "hooks": [
           {
             "type": "command",
