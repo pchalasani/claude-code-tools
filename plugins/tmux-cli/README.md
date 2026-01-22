@@ -27,6 +27,22 @@ Common use cases:
 - Interact with a script that prompts for input
 - Monitor output from a background process
 
+## Key Commands
+
+### `execute` - Run command with exit code
+
+The `execute` subcommand runs a shell command and returns both the output and exit
+code, making it ideal for build/test automation:
+
+```bash
+tmux-cli execute "pytest tests/" --timeout 60
+```
+
+Returns JSON with `output` and `exit_code` fields. Use this when you need to know
+if a command succeeded or failed (e.g., builds, tests, linters).
+
+For interactive or long-running commands, use `send` + `capture` instead.
+
 ## Installation
 
 This skill requires the `claude-code-tools` package:

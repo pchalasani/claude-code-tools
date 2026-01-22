@@ -110,30 +110,29 @@ tmux-cli wait_idle --pane=PANE_ID
 tmux-cli wait_idle --pane=2 --idle-time=3.0 --timeout=60
 ```
 
-### Execute command and get exit code (Python API)
+### Execute command and get exit code
 
-> **Note**: This is a Python API method, not a CLI command. Use it when you need
-> reliable success/failure detection for shell commands.
+Run a shell command and get both the output and exit code. Ideal for build/test
+automation where you need to know if a command succeeded or failed.
+
+```bash
+tmux-cli execute "pytest tests/" --pane=2
+# Returns JSON: {"output": "...", "exit_code": 0}
+
+# With custom timeout (default is 30 seconds)
+tmux-cli execute "long_running_script.sh" --pane=2 --timeout=120
+
+# Timeout returns exit_code=-1
+```
+
+**Python API:**
 
 ```python
 from claude_code_tools.tmux_cli_controller import TmuxCLIController
 
 ctrl = TmuxCLIController()
-
-# Execute a command and get structured result
 result = ctrl.execute("make test", pane_id="ops:1.2")
 # Returns: {"output": "...", "exit_code": 0}
-
-if result["exit_code"] != 0:
-    print(f"Command failed with exit code {result['exit_code']}")
-    print(f"Error output: {result['output']}")
-
-# With custom timeout (default is 30 seconds)
-result = ctrl.execute("long_running_script.sh", pane_id="2", timeout=120)
-
-# Timeout returns exit_code=-1
-if result["exit_code"] == -1:
-    print("Command timed out")
 ```
 
 **Why use `execute()` instead of `send_keys()` + `capture_pane()`?**
