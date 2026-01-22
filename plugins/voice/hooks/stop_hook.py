@@ -219,7 +219,8 @@ Guidelines:
 3. Phrase as a wrap-up or handoff statement
 4. No meta-commentary ("I explained", "I gave you", "I told you") - just state the content directly
 5. IMPORTANT: Match the user's tone - if they're casual or use colorful language, mirror that. Keep it to 1-2 sentences max.
-6. If the message is an error, exception, or doesn't look like normal text, just say "Ran into an issue - see the output." """
+6. If the message is an error, exception, or doesn't look like normal text, just say "Ran into an issue - see the output."
+7. This will be SPOKEN aloud via TTS - avoid file paths, UUIDs, hashes, or technical identifiers. Use natural language instead (e.g., "the config file" not "/Users/foo/bar/config.json")."""
 
     try:
         result = subprocess.run(
