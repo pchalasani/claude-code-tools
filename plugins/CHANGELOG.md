@@ -1,5 +1,24 @@
 # Plugin Changelog
 
+## 2026-01-22
+
+### voice
+
+- feat: replace blocking stop hook with auto-summarizing approach
+  - No more "Stop hook error" display - hook approves immediately
+  - Uses headless Claude (Opus) to generate voice summaries
+  - Clear prompt structure separates past conversation (tone) from last message
+  - Avoids meta-narration ("I explained X") - states content directly
+  - Concurrent text + audio via systemMessage and background TTS
+
+### aichat
+
+- fix: add defensive coding guardrails to UserPromptSubmit hook
+  - Try/except wrapper - any exception silently passes through
+  - Strict type checking - prompt must be non-empty string
+  - Stricter pattern matching - exact match or followed by space
+  - Case-insensitive comparison
+
 ## 2026-01-19
 
 ### voice
