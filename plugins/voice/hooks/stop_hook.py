@@ -211,14 +211,14 @@ LAST ASSISTANT MESSAGE:
 
 ---
 
-Summarize the LAST ASSISTANT MESSAGE as a brief voice update.
+Summarize the LAST ASSISTANT MESSAGE as a 1-2 sentence voice update. Keep it short.
 
 Guidelines:
 1. Use first person ("I", "I'm", "I'll")
 2. Don't narrate - rephrase what's being said or asked
 3. Phrase as a wrap-up or handoff statement
 4. No meta-commentary ("I explained", "I gave you", "I told you") - just state the content directly
-5. IMPORTANT: Match the user's tone - if they're casual or use colorful language, mirror that"""
+5. IMPORTANT: Match the user's tone - if they're casual or use colorful language, mirror that. Keep it to 1-2 sentences max."""
 
     try:
         result = subprocess.run(
