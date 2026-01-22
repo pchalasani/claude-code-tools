@@ -107,40 +107,58 @@ def copy_session_id_and_format_message(
 
 
 def main():
-    data = json.load(sys.stdin)
-    session_id = data.get("session_id", "")
-    prompt = data.get("prompt", "").strip()
+    try:
+        data = json.load(sys.stdin)
+        session_id = data.get("session_id", "")
+        prompt = data.get("prompt")
 
-    # Check which trigger type (if any)
-    is_resume_trigger = any(prompt.startswith(t) for t in RESUME_TRIGGERS)
-    is_session_id_trigger = any(prompt.startswith(t) for t in SESSION_ID_TRIGGERS)
+        # Fail safe: prompt must be a non-empty string
+        if not isinstance(prompt, str) or not prompt.strip():
+            sys.exit(0)
 
-    if not is_resume_trigger and not is_session_id_trigger:
-        # Not our trigger, let it pass through
-        sys.exit(0)
+        prompt = prompt.strip().lower()
 
-    if not session_id:
-        # No session ID available
+        # Check triggers with strict matching:
+        # Must be exact match OR the trigger followed by a space
+        is_resume_trigger = any(
+            prompt == t or prompt.startswith(t + " ")
+            for t in RESUME_TRIGGERS
+        )
+        is_session_id_trigger = any(
+            prompt == t or prompt.startswith(t + " ")
+            for t in SESSION_ID_TRIGGERS
+        )
+
+        if not is_resume_trigger and not is_session_id_trigger:
+            # Not our trigger, let it pass through
+            sys.exit(0)
+
+        if not session_id:
+            # No session ID available
+            result = {
+                "decision": "block",
+                "reason": "No session ID available.",
+            }
+            print(json.dumps(result))
+            sys.exit(0)
+
+        # Copy session ID and get formatted message
+        message = copy_session_id_and_format_message(
+            session_id,
+            show_resume_instructions=is_resume_trigger,
+        )
+
+        # Block the prompt and show the message
         result = {
             "decision": "block",
-            "reason": "No session ID available.",
+            "reason": message,
         }
         print(json.dumps(result))
         sys.exit(0)
 
-    # Copy session ID and get formatted message
-    message = copy_session_id_and_format_message(
-        session_id,
-        show_resume_instructions=is_resume_trigger,
-    )
-
-    # Block the prompt and show the message
-    result = {
-        "decision": "block",
-        "reason": message,
-    }
-    print(json.dumps(result))
-    sys.exit(0)
+    except Exception:
+        # Any error = pass through silently (fail safe)
+        sys.exit(0)
 
 
 if __name__ == "__main__":
