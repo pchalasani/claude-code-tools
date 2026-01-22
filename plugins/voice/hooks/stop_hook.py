@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Stop hook - auto-generate voice summary using headless Haiku.
+Stop hook - auto-generate voice summary using headless Claude.
 
 Instead of blocking and asking Claude to provide a summary (which shows as
 "Stop hook error"), this hook:
 1. Reads the last assistant message from the session file
-2. Calls headless Claude (Haiku) to generate a 1-sentence summary
+2. Calls headless Claude to generate a 1-sentence summary
 3. Calls the say script to speak it
 4. Returns approve (no blocking, no error display)
 """
@@ -166,43 +166,64 @@ def get_recent_conversation(
     return messages[-(num_turns * 2):]
 
 
-def summarize_with_haiku(conversation: list[tuple[str, str]]) -> str | None:
-    """Use headless Claude Haiku to generate a 1-sentence summary."""
+def summarize_with_claude(conversation: list[tuple[str, str]]) -> str | None:
+    """Use headless Claude to generate a 1-sentence summary."""
     if not conversation:
         return None
 
-    # Format conversation for context
-    conv_lines = []
-    for role, text in conversation:
-        # Truncate individual messages for the prompt
-        if len(text) > 1000:
-            text = text[:1000] + "..."
-        conv_lines.append(f"[{role}]: {text}")
+    # Separate past conversation from last assistant message
+    last_assistant_msg = None
+    past_conv = []
 
-    conversation_text = "\n\n".join(conv_lines)
+    # Find the last assistant message
+    for i in range(len(conversation) - 1, -1, -1):
+        role, text = conversation[i]
+        if role == "assistant":
+            last_assistant_msg = text
+            past_conv = conversation[:i]
+            break
 
-    # Limit total size
-    if len(conversation_text) > 6000:
-        conversation_text = conversation_text[-6000:]
+    if not last_assistant_msg:
+        return None
 
-    prompt = f"""Here is a recent conversation between a user and an AI assistant.
-Summarize what was accomplished in the LAST assistant message.
-Keep it to 1-2 short sentences for a voice update.
-Be conversational and concise. Focus on the outcome, not the process.
-IMPORTANT: Use first person ("I did X", "I updated Y") - you ARE the assistant giving a voice update.
-IMPORTANT: Match the user's tone - if they're casual or use colorful language, mirror that.
+    # Format past conversation for tone context
+    past_lines = []
+    for role, text in past_conv:
+        if len(text) > 500:
+            text = text[:500] + "..."
+        past_lines.append(f"[{role}]: {text}")
 
-Conversation:
-{conversation_text}
+    past_text = "\n\n".join(past_lines) if past_lines else "(no prior context)"
 
-Voice summary (first person):"""
+    # Limit sizes
+    if len(past_text) > 3000:
+        past_text = past_text[-3000:]
+    if len(last_assistant_msg) > 2000:
+        last_assistant_msg = last_assistant_msg[:2000] + "..."
+
+    prompt = f"""PAST CONVERSATION (for tone context):
+{past_text}
+
+---
+
+LAST ASSISTANT MESSAGE:
+{last_assistant_msg}
+
+---
+
+Summarize the LAST ASSISTANT MESSAGE as a brief voice update.
+
+Guidelines:
+1. Use first person ("I", "I'm", "I'll")
+2. Don't narrate - rephrase what's being said or asked
+3. Phrase as a wrap-up or handoff statement
+4. No meta-commentary ("I explained", "I gave you", "I told you") - just state the content directly"""
 
     try:
         result = subprocess.run(
             [
                 "claude", "-p",
-                "--model", "haiku",
-                "--output-format", "text",
+                "--output-format", "json",
                 "--no-session-persistence",
                 "--setting-sources", "",  # Skip CLAUDE.md files
                 prompt,
@@ -213,7 +234,8 @@ Voice summary (first person):"""
         )
 
         if result.returncode == 0:
-            return result.stdout.strip()
+            data = json.loads(result.stdout)
+            return data.get("result", "").strip()
 
     except Exception:
         pass
@@ -272,8 +294,8 @@ def main():
         print(json.dumps({"decision": "approve"}))
         return
 
-    # Generate summary with Haiku
-    summary = summarize_with_haiku(conversation)
+    # Generate summary with Claude
+    summary = summarize_with_claude(conversation)
     if not summary:
         # Fallback: use last message text
         last_msg = conversation[-1][1] if conversation else ""
