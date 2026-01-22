@@ -87,9 +87,42 @@ def find_session_file(session_id: str) -> Path | None:
     return None
 
 
-def get_last_assistant_message(session_file: Path) -> str | None:
-    """Extract the text of the last assistant message from a session file."""
-    last_msg = None
+def trim_to_words(text: str, max_words: int) -> str:
+    """Trim text to max_words, adding ellipsis if truncated."""
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    return " ".join(words[:max_words]) + "..."
+
+
+def extract_message_text(data: dict) -> str | None:
+    """Extract text content from a message data dict."""
+    message = data.get("message", {})
+    content = message.get("content", "")
+
+    if isinstance(content, str):
+        return content.strip()
+    elif isinstance(content, list):
+        text_parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text_parts.append(item.get("text", ""))
+        return " ".join(text_parts).strip()
+    return None
+
+
+def get_recent_conversation(
+    session_file: Path,
+    num_turns: int = 5,
+    max_assistant_words: int = 500,
+) -> list[tuple[str, str]]:
+    """
+    Extract recent conversation turns from session file.
+
+    Returns list of (role, text) tuples, most recent last.
+    Assistant messages are trimmed to max_assistant_words.
+    """
+    messages: list[tuple[str, str]] = []
 
     try:
         with open(session_file, "r", encoding="utf-8") as f:
@@ -100,24 +133,28 @@ def get_last_assistant_message(session_file: Path) -> str | None:
 
                 try:
                     data = json.loads(line)
-                    if data.get("type") != "assistant":
+                    msg_type = data.get("type")
+
+                    if msg_type not in ("user", "assistant"):
                         continue
 
-                    message = data.get("message", {})
-                    content = message.get("content", "")
+                    text = extract_message_text(data)
+                    if not text:
+                        continue
 
-                    text = None
-                    if isinstance(content, str):
-                        text = content.strip()
-                    elif isinstance(content, list):
-                        text_parts = []
-                        for item in content:
-                            if isinstance(item, dict) and item.get("type") == "text":
-                                text_parts.append(item.get("text", ""))
-                        text = " ".join(text_parts).strip()
+                    # Skip tool results (user messages with tool_result content)
+                    if msg_type == "user":
+                        content = data.get("message", {}).get("content", [])
+                        if isinstance(content, list) and content:
+                            if isinstance(content[0], dict):
+                                if content[0].get("type") == "tool_result":
+                                    continue
 
-                    if text:
-                        last_msg = text
+                    # Trim assistant messages
+                    if msg_type == "assistant":
+                        text = trim_to_words(text, max_assistant_words)
+
+                    messages.append((msg_type, text))
 
                 except json.JSONDecodeError:
                     continue
@@ -125,22 +162,40 @@ def get_last_assistant_message(session_file: Path) -> str | None:
     except Exception:
         pass
 
-    return last_msg
+    # Return last num_turns * 2 messages (to get num_turns of conversation)
+    return messages[-(num_turns * 2):]
 
 
-def summarize_with_haiku(text: str) -> str | None:
+def summarize_with_haiku(conversation: list[tuple[str, str]]) -> str | None:
     """Use headless Claude Haiku to generate a 1-sentence summary."""
-    if len(text) > 4000:
-        text = text[:4000] + "..."
+    if not conversation:
+        return None
 
-    prompt = f"""Summarize what was accomplished in 1-2 short sentences for a voice update.
+    # Format conversation for context
+    conv_lines = []
+    for role, text in conversation:
+        # Truncate individual messages for the prompt
+        if len(text) > 1000:
+            text = text[:1000] + "..."
+        conv_lines.append(f"[{role}]: {text}")
+
+    conversation_text = "\n\n".join(conv_lines)
+
+    # Limit total size
+    if len(conversation_text) > 6000:
+        conversation_text = conversation_text[-6000:]
+
+    prompt = f"""Here is a recent conversation between a user and an AI assistant.
+Summarize what was accomplished in the LAST assistant message.
+Keep it to 1-2 short sentences for a voice update.
 Be conversational and concise. Focus on the outcome, not the process.
-If the text is casual or uses colorful language, mirror that tone.
+IMPORTANT: Use first person ("I did X", "I updated Y") - you ARE the assistant giving a voice update.
+IMPORTANT: Match the user's tone - if they're casual or use colorful language, mirror that.
 
-Text to summarize:
-{text}
+Conversation:
+{conversation_text}
 
-Summary:"""
+Voice summary (first person):"""
 
     try:
         result = subprocess.run(
@@ -149,6 +204,7 @@ Summary:"""
                 "--model", "haiku",
                 "--output-format", "text",
                 "--no-session-persistence",
+                "--setting-sources", "",  # Skip CLAUDE.md files
                 prompt,
             ],
             capture_output=True,
@@ -210,15 +266,17 @@ def main():
         print(json.dumps({"decision": "approve"}))
         return
 
-    # Get last assistant message
-    last_msg = get_last_assistant_message(session_file)
-    if not last_msg:
+    # Get recent conversation for context
+    conversation = get_recent_conversation(session_file)
+    if not conversation:
         print(json.dumps({"decision": "approve"}))
         return
 
     # Generate summary with Haiku
-    summary = summarize_with_haiku(last_msg)
+    summary = summarize_with_haiku(conversation)
     if not summary:
+        # Fallback: use last message text
+        last_msg = conversation[-1][1] if conversation else ""
         summary = last_msg[:100] + ("..." if len(last_msg) > 100 else "")
 
     # Speak it
