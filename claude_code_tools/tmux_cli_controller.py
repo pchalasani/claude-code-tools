@@ -349,9 +349,6 @@ class TmuxCLIController:
             raise ValueError("No target pane specified")
 
         if enter and delay_enter:
-            # Capture pane state before sending (for Enter verification)
-            content_before = self.capture_pane(target, lines=20) if verify_enter else None
-
             # Send text without Enter first
             cmd = ['send-keys', '-t', target, text]
             self._run_tmux_command(cmd)
@@ -365,8 +362,12 @@ class TmuxCLIController:
             # Apply delay
             time.sleep(delay)
 
+            # Capture pane state AFTER text is sent but BEFORE Enter
+            # This ensures we detect changes caused by Enter, not by the text itself
+            content_before_enter = self.capture_pane(target, lines=20) if verify_enter else None
+
             # Send Enter with verification and retry logic
-            self._send_enter_with_retry(target, content_before, verify_enter, max_retries)
+            self._send_enter_with_retry(target, content_before_enter, verify_enter, max_retries)
         else:
             # Original behavior (no delay)
             cmd = ['send-keys', '-t', target, text]
@@ -374,7 +375,7 @@ class TmuxCLIController:
                 cmd.append('Enter')
             self._run_tmux_command(cmd)
 
-    def _send_enter_with_retry(self, target: str, content_before: Optional[str],
+    def _send_enter_with_retry(self, target: str, content_before_enter: Optional[str],
                                 verify: bool, max_retries: int):
         """
         Send Enter key with optional verification and retry.
@@ -384,7 +385,7 @@ class TmuxCLIController:
 
         Args:
             target: Target pane ID
-            content_before: Pane content captured before sending text (for comparison)
+            content_before_enter: Pane content captured after text but before Enter
             verify: Whether to verify Enter was received
             max_retries: Maximum retry attempts
         """
@@ -393,7 +394,7 @@ class TmuxCLIController:
             cmd = ['send-keys', '-t', target, 'Enter']
             self._run_tmux_command(cmd)
 
-            if not verify or content_before is None:
+            if not verify or content_before_enter is None:
                 return  # No verification needed
 
             # Wait a bit for the command to process
@@ -402,7 +403,7 @@ class TmuxCLIController:
             # Check if pane content changed (indicating Enter was received)
             content_after = self.capture_pane(target, lines=20)
 
-            if content_after != content_before:
+            if content_after != content_before_enter:
                 # Content changed - Enter was successful
                 return
 

@@ -146,16 +146,16 @@ class RemoteTmuxController:
             return
         target = self._active_pane_in_window(self._window_target(pane_id))
         if enter and delay_enter:
-            # Capture pane state before sending (for Enter verification)
-            content_before = self.capture_pane(pane_id, lines=20) if verify_enter else None
-
             # First send text (no Enter)
             self._run_tmux(['send-keys', '-t', target, text])
             # Delay
             delay = 1.5 if isinstance(delay_enter, bool) else float(delay_enter)
             time.sleep(delay)
+            # Capture pane state AFTER text is sent but BEFORE Enter
+            # This ensures we detect changes caused by Enter, not by the text itself
+            content_before_enter = self.capture_pane(pane_id, lines=20) if verify_enter else None
             # Send Enter with verification and retry
-            self._send_enter_with_retry(target, pane_id, content_before, verify_enter, max_retries)
+            self._send_enter_with_retry(target, pane_id, content_before_enter, verify_enter, max_retries)
         else:
             args = ['send-keys', '-t', target, text]
             if enter:
@@ -163,14 +163,14 @@ class RemoteTmuxController:
             self._run_tmux(args)
 
     def _send_enter_with_retry(self, target: str, pane_id: Optional[str],
-                                content_before: Optional[str], verify: bool,
+                                content_before_enter: Optional[str], verify: bool,
                                 max_retries: int):
         """Send Enter key with optional verification and retry.
 
         Args:
             target: Resolved tmux target
             pane_id: Original pane_id for capture_pane
-            content_before: Pane content captured before sending text
+            content_before_enter: Pane content captured after text but before Enter
             verify: Whether to verify Enter was received
             max_retries: Maximum retry attempts
         """
@@ -178,7 +178,7 @@ class RemoteTmuxController:
             # Send Enter
             self._run_tmux(['send-keys', '-t', target, 'Enter'])
 
-            if not verify or content_before is None:
+            if not verify or content_before_enter is None:
                 return
 
             # Wait a bit for the command to process
@@ -187,7 +187,7 @@ class RemoteTmuxController:
             # Check if pane content changed
             content_after = self.capture_pane(pane_id, lines=20)
 
-            if content_after != content_before:
+            if content_after != content_before_enter:
                 return  # Enter was successful
 
             # Content unchanged - retry with exponential backoff
