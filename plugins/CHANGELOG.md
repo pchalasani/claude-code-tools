@@ -7,9 +7,12 @@
 - feat: replace blocking stop hook with auto-summarizing approach
   - No more "Stop hook error" display - hook approves immediately
   - Uses headless Claude (Opus) to generate voice summaries
-  - Clear prompt structure separates past conversation (tone) from last message
-  - Avoids meta-narration ("I explained X") - states content directly
   - Concurrent text + audio via systemMessage and background TTS
+- refactor: simplify voice summary prompt to intuitive framing
+  - Removed 7 prescriptive rules, replaced with natural instruction
+  - Better tone matching - mirrors user's casual/colorful language
+  - Enforces 1-2 sentence max, never longer than original message
+- fix: defensive bash wrapper - approves instead of blocking if hook file missing
 
 ### aichat
 
@@ -18,6 +21,12 @@
   - Strict type checking - prompt must be non-empty string
   - Stricter pattern matching - exact match or followed by space
   - Case-insensitive comparison
+- fix: defensive bash wrapper - approves instead of blocking if hook file missing
+
+### tmux-cli
+
+- docs: document `execute` as CLI command (was incorrectly listed as Python API only)
+  - `tmux-cli execute "cmd" --pane=2` returns JSON with output and exit_code
 
 ## 2026-01-19
 
