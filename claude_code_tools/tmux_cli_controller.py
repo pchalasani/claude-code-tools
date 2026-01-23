@@ -331,43 +331,85 @@ class TmuxCLIController:
                     break
     
     def send_keys(self, text: str, pane_id: Optional[str] = None, enter: bool = True,
-                  delay_enter: Union[bool, float] = True):
+                  delay_enter: Union[bool, float] = True, verify_enter: bool = True,
+                  max_retries: int = 3):
         """
-        Send keystrokes to a pane.
-        
+        Send keystrokes to a pane with optional Enter key verification.
+
         Args:
             text: Text to send
             pane_id: Target pane (uses self.target_pane if not specified)
             enter: Whether to send Enter key after text
-            delay_enter: If True, use 1.0s delay; if float, use that delay in seconds (default: True)
+            delay_enter: If True, use 1.5s delay; if float, use that delay in seconds (default: True)
+            verify_enter: If True, verify Enter was received and retry if not (default: True)
+            max_retries: Maximum number of Enter key retries (default: 3)
         """
         target = pane_id or self.target_pane
         if not target:
             raise ValueError("No target pane specified")
-        
+
         if enter and delay_enter:
+            # Capture pane state before sending (for Enter verification)
+            content_before = self.capture_pane(target, lines=20) if verify_enter else None
+
             # Send text without Enter first
             cmd = ['send-keys', '-t', target, text]
             self._run_tmux_command(cmd)
-            
+
             # Determine delay duration
             if isinstance(delay_enter, bool):
-                delay = 1.0  # Default delay
+                delay = 1.5  # Default delay
             else:
                 delay = float(delay_enter)
-            
+
             # Apply delay
             time.sleep(delay)
-            
-            # Then send just Enter
-            cmd = ['send-keys', '-t', target, 'Enter']
-            self._run_tmux_command(cmd)
+
+            # Send Enter with verification and retry logic
+            self._send_enter_with_retry(target, content_before, verify_enter, max_retries)
         else:
-            # Original behavior
+            # Original behavior (no delay)
             cmd = ['send-keys', '-t', target, text]
             if enter:
                 cmd.append('Enter')
             self._run_tmux_command(cmd)
+
+    def _send_enter_with_retry(self, target: str, content_before: Optional[str],
+                                verify: bool, max_retries: int):
+        """
+        Send Enter key with optional verification and retry.
+
+        Verifies that Enter was received by checking if pane content changed
+        (indicating command was submitted). Retries if content hasn't changed.
+
+        Args:
+            target: Target pane ID
+            content_before: Pane content captured before sending text (for comparison)
+            verify: Whether to verify Enter was received
+            max_retries: Maximum retry attempts
+        """
+        for attempt in range(max_retries):
+            # Send Enter
+            cmd = ['send-keys', '-t', target, 'Enter']
+            self._run_tmux_command(cmd)
+
+            if not verify or content_before is None:
+                return  # No verification needed
+
+            # Wait a bit for the command to process
+            time.sleep(0.3)
+
+            # Check if pane content changed (indicating Enter was received)
+            content_after = self.capture_pane(target, lines=20)
+
+            if content_after != content_before:
+                # Content changed - Enter was successful
+                return
+
+            # Content unchanged - Enter may not have been received
+            if attempt < max_retries - 1:
+                # Wait before retry (exponential backoff)
+                time.sleep(0.5 * (attempt + 1))
     
     def capture_pane(self, pane_id: Optional[str] = None, lines: Optional[int] = None) -> str:
         """
@@ -705,12 +747,12 @@ class CLI:
     def send(self, text: str, pane: Optional[str] = None, enter: bool = True,
              delay_enter: Union[bool, float] = True):
         """Send text to a pane.
-        
+
         Args:
             text: Text to send
             pane: Target pane (session:window.pane, %id, or just index)
             enter: Whether to send Enter key after text
-            delay_enter: If True, use 1.0s delay; if float, use that delay in seconds (default: True)
+            delay_enter: If True, use 1.5s delay; if float, use that delay in seconds (default: True)
         """
         if self.mode == 'local':
             # Local mode - resolve pane identifier
