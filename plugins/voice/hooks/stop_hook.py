@@ -19,8 +19,12 @@ from pathlib import Path
 PLUGIN_ROOT = Path(__file__).parent.parent
 
 
-def get_voice_config() -> tuple[bool, str]:
-    """Read voice config from ~/.claude/voice.local.md"""
+def get_voice_config() -> tuple[bool, str, str]:
+    """Read voice config from ~/.claude/voice.local.md
+
+    Returns:
+        Tuple of (enabled, voice, custom_prompt)
+    """
     config_file = Path.home() / ".claude" / "voice.local.md"
 
     if not config_file.exists():
@@ -33,12 +37,13 @@ enabled: true
 
 Use `/voice:speak stop` to disable, `/voice:speak <name>` to change voice.
 """)
-        return True, "azelma"
+        return True, "azelma", ""
 
     content = config_file.read_text()
 
     enabled = True
     voice = "azelma"
+    custom_prompt = ""
 
     lines = content.split("\n")
     in_frontmatter = False
@@ -55,8 +60,16 @@ Use `/voice:speak stop` to disable, `/voice:speak <name>` to change voice.
                 enabled = val.lower() != "false"
             elif line.startswith("voice:"):
                 voice = line.split(":", 1)[1].strip()
+            elif line.startswith("prompt:"):
+                # Handle quoted strings
+                val = line.split(":", 1)[1].strip()
+                # Remove surrounding quotes if present
+                if (val.startswith('"') and val.endswith('"')) or \
+                   (val.startswith("'") and val.endswith("'")):
+                    val = val[1:-1]
+                custom_prompt = val
 
-    return enabled, voice
+    return enabled, voice, custom_prompt
 
 
 def find_session_file(session_id: str) -> Path | None:
@@ -166,7 +179,10 @@ def get_recent_conversation(
     return messages[-(num_turns * 2):]
 
 
-def summarize_with_claude(conversation: list[tuple[str, str]]) -> str | None:
+def summarize_with_claude(
+    conversation: list[tuple[str, str]],
+    custom_prompt: str = "",
+) -> str | None:
     """Use headless Claude to generate a 1-sentence summary."""
     if not conversation:
         return None
@@ -201,6 +217,13 @@ def summarize_with_claude(conversation: list[tuple[str, str]]) -> str | None:
     if len(last_assistant_msg) > 2000:
         last_assistant_msg = last_assistant_msg[:2000] + "..."
 
+    # Build the prompt
+    base_instruction = "You are the assistant who just wrote that message. Give a brief SPOKEN voice update to the user. Match the user's tone - if they're casual or use colorful language, mirror that. IMPORTANT: Keep it to 1-2 sentences max, and NEVER longer than the original message. What would you say?"
+
+    # Append custom prompt if provided
+    if custom_prompt:
+        base_instruction += f"\n\nAdditional instruction: {custom_prompt}"
+
     prompt = f"""PAST CONVERSATION (for tone context):
 {past_text}
 
@@ -211,7 +234,7 @@ YOUR LAST MESSAGE:
 
 ---
 
-You are the assistant who just wrote that message. Give a brief SPOKEN voice update to the user. Match the user's tone - if they're casual or use colorful language, mirror that. IMPORTANT: Keep it to 1-2 sentences max, and NEVER longer than the original message. What would you say?"""
+{base_instruction}"""
 
     try:
         result = subprocess.run(
@@ -229,7 +252,12 @@ You are the assistant who just wrote that message. Give a brief SPOKEN voice upd
 
         if result.returncode == 0:
             data = json.loads(result.stdout)
-            return data.get("result", "").strip()
+            summary = data.get("result", "").strip()
+            # Hard limit: truncate to 50 words max (500 is way too long for voice)
+            words = summary.split()
+            if len(words) > 50:
+                summary = " ".join(words[:50]) + "..."
+            return summary
 
     except Exception:
         pass
@@ -267,7 +295,7 @@ def main():
     session_id = data.get("session_id", "")
 
     # Check if voice is enabled
-    enabled, voice = get_voice_config()
+    enabled, voice, custom_prompt = get_voice_config()
     if not enabled:
         print(json.dumps({"decision": "approve"}))
         return
@@ -289,7 +317,7 @@ def main():
         return
 
     # Generate summary with Claude
-    summary = summarize_with_claude(conversation)
+    summary = summarize_with_claude(conversation, custom_prompt)
     if not summary:
         # Fallback: use last message text
         last_msg = conversation[-1][1] if conversation else ""
