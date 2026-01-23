@@ -206,21 +206,12 @@ def summarize_with_claude(conversation: list[tuple[str, str]]) -> str | None:
 
 ---
 
-LAST ASSISTANT MESSAGE:
+YOUR LAST MESSAGE:
 {last_assistant_msg}
 
 ---
 
-Summarize the LAST ASSISTANT MESSAGE as a 1-2 sentence voice update. Keep it short.
-
-Guidelines:
-1. Use first person ("I", "I'm", "I'll")
-2. Don't narrate - rephrase what's being said or asked
-3. Phrase as a wrap-up or handoff statement
-4. No meta-commentary ("I explained", "I gave you", "I told you") - just state the content directly
-5. IMPORTANT: Match the user's tone - if they're casual or use colorful language, mirror that. Keep it to 1-2 sentences max.
-6. If the message is an error, exception, or doesn't look like normal text, just say "Ran into an issue - see the output."
-7. This will be SPOKEN aloud via TTS - avoid file paths, UUIDs, hashes, or technical identifiers. Use natural language instead (e.g., "the config file" not "/Users/foo/bar/config.json")."""
+You are the assistant who just wrote that message. Give a brief SPOKEN voice update to the user. Match the user's tone - if they're casual or use colorful language, mirror that. IMPORTANT: Keep it to 1-2 sentences max, and NEVER longer than the original message. What would you say?"""
 
     try:
         result = subprocess.run(
