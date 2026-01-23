@@ -218,7 +218,7 @@ def summarize_with_claude(
         last_assistant_msg = last_assistant_msg[:2000] + "..."
 
     # Build the prompt
-    base_instruction = "You are the assistant who just wrote that message. Give a brief SPOKEN voice update to the user. Match the user's tone - if they're casual or use colorful language, mirror that. IMPORTANT: Keep it to 1-2 sentences max, and NEVER longer than the original message. What would you say?"
+    base_instruction = "You are the assistant who just wrote that message. Give a brief SPOKEN voice update to the user. Match the user's tone - if they're casual or use colorful language, mirror that. IMPORTANT: Keep it to 1-2 sentences max, and NEVER longer than the original message. Since this will be spoken aloud, avoid file paths, UUIDs, hashes, or technical identifiers - use natural language instead (e.g., 'the config file' not '/Users/foo/bar/config.json'). What would you say?"
 
     # Append custom prompt if provided
     if custom_prompt:
@@ -253,10 +253,10 @@ YOUR LAST MESSAGE:
         if result.returncode == 0:
             data = json.loads(result.stdout)
             summary = data.get("result", "").strip()
-            # Hard limit: truncate to 50 words max (500 is way too long for voice)
+            # Hard limit: truncate to 100 words max
             words = summary.split()
-            if len(words) > 50:
-                summary = " ".join(words[:50]) + "..."
+            if len(words) > 100:
+                summary = " ".join(words[:100]) + "..."
             return summary
 
     except Exception:

@@ -24,12 +24,12 @@ claude plugin add voice
 
 ### Stop Hook
 
-When the agent tries to stop, the `stop_hook.sh`:
+When the agent completes a task, the stop hook:
 
 1. Checks if voice feedback is enabled (via config file)
-2. If enabled, blocks the agent and asks it to provide a voice summary
-3. The agent calls the `say` script with a brief summary
-4. Once spoken, the agent is allowed to stop
+2. Reads the last assistant message from the session
+3. Uses a headless Claude to generate a brief spoken summary
+4. Plays the audio while displaying the summary text
 
 ### The `/voice:speak` Command
 
@@ -38,8 +38,27 @@ Control voice feedback with the slash command:
 - `/voice:speak` - Enable voice feedback
 - `/voice:speak <voice>` - Set voice (e.g., azure, alba) and enable
 - `/voice:speak stop` - Disable voice feedback
+- `/voice:speak prompt <text>` - Set custom instruction for summaries
+- `/voice:speak prompt` - Clear custom prompt
 
 Config is stored in `~/.claude/voice.local.md`.
+
+### Custom Prompts
+
+Use custom prompts to personalize how summaries are delivered:
+
+```bash
+# Be more enthusiastic
+/voice:speak prompt "be upbeat and encouraging"
+
+# Keep it ultra-brief
+/voice:speak prompt "use 5 words or less"
+
+# Add a sign-off
+/voice:speak prompt "always end with 'back to you, boss'"
+```
+
+The custom prompt is appended as an additional instruction to the summarizer.
 
 ### The `say` Script
 
