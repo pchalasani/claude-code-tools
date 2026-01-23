@@ -683,9 +683,30 @@ everything automatically—just describe what you want.
 Vanilla tmux can do everything tmux-cli does. The problem is that LLMs frequently make
 mistakes with raw tmux: forgetting the Enter key, not adding delays between text and
 Enter (causing race conditions with fast CLI apps), or incorrect escaping. `tmux-cli`
-bakes in defaults that address these: Enter is sent automatically with a 1-second delay
+bakes in defaults that address these: Enter is sent automatically with a 1.5-second delay
 (configurable), pane targeting accepts simple numbers instead of `session:window.pane`,
-and there's built-in `wait_idle` to detect when a CLI is ready for input.
+built-in `wait_idle` to detect when a CLI is ready for input, and **Enter key verification
+with automatic retry** to handle intermittent failures.
+
+> **Important: Instruct your AI agent to use `tmux-cli` instead of plain `tmux`**
+>
+> Add this directive to your project's `CLAUDE.md` or agent instructions:
+>
+> ```markdown
+> When interacting with tmux panes, ALWAYS use `tmux-cli send` instead of plain
+> `tmux send-keys`. Plain tmux commands are unreliable because they send text and
+> Enter simultaneously without any delay, causing race conditions where the Enter
+> key is lost before the target application can process the text input.
+> ```
+>
+> **Why plain tmux is unreliable:** When you run `tmux send-keys "text" Enter`, both
+> the text and Enter key are sent in rapid succession. If the target shell or application
+> hasn't fully processed the text input buffer, the Enter key can be lost. This is
+> especially common during shell initialization, with slow terminal emulators, or under
+> system load. `tmux-cli` addresses this by:
+> 1. Sending text first, then waiting 1.5 seconds before sending Enter
+> 2. Verifying the Enter was received by checking if pane content changed
+> 3. Automatically retrying the Enter key (up to 3 times) if verification fails
 
 ## Tmux-cli skill
 

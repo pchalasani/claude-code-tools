@@ -41,8 +41,9 @@ tmux-cli launch "command"
 tmux-cli send "text" --pane=PANE_ID
 # Example: tmux-cli send "print('hello')" --pane=3
 
-# By default, there's a 1-second delay between text and Enter.
-# This ensures compatibility with various CLI applications.
+# By default, there's a 1.5-second delay between text and Enter,
+# plus automatic Enter key verification with retry (up to 3 attempts).
+# This ensures reliability with various CLI applications.
 
 # To send without Enter:
 tmux-cli send "text" --pane=PANE_ID --enter=False

@@ -130,24 +130,69 @@ class RemoteTmuxController:
         return None
     
     def send_keys(self, text: str, pane_id: Optional[str] = None, enter: bool = True,
-                  delay_enter: Union[bool, float] = True):
-        """Send keys to the active pane of a given window (or last target)."""
+                  delay_enter: Union[bool, float] = True, verify_enter: bool = True,
+                  max_retries: int = 3):
+        """Send keys to the active pane of a given window (or last target).
+
+        Args:
+            text: Text to send
+            pane_id: Target pane/window
+            enter: Whether to send Enter key after text
+            delay_enter: If True, use 1.5s delay; if float, use that delay in seconds
+            verify_enter: If True, verify Enter was received and retry if not
+            max_retries: Maximum number of Enter key retries
+        """
         if not text:
             return
         target = self._active_pane_in_window(self._window_target(pane_id))
         if enter and delay_enter:
+            # Capture pane state before sending (for Enter verification)
+            content_before = self.capture_pane(pane_id, lines=20) if verify_enter else None
+
             # First send text (no Enter)
             self._run_tmux(['send-keys', '-t', target, text])
             # Delay
-            delay = 1.0 if isinstance(delay_enter, bool) else float(delay_enter)
+            delay = 1.5 if isinstance(delay_enter, bool) else float(delay_enter)
             time.sleep(delay)
-            # Then Enter
-            self._run_tmux(['send-keys', '-t', target, 'Enter'])
+            # Send Enter with verification and retry
+            self._send_enter_with_retry(target, pane_id, content_before, verify_enter, max_retries)
         else:
             args = ['send-keys', '-t', target, text]
             if enter:
                 args.append('Enter')
             self._run_tmux(args)
+
+    def _send_enter_with_retry(self, target: str, pane_id: Optional[str],
+                                content_before: Optional[str], verify: bool,
+                                max_retries: int):
+        """Send Enter key with optional verification and retry.
+
+        Args:
+            target: Resolved tmux target
+            pane_id: Original pane_id for capture_pane
+            content_before: Pane content captured before sending text
+            verify: Whether to verify Enter was received
+            max_retries: Maximum retry attempts
+        """
+        for attempt in range(max_retries):
+            # Send Enter
+            self._run_tmux(['send-keys', '-t', target, 'Enter'])
+
+            if not verify or content_before is None:
+                return
+
+            # Wait a bit for the command to process
+            time.sleep(0.3)
+
+            # Check if pane content changed
+            content_after = self.capture_pane(pane_id, lines=20)
+
+            if content_after != content_before:
+                return  # Enter was successful
+
+            # Content unchanged - retry with exponential backoff
+            if attempt < max_retries - 1:
+                time.sleep(0.5 * (attempt + 1))
     
     def capture_pane(self, pane_id: Optional[str] = None, lines: Optional[int] = None) -> str:
         """Capture output from the active pane of a window."""
