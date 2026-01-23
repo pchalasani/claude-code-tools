@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/aichat_resume_hook.py",
+            "command": "bash -c 'test -f \"${CLAUDE_PLUGIN_ROOT}/hooks/aichat_resume_hook.py\" && python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/aichat_resume_hook.py\" || echo \"{\\\"decision\\\":\\\"approve\\\"}\"'",
             "timeout": 10
           }
         ]
