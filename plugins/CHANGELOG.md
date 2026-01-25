@@ -1,5 +1,13 @@
 # Plugin Changelog
 
+## 2026-01-24
+
+### voice
+
+- feat: add `/voice:speak prompt <text>` to set custom voice summary instruction
+- fix: add 100-word hard limit on summaries to prevent verbose output
+- fix: restore TTS-friendly instruction (avoid file paths, UUIDs, hashes in spoken output)
+
 ## 2026-01-22
 
 ### voice
