@@ -956,10 +956,19 @@ Once installed, the plugin works automatically:
 Use the `/voice:speak` command to configure:
 
 ```bash
-/voice:speak            # Enable voice feedback with current voice
-/voice:speak alba       # Set voice to "alba" and enable feedback
-/voice:speak azure      # Set voice to "azure" and enable
-/voice:speak stop       # Disable voice feedback
+/voice:speak                  # Enable voice feedback with current voice
+/voice:speak alba             # Set voice to "alba" and enable feedback
+/voice:speak azure            # Set voice to "azure" and enable
+/voice:speak stop             # Disable voice feedback
+/voice:speak prompt <text>    # Set custom instruction for summaries
+/voice:speak prompt           # Clear custom prompt
+```
+
+**Custom prompts** let you personalize how summaries are delivered:
+
+```bash
+/voice:speak prompt "be upbeat and encouraging"
+/voice:speak prompt "always end with 'back to you, boss'"
 ```
 
 See the [pocket-tts repo](https://github.com/kyutai-labs/pocket-tts) for the
