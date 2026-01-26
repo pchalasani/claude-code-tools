@@ -319,12 +319,14 @@ class TmuxCLIController:
                     self.target_pane = output
                     return output
 
-                # Pane ID mismatch - find the actual new pane
-                # This handles edge cases where reported ID doesn't match reality
+                # Pane ID mismatch - find the actual new pane.
+                # This can occur when tmux reports a stale pane ID (e.g., from a
+                # recently killed pane) or during rapid pane creation/destruction.
                 current_panes = {p['id'] for p in self.list_panes()}
                 new_panes = current_panes - existing_panes
                 if new_panes:
-                    actual_pane = new_panes.pop()
+                    # Use min() for deterministic selection if multiple panes created
+                    actual_pane = min(new_panes)
                     self.target_pane = actual_pane
                     return actual_pane
 
@@ -722,12 +724,15 @@ class CLI:
         # list_panes() and create_pane() operate.
         tmux_pane = os.environ.get('TMUX_PANE')
         if tmux_pane:
-            session, _ = self.controller._run_tmux_command(
+            session, session_code = self.controller._run_tmux_command(
                 ['display-message', '-t', tmux_pane, '-p', '#{session_name}'])
-            window, _ = self.controller._run_tmux_command(
+            window, window_code = self.controller._run_tmux_command(
                 ['display-message', '-t', tmux_pane, '-p', '#{window_name}'])
-            pane_index, _ = self.controller._run_tmux_command(
+            pane_index, pane_code = self.controller._run_tmux_command(
                 ['display-message', '-t', tmux_pane, '-p', '#{pane_index}'])
+            # If any command failed, fall back to None so the error message shows
+            if session_code != 0 or window_code != 0 or pane_code != 0:
+                session = window = pane_index = None
         else:
             # Fallback if TMUX_PANE not set
             session = self.controller.get_current_session()
