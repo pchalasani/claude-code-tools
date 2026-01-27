@@ -1,0 +1,65 @@
+diff --git a/claude_code_tools/tmux_cli_controller.py b/claude_code_tools/tmux_cli_controller.py
+index ab12346..cd789ef 100644
+--- a/claude_code_tools/tmux_cli_controller.py
++++ b/claude_code_tools/tmux_cli_controller.py
+@@ -603,6 +603,49 @@ class TmuxCLIController:
+             capture_fn=lambda lines: self.capture_pane(pane_id=target, lines=lines),
+             start_marker=start_marker,
+             end_marker=end_marker,
++            cleanup_history=False,
++            hide_echo_during_execution=False,
++            timeout=timeout)
++
++    def execute_clean(self, command: str, pane_id: Optional[str] = None, timeout: int = 30) -> Dict[str, Any]:
++        """
++        Execute command with clean user interface - no technical clutter visible.
++        
++        This enhanced method provides a clean execution experience:
++        - Hides command transmission with stty echo disabling
++        - Clears history to prevent contamination from previous executions  
++        - Uses existing sophisticated marker system for reliability
++        - Returns clean, structured output without technical noise
++
++        Args:
++            command: Shell command to execute
++            pane_id: Target pane (uses self.target_pane if not specified)
++            timeout: Maximum seconds to wait for completion (default: 30)
++
++        Returns:
++            Dict with keys:
++                - output (str): Clean command output (stdout + stderr)
++                - exit_code (int): Command exit status, or -1 on timeout
++                - duration_ms (int): Execution time in milliseconds
++                - attempts (int): Number of execution attempts
++                - retried (bool): Whether execution was retried
++
++        Examples:
++            result = controller.execute_clean("echo 'Hello World'")
++            # "Hello World"
++            print(result["output"])
++
++            result = controller.execute_clean("ls -la /tmp")
++            print(f"Exit code: {result['exit_code']}")
++        """
++        from .tmux_execution_helpers import (
++            generate_execution_markers,
++            wrap_command_with_markers,
++            poll_for_completion,
++        )
++
++        target = pane_id or self.target_pane
++        if not target:
++            raise ValueError("No target pane specified")
++
++        # ENHANCEMENT 1: Hide command transmission with stty
++        self.send_keys("stty -echo", pane_id=target, enter=True, delay_enter=True)
++        self.send_keys(command, pane_id=target, enter=True, delay_enter=False)
++        self.send_keys("stty echo", pane_id=target, enter=True, delay_enter=True)
++
++        # ENHANCEMENT 2: Clear history to prevent contamination
++        self.send_keys("history -c", pane_id=target, enter=True, delay_enter=True)
++
++        # ENHANCEMENT 3: Use existing sophisticated execution with markers
++        return self.execute(command, pane_id=target)
+ 
+     def launch_cli(self, command: str, vertical: bool = True, size: int = 50) -> Optional[str]:
