@@ -22,6 +22,7 @@ dev = ["commitizen>=3.0.0"]
 gdocs = [
     "google-api-python-client>=2.0.0",
     "google-auth-oauthlib>=1.0.0",
+    "Pillow>=10.0.0",
 ]
 
 [project.scripts]
