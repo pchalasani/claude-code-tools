@@ -294,6 +294,9 @@ class TmuxCLIController:
         else:
             base_cmd.append('-v')
 
+        # Get list of existing panes BEFORE creating new one (for verification)
+        existing_panes = {p['id'] for p in self.list_panes()}
+
         # Try -l first (tmux 3.4+), fall back to -p (older versions)
         # tmux 3.4 removed -p, but 3.5+ has both; older versions only have -p
         for size_flag in (['-l', f'{size}%'], ['-p', str(size)]) if size else [[]]:
@@ -308,8 +311,24 @@ class TmuxCLIController:
 
             # Validate: code must be 0 and output must be a valid pane ID (starts with %)
             if code == 0 and output and output.startswith('%'):
-                self.target_pane = output
-                return output
+                # Verify the pane actually exists by querying it
+                verify_output, verify_code = self._run_tmux_command(
+                    ['display-message', '-t', output, '-p', '#{pane_id}']
+                )
+                if verify_code == 0 and verify_output == output:
+                    self.target_pane = output
+                    return output
+
+                # Pane ID mismatch - find the actual new pane.
+                # This can occur when tmux reports a stale pane ID (e.g., from a
+                # recently killed pane) or during rapid pane creation/destruction.
+                current_panes = {p['id'] for p in self.list_panes()}
+                new_panes = current_panes - existing_panes
+                if new_panes:
+                    # Use min() for deterministic selection if multiple panes created
+                    actual_pane = min(new_panes)
+                    self.target_pane = actual_pane
+                    return actual_pane
 
         return None
     
@@ -699,12 +718,27 @@ class CLI:
             if hasattr(self.controller, 'session_name'):
                 print(f"Remote session: {self.controller.session_name}")
             return
-            
-        # Get current location
-        session = self.controller.get_current_session()
-        window = self.controller.get_current_window()
-        pane_index = self.controller.get_current_pane_index()
-        
+
+        # Use TMUX_PANE to get location where this process is running,
+        # not the currently focused pane. This is consistent with where
+        # list_panes() and create_pane() operate.
+        tmux_pane = os.environ.get('TMUX_PANE')
+        if tmux_pane:
+            session, session_code = self.controller._run_tmux_command(
+                ['display-message', '-t', tmux_pane, '-p', '#{session_name}'])
+            window, window_code = self.controller._run_tmux_command(
+                ['display-message', '-t', tmux_pane, '-p', '#{window_name}'])
+            pane_index, pane_code = self.controller._run_tmux_command(
+                ['display-message', '-t', tmux_pane, '-p', '#{pane_index}'])
+            # If any command failed, fall back to None so the error message shows
+            if session_code != 0 or window_code != 0 or pane_code != 0:
+                session = window = pane_index = None
+        else:
+            # Fallback if TMUX_PANE not set
+            session = self.controller.get_current_session()
+            window = self.controller.get_current_window()
+            pane_index = self.controller.get_current_pane_index()
+
         if session and window and pane_index:
             print(f"Current location: {session}:{window}.{pane_index}")
         else:
