@@ -11,6 +11,7 @@ Prerequisites:
 """
 
 import argparse
+import base64
 import re
 import sys
 from pathlib import Path
@@ -79,6 +80,128 @@ def strip_base64_images(content: str) -> str:
     content = re.sub(r'\n{3,}', '\n\n', content)
 
     return content
+
+def extract_base64_images(
+    content: str,
+    output_dir: Path,
+    base_name: str = "image",
+) -> str:
+    """Extract base64 images to files, rewrite refs.
+
+    Handles both inline and reference-style base64 images.
+    Writes each to output_dir as base_name_001.png etc,
+    and rewrites the markdown to use local file paths.
+
+    Args:
+        content: Markdown text with base64 images.
+        output_dir: Directory to write image files to.
+        base_name: Prefix for image filenames.
+
+    Returns:
+        Modified markdown with local file references.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    counter = 0
+    ext_map = {
+        "png": "png",
+        "jpeg": "jpg",
+        "jpg": "jpg",
+        "gif": "gif",
+        "webp": "webp",
+        "svg+xml": "svg",
+    }
+
+    def _write_image(
+        mime_subtype: str, b64_data: str
+    ) -> Optional[str]:
+        """Decode and write one image. Returns filename."""
+        nonlocal counter
+        ext = ext_map.get(mime_subtype, "png")
+        counter += 1
+        filename = f"{base_name}_{counter:03d}.{ext}"
+        filepath = output_dir / filename
+        try:
+            raw = base64.b64decode(b64_data)
+            filepath.write_bytes(raw)
+            console.print(
+                f"  [green]Extracted:[/green] {filename}"
+                f" ({len(raw) // 1024}KB)"
+            )
+            return filename
+        except Exception as e:
+            console.print(
+                f"  [yellow]Warning:[/yellow] "
+                f"Failed to decode image: {e}"
+            )
+            return None
+
+    # --- Pattern 1: inline base64 images ---
+    # ![alt](data:image/TYPE;base64,DATA)
+    inline_pat = (
+        r"!\[([^\]]*)\]"
+        r"\(data:image/([^;]+);base64,([^)]+)\)"
+    )
+
+    def _inline_replace(match: re.Match) -> str:
+        alt = match.group(1).strip()
+        mime_sub = match.group(2)
+        b64 = match.group(3)
+        fname = _write_image(mime_sub, b64)
+        if fname:
+            return f"![{alt}]({fname})"
+        return match.group(0)  # keep original on failure
+
+    content = re.sub(inline_pat, _inline_replace, content)
+
+    # --- Pattern 2: reference-style base64 images ---
+    # Usage: ![][image1] or ![alt][image1]
+    # Definition: [image1]: <data:image/TYPE;base64,DATA>
+    ref_def_pat = (
+        r"^\[([^\]]+)\]:\s*"
+        r"<data:image/([^;]+);base64,([^>]+)>\s*$"
+    )
+
+    # Extract all reference definitions
+    ref_images: dict[str, str] = {}  # ref_name → fname
+    for match in re.finditer(
+        ref_def_pat, content, re.MULTILINE
+    ):
+        ref_name = match.group(1)
+        mime_sub = match.group(2)
+        b64 = match.group(3)
+        fname = _write_image(mime_sub, b64)
+        if fname:
+            ref_images[ref_name] = fname
+
+    # Remove the base64 reference definitions
+    content = re.sub(
+        ref_def_pat, "", content, flags=re.MULTILINE
+    )
+
+    # Rewrite usages: ![][refname] or ![alt][refname]
+    for ref_name, fname in ref_images.items():
+        escaped = re.escape(ref_name)
+        usage_pat = rf"!\[([^\]]*)\]\[{escaped}\]"
+
+        def _ref_replace(
+            m: re.Match, f: str = fname
+        ) -> str:
+            alt = m.group(1).strip() or ref_name
+            return f"![{alt}]({f})"
+
+        content = re.sub(usage_pat, _ref_replace, content)
+
+    # Clean up extra blank lines
+    content = re.sub(r"\n{3,}", "\n\n", content)
+
+    if counter:
+        console.print(
+            f"[cyan]Extracted {counter} image(s) "
+            f"to {output_dir}/[/cyan]"
+        )
+
+    return content
+
 
 # Import shared utilities from md2gdoc
 from claude_code_tools.md2gdoc import (
@@ -290,7 +413,8 @@ Examples:
   gdoc2md "My Document"                        # Download from root
   gdoc2md "My Document" --folder "OTA/Reports" # Download from folder
   gdoc2md "My Document" -o report.md           # Save with custom name
-  gdoc2md "My Document" --images               # Keep base64 images
+  gdoc2md "My Document" --no-images             # Strip images to placeholders
+  gdoc2md "My Document" --keep-base64           # Keep base64 images inline
   gdoc2md --list --folder OTA                  # List docs in folder
 
 Credentials (in order of precedence):
@@ -331,9 +455,17 @@ Credentials (in order of precedence):
     )
 
     parser.add_argument(
-        "--images",
+        "--no-images",
         action="store_true",
-        help="Keep base64-encoded images (default: replace with placeholders)",
+        help="Strip images to placeholders instead "
+        "of extracting to files",
+    )
+
+    parser.add_argument(
+        "--keep-base64",
+        action="store_true",
+        help="Keep base64-encoded images inline "
+        "instead of extracting to files",
     )
 
     args = parser.parse_args()
@@ -394,17 +526,26 @@ Credentials (in order of precedence):
     if content is None:
         sys.exit(1)
 
-    # Strip base64 images unless --images flag is used
-    if not args.images:
-        content = strip_base64_images(content)
-
-    # Determine output filename
+    # Determine output filename first (needed for image dir)
     if args.output:
         output_path = Path(args.output)
     else:
-        # Use doc name, sanitize for filesystem
-        safe_name = "".join(c if c.isalnum() or c in "._- " else "_" for c in doc["name"])
+        safe_name = "".join(
+            c if c.isalnum() or c in "._- " else "_"
+            for c in doc["name"]
+        )
         output_path = Path(f"{safe_name}.md")
+
+    # Handle images: default=extract, --no-images=strip,
+    # --keep-base64=leave inline
+    if args.no_images:
+        content = strip_base64_images(content)
+    elif not args.keep_base64:
+        img_dir = output_path.parent
+        img_base = output_path.stem
+        content = extract_base64_images(
+            content, img_dir, base_name=img_base
+        )
 
     # Check if file exists
     if output_path.exists():
