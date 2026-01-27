@@ -648,29 +648,24 @@ class TmuxCLIController:
         # Wrap command with markers
         wrapped_command = wrap_command_with_markers(command, start_marker, end_marker)
 
-        try:
-            # Hide transmission if requested (for clean viewport UX)
-            if hide_transmission:
-                self.send_keys("stty -echo", pane_id=target, enter=True, delay_enter=True)
+        # Hide transmission if requested (for clean viewport UX)
+        if hide_transmission:
+            self.send_keys("stty -echo", pane_id=target, enter=True, delay_enter=True)
 
-            # Send wrapped command to pane
-            self.send_keys(wrapped_command, pane_id=target, enter=True, delay_enter=False)
+        # Send wrapped command to pane
+        self.send_keys(wrapped_command, pane_id=target, enter=True, delay_enter=False)
 
-            # Poll for completion with progressive expansion
-            return poll_for_completion(
-                capture_fn=lambda lines: self.capture_pane(pane_id=target, lines=lines),
-                start_marker=start_marker,
-                end_marker=end_marker,
-                timeout=timeout,
-            )
-        finally:
-            # Always restore echo if we disabled it, even on error
-            if hide_transmission:
-                try:
-                    self.send_keys("stty echo", pane_id=target, enter=True, delay_enter=True)
-                except Exception:
-                    # Don't mask the original exception if stty echo fails
-                    pass
+        # Restore echo immediately after sending command, before it executes
+        if hide_transmission:
+            self.send_keys("stty echo", pane_id=target, enter=True, delay_enter=True)
+
+        # Poll for completion with progressive expansion
+        return poll_for_completion(
+            capture_fn=lambda lines: self.capture_pane(pane_id=target, lines=lines),
+            start_marker=start_marker,
+            end_marker=end_marker,
+            timeout=timeout,
+        )
 
     def launch_cli(self, command: str, vertical: bool = True, size: int = 50) -> Optional[str]:
         """
