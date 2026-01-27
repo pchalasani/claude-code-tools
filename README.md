@@ -1094,6 +1094,7 @@ uv tool install 'claude-code-tools[gdocs]'
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
 2. Create/select a project and enable the **Google Drive API**
+   and the **Google Docs API**
 3. Go to **APIs & Services** → **Credentials** → **Create Credentials** →
    **OAuth client ID**
 4. Choose **Desktop app**, then download the JSON file
@@ -1121,9 +1122,18 @@ If a file with the same name exists, `--on-existing` controls behavior:
 
 Features:
 
-- Native markdown conversion (same quality as manual upload + "Open in Docs")
+- Native markdown conversion (same quality as manual
+  upload + "Open in Docs")
+- **Image upload**: local images referenced in markdown
+  (e.g., `![alt](diagram.png)`) are uploaded to Drive
+  at full resolution, then inserted into the Google Doc
+  via the Docs API with proper sizing to fit the page
+- `--max-image-width` controls display width in inches
+  (default: 6.5 = full page width)
+- `--no-images` skips image processing entirely
 - Follows Drive shortcuts to shared folders
-- Conflict detection with version suffix or overwrite options
+- Conflict detection with version suffix or overwrite
+  options
 - Creates folders if they don't exist
 
 ### gdoc2md — Google Docs to Markdown
@@ -1136,6 +1146,14 @@ gdoc2md "My Document" --folder "PNL/Reports" # Download from folder
 gdoc2md "My Document" -o report.md           # Save with custom name
 gdoc2md --list --folder PNL                  # List docs in folder
 ```
+
+By default, embedded images are extracted to local files
+(e.g., `report_001.png`, `report_002.png`) alongside the
+markdown, with references rewritten to use local paths:
+
+- Default: extract images to files
+- `--no-images`: strip images to placeholders
+- `--keep-base64`: keep base64 data inline
 
 <a id="development"></a>
 ## 🛠️ Development
