@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """
-Stop hook - auto-generate voice summary using headless Claude.
+Stop hook - extract or generate voice summary.
 
-Instead of blocking and asking Claude to provide a summary (which shows as
-"Stop hook error"), this hook:
-1. Reads the last assistant message from the session file
-2. Calls headless Claude to generate a 1-sentence summary
-3. Calls the say script to speak it
-4. Returns approve (no blocking, no error display)
+This hook tries to extract an inline voice summary (📢 marker) first,
+falling back to headless Claude only if no marker is found.
+
+Flow:
+1. Look for 📢 marker in the last assistant message (instant, no API call)
+2. If not found, call headless Claude to generate a summary (slower fallback)
+3. Speak the summary via the say script
+4. Return approve (non-blocking)
 """
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -108,6 +111,34 @@ def trim_to_words(text: str, max_words: int) -> str:
     return " ".join(words[:max_words]) + "..."
 
 
+def extract_voice_marker(text: str) -> str | None:
+    """Extract voice summary from 📢 marker if present.
+
+    Looks for lines starting with 📢 (with optional whitespace).
+    Returns the text after the marker, or None if not found.
+    """
+    # Match 📢 at start of line, capture everything after it
+    # Handle both "📢 text" and "📢text" formats
+    pattern = r'^[ \t]*📢[ \t]*(.+?)[ \t]*$'
+    match = re.search(pattern, text, re.MULTILINE)
+    if match:
+        summary = match.group(1).strip()
+        # Clean up any markdown artifacts (brackets, etc.)
+        summary = re.sub(r'^\[|\]$', '', summary)
+        return summary if summary else None
+    return None
+
+
+def word_count(text: str) -> int:
+    """Count words in text."""
+    return len(text.split())
+
+
+def is_short_response(text: str, max_words: int = 25) -> bool:
+    """Check if response is short enough to speak directly."""
+    return word_count(text) <= max_words
+
+
 def extract_message_text(data: dict) -> str | None:
     """Extract text content from a message data dict."""
     message = data.get("message", {})
@@ -120,8 +151,34 @@ def extract_message_text(data: dict) -> str | None:
         for item in content:
             if isinstance(item, dict) and item.get("type") == "text":
                 text_parts.append(item.get("text", ""))
-        return " ".join(text_parts).strip()
+        # Join with newlines so 📢 markers stay at line start
+        return "\n".join(text_parts).strip()
     return None
+
+
+def get_last_assistant_message(session_file: Path) -> str | None:
+    """Get the last assistant message text from session file."""
+    last_assistant_text = None
+
+    try:
+        with open(session_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+
+                try:
+                    data = json.loads(line)
+                    if data.get("type") == "assistant":
+                        text = extract_message_text(data)
+                        if text:
+                            last_assistant_text = text
+                except json.JSONDecodeError:
+                    continue
+    except Exception:
+        pass
+
+    return last_assistant_text
 
 
 def get_recent_conversation(
@@ -253,10 +310,10 @@ YOUR LAST MESSAGE:
         if result.returncode == 0:
             data = json.loads(result.stdout)
             summary = data.get("result", "").strip()
-            # Hard limit: truncate to 100 words max
+            # Hard limit: truncate to 25 words max
             words = summary.split()
-            if len(words) > 100:
-                summary = " ".join(words[:100]) + "..."
+            if len(words) > 25:
+                summary = " ".join(words[:25]) + "..."
             return summary
 
     except Exception:
@@ -310,27 +367,53 @@ def main():
         print(json.dumps({"decision": "approve"}))
         return
 
-    # Get recent conversation for context
-    conversation = get_recent_conversation(session_file)
-    if not conversation:
+    summary = None
+    used_headless = False
+
+    # Get last assistant message
+    last_assistant_msg = get_last_assistant_message(session_file)
+
+    # Strategy 1: Try to extract 📢 marker (instant!)
+    if last_assistant_msg:
+        marker_summary = extract_voice_marker(last_assistant_msg)
+        if marker_summary:
+            summary = marker_summary
+
+    # Strategy 2: If no marker but response is short (≤25 words), speak directly
+    if not summary and last_assistant_msg:
+        if is_short_response(last_assistant_msg, max_words=25):
+            summary = last_assistant_msg  # Already short enough
+
+    # Strategy 3: Fall back to headless Claude summarization (slower)
+    if not summary and last_assistant_msg:
+        conversation = get_recent_conversation(session_file)
+        if conversation:
+            summary = summarize_with_claude(conversation, custom_prompt)
+            if summary:
+                used_headless = True
+
+    # Strategy 4: Last resort - truncate last message
+    if not summary and last_assistant_msg:
+        summary = trim_to_words(last_assistant_msg, 20)
+
+    if not summary:
         print(json.dumps({"decision": "approve"}))
         return
 
-    # Generate summary with Claude
-    summary = summarize_with_claude(conversation, custom_prompt)
-    if not summary:
-        # Fallback: use last message text
-        last_msg = conversation[-1][1] if conversation else ""
-        summary = last_msg[:100] + ("..." if len(last_msg) > 100 else "")
+    # Final safety: always enforce 25-word max no matter which strategy
+    summary = trim_to_words(summary, 25)
 
     # Speak it
     speak_summary(session_id, summary, voice)
 
-    # Approve with systemMessage to display the summary
-    print(json.dumps({
-        "decision": "approve",
-        "systemMessage": f"🔊 {summary}"
-    }))
+    # Only show output if we used headless Claude (summary is new, not in message)
+    if used_headless:
+        print(json.dumps({
+            "decision": "approve",
+            "systemMessage": f"🔊 {summary}"
+        }))
+    else:
+        print(json.dumps({"decision": "approve"}))
 
 
 if __name__ == "__main__":
