@@ -140,6 +140,8 @@ Four commands are installed:
 | [`vault`](#vault) | Encrypted .env backup and sync |
 | [`env-safe`](#env-safe) | Safe .env inspection without exposing values |
 
+
+
 <a id="claude-code-plugins"></a>
 
 ### Claude Code Plugins
@@ -1249,3 +1251,18 @@ Run `make help` for full list. Key commands:
 ## 📄 License
 
 MIT
+
+
+## 🔎 Related / Complementary Tools
+
+- **[clicodelog](https://github.com/monk1337/clicodelog)**  
+  A lightweight, local-first web UI to browse, inspect, and export
+  Claude Code, Codex CLI, and Gemini CLI session logs.
+  
+  Useful for:
+  - Visual inspection of long sessions
+  - Auditing agent behavior and tool usage
+  - Exporting conversations for reports or debugging
+
+  Complements `aichat` by focusing on **post-session inspection**, while
+  `claude-code-tools` focuses on **in-session workflows and continuation**.
