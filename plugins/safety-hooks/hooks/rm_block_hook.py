@@ -1,19 +1,39 @@
 #!/usr/bin/env python3
+import os
 import re
+import sys
+
+# Add plugin hooks directory to Python path for local imports
+PLUGIN_ROOT = os.environ.get('CLAUDE_PLUGIN_ROOT')
+if PLUGIN_ROOT:
+    hooks_dir = os.path.join(PLUGIN_ROOT, 'hooks')
+    if hooks_dir not in sys.path:
+        sys.path.insert(0, hooks_dir)
+
+from command_utils import extract_subcommands
 
 def check_rm_command(command):
     """
     Check if a command contains rm that should be blocked.
+    Handles compound commands (e.g., "cd /path && rm foo").
     Returns tuple: (should_block: bool, reason: str or None)
     """
+    for subcmd in extract_subcommands(command):
+        should_block, reason = _check_single_rm(subcmd)
+        if should_block:
+            return True, reason
+    return False, None
+
+
+def _check_single_rm(command):
+    """Check a single command (no shell chaining) for rm."""
     # Normalize the command
     normalized_cmd = ' '.join(command.strip().split())
-    
+
     # Check if it's an rm command
     # This catches: rm, /bin/rm, /usr/bin/rm, etc.
-    # Also simpler check: if the command starts with rm or contains rm after common separators
-    if (normalized_cmd.startswith("rm ") or normalized_cmd == "rm" or 
-        re.search(r'(^|[;&|]\s*)(/\S*/)?rm\b', normalized_cmd)):
+    if (normalized_cmd.startswith("rm ") or normalized_cmd == "rm" or
+        re.search(r'^(/\S*/)?rm\b', normalized_cmd)):
         reason_text = (
             "Instead of using 'rm':\n "
             "- MOVE files using `mv` to the TRASH directory in the CURRENT folder (create it if needed), \n"
@@ -25,7 +45,7 @@ def check_rm_command(command):
             "```"
         )
         return True, reason_text
-    
+
     return False, None
 
 

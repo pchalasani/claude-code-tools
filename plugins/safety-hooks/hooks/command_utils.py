@@ -135,12 +135,12 @@ def expand_command_aliases(command: str) -> str:
 
     # Find the operators and their positions to preserve them
     # This regex captures the operators as well as the commands
-    parts = re.split(r'(\s*(?:&&|\|\||;)\s*)', command)
+    parts = re.split(r'(\s*(?:&&|\|\||[;&|])\s*)', command)
 
     result = []
     for part in parts:
         # Check if this part is an operator
-        if re.match(r'\s*(?:&&|\|\||;)\s*', part):
+        if re.match(r'\s*(?:&&|\|\||[;&|])\s*', part):
             result.append(part)
         elif part.strip():
             # It's a command, expand its alias
@@ -155,7 +155,7 @@ def extract_subcommands(command: str) -> list[str]:
     """
     Split compound bash command into individual subcommands.
 
-    Splits on &&, ||, and ; operators.
+    Splits on &&, ||, ;, | (pipe), and & (background) operators.
 
     Args:
         command: A bash command string, possibly compound.
@@ -169,5 +169,5 @@ def extract_subcommands(command: str) -> list[str]:
     """
     if not command:
         return []
-    subcommands = re.split(r'\s*(?:&&|\|\||;)\s*', command)
+    subcommands = re.split(r'\s*(?:&&|\|\||[;&|])\s*', command)
     return [cmd.strip() for cmd in subcommands if cmd.strip()]
