@@ -428,7 +428,7 @@ aichat resume                # Auto-find latest for this project
 > [!TIP]
 > It's highly recommended to turn off auto-compaction when using `aichat resume`.
 > - **Claude Code:** Use the `/config` command to disable auto-compaction
-> - **Codex CLI:** Set `model_auto_compact_token_limit = 0` in `~/.codex/config.toml`
+> - **Codex CLI:** Set `model_auto_compact_token_limit = 200000` in `~/.codex/config.toml`
 
 When you access the resume menu using any of the above 3 mechanisms, you will
 be presented with 3 resume strategies, as described below.
