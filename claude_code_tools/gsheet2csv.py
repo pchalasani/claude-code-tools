@@ -11,6 +11,8 @@ Prerequisites:
 """
 
 import argparse
+import csv
+import io
 import sys
 from pathlib import Path
 from typing import Optional
@@ -180,6 +182,7 @@ Examples:
   gsheet2csv "My Spreadsheet"                      # Download from root
   gsheet2csv "My Spreadsheet" --folder "Reports"   # Download from folder
   gsheet2csv "My Spreadsheet" -o data.csv          # Save with custom name
+  gsheet2csv "My Spreadsheet" -o data.tsv          # Save as TSV
   gsheet2csv "My Spreadsheet" --sheet "Sheet2"     # Download specific tab
   gsheet2csv --list --folder Reports               # List sheets in folder
   gsheet2csv "My Spreadsheet" --list-tabs          # List tabs in spreadsheet
@@ -337,6 +340,14 @@ Note: By default, exports the first sheet. Use --sheet to specify a tab name.
             output_path = Path(f"{safe_name}_{safe_tab}.csv")
         else:
             output_path = Path(f"{safe_name}.csv")
+
+    # Convert to TSV if output extension is .tsv
+    if output_path.suffix.lower() == ".tsv":
+        reader = csv.reader(io.StringIO(content))
+        tsv_buf = io.StringIO()
+        writer = csv.writer(tsv_buf, delimiter="\t")
+        writer.writerows(reader)
+        content = tsv_buf.getvalue()
 
     # Check if file exists
     if output_path.exists():
