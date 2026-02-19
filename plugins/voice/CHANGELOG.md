@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.10.7] - 2026-02-19
+
+### Fixed
+
+- **Reduced ffplay startup latency**: Added `-probesize 32` and
+  `-analyzeduration 0` flags to the `ffplay` streaming command.
+  Reduces time-to-first-audio by ~0.6s by making ffplay start
+  playback sooner instead of buffering excess data. (#60)
+
 ## [1.10.4] - 2026-02-11
 
 ### Fixed
