@@ -123,7 +123,8 @@ play_audio_file() {
 
 # Function to play audio via streaming (lower latency)
 play_audio_stream() {
-    ffplay -nodisp -autoexit -loglevel quiet -i pipe:0
+    ffplay -nodisp -autoexit -loglevel quiet \
+        -probesize 32 -analyzeduration 0 -i pipe:0
 }
 
 # Session state files (for stop hook integration)
