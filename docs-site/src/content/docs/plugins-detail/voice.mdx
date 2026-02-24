@@ -91,8 +91,8 @@ plugin.
     The default voice is **azelma**. To change it:
 
     ```bash
-    /speak alba
-    /speak cosette
+    /voice:speak alba
+    /voice:speak cosette
     ```
 
     Available voices: alba, marius, javert, jean,
@@ -107,13 +107,13 @@ plugin.
 
     ```bash
     # Set a custom instruction for summaries
-    /speak prompt "be upbeat and encouraging"
+    /voice:speak prompt "be upbeat and encouraging"
 
     # Another example
-    /speak prompt "always end with 'back to you, boss'"
+    /voice:speak prompt "always end with 'back to you, boss'"
 
     # Clear the custom prompt
-    /speak prompt
+    /voice:speak prompt
     ```
   </TabItem>
 </Tabs>
@@ -188,7 +188,7 @@ This design ensures:
   stale-process detection prevents overlapping audio
   when multiple sessions finish at the same time
 - **Infinite loop prevention** -- When you run
-  `/speak stop`, a `just_disabled` flag is set. The
+  `/voice:speak stop`, a `just_disabled` flag is set. The
   next prompt hook sees this, injects a "stop adding
   📢 markers" message to override stale instructions
   still in context, and clears the flag. Without
