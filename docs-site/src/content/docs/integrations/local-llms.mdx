@@ -238,6 +238,66 @@ llama-server \
 |-------|------|-------|
 | UD-Q4\_K\_XL | ~46 GB | Recommended for 64 GB systems |
 
+### Qwen3.5-35B-A3B -- Smart General-Purpose MoE
+
+A 35B MoE model with 3B active parameters. Uses
+sliding window attention (SWA), which requires the
+`--swa-full` flag to enable prompt caching across
+follow-up requests. Without it, every request
+reprocesses the full prompt from scratch.
+
+```bash
+llama-server \
+  -hf unsloth/Qwen3.5-35B-A3B-GGUF:Q4_K_M \
+  --port 8131 \
+  -c 131072 \
+  -b 2048 \
+  -ub 1024 \
+  --parallel 1 \
+  -fa on \
+  --jinja \
+  --keep 1024 \
+  --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  --swa-full \
+  --no-context-shift \
+  --mlock \
+  --no-mmap
+```
+
+**Critical settings:**
+
+| Setting | Why |
+|---------|-----|
+| `--swa-full` | Expands SWA cache to full context, enabling prompt caching (uses more RAM) |
+| `--no-context-shift` | Required -- context shift is incompatible with SWA |
+| `--cache-type-k/v q8_0` | "Basically free" quality-wise, boosts throughput |
+| `--keep 1024` | Keeps system prompt prefix in cache |
+| `--mlock --no-mmap` | macOS memory optimization |
+
+**Performance (M1 Max 64 GB):**
+
+- Cold start: ~93 seconds (processing ~35k token system prompt)
+- Cached follow-ups: ~10 seconds
+- Prompt eval: ~245--375 tok/s
+- Generation: ~12 tok/s
+
+| Quant | Size | Notes |
+|-------|------|-------|
+| Q4\_K\_M | ~20 GB | Good balance, recommended |
+| UD-Q4\_K\_XL | ~21 GB | Slightly better quality |
+| UD-Q5\_K\_XL | ~25 GB | Higher quality, slower |
+
+:::caution[SWA Cache Gotcha]
+Without `--swa-full`, this model reprocesses the
+entire ~35k token prompt on every request, turning
+a 10-second follow-up into a 93-second wait. This
+is due to the sliding window attention architecture
+invalidating the KV cache. See
+[llama.cpp #19858](https://github.com/ggml-org/llama.cpp/issues/19858)
+for details.
+:::
+
 ### Qwen3-Next-80B-A3B -- Better Long Context
 
 Slower generation but performance does not degrade
@@ -349,6 +409,7 @@ llama-server \
 | Qwen3-VL-30B | 8128 | See [Vision Models](#vision-models) |
 | GLM-4.7-Flash | 8129 | See full command above |
 | Qwen3-Coder-Next | 8130 | See full command above (~46 GB) |
+| Qwen3.5-35B-A3B | 8131 | See full command above (needs `--swa-full`) |
 
 ## Vision Models
 
