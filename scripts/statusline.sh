@@ -56,19 +56,21 @@ if git -C "$cwd" rev-parse --git-dir > /dev/null 2>&1; then
     branch=$(git -C "$cwd" branch --show-current 2>/dev/null)
     [ -z "$branch" ] && branch=$(git -C "$cwd" rev-parse --short HEAD 2>/dev/null)
 
-    # Get status counts
+    # Get status counts (filter empty lines to avoid false counts)
     status=$(git -C "$cwd" status --porcelain 2>/dev/null)
-    staged=$(echo "$status" | grep -c '^[MADRC]')
-    modified=$(echo "$status" | grep -c '^.[MD]')
+    staged=$(echo "$status" | grep -c '^[MADRC]' || true)
+    modified=$(echo "$status" | grep -c '^.[MD]' || true)
+    conflicts=$(echo "$status" | grep -c '^[UDA][UDA]' || true)
 
     # Ahead/behind
     ahead=$(git -C "$cwd" rev-list --count @{u}..HEAD 2>/dev/null || echo 0)
     behind=$(git -C "$cwd" rev-list --count HEAD..@{u} 2>/dev/null || echo 0)
 
-    # Build compact git status (starship style)
+    # Build compact git status (p10k style)
     git_status=""
     [ "$ahead" -gt 0 ] 2>/dev/null && git_status+="⇡$ahead"
     [ "$behind" -gt 0 ] 2>/dev/null && git_status+="⇣$behind"
+    [ "$conflicts" -gt 0 ] && git_status+="~$conflicts"
     [ "$staged" -gt 0 ] && git_status+="+$staged"
     [ "$modified" -gt 0 ] && git_status+="!$modified"
 
