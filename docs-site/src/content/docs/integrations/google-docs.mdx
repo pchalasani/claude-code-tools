@@ -32,7 +32,13 @@ with the `gdocs` extra:
 uv tool install 'claude-code-tools[gdocs]'
 ```
 
-## First-Time Setup
+## First-Time Google OAuth Setup
+
+:::note
+This setup is shared by all Google tools
+(`md2gdoc`, `gdoc2md`, `csv2gsheet`, `gsheet2csv`).
+You only need to do it once per GCP project.
+:::
 
 <Steps>
 
@@ -42,16 +48,37 @@ uv tool install 'claude-code-tools[gdocs]'
 2. Create or select a project and enable the
    **Google Drive API** and the **Google Docs API**
 
-3. Go to **APIs & Services** > **Credentials** >
+3. Set up the **OAuth consent screen**:
+
+   - Go to **APIs & Services** > **OAuth consent
+     screen**
+   - If prompted for user type, choose **Internal**
+     (available for Google Workspace accounts) --
+     this avoids needing Google verification
+   - Fill in the required fields (app name, support
+     email) and save
+   - If your app is set to **External**, go to the
+     **Audience** tab in the left sidebar and either
+     click **Publish app** to make it available, or
+     add your email under **Test users**
+
+   :::caution
+   If you skip this step, the OAuth flow will show an
+   error saying the app is "blocked" or "being
+   evaluated". Publishing the app (or switching to
+   Internal) resolves this.
+   :::
+
+4. Go to **APIs & Services** > **Credentials** >
    **Create Credentials** > **OAuth client ID**
 
-4. Choose **Desktop app**, then download the JSON
+5. Choose **Desktop app**, then download the JSON
    file
 
-5. Save it as `.gdoc-credentials.json` in your
+6. Save it as `.gdoc-credentials.json` in your
    project directory
 
-6. First run will open a browser for OAuth consent
+7. First run will open a browser for OAuth consent
    (one-time per project)
 
 </Steps>
