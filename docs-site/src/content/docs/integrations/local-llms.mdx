@@ -261,6 +261,7 @@ llama-server \
   --cache-type-v q8_0 \
   --swa-full \
   --no-context-shift \
+  --chat-template-kwargs '{"enable_thinking": false}' \
   --mlock \
   --no-mmap
 ```
@@ -269,6 +270,7 @@ llama-server \
 
 | Setting | Why |
 |---------|-----|
+| `--chat-template-kwargs ...` | Disables thinking mode -- nearly 2x faster generation without meaningful quality loss for agentic workflows |
 | `--swa-full` | Expands SWA cache to full context, enabling prompt caching (uses more RAM) |
 | `--no-context-shift` | Required -- context shift is incompatible with SWA |
 | `--cache-type-k/v q8_0` | "Basically free" quality-wise, boosts throughput |
@@ -277,10 +279,9 @@ llama-server \
 
 **Performance (M1 Max 64 GB):**
 
-- Cold start: ~93 seconds (processing ~35k token system prompt)
-- Cached follow-ups: ~10 seconds
-- Prompt eval: ~245--375 tok/s
-- Generation: ~12 tok/s
+- Cached follow-ups: ~3 seconds
+- Prompt eval: ~374--408 tok/s
+- Generation: ~21--23 tok/s
 
 | Quant | Size | Notes |
 |-------|------|-------|
