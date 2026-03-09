@@ -809,6 +809,146 @@ def post_insert_images(
         return 0
 
 
+def apply_formatting(
+    docs_service,
+    doc_id: str,
+    font_family: Optional[str] = None,
+    font_size: Optional[float] = None,
+    line_spacing: Optional[float] = None,
+) -> None:
+    """Apply font and spacing to the document body.
+
+    Font family and size are applied only to NORMAL_TEXT
+    paragraphs so that headings, titles, and other named
+    styles keep their distinct appearance. Bold, italic,
+    and other inline formatting is preserved because the
+    fields mask only touches font family and size.
+
+    Line spacing is applied to ALL paragraphs (including
+    headings) using NEVER_COLLAPSE so the value is always
+    respected.
+
+    Args:
+        docs_service: Authenticated Google Docs service.
+        doc_id: The Google Doc ID.
+        font_family: Font name (e.g. "Arial").
+        font_size: Font size in points (e.g. 10).
+        line_spacing: Line spacing multiplier (e.g. 2.0
+            for double spacing).
+    """
+    if not any([font_family, font_size, line_spacing]):
+        return
+
+    doc = (
+        docs_service.documents()
+        .get(documentId=doc_id)
+        .execute()
+    )
+    body = doc.get("body", {})
+    content = body.get("content", [])
+    if not content:
+        return
+
+    end_index = content[-1].get("endIndex", 1)
+    if end_index <= 1:
+        return
+
+    requests: list[dict] = []
+
+    # Build text style dict once (used per-paragraph)
+    text_style: dict = {}
+    text_fields: list[str] = []
+    if font_family:
+        text_style["weightedFontFamily"] = {
+            "fontFamily": font_family,
+        }
+        text_fields.append("weightedFontFamily")
+    if font_size:
+        text_style["fontSize"] = {
+            "magnitude": font_size,
+            "unit": "PT",
+        }
+        text_fields.append("fontSize")
+
+    # Iterate paragraphs to selectively apply styles
+    for element in content:
+        paragraph = element.get("paragraph")
+        if not paragraph:
+            continue
+
+        p_style = paragraph.get("paragraphStyle", {})
+        named_style = p_style.get(
+            "namedStyleType", "NORMAL_TEXT"
+        )
+        start = element.get("startIndex", 0)
+        end = element.get("endIndex", 0)
+        if start >= end:
+            continue
+
+        p_range = {
+            "startIndex": start,
+            "endIndex": end,
+        }
+
+        # Font family/size: only on NORMAL_TEXT paragraphs
+        # so headings keep their distinct style
+        if text_fields and named_style == "NORMAL_TEXT":
+            requests.append(
+                {
+                    "updateTextStyle": {
+                        "range": p_range,
+                        "textStyle": text_style,
+                        "fields": ",".join(text_fields),
+                    }
+                }
+            )
+
+        # Line spacing: apply to all paragraphs
+        if line_spacing:
+            requests.append(
+                {
+                    "updateParagraphStyle": {
+                        "range": p_range,
+                        "paragraphStyle": {
+                            "lineSpacing": (
+                                line_spacing * 100
+                            ),
+                            "spacingMode": (
+                                "NEVER_COLLAPSE"
+                            ),
+                        },
+                        "fields": (
+                            "lineSpacing,spacingMode"
+                        ),
+                    }
+                }
+            )
+
+    if not requests:
+        return
+
+    try:
+        docs_service.documents().batchUpdate(
+            documentId=doc_id,
+            body={"requests": requests},
+        ).execute()
+        parts = []
+        if font_family:
+            parts.append(f"font={font_family}")
+        if font_size:
+            parts.append(f"size={font_size}pt")
+        if line_spacing:
+            parts.append(f"spacing={line_spacing}x")
+        console.print(
+            f"[green]Applied formatting:[/green] "
+            f"{', '.join(parts)}"
+        )
+    except Exception as e:
+        console.print(
+            f"[red]Error applying formatting:[/red] {e}"
+        )
+
+
 def cleanup_temp_images(
     service, file_ids: list[str]
 ) -> None:
@@ -878,6 +1018,7 @@ Examples:
   md2gdoc report.md --name "Q4 Summary"
   md2gdoc report.md --on-existing version
   md2gdoc report.md --max-image-width 5.0
+  md2gdoc report.md --font Arial --font-size 10 --line-spacing 2.0
         """,
     )
 
@@ -907,6 +1048,20 @@ Examples:
         "--max-image-width", type=float, default=6.5,
         help="Max image display width in inches "
         "(default: 6.5 = full page width)",
+    )
+    parser.add_argument(
+        "--font", type=str, default=None,
+        help="Font family for body text "
+        "(e.g., 'Arial', 'Times New Roman')",
+    )
+    parser.add_argument(
+        "--font-size", type=float, default=None,
+        help="Font size in points (e.g., 10, 12)",
+    )
+    parser.add_argument(
+        "--line-spacing", type=float, default=None,
+        help="Line spacing multiplier "
+        "(e.g., 1.0, 1.5, 2.0 for double)",
     )
 
     args = parser.parse_args()
@@ -1025,6 +1180,7 @@ Examples:
 
     # --- Post-insert images via Docs API ---
     n_images = 0
+    docs_svc = None
     if image_infos and doc_id:
         max_w_pt = args.max_image_width * 72  # in→pt
         docs_svc = get_docs_service()
@@ -1042,6 +1198,29 @@ Examples:
                 "[yellow]Warning:[/yellow] Could not "
                 "get Docs service — images left as "
                 "placeholders."
+            )
+
+    # --- Apply formatting ---
+    has_formatting = any([
+        args.font, args.font_size, args.line_spacing,
+    ])
+    if has_formatting and doc_id:
+        fmt_svc = docs_svc or get_docs_service()
+        if fmt_svc:
+            console.print(
+                "[cyan]Applying formatting...[/cyan]"
+            )
+            apply_formatting(
+                fmt_svc,
+                doc_id,
+                font_family=args.font,
+                font_size=args.font_size,
+                line_spacing=args.line_spacing,
+            )
+        else:
+            console.print(
+                "[yellow]Warning:[/yellow] Could not "
+                "get Docs service — formatting skipped."
             )
 
     # --- Cleanup ---

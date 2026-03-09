@@ -122,6 +122,34 @@ If a file with the same name already exists,
 md2gdoc report.md --on-existing overwrite
 ```
 
+### Formatting
+
+By default, Google's markdown converter picks the
+font, size, and spacing. Use these flags to override
+body text formatting after upload:
+
+```bash
+# 10pt Arial, double-spaced
+md2gdoc report.md --font Arial --font-size 10 --line-spacing 2.0
+
+# Just change the font
+md2gdoc report.md --font "Times New Roman"
+
+# 1.5x spacing, keep default font
+md2gdoc report.md --line-spacing 1.5
+```
+
+- `--font` -- font family (e.g. `Arial`,
+  `"Times New Roman"`)
+- `--font-size` -- size in points (e.g. `10`, `12`)
+- `--line-spacing` -- multiplier (`1.0` = single,
+  `1.5`, `2.0` = double)
+
+All flags are optional and can be combined. Heading
+styles (H1, H2, etc.) and inline formatting (bold,
+italic, etc.) are preserved -- only body text
+paragraphs get the font/size override.
+
 ### Features
 
 - Native markdown conversion (same quality as manual
@@ -130,6 +158,9 @@ md2gdoc report.md --on-existing overwrite
   markdown (e.g. `![alt](diagram.png)`) are uploaded
   to Drive at full resolution, then inserted into
   the Google Doc with proper sizing
+- **Formatting** -- optional `--font`, `--font-size`,
+  and `--line-spacing` flags to control body text
+  appearance (see above)
 - `--max-image-width` controls display width in
   inches (default: 6.5 = full page width)
 - `--no-images` skips image processing entirely
