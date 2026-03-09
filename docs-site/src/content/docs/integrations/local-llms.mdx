@@ -89,21 +89,28 @@ cclocal 8124         # connect to localhost:8124
 cclocal 8124 --resume abc123  # with extra args
 ```
 
-:::danger[Disable Telemetry]
-Add this to `~/.claude/settings.json`:
+:::danger[Required Settings for Local Models]
+Add these to `~/.claude/settings.json`:
 
 ```json
 {
   "env": {
-    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
   }
 }
 ```
 
-Without this, Claude Code sends telemetry requests to
-your local server, which returns 404s and retries
-aggressively -- causing ephemeral port exhaustion on
-macOS and system-wide network failures.
+- **Attribution header** (`CLAUDE_CODE_ATTRIBUTION_HEADER`):
+  Claude Code prepends an attribution header that
+  changes on every request, invalidating the KV cache
+  and forcing full prompt re-processing each time.
+  Disabling it is critical for usable performance.
+- **Telemetry** (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`):
+  Without this, Claude Code sends telemetry requests
+  to your local server, which returns 404s and retries
+  aggressively -- causing ephemeral port exhaustion on
+  macOS and system-wide network failures.
 :::
 
 </TabItem>
