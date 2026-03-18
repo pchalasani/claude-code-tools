@@ -247,6 +247,7 @@ class TestTrimAndCreateSession:
             target_tools=None,
             threshold=500,
             output_dir=temp_output_dir,
+            min_token_savings=0,
         )
 
         assert result["detected_agent"] == agent
@@ -286,6 +287,7 @@ class TestTrimAndCreateSession:
             target_tools=None,
             threshold=500,
             output_dir=temp_output_dir,
+            min_token_savings=0,
         )
 
         expected_agent = (
@@ -304,6 +306,7 @@ class TestTrimAndCreateSession:
             threshold=500,
             output_dir=temp_output_dir,
             trim_assistant_messages=1,  # Trim first 1
+            min_token_savings=0,
         )
 
         assert result["num_assistant_trimmed"] > 0
@@ -319,6 +322,7 @@ class TestTrimAndCreateSession:
             threshold=500,
             output_dir=temp_output_dir,
             trim_assistant_messages=-1,  # Keep last 1
+            min_token_savings=0,
         )
 
         # Should have trimmed some messages (if more than 1 exists)
@@ -341,6 +345,7 @@ class TestIsTrimmedSession:
             target_tools=None,
             threshold=500,
             output_dir=temp_output_dir,
+            min_token_savings=0,
         )
 
         trimmed_file = Path(result["output_file"])
@@ -381,6 +386,7 @@ class TestIsTrimmedSession:
             target_tools=None,
             threshold=500,
             output_dir=temp_output_dir,
+            min_token_savings=0,
         )
 
         trimmed_file = Path(result["output_file"])

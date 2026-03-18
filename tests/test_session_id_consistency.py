@@ -262,6 +262,7 @@ class TestRegularTrimSessionId:
             target_tools=None,  # Trim all
             threshold=10,  # Low threshold
             output_dir=tmp_path,
+            min_token_savings=0,
         )
 
         output_file = result["output_file"]

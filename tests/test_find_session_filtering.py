@@ -60,6 +60,7 @@ class TestIsTrimmedSessionIntegration:
                 target_tools=None,
                 threshold=500,
                 output_dir=Path(tmpdir),
+                min_token_savings=0,
             )
 
             trimmed_path = Path(result["output_file"])
@@ -82,6 +83,7 @@ class TestIsTrimmedSessionIntegration:
                 target_tools=None,
                 threshold=500,
                 output_dir=Path(tmpdir),
+                min_token_savings=0,
             )
 
             trimmed_path = Path(result["output_file"])
@@ -111,6 +113,7 @@ class TestCodexSessionFiltering:
             target_tools=None,
             threshold=500,
             output_dir=sessions_dir,
+            min_token_savings=0,
         )
 
         # Find with original_only=True
@@ -144,6 +147,7 @@ class TestCodexSessionFiltering:
             target_tools=None,
             threshold=500,
             output_dir=temp_codex_dir / "sessions",
+            min_token_savings=0,
         )
 
         # Find without filtering

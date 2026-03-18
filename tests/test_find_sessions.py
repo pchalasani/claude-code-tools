@@ -68,6 +68,7 @@ class TestFindOriginalSession:
             target_tools=None,
             threshold=500,
             output_dir=temp_session_dir,
+            min_token_savings=0,
         )
 
         trimmed = Path(result["output_file"])
@@ -96,6 +97,7 @@ class TestFindOriginalSession:
             target_tools=None,
             threshold=500,
             output_dir=temp_session_dir,
+            min_token_savings=0,
         )
         trim1 = Path(result1["output_file"])
 
@@ -106,6 +108,7 @@ class TestFindOriginalSession:
             target_tools=None,
             threshold=400,
             output_dir=temp_session_dir,
+            min_token_savings=0,
         )
         trim2 = Path(result2["output_file"])
 
@@ -116,6 +119,7 @@ class TestFindOriginalSession:
             target_tools=None,
             threshold=300,
             output_dir=temp_session_dir,
+            min_token_savings=0,
         )
         trim3 = Path(result3["output_file"])
 
@@ -144,6 +148,7 @@ class TestFindDirectChildren:
             target_tools=None,
             threshold=500,
             output_dir=temp_session_dir,
+            min_token_savings=0,
         )
 
         result2 = trim_and_create_session(
@@ -152,6 +157,7 @@ class TestFindDirectChildren:
             target_tools=None,
             threshold=400,
             output_dir=temp_session_dir,
+            min_token_savings=0,
         )
 
         # Find children
@@ -174,6 +180,7 @@ class TestFindDirectChildren:
             target_tools=None,
             threshold=500,
             output_dir=temp_session_dir,
+            min_token_savings=0,
         )
         child = Path(result1["output_file"])
 
@@ -183,6 +190,7 @@ class TestFindDirectChildren:
             target_tools=None,
             threshold=400,
             output_dir=temp_session_dir,
+            min_token_savings=0,
         )
         grandchild = Path(result2["output_file"])
 
@@ -221,6 +229,7 @@ class TestFindAllDescendants:
             target_tools=None,
             threshold=500,
             output_dir=temp_session_dir,
+            min_token_savings=0,
         )
         trim1 = Path(result1["output_file"])
 
@@ -230,6 +239,7 @@ class TestFindAllDescendants:
             target_tools=None,
             threshold=400,
             output_dir=temp_session_dir,
+            min_token_savings=0,
         )
         trim1a = Path(result1a["output_file"])
 
@@ -239,6 +249,7 @@ class TestFindAllDescendants:
             target_tools=None,
             threshold=450,
             output_dir=temp_session_dir,
+            min_token_savings=0,
         )
         trim2 = Path(result2["output_file"])
 
@@ -301,6 +312,7 @@ class TestTrimMetadataPreservation:
             target_tools=None,
             threshold=500,
             output_dir=temp_session_dir,
+            min_token_savings=0,
         )
         trim1 = Path(result1["output_file"])
 
@@ -311,6 +323,7 @@ class TestTrimMetadataPreservation:
             target_tools=None,
             threshold=400,
             output_dir=temp_session_dir,
+            min_token_savings=0,
         )
         trim2 = Path(result2["output_file"])
 

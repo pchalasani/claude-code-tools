@@ -90,9 +90,9 @@ def execute_action(
     Returns:
         'back' if user wants to go back to menu, None otherwise.
     """
-    # For Claude, session_id is the file stem; for Codex, it must be passed explicitly
+    # For Claude, session_id is the file stem; for Codex, extract UUID
     if session_id is None:
-        session_id = session_file.stem
+        session_id = get_session_uuid(session_file.stem)
     if action == "path":
         print(f"\nSession file path:")
         print(f"{session_file}")
@@ -295,7 +295,7 @@ Examples:
             sys.exit(1)
 
         session_file = input_path
-        session_id = session_file.stem
+        session_id = get_session_uuid(session_file.stem)
 
         # Extract project info based on agent type
         if agent == "claude":
@@ -343,8 +343,8 @@ Examples:
 
         agent, session_file, project_path, git_branch = result
 
-        # Update session_id to the actual full UUID from the found file
-        session_id = session_file.stem
+        # Update session_id to the actual UUID from the found file
+        session_id = get_session_uuid(session_file.stem)
 
         # Override agent if specified
         if args.agent and args.agent != agent:
