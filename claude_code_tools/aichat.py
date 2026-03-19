@@ -72,15 +72,29 @@ def main(ctx, claude_home, codex_home):
         CLAUDE_CONFIG_DIR  - Default Claude home (overridden by --claude-home)
         CODEX_HOME         - Default Codex home (overridden by --codex-home)
     """
-    # Store home dirs in context for subcommands to access
+    # Store home dirs in context for subcommands to access.
+    # Scan sys.argv for --claude-home/--codex-home that may appear
+    # after the subcommand name (invisible to the group-level option).
+    import sys
     ctx.ensure_object(dict)
-    ctx.obj['claude_home'] = claude_home
-    ctx.obj['codex_home'] = codex_home
+    effective_claude_home = claude_home
+    if not effective_claude_home:
+        for i, arg in enumerate(sys.argv):
+            if arg == '--claude-home' and i + 1 < len(sys.argv):
+                effective_claude_home = sys.argv[i + 1]
+                break
+    effective_codex_home = codex_home
+    if not effective_codex_home:
+        for i, arg in enumerate(sys.argv):
+            if arg == '--codex-home' and i + 1 < len(sys.argv):
+                effective_codex_home = sys.argv[i + 1]
+                break
+    ctx.obj['claude_home'] = effective_claude_home
+    ctx.obj['codex_home'] = effective_codex_home
 
     # Auto-index sessions on every aichat command (incremental, fast if up-to-date)
     # Skip for build-index/clear-index to avoid double-indexing or state conflicts
     # In JSON mode (-j/--json), suppress all output for clean parsing
-    import sys
     skip_auto_index_cmds = ['build-index', 'clear-index', 'index-stats']
     should_skip = any(cmd in sys.argv for cmd in skip_auto_index_cmds)
     json_mode = any(arg in sys.argv for arg in ['-j', '--json'])
@@ -88,10 +102,13 @@ def main(ctx, claude_home, codex_home):
         try:
             from claude_code_tools.search_index import auto_index
             from claude_code_tools.session_utils import get_claude_home, get_codex_home
-            # Respect CLI args, then env vars, then defaults
             auto_index(
-                claude_home=get_claude_home(cli_arg=claude_home),
-                codex_home=get_codex_home(cli_arg=codex_home),
+                claude_home=get_claude_home(
+                    cli_arg=effective_claude_home,
+                ),
+                codex_home=get_codex_home(
+                    cli_arg=effective_codex_home,
+                ),
                 verbose=False,
                 silent=json_mode,
             )
