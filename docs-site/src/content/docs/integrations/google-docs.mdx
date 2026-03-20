@@ -1,8 +1,9 @@
 ---
 title: "Google Docs Tools"
 description: >
-  Upload Markdown as native Google Docs (md2gdoc) and
-  download Google Docs as Markdown (gdoc2md).
+  Upload Markdown as native Google Docs (md2gdoc),
+  download Google Docs as Markdown (gdoc2md), and
+  download Google Docs as Word files (gdoc2docx).
 ---
 
 import {
@@ -22,6 +23,8 @@ manual steps.
 
 `md2gdoc` reduces this to one command.
 `gdoc2md` does the reverse.
+`gdoc2docx` downloads Google Docs as Word (.docx)
+files.
 
 ## Installation
 
@@ -36,7 +39,8 @@ uv tool install 'claude-code-tools[gdocs]'
 
 :::note
 This setup is shared by all Google tools
-(`md2gdoc`, `gdoc2md`, `csv2gsheet`, `gsheet2csv`).
+(`md2gdoc`, `gdoc2md`, `gdoc2docx`, `csv2gsheet`,
+`gsheet2csv`).
 You only need to do it once per GCP project.
 :::
 
@@ -196,6 +200,34 @@ to use local paths.
 - Default -- extract images to files
 - `--no-images` -- strip images to placeholders
 - `--keep-base64` -- keep base64 data inline
+
+</TabItem>
+<TabItem label="gdoc2docx (Word)">
+
+Download Google Docs as Word (.docx) files:
+
+```bash
+# Download from root
+gdoc2docx "My Document"
+
+# Download from a specific folder
+gdoc2docx "My Document" --folder "PNL/Reports"
+
+# Save with a custom name
+gdoc2docx "My Document" -o report.docx
+
+# List docs in a folder
+gdoc2docx --list --folder PNL
+```
+
+### Supported Source Formats
+
+- **Google Docs** -- exported as DOCX via the Drive
+  API
+- **DOCX** -- downloaded directly (no conversion
+  needed)
+- **DOC / ODT** -- converted via a temporary Google
+  Doc, then exported as DOCX
 
 </TabItem>
 </Tabs>
