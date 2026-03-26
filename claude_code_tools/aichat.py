@@ -2295,6 +2295,8 @@ def search(
             project_path=cwd,
             action_kwargs=kwargs,
             session_id=sess.get("session_id"),
+            claude_home=sess.get("claude_home"),
+            codex_home=sess.get("codex_home"),
         )
 
     def check_directory_and_confirm(sess):
