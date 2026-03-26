@@ -40,6 +40,7 @@ gdoc2docx = "claude_code_tools.gdoc2docx:main"
 csv2gsheet = "claude_code_tools.csv2gsheet:main"
 gsheet2csv = "claude_code_tools.gsheet2csv:main"
 fix-session = "claude_code_tools.fix_session:main"
+msg = "claude_code_tools.msg.cli:main"
 
 [build-system]
 requires = ["hatchling"]
