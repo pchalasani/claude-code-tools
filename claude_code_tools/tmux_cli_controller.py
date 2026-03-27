@@ -620,7 +620,8 @@ class TmuxCLIController:
 
         self._run_tmux_command(['send-keys', '-t', target, 'C-l'])
 
-    def execute(self, command: str, pane_id: Optional[str] = None, timeout: int = 30) -> Dict[str, Any]:
+    def execute(self, command: str, pane_id: Optional[str] = None, timeout: int = 30,
+                hide_transmission: bool = False) -> Dict[str, Any]:
         """
         Execute a command and return output with exit code.
 
@@ -630,6 +631,10 @@ class TmuxCLIController:
             command: Shell command to execute
             pane_id: Target pane (uses self.target_pane if not specified)
             timeout: Maximum seconds to wait for completion (default: 30)
+            hide_transmission: If True, hide the command transmission from viewport
+                             using stty -echo. Useful for screen sharing, demos, or
+                             IDE integrations where technical scaffolding should not
+                             be visible to users. (default: False)
 
         Returns:
             Dict with keys:
@@ -638,6 +643,13 @@ class TmuxCLIController:
 
         Raises:
             ValueError: If no target pane specified
+
+        Examples:
+            >>> controller = TmuxCLIController()
+            >>> # Normal execution (markers visible in pane)
+            >>> result = controller.execute("echo 'test'")
+            >>> # Hidden transmission (clean viewport for demos)
+            >>> result = controller.execute("echo 'test'", hide_transmission=True)
         """
         from .tmux_execution_helpers import (
             generate_execution_markers,
@@ -655,8 +667,16 @@ class TmuxCLIController:
         # Wrap command with markers
         wrapped_command = wrap_command_with_markers(command, start_marker, end_marker)
 
+        # Hide transmission if requested (for clean viewport UX)
+        if hide_transmission:
+            self.send_keys("stty -echo", pane_id=target, enter=True, delay_enter=True)
+
         # Send wrapped command to pane
         self.send_keys(wrapped_command, pane_id=target, enter=True, delay_enter=False)
+
+        # Restore echo immediately after sending command, before it executes
+        if hide_transmission:
+            self.send_keys("stty echo", pane_id=target, enter=True, delay_enter=True)
 
         # Poll for completion with progressive expansion
         return poll_for_completion(
