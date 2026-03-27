@@ -19,7 +19,10 @@ from .models import (
     _now_iso,
 )
 
-DEFAULT_DB_DIR = os.path.expanduser("~/.msg")
+DEFAULT_DB_DIR = os.environ.get(
+    "MSG_DB_DIR",
+    os.path.expanduser("~/.msg"),
+)
 DEFAULT_DB_PATH = os.path.join(DEFAULT_DB_DIR, "msg.db")
 
 SCHEMA_SQL = """

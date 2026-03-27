@@ -7,20 +7,12 @@ arguments:
     required: true
 ---
 
-Register this agent session for inter-agent communication
-using the msg system.
-
-Run:
+Run ONLY this ONE command. Do NOT run anything before
+or after it. No tmux commands, no queries, no status
+checks. The command auto-detects everything it needs.
 
 ```bash
 msg register $ARGUMENTS
 ```
 
-This will auto-detect the tmux pane and agent type.
-After registration, other agents can send messages
-to this session using the registered name.
-
-After running the command, display a summary to the user
-confirming what was registered. Include the name, pane
-address, session ID, and agent type as shown in the
-command output.
+Show the output to the user. You are done.

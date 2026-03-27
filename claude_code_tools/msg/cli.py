@@ -10,11 +10,47 @@ from datetime import datetime, timezone
 import click
 
 from .models import AgentKind
-from .store import MsgStore, DEFAULT_DB_PATH
+from .store import MsgStore, DEFAULT_DB_PATH, DEFAULT_DB_DIR
 
 
-def _get_store(db_path: str | None = None) -> MsgStore:
-    return MsgStore(db_path or DEFAULT_DB_PATH)
+def _check_db_writable(db_dir: str) -> bool:
+    """Check if we can write to the DB directory."""
+    from pathlib import Path
+    try:
+        Path(db_dir).mkdir(parents=True, exist_ok=True)
+        test_file = os.path.join(db_dir, ".write_test")
+        with open(test_file, "w") as f:
+            f.write("test")
+        os.remove(test_file)
+        return True
+    except OSError:
+        return False
+
+
+def _get_local_db_path() -> str:
+    """Get project-local DB path."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            root = result.stdout.strip()
+            return os.path.join(root, ".msg", "msg.db")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return os.path.join(os.getcwd(), ".msg", "msg.db")
+
+
+def _get_store(
+    db_path: str | None = None,
+    local: bool = False,
+) -> MsgStore:
+    if db_path:
+        return MsgStore(db_path)
+    if local:
+        return MsgStore(_get_local_db_path())
+    return MsgStore(DEFAULT_DB_PATH)
 
 
 def _detect_tmux_pane() -> str | None:
@@ -193,16 +229,50 @@ def _ensure_watcher_running(store: MsgStore) -> None:
 @click.group()
 @click.option(
     "--db", default=None,
-    help="Path to msg database (default: ~/.msg/msg.db)",
+    help="Path to msg database",
+)
+@click.option(
+    "--local", is_flag=True, default=False,
+    help="Use project-local DB instead of global ~/.msg/",
 )
 @click.pass_context
-def cli(ctx: click.Context, db: str | None) -> None:
+def cli(
+    ctx: click.Context,
+    db: str | None,
+    local: bool,
+) -> None:
     """msg: Inter-agent communication for coding agents."""
     ctx.ensure_object(dict)
-    store = _get_store(db)
+
+    # If no explicit path, check if global DB is writable
+    if not db and not local:
+        if not _check_db_writable(DEFAULT_DB_DIR):
+            home = os.path.expanduser("~")
+            click.echo(
+                "Cannot write to ~/.msg/ "
+                "(sandbox restriction).\n\n"
+                "Ask the user which option they prefer:\n\n"
+                "Option A: Global messaging "
+                "(agents across any project can talk)\n"
+                "  User needs to add to "
+                "~/.codex/config.toml:\n"
+                "    [sandbox_workspace_write]\n"
+                f'    writable_roots = ["{home}/.msg"]\n'
+                "  Then restart Codex.\n\n"
+                "Option B: Local messaging "
+                "(this project only)\n"
+                "  Works immediately, no config "
+                "changes needed.\n\n"
+                "If user chooses B, re-run the same "
+                "command with --local flag prepended "
+                "after 'msg', e.g.: "
+                "msg --local register <name>",
+                err=True,
+            )
+            sys.exit(1)
+
+    store = _get_store(db=db, local=local)
     ctx.obj["store"] = store
-    # Auto-start watcher if not running
-    # (skip if the command itself is 'watch' to avoid loop)
     if ctx.invoked_subcommand != "watch":
         _ensure_watcher_running(store)
 

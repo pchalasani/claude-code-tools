@@ -34,6 +34,11 @@
       "name": "voice",
       "source": "./plugins/voice",
       "description": "Audio feedback when Claude Code agent completes tasks using pocket-tts"
+    },
+    {
+      "name": "msg",
+      "source": "./plugins/msg",
+      "description": "Inter-agent communication for Claude Code and Codex CLI sessions via threads and messages"
     }
   ]
 }

@@ -1,5 +1,5 @@
 {
-  "description": "Stop hook for msg inter-agent communication. Checks inbox on stop for Claude Code sessions.",
+  "description": "Hooks for msg inter-agent communication. Checks inbox on Stop and UserPromptSubmit.",
   "hooks": {
     "Stop": [
       {
@@ -7,7 +7,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'python3 ${CLAUDE_PLUGIN_ROOT}/hooks/stop_hook.py'",
+            "command": "msg-hook stop",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "msg-hook prompt-submit",
             "timeout": 5
           }
         ]

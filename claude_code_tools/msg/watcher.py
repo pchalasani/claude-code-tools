@@ -1,8 +1,13 @@
 """Async watcher daemon for msg delivery notifications.
 
-Monitors the SQLite DB for pending deliveries, claims them,
-waits for recipient to be idle, then types a notification
-into the recipient's tmux pane via tmux-cli.
+Monitors the SQLite DB for pending deliveries and
+delivers notifications to recipient agents.
+
+Delivery logic for headed agents:
+- Busy (not idle) → release claim, Stop hook handles it
+- Idle + prompt empty → type slash command into pane
+- Idle + user typing → release claim, UserPromptSubmit
+  hook handles it
 """
 
 from __future__ import annotations
@@ -11,17 +16,16 @@ import asyncio
 import logging
 import os
 import signal
-import subprocess
-import sys
 from collections import defaultdict
 
 from .models import _new_uuid
+from .prompt_detect import PromptState, detect_prompt_state
 from .store import MsgStore, DEFAULT_DB_PATH
 
 logger = logging.getLogger("msg.watcher")
 
-POLL_INTERVAL = 1.0  # seconds between DB checks
-IDLE_TIMEOUT = 120.0  # max seconds to wait for idle
+POLL_INTERVAL = 2.0  # seconds between DB checks
+IDLE_CHECK_TIMEOUT = 3.0  # quick idle check (not blocking)
 IDLE_TIME = 2.0  # seconds of no output = idle
 HEARTBEAT_INTERVAL = 10.0  # seconds between heartbeats
 
@@ -46,7 +50,6 @@ class Watcher:
             self.watcher_id[:8], self.pid,
         )
 
-        # Handle graceful shutdown
         loop = asyncio.get_event_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(
@@ -87,33 +90,28 @@ class Watcher:
     async def _process_pending(self) -> None:
         """Claim and process pending deliveries."""
         try:
-            # Release any expired claims first
             released = self.store.release_expired_claims()
             if released:
                 logger.debug(
                     "Released %d expired claims", released,
                 )
 
-            # Claim pending deliveries
             claimed = self.store.claim_pending_deliveries(
                 self.watcher_id,
             )
             if not claimed:
                 return
 
-            # Group by recipient
             by_recipient: dict[str, list[dict]] = (
                 defaultdict(list)
             )
             for d in claimed:
                 by_recipient[d["recipient_id"]].append(d)
 
-            # Process each recipient concurrently
             tasks = []
             for recipient_id, deliveries in (
                 by_recipient.items()
             ):
-                # Skip if already being processed
                 if recipient_id in self._active_recipients:
                     continue
                 self._active_recipients.add(recipient_id)
@@ -146,11 +144,52 @@ class Watcher:
             display_addr = (
                 deliveries[0]["recipient_display_addr"]
             )
+            agent_kind = deliveries[0].get(
+                "recipient_agent_kind", "claude",
+            )
             target = display_addr or pane_id
 
-            # Build consolidated notification
+            # Step 1: Quick idle check (non-blocking)
+            is_idle = await self._check_idle(target)
+
+            if not is_idle:
+                # Agent is busy — release claims.
+                # Stop hook will handle delivery.
+                logger.debug(
+                    "%s is busy, releasing claims.",
+                    recipient_name,
+                )
+                self._release_deliveries(deliveries)
+                return
+
+            # Step 2: Check prompt state
+            prompt_state = detect_prompt_state(
+                target, agent_kind,
+            )
+
+            if prompt_state == PromptState.HAS_TEXT:
+                # User is typing — release claims.
+                # UserPromptSubmit hook will handle it.
+                logger.debug(
+                    "%s has text in prompt, releasing.",
+                    recipient_name,
+                )
+                self._release_deliveries(deliveries)
+                return
+
+            if prompt_state == PromptState.UNKNOWN:
+                # Can't determine — release, retry next
+                # loop iteration.
+                logger.debug(
+                    "%s prompt state unknown, releasing.",
+                    recipient_name,
+                )
+                self._release_deliveries(deliveries)
+                return
+
+            # Step 3: Prompt is empty — safe to inject
             notification = self._build_notification(
-                deliveries,
+                agent_kind,
             )
 
             logger.info(
@@ -158,30 +197,14 @@ class Watcher:
                 recipient_name, target, notification,
             )
 
-            # Wait for recipient to be idle
-            try:
-                await self._wait_idle(target)
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "Timeout waiting for %s to be idle.",
-                    recipient_name,
-                )
-                for d in deliveries:
-                    self.store.mark_delivery_failed(
-                        d["id"],
-                        error="Timeout waiting for idle",
-                    )
-                return
-
-            # Type notification into pane
             await self._tmux_send(target, notification)
 
-            # Mark all as notified
             for d in deliveries:
                 self.store.mark_notified(d["id"])
 
             logger.info(
-                "Notified %s successfully.", recipient_name,
+                "Notified %s successfully.",
+                recipient_name,
             )
 
         except Exception as e:
@@ -196,44 +219,44 @@ class Watcher:
         finally:
             self._active_recipients.discard(recipient_id)
 
-    def _build_notification(
+    def _release_deliveries(
         self, deliveries: list[dict],
-    ) -> str:
-        """Build notification.
+    ) -> None:
+        """Release claimed deliveries back to pending."""
+        for d in deliveries:
+            self.store.mark_delivery_failed(
+                d["id"],
+                error="Released by watcher (not ready)",
+            )
 
-        For Claude: /inbox slash command.
-        For Codex: plain text instruction.
-        """
-        # Check if recipient is Claude or Codex
-        agent_kind = deliveries[0].get(
-            "recipient_agent_kind",
-        )
+    def _build_notification(
+        self, agent_kind: str,
+    ) -> str:
+        """Build notification slash command."""
         if agent_kind == "codex":
-            return "/prompts:msg:inbox"
+            return "/prompts:inbox"
         return "/msg:inbox"
 
-    async def _wait_idle(
-        self,
-        pane_target: str,
-    ) -> None:
-        """Wait for a tmux pane to become idle."""
-        proc = await asyncio.create_subprocess_exec(
-            "tmux-cli", "wait_idle",
-            f"--pane={pane_target}",
-            f"--idle-time={IDLE_TIME}",
-            f"--timeout={IDLE_TIMEOUT}",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await asyncio.wait_for(
-            proc.communicate(),
-            timeout=IDLE_TIMEOUT + 10,
-        )
-        if proc.returncode != 0:
-            err = stderr.decode().strip() if stderr else ""
-            raise RuntimeError(
-                f"wait_idle failed for {pane_target}: {err}"
+    async def _check_idle(
+        self, pane_target: str,
+    ) -> bool:
+        """Quick non-blocking idle check."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "tmux-cli", "wait_idle",
+                f"--pane={pane_target}",
+                f"--idle-time={IDLE_TIME}",
+                f"--timeout={IDLE_CHECK_TIMEOUT}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
+            _, _ = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=IDLE_CHECK_TIMEOUT + 5,
+            )
+            return proc.returncode == 0
+        except (asyncio.TimeoutError, Exception):
+            return False
 
     async def _tmux_send(
         self,
