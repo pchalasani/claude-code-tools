@@ -248,6 +248,50 @@ llama-server -hf unsloth/GLM-4.7-Flash-GGUF:Q8_0 \
 | UD-Q4_K_XL | ~18 GB | Good balance, recommended |
 | Q8_0 | ~32 GB | Higher quality, 20-40% slower |
 
+### Gemma-4-26B-A4B (Google MoE with Vision)
+
+A 26B MoE model from Google with only 4B active parameters. Supports up to 256K
+context. Optionally supports vision via a multimodal projector (mmproj).
+
+```bash
+llama-server -hf unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL \
+  --port 8132 \
+  -c 131072 \
+  -b 2048 \
+  -ub 1024 \
+  --parallel 1 \
+  -fa on \
+  --jinja \
+  --temp 1.0 \
+  --top-p 0.95 \
+  --top-k 64
+```
+
+**Key settings:**
+
+| Setting | Why |
+|---------|-----|
+| `--temp 1.0` | Recommended by Google |
+| `--top-k 64` | Gemma-specific sampling parameter |
+| `-c 131072` | 128K context; Claude Code needs 20k+ for system prompt alone |
+| `-fa on` | Enables flash attention for faster prompt processing |
+
+**Performance (M1 Max 64 GB, ~37K input tokens):**
+
+- Cold start: pp 395 tok/s, tg 40 tok/s (96s total)
+- Cached follow-up: pp 110 tok/s, tg 40 tok/s (6s total)
+
+**Quantization options:**
+
+| Quant | Size | Notes |
+|-------|------|-------|
+| UD-Q4_K_XL | ~16 GB | Recommended, fits comfortably on 64GB systems |
+
+> **Thinking mode:** Enable thinking by prepending `<|think|>` to the system
+> prompt. The model outputs reasoning in `<|channel>thought...<channel|>` tags
+> before the final answer. For multi-turn conversations, only feed visible
+> answers back -- exclude prior thought blocks.
+
 ## Quick Reference
 
 | Model | Port | Command |
@@ -259,6 +303,7 @@ llama-server -hf unsloth/GLM-4.7-Flash-GGUF:Q8_0 \
 | Qwen3-Coder-30B | 8127 | `llama-server --fim-qwen-30b-default --port 8127` |
 | Qwen3-Coder-Next | 8130 | See full command above (~46GB RAM) |
 | GLM-4.7-Flash | 8129 | See full command above (requires chat template) |
+| Gemma-4-26B-A4B | 8132 | See full command above |
 
 ## Usage
 
@@ -426,8 +471,60 @@ Then run Codex with an image:
 codex --model qwen3-vl -c model_provider=llama-8128 -i screenshot.png "describe this"
 ```
 
+## Gemma-4-26B-A4B Vision Setup
+
+Gemma-4 also supports vision via a BF16 multimodal projector.
+
+**One-time setup** (download the mmproj file):
+
+```bash
+just gemma4-download
+# Or manually:
+mkdir -p ~/models
+hf download unsloth/gemma-4-26B-A4B-it-GGUF \
+  mmproj-BF16.gguf \
+  --local-dir ~/models
+```
+
+**Start the server** (port 8132):
+
+```bash
+just gemma4-vision
+# Or manually:
+llama-server -hf unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL \
+  --mmproj ~/models/mmproj-BF16.gguf \
+  --port 8132 \
+  -c 131072 \
+  -b 2048 \
+  -ub 1024 \
+  --parallel 1 \
+  -fa on \
+  --jinja \
+  --temp 1.0 \
+  --top-p 0.95 \
+  --top-k 64
+```
+
+**Use with Codex:**
+
+First, add the provider to `~/.codex/config.toml`:
+
+```toml
+[model_providers.llama-8132]
+name = "Gemma-4 Vision"
+base_url = "http://localhost:8132/v1"
+wire_api = "chat"
+```
+
+Then run Codex with an image:
+
+```bash
+codex --model gemma-4 -c model_provider=llama-8132 -i screenshot.png "describe this"
+```
+
 ## Quick Reference
 
 | Model | Port | Command |
 |-------|------|---------|
 | Qwen3-VL-30B-A3B | 8128 | `just qwen3-vl` (after `just qwen3-vl-download`) |
+| Gemma-4-26B-A4B | 8132 | `just gemma4-vision` (after `just gemma4-download`) |
