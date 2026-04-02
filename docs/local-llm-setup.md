@@ -90,6 +90,24 @@ cclocal 8124 --resume abc123  # With additional claude args
 > which returns 404s and retries aggressively—causing ephemeral port exhaustion
 > on macOS and system-wide network failures.
 
+## Performance Comparison
+
+Approximate token generation speeds measured inside Claude Code on an M1 Max
+(64 GB), with roughly 30--37K input context tokens (a typical Claude Code
+prompt). All models served via `llama-server`.
+
+| Model | Active Params | tg (tok/s) |
+|-------|--------------|------------|
+| **Gemma-4-26B-A4B** | **4B** | **~40** |
+| GPT-OSS-20B | 20B (dense) | ~17--38 |
+| Qwen3-30B-A3B | 3B | ~15--27 |
+| GLM-4.7-Flash | 3B | ~12--13 |
+| Qwen3.5-35B-A3B | 3B | ~12 |
+| Qwen3-Next-80B-A3B | 3B | ~3--5 |
+
+tg = token generation (output speed). Models without benchmarks are omitted.
+Speeds vary with prompt length, quantization, and system load.
+
 ## Model Commands
 
 ### GPT-OSS-20B (Fast, Good Baseline)
