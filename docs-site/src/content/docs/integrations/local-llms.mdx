@@ -437,8 +437,11 @@ llama-server \
 
 **Performance (M1 Max 64 GB, ~37K input tokens):**
 
-- Cold start: pp 395 tok/s, tg 40 tok/s (96s total)
-- Cached follow-up: pp 110 tok/s, tg 40 tok/s (6s total)
+pp = prompt processing, tg = token generation.
+
+- Cold start: pp 395 tok/s, tg 40 tok/s (~96s total)
+- Cached follow-up: tg 40 tok/s (~6s total, prompt
+  cached in ~0.4s)
 
 | Quant | Size | Notes |
 |-------|------|-------|
