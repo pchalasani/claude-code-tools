@@ -13,5 +13,9 @@
     "@astrojs/starlight": "^0.37.6",
     "astro": "^5.17.1",
     "sharp": "^0.33.0"
+  },
+  "overrides": {
+    "zod": "3.25.76",
+    "@astrojs/sitemap": "3.7.0"
   }
 }
