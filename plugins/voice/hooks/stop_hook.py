@@ -379,17 +379,16 @@ def speak_summary(session_id: str, summary: str, voice: str) -> None:
     say_script = PLUGIN_ROOT / "scripts" / "say"
 
     try:
+        # On Windows, bash scripts can't be executed directly by subprocess.Popen
+        # (WinError 193: not a valid Win32 application). Must invoke through bash.
+        import platform
+        if platform.system() == "Windows":
+            cmd = ["bash", str(say_script), "--session", session_id, "--voice", voice, summary]
+        else:
+            cmd = [str(say_script), "--session", session_id, "--voice", voice, summary]
+
         # Run in background so we can return JSON immediately
-        subprocess.Popen(
-            [
-                str(say_script),
-                "--session", session_id,
-                "--voice", voice,
-                summary,
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
 
