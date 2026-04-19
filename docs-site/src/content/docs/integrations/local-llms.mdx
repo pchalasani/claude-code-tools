@@ -187,6 +187,7 @@ prompt). All models served via `llama-server`.
 | Model | Active Params | tg (tok/s) |
 |-------|--------------|------------|
 | **Gemma-4-26B-A4B** | **4B** | **~40** |
+| **Qwen3.6-35B-A3B** | **3B** | **~35** |
 | GPT-OSS-20B | 3.6B | ~17--38 |
 | Qwen3-30B-A3B | 3B | ~15--27 |
 | GLM-4.7-Flash | 3B | ~12--13 |
@@ -476,6 +477,68 @@ feed visible answers back -- exclude prior thought
 blocks.
 :::
 
+### Qwen3.6-35B-A3B -- Fast Qwen MoE
+
+A 35B MoE model with 3B active parameters. Successor
+to Qwen3.5-35B-A3B with vision support. Uses sliding
+window attention (SWA).
+
+```bash
+llama-server \
+  -hf unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL \
+  --port 8133 \
+  -ngl 999 \
+  --threads 8 \
+  -c 65536 \
+  -b 2048 \
+  -ub 1024 \
+  --parallel 1 \
+  -fa on \
+  --jinja \
+  --keep 1024 \
+  --swa-full \
+  --no-context-shift \
+  --chat-template-kwargs '{"enable_thinking": false}' \
+  --temp 0.7 \
+  --top-p 0.8 \
+  --top-k 20 \
+  --min-p 0.00 \
+  --no-mmap
+```
+
+**Critical settings:**
+
+| Setting | Why |
+|---------|-----|
+| No `--cache-type-k/v` | **Do not** use `q8_0` KV cache -- it kills tg from ~35 to ~12 tok/s. Use default f16 cache. |
+| `--swa-full` | Expands SWA cache to full context, enabling prompt caching |
+| `--no-context-shift` | Required -- context shift is incompatible with SWA |
+| `--chat-template-kwargs ...` | Disables thinking mode for agentic workflows |
+| `-c 65536` | 64K context -- enough for Claude Code, avoids the RAM cost of 128K |
+
+**Performance (M1 Max 64 GB, ~41K input tokens):**
+
+pp = prompt processing, tg = token generation.
+
+- Cold start: pp 575 tok/s, tg 35 tok/s (~79s total)
+- Cached follow-up: tg 35 tok/s (~8s total)
+
+| Quant | Size | Notes |
+|-------|------|-------|
+| UD-Q4\_K\_XL | ~23 GB | Recommended |
+| UD-Q4\_K\_M | ~22 GB | Slightly smaller |
+| UD-Q4\_K\_S | ~21 GB | Smallest Q4, marginal quality loss |
+
+:::caution[KV Cache Quantization]
+Using `--cache-type-k q8_0 --cache-type-v q8_0`
+reduces RAM usage but **drops token generation from
+~35 tok/s to ~12 tok/s** on this model. The
+dequantization overhead per decode step is severe.
+This does not affect all models equally -- Qwen3.5
+showed the same penalty, but other architectures
+may not.
+:::
+
 ## Quick Reference
 
 | Model | Port | Command |
@@ -490,6 +553,7 @@ blocks.
 | Qwen3-Coder-Next | 8130 | See full command above (~46 GB) |
 | Qwen3.5-35B-A3B | 8131 | See full command above (needs `--swa-full`) |
 | Gemma-4-26B-A4B | 8132 | See full command above |
+| Qwen3.6-35B-A3B | 8133 | See full command above (no q8\_0 cache!) |
 
 ## Vision Models
 

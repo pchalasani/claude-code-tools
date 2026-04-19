@@ -99,6 +99,7 @@ prompt). All models served via `llama-server`.
 | Model | Active Params | tg (tok/s) |
 |-------|--------------|------------|
 | **Gemma-4-26B-A4B** | **4B** | **~40** |
+| **Qwen3.6-35B-A3B** | **3B** | **~35** |
 | GPT-OSS-20B | 3.6B | ~17--38 |
 | Qwen3-30B-A3B | 3B | ~15--27 |
 | GLM-4.7-Flash | 3B | ~12--13 |
@@ -313,6 +314,61 @@ pp = prompt processing, tg = token generation.
 > before the final answer. For multi-turn conversations, only feed visible
 > answers back -- exclude prior thought blocks.
 
+### Qwen3.6-35B-A3B (Fast Qwen MoE)
+
+A 35B MoE model with 3B active parameters. Successor to Qwen3.5 with vision
+support. Uses sliding window attention (SWA).
+
+```bash
+llama-server -hf unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL \
+  --port 8133 \
+  -ngl 999 \
+  --threads 8 \
+  -c 65536 \
+  -b 2048 \
+  -ub 1024 \
+  --parallel 1 \
+  -fa on \
+  --jinja \
+  --keep 1024 \
+  --swa-full \
+  --no-context-shift \
+  --chat-template-kwargs '{"enable_thinking": false}' \
+  --temp 0.7 \
+  --top-p 0.8 \
+  --top-k 20 \
+  --min-p 0.00 \
+  --no-mmap
+```
+
+**Critical settings:**
+
+| Setting | Why |
+|---------|-----|
+| No `--cache-type-k/v` | **Do not** use `q8_0` KV cache -- drops tg from ~35 to ~12 tok/s |
+| `--swa-full` | Expands SWA cache for prompt caching |
+| `--no-context-shift` | Required with SWA |
+| `--chat-template-kwargs ...` | Disables thinking mode for agentic workflows |
+| `-c 65536` | 64K context -- enough for Claude Code |
+
+**Performance (M1 Max 64 GB, ~41K input tokens):**
+
+pp = prompt processing, tg = token generation.
+
+- Cold start: pp 575 tok/s, tg 35 tok/s (~79s total)
+- Cached follow-up: tg 35 tok/s (~8s total)
+
+**Quantization options:**
+
+| Quant | Size | Notes |
+|-------|------|-------|
+| UD-Q4_K_XL | ~23 GB | Recommended |
+| UD-Q4_K_M | ~22 GB | Slightly smaller |
+| UD-Q4_K_S | ~21 GB | Smallest Q4, marginal quality loss |
+
+> **Warning:** Using `--cache-type-k q8_0 --cache-type-v q8_0` reduces RAM but
+> **drops token generation from ~35 tok/s to ~12 tok/s** on this model.
+
 ## Quick Reference
 
 | Model | Port | Command |
@@ -325,6 +381,7 @@ pp = prompt processing, tg = token generation.
 | Qwen3-Coder-Next | 8130 | See full command above (~46GB RAM) |
 | GLM-4.7-Flash | 8129 | See full command above (requires chat template) |
 | Gemma-4-26B-A4B | 8132 | See full command above |
+| Qwen3.6-35B-A3B | 8133 | See full command above (no q8_0 cache!) |
 
 ## Usage
 
