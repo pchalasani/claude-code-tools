@@ -1,7 +1,7 @@
 <div align="center">
 
 <a href="https://pchalasani.github.io/claude-code-tools/">
-<img src="assets/logo-nyc-subway.png" alt="CLAUDE CODE TOOLS"
+<img src="assets/logo-nyc-subway.jpg" alt="CLAUDE CODE TOOLS"
      width="500"/>
 </a>
 
