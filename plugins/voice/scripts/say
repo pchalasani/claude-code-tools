@@ -111,12 +111,23 @@ play_audio_file() {
     local file="$1"
     if [[ "$(uname)" == "Darwin" ]]; then
         afplay "$file"
+    elif [[ "$(uname -o 2>/dev/null)" == "Msys" ]] || [[ -n "$MSYSTEM" ]]; then
+        # Windows (Git Bash / MSYS2) - use WPF MediaPlayer with dynamic duration detection
+        # SoundPlayer often routes audio to the wrong device on multi-output Windows systems
+        # Calculate duration from file size (WAV headers from pocket-tts can be malformed)
+        # WAV format: (filesize - 44 header) / (sample_rate * bytes_per_sample * channels)
+        # pocket-tts outputs 24kHz, 16-bit, mono
+        local winpath filesize duration_ms
+        winpath=$(cygpath -w "$file")
+        filesize=$(stat -c%s "$file" 2>/dev/null || wc -c < "$file")
+        duration_ms=$(( (filesize - 44) * 1000 / (24000 * 2 * 1) + 1000 ))
+        powershell.exe -NoProfile -Command "Add-Type -AssemblyName PresentationCore; \$mp = New-Object System.Windows.Media.MediaPlayer; \$mp.Open([uri]::new('file:///$winpath')); Start-Sleep -Milliseconds 500; \$mp.Play(); Start-Sleep -Milliseconds $duration_ms; \$mp.Close()"
     elif command -v aplay > /dev/null 2>&1; then
         aplay -q "$file"
     elif command -v paplay > /dev/null 2>&1; then
         paplay "$file"
     else
-        echo "Error: No audio player found (tried afplay, aplay, paplay)" >&2
+        echo "Error: No audio player found (tried afplay, powershell, aplay, paplay)" >&2
         exit 1
     fi
 }
