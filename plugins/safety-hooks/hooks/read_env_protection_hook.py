@@ -43,6 +43,7 @@ def main():
     if tool_name != "Read":
         print(json.dumps({
             "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
                 "permissionDecision": "allow"
             }
         }))
@@ -64,6 +65,7 @@ def main():
     else:
         print(json.dumps({
             "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
                 "permissionDecision": "allow"
             }
         }))
