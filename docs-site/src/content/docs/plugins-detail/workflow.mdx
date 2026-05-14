@@ -32,6 +32,7 @@ claude plugin install workflow@cctools-plugins
 | Skill | `/code-walk-thru` | Walk through files in your editor to explain code or show changes |
 | Skill | `/log-work` | Log work progress to `WORKLOG/YYYYMMDD.md` |
 | Skill | `/make-issue-spec` | Create task specs at `issues/YYYYMMDD-topic.md` |
+| Skill | `/socratic-quiz` | Guided Socratic questioning to deepen understanding of a topic |
 | Agent | `ui-tester` | Browser-based UI testing via Chrome DevTools MCP |
 
 ## Skill Details
@@ -81,6 +82,35 @@ consistent format.
 The generated spec includes sections for the
 problem description, proposed solution, acceptance
 criteria, and implementation notes.
+
+### /socratic-quiz
+
+Guides you to deeper understanding of a topic
+through adaptive, one-at-a-time questions rather
+than direct explanation. Useful for:
+
+- Testing your grasp of a concept before relying
+  on it
+- Reasoning your way into an unfamiliar codebase
+  or system
+- Studying for interviews or technical reviews
+
+Trigger phrases include "quiz me", "help me
+understand", "teach me", and "test my
+understanding". You can also invoke the skill
+directly:
+
+```
+/socratic-quiz help me understand how the
+WebSocket reconnect logic works
+```
+
+The skill asks one question at a time, adapts up
+or down based on your answers, and never reveals
+the answer directly — the goal is understanding,
+not evaluation. It ends with a brief summary of
+what you demonstrated and where to dig deeper,
+not a grade.
 
 ### ui-tester Agent
 
