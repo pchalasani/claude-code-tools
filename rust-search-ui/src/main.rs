@@ -2688,6 +2688,44 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// Find all case-insensitive matches of `needle` in `haystack`, returning
+/// match ranges as (start, end) character indices into the **original** haystack.
+///
+/// Correctly handles Unicode case mappings where one source character expands
+/// to multiple lowercase characters (e.g., `İ` U+0130 → `i` + U+0307). Returned
+/// indices are always in the haystack's original `chars()` coordinates, so the
+/// ranges can be used directly to slice a `Vec<char>` collected from `haystack`.
+fn find_case_insensitive_matches(haystack: &str, needle: &str) -> Vec<(usize, usize)> {
+    let needle_lower: Vec<char> = needle.chars().flat_map(|c| c.to_lowercase()).collect();
+    if needle_lower.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lower_chars: Vec<char> = Vec::new();
+    let mut lower_to_original: Vec<usize> = Vec::new();
+    for (orig_idx, ch) in haystack.chars().enumerate() {
+        for lower_ch in ch.to_lowercase() {
+            lower_chars.push(lower_ch);
+            lower_to_original.push(orig_idx);
+        }
+    }
+
+    let mut matches = Vec::new();
+    let mut i = 0;
+    while i + needle_lower.len() <= lower_chars.len() {
+        let found = (0..needle_lower.len()).all(|j| lower_chars[i + j] == needle_lower[j]);
+        if found {
+            let original_start = lower_to_original[i];
+            let original_end = lower_to_original[i + needle_lower.len() - 1] + 1;
+            matches.push((original_start, original_end));
+            i += needle_lower.len();
+        } else {
+            i += 1;
+        }
+    }
+    matches
+}
+
 /// Find text containing query keywords and return spans with highlighted matches.
 /// If query is empty, returns None. Otherwise returns Some(Vec<Span>) with highlighted keywords.
 fn find_matching_snippet<'a>(
@@ -2709,17 +2747,14 @@ fn find_matching_snippet<'a>(
         return None;
     }
 
-    let content_lower = content.to_lowercase();
-
-    // Find first occurrence of any keyword
-    let mut best_pos = None;
+    // Find first occurrence of any keyword (in original char coordinates)
+    let mut best_pos: Option<usize> = None;
     for keyword in &keywords {
-        if let Some(pos) = content_lower.find(keyword) {
-            match best_pos {
-                None => best_pos = Some(pos),
-                Some(current) if pos < current => best_pos = Some(pos),
-                _ => {}
-            }
+        if let Some(&(start, _)) = find_case_insensitive_matches(content, keyword).first() {
+            best_pos = Some(match best_pos {
+                Some(current) => current.min(start),
+                None => start,
+            });
         }
     }
 
@@ -2732,29 +2767,16 @@ fn find_matching_snippet<'a>(
     let snippet_end = (snippet_start + max_len).min(chars.len());
 
     let snippet: String = chars[snippet_start..snippet_end].iter().collect();
-    let snippet_lower = snippet.to_lowercase();
 
     // Build spans with highlighted keywords
     let mut spans: Vec<Span> = Vec::new();
     let mut current_pos = 0;
     let snippet_chars: Vec<char> = snippet.chars().collect();
-    let snippet_lower_chars: Vec<char> = snippet_lower.chars().collect();
 
     // Find all keyword positions in the snippet
     let mut highlights: Vec<(usize, usize)> = Vec::new();
     for keyword in &keywords {
-        let kw_chars: Vec<char> = keyword.chars().collect();
-        let mut search_pos = 0;
-        while search_pos + kw_chars.len() <= snippet_lower_chars.len() {
-            let match_found = (0..kw_chars.len())
-                .all(|i| snippet_lower_chars[search_pos + i] == kw_chars[i]);
-            if match_found {
-                highlights.push((search_pos, search_pos + kw_chars.len()));
-                search_pos += kw_chars.len();
-            } else {
-                search_pos += 1;
-            }
-        }
+        highlights.extend(find_case_insensitive_matches(&snippet, keyword));
     }
 
     // Sort and merge overlapping highlights
@@ -2819,28 +2841,12 @@ fn highlight_keywords_in_line<'a>(
         return vec![Span::styled(text.to_string(), base_style)];
     }
 
-    let text_lower = text.to_lowercase();
     let text_chars: Vec<char> = text.chars().collect();
-    let text_lower_chars: Vec<char> = text_lower.chars().collect();
 
     // Find all keyword positions
     let mut highlights: Vec<(usize, usize)> = Vec::new();
     for keyword in &keywords {
-        let kw_chars: Vec<char> = keyword.chars().collect();
-        if kw_chars.is_empty() {
-            continue;
-        }
-        let mut search_pos = 0;
-        while search_pos + kw_chars.len() <= text_lower_chars.len() {
-            let match_found = (0..kw_chars.len())
-                .all(|i| text_lower_chars[search_pos + i] == kw_chars[i]);
-            if match_found {
-                highlights.push((search_pos, search_pos + kw_chars.len()));
-                search_pos += kw_chars.len();
-            } else {
-                search_pos += 1;
-            }
-        }
+        highlights.extend(find_case_insensitive_matches(text, keyword));
     }
 
     // No highlights found
@@ -3005,29 +3011,18 @@ fn render_with_dual_highlighting<'a>(
         } else {
             // Apply view search highlighting within this segment
             let segment_base = if is_query_match { query_highlight } else { base_style };
-            let pattern_lower = view_pattern.to_lowercase();
-            let text_lower = text.to_lowercase();
             let text_chars: Vec<char> = text.chars().collect();
-            let pattern_chars: Vec<char> = pattern_lower.chars().collect();
-            let text_lower_chars: Vec<char> = text_lower.chars().collect();
+            let matches = find_case_insensitive_matches(&text, view_pattern);
 
             let mut last_end = 0;
-            let mut i = 0;
-            while i + pattern_chars.len() <= text_lower_chars.len() {
-                let match_found = (0..pattern_chars.len())
-                    .all(|j| text_lower_chars[i + j] == pattern_chars[j]);
-                if match_found {
-                    if i > last_end {
-                        let before: String = text_chars[last_end..i].iter().collect();
-                        spans.push(Span::styled(before, segment_base));
-                    }
-                    let matched: String = text_chars[i..i + pattern_chars.len()].iter().collect();
-                    spans.push(Span::styled(matched, view_highlight));
-                    last_end = i + pattern_chars.len();
-                    i = last_end;
-                } else {
-                    i += 1;
+            for (start, end) in matches {
+                if start > last_end {
+                    let before: String = text_chars[last_end..start].iter().collect();
+                    spans.push(Span::styled(before, segment_base));
                 }
+                let matched: String = text_chars[start..end].iter().collect();
+                spans.push(Span::styled(matched, view_highlight));
+                last_end = end;
             }
             if last_end < text_chars.len() {
                 let remaining: String = text_chars[last_end..].iter().collect();
@@ -3054,45 +3049,29 @@ fn highlight_search_in_text<'a>(
         return vec![Span::styled(text.to_string(), base_style)];
     }
 
-    let pattern_lower = pattern.to_lowercase();
-    let text_lower = text.to_lowercase();
+    let text_chars: Vec<char> = text.chars().collect();
+    let matches = find_case_insensitive_matches(text, pattern);
+
+    if matches.is_empty() {
+        return vec![Span::styled(text.to_string(), base_style)];
+    }
+
     let mut spans: Vec<Span> = Vec::new();
     let mut last_end = 0;
 
-    // Find all occurrences of pattern (case-insensitive)
-    let text_chars: Vec<char> = text.chars().collect();
-    let pattern_chars: Vec<char> = pattern_lower.chars().collect();
-    let text_lower_chars: Vec<char> = text_lower.chars().collect();
-
-    let mut i = 0;
-    while i + pattern_chars.len() <= text_lower_chars.len() {
-        let match_found = (0..pattern_chars.len())
-            .all(|j| text_lower_chars[i + j] == pattern_chars[j]);
-
-        if match_found {
-            // Add text before match
-            if i > last_end {
-                let before: String = text_chars[last_end..i].iter().collect();
-                spans.push(Span::styled(before, base_style));
-            }
-            // Add highlighted match
-            let matched: String = text_chars[i..i + pattern_chars.len()].iter().collect();
-            spans.push(Span::styled(matched, highlight_style));
-            last_end = i + pattern_chars.len();
-            i = last_end;
-        } else {
-            i += 1;
+    for (start, end) in matches {
+        if start > last_end {
+            let before: String = text_chars[last_end..start].iter().collect();
+            spans.push(Span::styled(before, base_style));
         }
+        let matched: String = text_chars[start..end].iter().collect();
+        spans.push(Span::styled(matched, highlight_style));
+        last_end = end;
     }
 
-    // Add remaining text
     if last_end < text_chars.len() {
         let remaining: String = text_chars[last_end..].iter().collect();
         spans.push(Span::styled(remaining, base_style));
-    }
-
-    if spans.is_empty() {
-        spans.push(Span::styled(text.to_string(), base_style));
     }
 
     spans
@@ -3815,29 +3794,12 @@ fn search_tantivy(
 fn rehighlight_keywords(snippet: &str, keywords: &[&str]) -> String {
     // First strip any existing <b> tags to get plain text
     let plain = strip_html_tags(snippet);
-    let plain_lower = plain.to_lowercase();
     let plain_chars: Vec<char> = plain.chars().collect();
-    let plain_lower_chars: Vec<char> = plain_lower.chars().collect();
 
-    // Find all keyword positions (case-insensitive, substring matching)
+    // Find all keyword positions (case-insensitive, substring matching) in original char coords
     let mut highlights: Vec<(usize, usize)> = Vec::new();
     for keyword in keywords {
-        let kw_lower = keyword.to_lowercase();
-        let kw_chars: Vec<char> = kw_lower.chars().collect();
-        if kw_chars.is_empty() {
-            continue;
-        }
-        let mut search_pos = 0;
-        while search_pos + kw_chars.len() <= plain_lower_chars.len() {
-            let match_found = (0..kw_chars.len())
-                .all(|i| plain_lower_chars.get(search_pos + i) == Some(&kw_chars[i]));
-            if match_found {
-                highlights.push((search_pos, search_pos + kw_chars.len()));
-                search_pos += kw_chars.len();
-            } else {
-                search_pos += 1;
-            }
-        }
+        highlights.extend(find_case_insensitive_matches(&plain, keyword));
     }
 
     if highlights.is_empty() {
@@ -3879,9 +3841,7 @@ fn rehighlight_keywords(snippet: &str, keywords: &[&str]) -> String {
 /// For multi-word queries, prioritizes finding the exact phrase over scattered keywords.
 /// Returns a window of text around the best match with HTML highlighting.
 fn extract_snippet(content: &str, keywords: &[&str], window_chars: usize) -> String {
-    let content_lower = content.to_lowercase();
     let chars: Vec<char> = content.chars().collect();
-    let chars_lower: Vec<char> = content_lower.chars().collect();
 
     // Helper to build snippet around a character position (returns plain text)
     let build_snippet_text = |match_start: usize, match_len: usize| -> (String, bool, bool) {
@@ -3905,28 +3865,12 @@ fn extract_snippet(content: &str, keywords: &[&str], window_chars: usize) -> Str
 
     // Helper to add <b> tags around keywords in a snippet
     let highlight_keywords = |text: &str, has_prefix: bool, has_suffix: bool| -> String {
-        let text_lower = text.to_lowercase();
         let text_chars: Vec<char> = text.chars().collect();
-        let text_lower_chars: Vec<char> = text_lower.chars().collect();
 
-        // Find all keyword positions
+        // Find all keyword positions in original char coords
         let mut highlights: Vec<(usize, usize)> = Vec::new();
         for keyword in keywords {
-            let kw_chars: Vec<char> = keyword.chars().collect();
-            if kw_chars.is_empty() {
-                continue;
-            }
-            let mut search_pos = 0;
-            while search_pos + kw_chars.len() <= text_lower_chars.len() {
-                let match_found = (0..kw_chars.len())
-                    .all(|i| text_lower_chars.get(search_pos + i) == Some(&kw_chars[i]));
-                if match_found {
-                    highlights.push((search_pos, search_pos + kw_chars.len()));
-                    search_pos += kw_chars.len();
-                } else {
-                    search_pos += 1;
-                }
-            }
+            highlights.extend(find_case_insensitive_matches(text, keyword));
         }
 
         // Sort and merge overlapping highlights
@@ -3969,36 +3913,20 @@ fn extract_snippet(content: &str, keywords: &[&str], window_chars: usize) -> Str
     // For multi-word queries, first try to find the exact phrase
     if keywords.len() > 1 {
         let phrase = keywords.join(" ");
-        let phrase_chars: Vec<char> = phrase.chars().collect();
-        for i in 0..chars_lower.len().saturating_sub(phrase_chars.len() - 1) {
-            let matches = phrase_chars
-                .iter()
-                .enumerate()
-                .all(|(j, &pc)| chars_lower.get(i + j) == Some(&pc));
-            if matches {
-                let (text, has_prefix, has_suffix) = build_snippet_text(i, phrase_chars.len());
-                return highlight_keywords(&text, has_prefix, has_suffix);
-            }
+        if let Some(&(start, end)) = find_case_insensitive_matches(content, &phrase).first() {
+            let (text, has_prefix, has_suffix) = build_snippet_text(start, end - start);
+            return highlight_keywords(&text, has_prefix, has_suffix);
         }
     }
 
     // Fallback: find the first keyword occurrence (by character index)
     for keyword in keywords {
-        let kw_chars: Vec<char> = keyword.chars().collect();
-        if kw_chars.is_empty() {
+        if keyword.is_empty() {
             continue;
         }
-
-        // Search for keyword in lowercased char array
-        for i in 0..chars_lower.len().saturating_sub(kw_chars.len() - 1) {
-            let matches = kw_chars
-                .iter()
-                .enumerate()
-                .all(|(j, &kc)| chars_lower.get(i + j) == Some(&kc));
-            if matches {
-                let (text, has_prefix, has_suffix) = build_snippet_text(i, kw_chars.len());
-                return highlight_keywords(&text, has_prefix, has_suffix);
-            }
+        if let Some(&(start, end)) = find_case_insensitive_matches(content, keyword).first() {
+            let (text, has_prefix, has_suffix) = build_snippet_text(start, end - start);
+            return highlight_keywords(&text, has_prefix, has_suffix);
         }
     }
 
@@ -5368,5 +5296,71 @@ mod tests {
         // Empty string with max=0
         let result = truncate("", 0);
         assert_eq!(result, "", "empty string with max=0 should remain empty");
+    }
+
+    // Issue #75: lowercasing some Unicode chars (e.g., Turkish dotted I `İ`
+    // U+0130 → `i` + U+0307) expands one source char into multiple lowercase
+    // chars. Search ranges computed against the lowercased buffer must be mapped
+    // back to original-char coordinates before being used to slice the source.
+
+    #[test]
+    fn test_find_case_insensitive_matches_handles_lowercase_expansion() {
+        // İ (U+0130) lowercases to i + U+0307. Match for "i\u{307}" must point
+        // at the single original char İ at char index 4.
+        let result = find_case_insensitive_matches("abc İ", "i\u{307}");
+        assert_eq!(result, vec![(4, 5)]);
+    }
+
+    #[test]
+    fn test_rehighlight_keywords_handles_lowercase_expansion() {
+        let result = rehighlight_keywords("abc İ", &["i\u{307}"]);
+        assert_eq!(result, "abc <b>İ</b>");
+    }
+
+    #[test]
+    fn test_extract_snippet_handles_lowercase_expansion() {
+        let result = extract_snippet("abc İ", &["i\u{307}"], 20);
+        assert_eq!(result, "abc <b>İ</b>");
+    }
+
+    #[test]
+    fn test_find_matching_snippet_handles_multibyte_offset() {
+        // Pre-fix: `content_lower.find(keyword)` returned the BYTE offset of
+        // the match (10 here, since `İ` is 2 bytes in UTF-8), which was then
+        // used as a CHAR index. This produced wrong snippet windows / wrong
+        // highlight spans for any non-ASCII content. Post-fix: everything runs
+        // in original-char coordinates.
+        let highlight = Style::default().fg(Color::Yellow);
+        let normal = Style::default();
+
+        let spans = find_matching_snippet("İİİ key word", "key", 100, normal, highlight)
+            .expect("should find a match");
+
+        let highlighted: Vec<String> = spans
+            .iter()
+            .filter(|s| s.style == highlight)
+            .map(|s| s.content.to_string())
+            .collect();
+        assert_eq!(highlighted, vec!["key".to_string()]);
+    }
+
+    #[test]
+    fn test_rehighlight_keywords_does_not_panic_on_issue_75_query() {
+        // Smoke test using the exact reproducer from the issue. The query has
+        // a final `İ` which lowercases to `i` + U+0307. When applied against
+        // content that also contains expanding chars, lower-char/original-char
+        // index misalignment was the trigger for the panic at src/main.rs:3868.
+        let query = "Türkçe karakter şığ öç üİ";
+        let keywords_owned: Vec<String> = query
+            .to_lowercase()
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect();
+        let keywords: Vec<&str> = keywords_owned.iter().map(|s| s.as_str()).collect();
+        // Content that itself contains expanding chars (multiple İ's) so that
+        // the lowercased buffer is longer than the original char vector.
+        let content = "some İ text üi̇ with İİ Turkish characters";
+        let _ = rehighlight_keywords(content, &keywords);
+        let _ = extract_snippet(content, &keywords, 100);
     }
 }
