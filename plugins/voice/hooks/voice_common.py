@@ -6,8 +6,10 @@ Shared voice plugin utilities and constants.
 from pathlib import Path
 
 # Word limit for short response detection and fallback truncation.
-# This does NOT apply to explicitly generated summaries (📢 marker or headless Claude).
+# Explicit summaries (📢 marker or headless Claude) are allowed up to
+# MAX_SPOKEN_WORDS * 2 as a safety cap in case the model overshoots.
 MAX_SPOKEN_WORDS = 25
+MAX_EXPLICIT_SUMMARY_WORDS = MAX_SPOKEN_WORDS * 2
 
 
 def get_voice_config() -> tuple[bool, str, str, bool]:
@@ -89,7 +91,7 @@ def build_full_reminder(custom_prompt: str = "") -> str:
         f"- If ≤{MAX_SPOKEN_WORDS} words of natural speakable text, no summary needed\n"
         f"- If ≤{MAX_SPOKEN_WORDS} words but contains code/paths/technical output, "
         "ADD a 📢 summary\n"
-        "- If longer, end with: 📢 [brief spoken summary]\n\n"
+        f"- If longer, end with: 📢 [brief spoken summary, ≤{MAX_EXPLICIT_SUMMARY_WORDS} words]\n\n"
         "VOICE SUMMARY STYLE:\n"
         "- Match the user's tone - if they're casual or use colorful language, "
         "mirror that\n"
@@ -111,6 +113,7 @@ def build_full_reminder(custom_prompt: str = "") -> str:
 def build_short_reminder() -> str:
     """Build a brief voice reminder for PostToolUse hook."""
     return (
-        "[Voice feedback: when done, end with 📢 summary (max 25 words) "
-        "if response is >25 words or contains code/paths]"
+        f"[Voice feedback: when done, end with 📢 summary "
+        f"(≤{MAX_EXPLICIT_SUMMARY_WORDS} words) "
+        f"if response is >{MAX_SPOKEN_WORDS} words or contains code/paths]"
     )

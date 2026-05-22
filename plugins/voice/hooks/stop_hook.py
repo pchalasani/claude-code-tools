@@ -22,7 +22,7 @@ from pathlib import Path
 # Add hooks directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
-from voice_common import MAX_SPOKEN_WORDS
+from voice_common import MAX_EXPLICIT_SUMMARY_WORDS, MAX_SPOKEN_WORDS
 
 PLUGIN_ROOT = Path(__file__).parent.parent
 
@@ -433,14 +433,12 @@ def main():
     # Get last assistant message
     last_assistant_msg = get_last_assistant_message(session_file)
 
-    # Flexible limit for explicit summaries (1.5x the strict limit)
-    flexible_limit = int(MAX_SPOKEN_WORDS * 1.5)
-
     # Strategy 1: Try to extract 📢 marker (instant!)
     if last_assistant_msg:
         marker_summary = extract_voice_marker(last_assistant_msg)
         if marker_summary:
-            summary = trim_to_words(marker_summary, flexible_limit)
+            # Safety cap: marker is prompted to be brief, but trim if it overshoots.
+            summary = trim_to_words(marker_summary, MAX_EXPLICIT_SUMMARY_WORDS)
 
     # Strategy 2: If no marker but response is short, speak directly
     if not summary and last_assistant_msg:
@@ -453,7 +451,7 @@ def main():
         if conversation:
             summary = summarize_with_claude(conversation, custom_prompt)
             if summary:
-                summary = trim_to_words(summary, flexible_limit)
+                summary = trim_to_words(summary, MAX_EXPLICIT_SUMMARY_WORDS)
                 used_headless = True
 
     # Strategy 4: Last resort - truncate last message
@@ -463,9 +461,6 @@ def main():
     if not summary:
         print(json.dumps({"decision": "approve"}))
         return
-
-    # No final truncation - trust explicit summaries (marker or headless Claude)
-    # Only Strategy 2 and 4 use raw text which is already bounded by MAX_SPOKEN_WORDS
 
     # Speak it
     speak_summary(session_id, summary, voice)
