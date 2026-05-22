@@ -115,6 +115,7 @@ if __name__ == "__main__":
     if tool_name != "Bash":
         print(json.dumps({
             "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
                 "permissionDecision": "allow"
             }
         }))
@@ -136,6 +137,7 @@ if __name__ == "__main__":
     else:
         print(json.dumps({
             "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
                 "permissionDecision": "allow"
             }
         }))
