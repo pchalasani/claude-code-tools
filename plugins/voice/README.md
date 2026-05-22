@@ -128,8 +128,11 @@ You can use the `say` script directly from the command line:
 
 ### Environment Variables
 
+- `CC_VOICE`: Voice to use (overrides `~/.claude/voice.local.md`; `--voice` CLI flag still wins)
 - `TTS_HOST`: TTS server host (default: `localhost`)
 - `TTS_PORT`: TTS server port (default: `8000`)
+
+Voice resolution order: `--voice <name>` flag → `CC_VOICE` env var → config file `voice:` field.
 
 ## Disabling
 

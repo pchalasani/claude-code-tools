@@ -36,6 +36,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --help, -h         Show this help message"
             echo ""
             echo "Environment variables:"
+            echo "  CC_VOICE           Voice to use (overrides config file; --voice still wins)"
             echo "  TTS_HOST           TTS server host (default: localhost)"
             echo "  TTS_PORT           TTS server port (default: 8000)"
             exit 0
@@ -55,6 +56,11 @@ if [[ -z "$TEXT" ]]; then
     exit 1
 fi
 
+# Apply CC_VOICE env var if --voice was not specified
+if [[ -z "$VOICE" && -n "$CC_VOICE" ]]; then
+    VOICE="$CC_VOICE"
+fi
+
 # Check config file for voice and enabled status
 CONFIG_FILE="$HOME/.claude/voice.local.md"
 if [[ -f "$CONFIG_FILE" ]]; then
@@ -64,7 +70,7 @@ if [[ -f "$CONFIG_FILE" ]]; then
     if [[ "$ENABLED" == "false" ]]; then
         exit 0
     fi
-    # Extract voice if not specified via --voice
+    # Extract voice if not specified via --voice or CC_VOICE
     if [[ -z "$VOICE" ]]; then
         VOICE=$(sed -n '/^---$/,/^---$/p' "$CONFIG_FILE" | grep "^voice:" | sed 's/voice:[[:space:]]*//')
     fi
