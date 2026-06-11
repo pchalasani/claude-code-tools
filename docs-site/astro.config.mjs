@@ -85,6 +85,7 @@ export default defineConfig({
             { label: "Status Line", slug: "tools/statusline" },
             { label: "vault", slug: "tools/vault" },
             { label: "env-safe", slug: "tools/env-safe" },
+            { label: "agent-tunnel", slug: "tools/agent-tunnel" },
           ],
         },
         {

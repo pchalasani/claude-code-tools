@@ -1,0 +1,224 @@
+"""Configuration loading for agent-tunnel.
+
+Config lives in TOML (default ~/.config/agent-tunnel/config.toml) and can be
+overridden per-invocation via CLI options. `agent-tunnel init` writes a
+commented sample file.
+
+Sessions are NOT configured here — they are published at runtime from inside
+each Claude session via the `>share` hook, which writes to the registry that
+the daemon reads. This config only holds the Discord wiring and limits.
+"""
+
+from __future__ import annotations
+
+import os
+import tomllib
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Optional
+
+DEFAULT_CONFIG_PATH = Path.home() / ".config" / "agent-tunnel" / "config.toml"
+DEFAULT_STATE_PATH = (
+    Path.home() / ".local" / "state" / "agent-tunnel" / "state.json"
+)
+# Env-overridable so the >share hook and the daemon can share a path (and for
+# tests). The hook honors the same AGENT_TUNNEL_REGISTRY variable.
+DEFAULT_REGISTRY_PATH = Path(
+    os.environ.get("AGENT_TUNNEL_REGISTRY")
+    or (Path.home() / ".local" / "state" / "agent-tunnel" / "registry.json")
+)
+
+DEFAULT_PERSONA = (
+    "You are answering a question relayed from a teammate over chat. "
+    "They cannot see this terminal or your files, so answer in a "
+    "self-contained way, formatted as chat-friendly markdown. "
+    "Never reveal credentials, tokens, or the contents of .env files."
+)
+
+DEFAULT_ALLOWED_TOOLS = ["Read", "Grep", "Glob"]
+# Names are validated by the claude CLI ("matches no known tool" is a hard
+# error), so only currently existing tools may appear here.
+DEFAULT_DISALLOWED_TOOLS = [
+    "Write",
+    "Edit",
+    "NotebookEdit",
+    "Bash",
+    "Task",
+    "Agent",
+    "WebFetch",
+    "WebSearch",
+]
+
+
+@dataclass
+class DiscordConfig:
+    """Discord-facing settings."""
+
+    token_env: str = "AGENT_TUNNEL_DISCORD_TOKEN"
+    channel_ids: list[int] = field(default_factory=list)
+    allowed_user_ids: list[int] = field(default_factory=list)
+    allowed_role_ids: list[int] = field(default_factory=list)
+    respond_to_dms: bool = False
+
+
+@dataclass
+class ClaudeConfig:
+    """How forked Claude Code invocations are constructed."""
+
+    binary: str = "claude"
+    model: str = ""
+    allowed_tools: list[str] = field(
+        default_factory=lambda: list(DEFAULT_ALLOWED_TOOLS)
+    )
+    disallowed_tools: list[str] = field(
+        default_factory=lambda: list(DEFAULT_DISALLOWED_TOOLS)
+    )
+    permission_mode: str = "dontAsk"
+    persona: str = DEFAULT_PERSONA
+    headless_extra_args: list[str] = field(default_factory=list)
+    tmux_extra_args: list[str] = field(default_factory=list)
+
+
+@dataclass
+class LimitsConfig:
+    """Throughput and safety limits."""
+
+    max_concurrent: int = 2
+    per_user_cooldown_s: float = 15.0
+    answer_timeout_s: float = 600.0
+    launch_timeout_s: float = 90.0
+    pane_idle_ttl_min: float = 60.0
+    max_inline_chars: int = 5500
+
+
+@dataclass
+class TunnelConfig:
+    """Top-level agent-tunnel configuration."""
+
+    backend: str = "tmux"
+    tmux_session: str = "agent-tunnel"
+    state_path: Path = DEFAULT_STATE_PATH
+    registry_path: Path = DEFAULT_REGISTRY_PATH
+    claude_home: Optional[Path] = None
+    # Only used by the `agent-tunnel ask` smoke test when no handle/session is
+    # given (auto = newest session in this dir); never needed by `serve`.
+    project_dir: Optional[Path] = None
+    discord: DiscordConfig = field(default_factory=DiscordConfig)
+    claude: ClaudeConfig = field(default_factory=ClaudeConfig)
+    limits: LimitsConfig = field(default_factory=LimitsConfig)
+
+
+def _apply(dc: Any, data: dict[str, Any]) -> None:
+    """Copy known keys from a TOML table onto a dataclass instance."""
+    for key, value in data.items():
+        if hasattr(dc, key):
+            setattr(dc, key, value)
+
+
+def load_config(
+    path: Optional[Path] = None,
+    backend: Optional[str] = None,
+    channel_ids: Optional[list[int]] = None,
+    token_env: Optional[str] = None,
+) -> TunnelConfig:
+    """Load config from TOML, then apply CLI overrides.
+
+    Args:
+        path: Config file path; defaults to DEFAULT_CONFIG_PATH. A missing
+            default file is fine (pure-CLI usage); an explicitly given but
+            missing path is an error.
+        backend: Override backend ("tmux" or "headless").
+        channel_ids: Override watched Discord channel ids.
+        token_env: Override env var name holding the Discord bot token.
+
+    Returns:
+        A fully populated TunnelConfig.
+
+    Raises:
+        FileNotFoundError: Explicit config path does not exist.
+        ValueError: Unknown backend.
+    """
+    explicit = path is not None
+    cfg_path = path or DEFAULT_CONFIG_PATH
+    data: dict[str, Any] = {}
+    if cfg_path.exists():
+        with open(cfg_path, "rb") as f:
+            data = tomllib.load(f)
+    elif explicit:
+        raise FileNotFoundError(f"Config file not found: {cfg_path}")
+
+    cfg = TunnelConfig()
+    tunnel_tbl = data.get("tunnel", {})
+    for key in ("backend", "tmux_session"):
+        if key in tunnel_tbl:
+            setattr(cfg, key, tunnel_tbl[key])
+    for key in ("state_path", "registry_path", "claude_home", "project_dir"):
+        if key in tunnel_tbl:
+            setattr(cfg, key, Path(tunnel_tbl[key]).expanduser())
+
+    _apply(cfg.discord, data.get("discord", {}))
+    _apply(cfg.claude, data.get("claude", {}))
+    _apply(cfg.limits, data.get("limits", {}))
+
+    if backend:
+        cfg.backend = backend
+    if channel_ids:
+        cfg.discord.channel_ids = list(channel_ids)
+    if token_env:
+        cfg.discord.token_env = token_env
+
+    if cfg.backend not in ("tmux", "headless"):
+        raise ValueError(f"Unknown backend: {cfg.backend!r}")
+    return cfg
+
+
+def sample_config() -> str:
+    """Return a commented sample config file."""
+    return f'''\
+# agent-tunnel configuration
+# See docs/agent-tunnel-spec.md in claude-code-tools for details.
+#
+# There is NO project/session setting here: you publish a session at runtime
+# from inside it by typing  >share  (the hook mints a handle you give to
+# colleagues). This file only configures Discord and limits.
+
+[tunnel]
+# "tmux" = interactive forked sessions (subscription metering);
+# "headless" = claude -p (Agent SDK credit metering from 2026-06-15).
+backend = "tmux"
+# Name of the dedicated tmux session holding fork windows.
+tmux_session = "agent-tunnel"
+
+[discord]
+# Env var that holds the bot token (never put the token itself here).
+token_env = "AGENT_TUNNEL_DISCORD_TOKEN"
+# Channel ids the bot watches (developer mode -> Copy Channel ID).
+channel_ids = []
+# Empty lists mean: anyone in the watched channels may ask.
+allowed_user_ids = []
+allowed_role_ids = []
+respond_to_dms = false
+
+[claude]
+binary = "claude"
+# Empty string = the published session's default model.
+model = ""
+allowed_tools = {DEFAULT_ALLOWED_TOOLS!r}
+disallowed_tools = {DEFAULT_DISALLOWED_TOOLS!r}
+permission_mode = "dontAsk"
+# Appended system prompt for remote turns; set to "" to disable.
+# persona = "..."
+# Extra CLI args per backend. Caution: "--bare" can break subscription
+# auth ("Not logged in") since it skips loading user configuration.
+headless_extra_args = []
+tmux_extra_args = []
+
+[limits]
+max_concurrent = 2
+per_user_cooldown_s = 15.0
+answer_timeout_s = 600.0
+launch_timeout_s = 90.0
+pane_idle_ttl_min = 60.0
+# Answers longer than this are attached as answer.md instead of inlined.
+max_inline_chars = 5500
+'''

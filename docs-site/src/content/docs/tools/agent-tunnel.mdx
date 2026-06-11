@@ -1,0 +1,199 @@
+---
+title: "agent-tunnel — Share Your Expert Sessions"
+description: >
+  Publish any local Claude Code session with >share and let teammates ask it
+  questions over Discord, answered against safe read-only forks.
+---
+
+import { Steps, Aside } from "@astrojs/starlight/components";
+
+A local Claude Code session accumulates large, valuable context over weeks of
+use — effectively a custom expert agent. `agent-tunnel` lets you **publish a
+specific session** with `>share`, hand the resulting **handle** to teammates,
+and have them ask it questions over Discord — each answered against a private,
+read-only **fork** of that session.
+
+## How it works
+
+- Inside any session, you type `>share`. A `UserPromptSubmit` hook reads
+  *that* session's own id and folder and mints a short **handle** (e.g.
+  `pay-7Q2`). Because a single folder can hold many sessions, the handle is
+  pinned to the exact session you ran it in — not the folder.
+- You give the handle to colleagues. In the Discord channel, a message that
+  **starts with the handle** opens a thread bound to that session; follow-ups
+  stay in the thread. Different teammates and different sessions never collide.
+- Each thread is answered against `--resume <session> --fork-session`: the
+  fork copies the context, your original session is untouched, and remote
+  turns are **hard-restricted to read-only tools** (`Read`/`Grep`/`Glob`).
+- The Discord Gateway is an *outbound* websocket — **no tunnel, no open
+  port, no cloud infra**.
+
+```text
+   inside any session:  >share  ─►  hook writes registry  { handle → session }
+                                                  │
+   colleague's Discord  ─►  Discord  ◄─ ws ─  agent-tunnel serve  ─►  fork that
+        (handle → thread)                       (reads registry)       session
+```
+
+Two backends, switchable in config:
+
+- `tmux` (default): a real interactive `claude` per thread — metered like
+  normal interactive subscription usage; you can attach and watch.
+- `headless`: `claude -p` per question — cleaner I/O, but metered as Agent
+  SDK usage on subscription plans from 2026-06-15.
+
+Full design: [`docs/agent-tunnel-spec.md`](https://github.com/pchalasani/claude-code-tools/blob/main/docs/agent-tunnel-spec.md).
+
+## Publishing a session: `>share`
+
+Type these as a prompt **inside the Claude session you want to expose** (the
+prompt is intercepted — it never goes to the model; you just see the handle):
+
+| Command | Effect |
+| --- | --- |
+| `>share` | Publish this session; mint/show a handle |
+| `>share <label>` | Publish with a chosen handle, e.g. `>share payments` |
+| `>share status` | Show this session's handle, if any |
+| `>share off` | Stop sharing (revoke the handle) |
+
+Requires the `agent-tunnel` plugin (which provides the hook) to be installed.
+
+## Sharing over the internet without exposing your machine
+
+You never open a port or run a tunnel. Your laptop holds an **outbound**
+websocket to Discord, which relays messages both ways. "Sharing on the open
+internet" just means "the colleague is in your Discord server." Nothing on
+your machine is internet-reachable.
+
+## Part A — One-time bot setup (Discord Developer Portal)
+
+<Steps>
+
+1. **Create the application** at the
+   [developer portal](https://discord.com/developers/applications) →
+   **New Application**.
+
+2. **Add the bot.** Left sidebar → **Bot**. Set its display name (what
+   colleagues see). **Reset Token** → **Copy**. Treat it like a password.
+
+3. **Enable the privileged intent.** Toggle **MESSAGE CONTENT INTENT** on —
+   mandatory, or the bot sees blank messages.
+
+4. **Generate the invite link.** **OAuth2** → **URL Generator** → scope
+   `bot`; permissions: View Channels, Send Messages, Create Public Threads,
+   Send Messages in Threads, Attach Files, Add Reactions, Read Message
+   History. Copy the URL.
+
+5. **Invite it.** Paste the URL → pick a server (one where *you* have "Manage
+   Server" — typically your own; company servers usually require an admin) →
+   **Authorize**.
+
+6. **Get the channel ID.** User Settings → Advanced → **Developer Mode** on;
+   right-click the target channel → **Copy Channel ID**.
+
+</Steps>
+
+## Part B — One-time agent-tunnel config
+
+<Steps>
+
+1. Export the token (config stores only the env-var *name*, never the token):
+
+   ```bash
+   export AGENT_TUNNEL_DISCORD_TOKEN="<token from step 2>"
+   ```
+
+2. Write and edit the config — note there is **no project/session** here;
+   sessions are published at runtime via `>share`:
+
+   ```bash
+   agent-tunnel init      # writes ~/.config/agent-tunnel/config.toml
+   ```
+
+   ```toml
+   [tunnel]
+   backend = "tmux"        # or "headless"
+
+   [discord]
+   channel_ids = [123456789012345678]   # the id you copied
+   # allowed_user_ids = [...]            # optional allowlist
+   ```
+
+3. Smoke-test the pipeline without Discord (publish a session with `>share`
+   first, then):
+
+   ```bash
+   agent-tunnel ask --handle <your-handle> "what does this project do?"
+   ```
+
+</Steps>
+
+## Part C — Run it and daily use
+
+```bash
+agent-tunnel serve
+```
+
+Keep it running in a dedicated terminal (the one with the token exported).
+Your laptop must be awake and online; discord.py auto-reconnects after sleep.
+
+**The loop in practice:**
+
+<Steps>
+
+1. You're deep in a Claude session that's become an expert on something. You
+   type `>share payments` → you get handle `payments`.
+
+2. You drop `payments` to a colleague (DM, the channel, wherever).
+
+3. In the channel they post: `payments how does token refresh work?` → the
+   bot opens a thread and answers there, read-only, from a fork of that exact
+   session.
+
+4. They keep asking **in that thread** — follow-ups need no handle. Another
+   colleague hitting a different handle gets their own thread and fork.
+
+5. Done sharing? Back in the session: `>share off`.
+
+</Steps>
+
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| `agent-tunnel serve` | Run the Discord daemon |
+| `agent-tunnel published` | List live handles (from the registry) |
+| `agent-tunnel ask --handle H "Q"` | Local test through the full pipeline |
+| `agent-tunnel status` | Show threads, forks, tmux windows |
+| `agent-tunnel forget --thread T \| --all` | Drop bindings (+ windows) |
+| `agent-tunnel init` | Write a commented sample config |
+
+## Security notes
+
+<Aside type="caution">
+**Access equals Discord channel membership.** Anyone who can post in the
+watched channel and knows a live handle can query that session. Use a private
+channel and/or `allowed_user_ids` / `allowed_role_ids`, and `>share off` when
+done.
+</Aside>
+
+<Aside type="caution">
+**They can read what that session can read.** Read-only tools are hard-enforced
+by the CLI permission layer — no writes, edits, or commands. But a determined
+asker can surface anything in the session context or readable project tree.
+Only `>share` sessions whose context you're willing to expose.
+</Aside>
+
+<Aside type="note">
+**It runs on your machine, billed to your subscription.** Consumer plans
+prohibit making your *account* available to others; an owner-operated relay
+where colleagues only submit questions is a gray area not publicly addressed.
+For unambiguous footing or higher volume, use `backend = "headless"` with an
+`ANTHROPIC_API_KEY`. Each **new** thread replays the session's full context
+(~its token count per cold question).
+</Aside>
+
+<Aside type="note">
+**Token hygiene.** The bot token grants full control of the bot. Keep it in
+the environment variable; if it leaks, **Reset Token** in the portal.
+</Aside>

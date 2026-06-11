@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+"""UserPromptSubmit hook: publish the CURRENT Claude session for agent-tunnel.
+
+Triggers (typed as a prompt inside any Claude Code session):
+- '>share'            : publish this session, mint/show a handle
+- '>share <label>'    : publish with a chosen handle (e.g. >share payments)
+- '>share status'     : show this session's handle, if any
+- '>share off'        : revoke this session's handle
+
+The handle is what you give to colleagues; they address it in the
+agent-tunnel Discord channel to talk to a read-only fork of THIS session.
+
+Standalone (stdlib only): Claude Code may run this under a Python without the
+claude_code_tools package installed. It writes the shared registry JSON read
+by the `agent-tunnel serve` daemon. The schema MUST match
+claude_code_tools/agent_tunnel/registry.py.
+"""
+import fcntl
+import json
+import os
+import re
+import sys
+import time
+
+TRIGGER = ">share"
+REGISTRY_PATH = os.environ.get("AGENT_TUNNEL_REGISTRY") or os.path.expanduser(
+    "~/.local/state/agent-tunnel/registry.json"
+)
+HANDLE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")
+
+GREEN = "\033[92m"
+BLUE = "\033[94m"
+YELLOW = "\033[93m"
+RESET = "\033[0m"
+
+
+def _sanitize_label(label):
+    slug = re.sub(r"[^a-z0-9]+", "-", label.strip().lower()).strip("-")
+    slug = slug[:32].rstrip("-")
+    return slug if slug and HANDLE_RE.match(slug) else None
+
+
+def _derive_handle(session_id):
+    compact = session_id.replace("-", "")
+    return compact[:6] if compact else "session"
+
+
+def _load(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f).get("records", {})
+    except (OSError, ValueError):
+        return {}
+
+
+def _atomic_write(path, records):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"records": records}, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, path)
+
+
+def _publish(session_id, cwd, transcript_path, label):
+    """Insert/update this session's record under a read-modify-write lock."""
+    os.makedirs(os.path.dirname(REGISTRY_PATH), exist_ok=True)
+    lock_path = REGISTRY_PATH + ".lock"
+    with open(lock_path, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            records = _load(REGISTRY_PATH)
+            existing = _find_by_session(records, session_id)
+            if label:
+                handle = label
+                taken = records.get(handle)
+                if taken and taken.get("session_id") != session_id:
+                    return None, handle  # collision
+                if existing and existing != handle:
+                    records.pop(existing, None)
+            elif existing:
+                handle = existing
+            else:
+                handle = _derive_handle(session_id)
+                while (
+                    handle in records
+                    and records[handle].get("session_id") != session_id
+                ):
+                    handle += "x"
+            records[handle] = {
+                "handle": handle,
+                "session_id": session_id,
+                "cwd": cwd,
+                "label": label or records.get(handle, {}).get("label", ""),
+                "transcript_path": transcript_path,
+                "created_at": records.get(handle, {}).get(
+                    "created_at", time.time()
+                ),
+                "revoked": False,
+            }
+            _atomic_write(REGISTRY_PATH, records)
+            return handle, None
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _find_by_session(records, session_id):
+    for handle, rec in records.items():
+        if rec.get("session_id") == session_id and not rec.get("revoked"):
+            return handle
+    return None
+
+
+def _revoke(session_id):
+    lock_path = REGISTRY_PATH + ".lock"
+    if not os.path.exists(REGISTRY_PATH):
+        return None
+    with open(lock_path, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            records = _load(REGISTRY_PATH)
+            handle = _find_by_session(records, session_id)
+            if handle:
+                records[handle]["revoked"] = True
+                _atomic_write(REGISTRY_PATH, records)
+            return handle
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _status(session_id):
+    handle = _find_by_session(_load(REGISTRY_PATH), session_id)
+    if handle:
+        return (
+            f"{GREEN}This session is shared as handle: {handle}{RESET}\n"
+            f"{BLUE}Colleagues: post  {handle} <question>  in the "
+            f"agent-tunnel channel. Revoke with >share off.{RESET}"
+        )
+    return f"{BLUE}This session is not shared. Type >share to publish it.{RESET}"
+
+
+def main():
+    try:
+        data = json.load(sys.stdin)
+        session_id = data.get("session_id", "")
+        prompt = data.get("prompt")
+        cwd = data.get("cwd") or os.getcwd()
+        transcript_path = data.get("transcript_path", "")
+
+        if not isinstance(prompt, str) or not prompt.strip():
+            sys.exit(0)
+        stripped = prompt.strip()
+        low = stripped.lower()
+        if low != TRIGGER and not low.startswith(TRIGGER + " "):
+            sys.exit(0)
+
+        if not session_id:
+            print(json.dumps({"decision": "block", "reason": "No session ID."}))
+            sys.exit(0)
+
+        arg = stripped[len(TRIGGER):].strip()
+
+        if arg.lower() == "off":
+            handle = _revoke(session_id)
+            message = (
+                f"{YELLOW}Stopped sharing (handle {handle} revoked).{RESET}"
+                if handle
+                else f"{BLUE}This session was not shared.{RESET}"
+            )
+        elif arg.lower() == "status":
+            message = _status(session_id)
+        else:
+            label = _sanitize_label(arg) if arg else ""
+            if arg and not label:
+                message = (
+                    f"{YELLOW}Invalid handle. Use letters, digits, dashes "
+                    f"(2-32 chars), e.g. >share payments-auth.{RESET}"
+                )
+            else:
+                handle, collision = _publish(
+                    session_id, cwd, transcript_path, label
+                )
+                if collision:
+                    message = (
+                        f"{YELLOW}Handle '{collision}' is already used by "
+                        f"another session. Pick a different name.{RESET}"
+                    )
+                else:
+                    message = (
+                        f"{GREEN}Sharing this session as: {handle}{RESET}\n"
+                        f"{BLUE}Give colleagues this handle; they post  "
+                        f"{handle} <question>  in the agent-tunnel channel.\n"
+                        f"Revoke anytime with >share off.{RESET}"
+                    )
+
+        print(json.dumps({"decision": "block", "reason": message}))
+        sys.exit(0)
+    except Exception:
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
