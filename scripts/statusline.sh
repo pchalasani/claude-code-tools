@@ -48,6 +48,41 @@ BLINK=$'\033[5m'
 # Powerline separator
 SEP=''
 
+# --- Helpers for the second (limits) line ---
+
+# Format a Unix-epoch reset time as a compact countdown, e.g. "2h13m", "4d6h".
+fmt_reset() {
+    local target=$1 now delta d h m
+    now=$(date +%s)
+    delta=$((target - now))
+    [ "$delta" -le 0 ] && { echo "now"; return; }
+    d=$((delta / 86400))
+    h=$(((delta % 86400) / 3600))
+    m=$(((delta % 3600) / 60))
+    if [ "$d" -gt 0 ]; then echo "${d}d${h}h"
+    elif [ "$h" -gt 0 ]; then echo "${h}h${m}m"
+    else echo "${m}m"; fi
+}
+
+# Build a 10-char color-coded progress bar for an integer percentage (0-100).
+# Used for every bar on line 2 (ctx, 5h, 7d), color-coded by usage level.
+build_bar() {
+    local pct=$1 bar_width=10 filled empty fill_color blink="" empty_color
+    local fb="" eb="" i
+    filled=$((pct * bar_width / 100))
+    [ "$filled" -gt "$bar_width" ] && filled=$bar_width
+    [ "$filled" -lt 0 ] && filled=0
+    empty=$((bar_width - filled))
+    if [ "$pct" -gt 95 ]; then fill_color=$'\033[38;5;196m'; blink=$BLINK
+    elif [ "$pct" -gt 85 ]; then fill_color=$'\033[38;5;208m'
+    elif [ "$pct" -gt 70 ]; then fill_color=$'\033[38;5;220m'
+    else fill_color=$'\033[38;5;29m'; fi
+    empty_color=$'\033[38;5;240m'
+    for ((i=0; i<filled; i++)); do fb+="█"; done
+    for ((i=0; i<empty; i++)); do eb+="░"; done
+    printf '%s' "${blink}${fill_color}${fb}${RESET}${empty_color}${eb}${RESET}"
+}
+
 # Git info - check status first to determine model background color
 git_segment=""
 model_bg=$BG_GREEN  # default to green
@@ -98,60 +133,60 @@ else
     next_bg=$BG_CYAN
 fi
 
-# Context progress bar (uses built-in used_percentage from Claude Code 2.1.6+)
-context_segment=""
-pct=$(echo "$input" | jq '.context_window.used_percentage // empty' 2>/dev/null)
-if [ -n "$pct" ] && [ "$pct" != "null" ] && [ "$pct" -ge 0 ] 2>/dev/null; then
-    # Build progress bar (10 chars wide)
-    bar_width=10
-    filled=$((pct * bar_width / 100))
-    [ "$filled" -gt "$bar_width" ] && filled=$bar_width
-    empty=$((bar_width - filled))
-
-    # Colors for filled portion based on level
-    if [ "$pct" -gt 95 ]; then
-        fill_color=$'\033[38;5;196m'  # bright red
-        bar_blink=$BLINK
-    elif [ "$pct" -gt 85 ]; then
-        fill_color=$'\033[38;5;208m'  # orange
-        bar_blink=""
-    elif [ "$pct" -gt 70 ]; then
-        fill_color=$'\033[38;5;220m'  # yellow
-        bar_blink=""
-    else
-        fill_color=$'\033[38;5;29m'   # forest green
-        bar_blink=""
-    fi
-    empty_color=$'\033[38;5;240m'     # dark gray
-
-    # Build the bar string
-    filled_bar=""
-    empty_bar=""
-    for ((i=0; i<filled; i++)); do filled_bar+="█"; done
-    for ((i=0; i<empty; i++)); do empty_bar+="░"; done
-
-    # Segment with dark background
-    BG_DARK=$'\033[48;5;236m'
-    FG_DARK=$'\033[38;5;236m'
-    context_segment="${next_fg}${BG_DARK}${SEP}${bar_blink}${fill_color}${filled_bar}${RESET}${BG_DARK}${empty_color}${empty_bar}${FG_WHITE} ${pct}%${RESET}"
-    next_fg=$FG_DARK
-fi
-
-# Fallback if no context data
-if [ -z "$context_segment" ]; then
-    BG_DARK=$'\033[48;5;236m'
-    FG_DARK=$'\033[38;5;236m'
-    context_segment="${next_fg}${BG_DARK}${SEP}${FG_WHITE} --%${RESET}"
-    next_fg=$FG_DARK
-fi
+# Context window usage -- rendered on line 2 (built-in since Claude Code 2.1.6+).
+ctx_pct=""
+ctx_raw=$(echo "$input" | jq -r '.context_window.used_percentage // empty' 2>/dev/null)
+[ -n "$ctx_raw" ] && [ "$ctx_raw" != "null" ] && ctx_pct=$(printf '%.0f' "$ctx_raw" 2>/dev/null)
 
 # Date and time
 current_datetime=$(date +"%Y/%m/%d %H:%M")
 
+# --- Line 2: context usage + session (5h) / weekly (7d) limit usage ---
+DIM=$'\033[38;5;244m'
+LABEL=$'\033[38;5;250m'
+
+# Context segment (always shown; falls back to --% before the first response).
+if [ -n "$ctx_pct" ]; then
+    ctx_segment="${LABEL}ctx ${RESET}$(build_bar "$ctx_pct")${FG_WHITE} ${ctx_pct}%${RESET}"
+else
+    ctx_segment="${LABEL}ctx ${DIM}--%${RESET}"
+fi
+
+# Session / weekly limit segments. rate_limits is present only for Claude.ai
+# Pro/Max subscribers, after the first API response; each window may be absent.
+limit_segment=""
+five_pct_raw=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty' 2>/dev/null)
+five_reset_raw=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty' 2>/dev/null)
+seven_pct_raw=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty' 2>/dev/null)
+seven_reset_raw=$(echo "$input" | jq -r '.rate_limits.seven_day.resets_at // empty' 2>/dev/null)
+
+if [ -n "$five_pct_raw" ]; then
+    five_pct=$(printf '%.0f' "$five_pct_raw" 2>/dev/null)
+    seg="${LABEL}5h ${RESET}$(build_bar "$five_pct")${FG_WHITE} ${five_pct}%${RESET}"
+    [ -n "$five_reset_raw" ] && seg+="${DIM} ↻$(fmt_reset "$five_reset_raw")${RESET}"
+    limit_segment="$seg"
+fi
+
+if [ -n "$seven_pct_raw" ]; then
+    seven_pct=$(printf '%.0f' "$seven_pct_raw" 2>/dev/null)
+    seg="${LABEL}7d ${RESET}$(build_bar "$seven_pct")${FG_WHITE} ${seven_pct}%${RESET}"
+    [ -n "$seven_reset_raw" ] && seg+="${DIM} ↻$(fmt_reset "$seven_reset_raw")${RESET}"
+    [ -n "$limit_segment" ] && limit_segment+="   "
+    limit_segment+="$seg"
+fi
+
+# Combine: ctx always, limits appended when present.
+line2="$ctx_segment"
+[ -n "$limit_segment" ] && line2+="   $limit_segment"
+
 # Build output with powerline style
+# Line 1: model / directory / git / date-time
 # Model: black on green (clean) or yellow (dirty)
 echo -n "${model_bg}${FG_BLACK}${BOLD} $model ${RESET}"
 echo -n "${model_fg}${BG_BLUE}${SEP}${FG_BLACK}  $dir_name ${RESET}"
 echo -n "$git_segment"
-echo -n "$context_segment"
 echo -n "${next_fg}${RESET}${SEP} ${current_datetime}"
+
+# Line 2: context usage, then session/weekly limit usage when available.
+printf '\n'
+echo -n " ${line2}"
