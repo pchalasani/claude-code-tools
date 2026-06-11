@@ -9,6 +9,11 @@ usage directly in your terminal status bar. It uses a
 powerline-style display with color-coded context
 indicators so you always know how much context remains.
 
+A second line shows **context-window usage** plus --
+for Claude.ai Pro/Max subscribers -- your **session
+(5h) and weekly (7d) limit usage**, so you can see how
+close you are to each limit at a glance.
+
 :::note[Installation]
 Part of the `claude-code-tools` package.
 See [Quick Start](../../getting-started/) for
@@ -20,18 +25,36 @@ installation.
 The status line is a shell script
 (`scripts/statusline.sh`) that reads JSON input from
 Claude Code (available since v2.1.6+) and renders a
-compact, color-coded bar showing:
+compact, color-coded display of up to two lines.
+
+![two-line status line](/claude-code-tools/assets/statusline-limits.png)
+
+**Line 1** -- where you are (always shown):
 
 - **Model name** (e.g. `opus-4`, `sonnet`)
 - **Current directory**
 - **Git branch and status** (staged, modified,
   ahead/behind)
-- **Context usage** as a progress bar with percentage
+- **Date and time**
+
+**Line 2** -- how much you've used:
+
+- **ctx** -- context-window usage, as a color-coded
+  progress bar with percentage (always shown)
+- **5h** -- the rolling 5-hour session limit, with a
+  bar, percentage, and a countdown to reset
+  (e.g. `↻3h12m`)
+- **7d** -- the 7-day (weekly) limit, same format
+
+The **ctx** bar is always present. The **5h** and **7d**
+segments appear only for Claude.ai Pro/Max subscribers,
+after the first API response of a session; each is
+dropped when its data is unavailable.
 
 ## Color States
 
-The context progress bar changes color based on usage
-level:
+The context bar and the two limit bars all change color
+based on the same usage thresholds:
 
 ### Green (0--70%)
 
@@ -88,6 +111,24 @@ Requires `jq` and a
 [Nerd Font](https://www.nerdfonts.com/) for
 powerline symbols.
 
+The **session/weekly limit line** appears automatically
+once Claude Code sends `rate_limits` data (Claude.ai
+Pro/Max, after the first message of a session). Its
+reset countdowns are computed when the line renders,
+which happens after each assistant message. To keep
+them ticking while the session is idle, add a
+`refreshInterval` (in seconds) to the config:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "~/.claude/statusline.sh",
+    "refreshInterval": 10
+  }
+}
+```
+
 ## How It Works
 
 The script receives JSON on stdin with fields including:
@@ -96,14 +137,22 @@ The script receives JSON on stdin with fields including:
 - `workspace.current_dir` -- Working directory
 - `context_window.used_percentage` -- Context usage
   (0--100)
+- `rate_limits.five_hour` -- Session limit, with
+  `used_percentage` and `resets_at` (Unix epoch)
+- `rate_limits.seven_day` -- Weekly limit, same shape
 
 It then:
 
 1. Extracts and cleans the model name.
 2. Reads git status from the working directory.
-3. Builds a powerline-style output with ANSI colors.
-4. Renders a 10-character progress bar for context
-   usage, color-coded by level.
+3. Builds line 1 (model, directory, git, date/time) as
+   a powerline bar with ANSI colors.
+4. Builds line 2: a `ctx` context-usage bar (always
+   shown), then 5h and 7d limit bars with reset
+   countdowns when `rate_limits` is present.
+5. Color-codes every bar by usage level and handles
+   each limit window independently, dropping any
+   segment whose data is unavailable.
 
 The model segment background is **green** when git is
 clean and **yellow** when there are uncommitted changes,
