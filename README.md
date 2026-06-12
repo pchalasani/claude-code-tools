@@ -81,12 +81,17 @@ Click a card to jump to that feature, or
 </a>
 </td>
 <td align="center">
-<a href="https://pchalasani.github.io/claude-code-tools/tools/lmsh/">
-<img src="assets/card-lmsh.svg" alt="lmsh" width="200"/>
+<a href="https://pchalasani.github.io/claude-code-tools/tools/agent-tunnel/">
+<img src="assets/card-agent-tunnel.svg" alt="agent-tunnel" width="200"/>
 </a>
 </td>
 </tr>
 <tr>
+<td align="center">
+<a href="https://pchalasani.github.io/claude-code-tools/tools/lmsh/">
+<img src="assets/card-lmsh.svg" alt="lmsh" width="200"/>
+</a>
+</td>
 <td align="center">
 <a href="https://pchalasani.github.io/claude-code-tools/tools/vault/">
 <img src="assets/card-vault.svg" alt="vault" width="200"/>
@@ -97,13 +102,13 @@ Click a card to jump to that feature, or
 <img src="assets/card-env-safe.svg" alt="env-safe" width="200"/>
 </a>
 </td>
+</tr>
+<tr>
 <td align="center">
 <a href="https://pchalasani.github.io/claude-code-tools/plugins-detail/safety-hooks/">
 <img src="assets/card-safety.svg" alt="safety" width="200"/>
 </a>
 </td>
-</tr>
-<tr>
 <td align="center">
 <a href="https://pchalasani.github.io/claude-code-tools/tools/statusline/">
 <img src="assets/card-statusline.svg" alt="statusline" width="200"/>
@@ -114,13 +119,13 @@ Click a card to jump to that feature, or
 <img src="assets/card-gdocs.svg" alt="gdocs" width="200"/>
 </a>
 </td>
+</tr>
+<tr>
 <td align="center">
 <a href="https://pchalasani.github.io/claude-code-tools/integrations/google-sheets/">
 <img src="assets/card-gsheets.svg" alt="gsheets" width="200"/>
 </a>
 </td>
-</tr>
-<tr>
 <td align="center">
 <a href="https://pchalasani.github.io/claude-code-tools/integrations/alt-llm-providers/">
 <img src="assets/card-alt.svg" alt="alt" width="200"/>
@@ -131,6 +136,8 @@ Click a card to jump to that feature, or
 <img src="assets/card-voice.svg" alt="voice" width="200"/>
 </a>
 </td>
+</tr>
+<tr>
 <td align="center">
 <a href="https://pchalasani.github.io/claude-code-tools/tools/fix-session/">
 <img src="assets/card-session-repair.svg" alt="session repair" width="200"/>
