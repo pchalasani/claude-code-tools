@@ -71,34 +71,47 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
 
 - `registry.py` — shared handle registry (read by daemon, written by hook).
   Defines the JSON schema duplicated in the hook; `Registry` + helpers
-  (`derive_handle`, `sanitize_label`).
+  (`derive_handle`, `sanitize_label`). Records carry `config_dir`; old records
+  backfill it from `transcript_path` on read.
 - `config.py` — TOML config (Discord + limits + backend). No project/session
   here. `discord.token_file` reads the bot token from a file (no export);
+  `claude.auto_trust` / `trust_config_path` control folder pre-trust;
   `AGENT_TUNNEL_REGISTRY` env overrides the registry path (hook + daemon
   honor it).
 - `store.py` — daemon state: `thread_key → ThreadRecord` (handle, expert
-  session id, project dir, fork id, tmux window). `bind()` records a pending
-  thread before the first answer; fork id filled on completion.
-- `session.py` — transcript-dir resolution and fork-transcript parsing
-  (locate the question, detect turn completion, extract the answer).
+  session id, project dir, **config dir**, fork id, tmux window). `bind()`
+  records a pending thread before the first answer; fork id filled on
+  completion.
+- `session.py` — transcript-dir resolution (per config dir) and
+  fork-transcript parsing (locate the question, detect turn completion,
+  extract the answer).
 - `tmux.py` — minimal ops on a DEDICATED private tmux server
   (`tmux -L <socket>`), isolated from the user's main server (own fd budget,
   out of their `tmux ls`): named windows (`<handle>-<short>`), bracketed
   paste, Enter-with-verify, idle detection, liveness/reaping.
-- `backends.py` — `HeadlessBackend` / `TmuxBackend` behind one interface;
-  both read the thread's binding to decide what to fork.
-- `discord_bot.py` — handle→thread routing, `!done`/`!close`/`!end` teardown,
-  question-named threads, allowlists, cooldown, concurrency, 2000-char
-  chunking, long answers as `answer.md`; `token_file` resolution.
+- `trust.py` — pre-trust a folder in the right config's `.claude.json`
+  (surgical, atomic) so the interactive fork doesn't hit the trust dialog.
+- `backends.py` — `HeadlessBackend` / `TmuxBackend` behind one interface; both
+  read the thread's binding to decide what to fork, and pin the fork to the
+  session's config dir via `CLAUDE_CONFIG_DIR`.
+- `discord_bot.py` — handle→thread routing, `!list`/`!handles` discovery,
+  `!done`/`!close`/`!end` teardown, `<handle>: <question>` thread names,
+  allowlists, cooldown, concurrency, 2000-char chunking, long answers as
+  `answer.md`; `token_file` resolution.
 - `cli.py` — `serve | ask | published | status | watch | doctor | forget |
   init | help`. `watch` attaches to the private tmux server; `doctor` runs a
-  readiness checklist; `help` prints extensive per-command help.
+  readiness checklist; `published` tags each handle with its config dir;
+  `help` prints extensive per-command help.
 
 ## `>share` semantics
 
 - `>share` — publish this session; mint/show a handle (default: short slug of
   the session id; idempotent — re-running returns the same handle).
 - `>share <label>` — publish with a chosen handle (validated, deduped).
+- `>share --write <label>` / `>share --read <label>` — set per-handle access
+  (write = read tools + Write/Edit/NotebookEdit, never Bash; read = read-only).
+  Re-sharing without a flag preserves the current level. The access level rides
+  on the registry record → ThreadRecord → `build_claude_flags(access=…)`.
 - `>share status` — show this session's handle, if any.
 - `>share off` — revoke (new threads can't open; existing forks keep working,
   since a fork holds its own copy of history).
@@ -106,13 +119,30 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
 ## Routing (handle-opens-a-thread)
 
 - Watched-channel message `\<handle\> [question]`: if the handle is live, open
-  a public thread, bind `thread → {handle, session_id, cwd}`, and answer the
-  question (or post a ready notice).
+  a public thread (named `\<handle\>: \<question\>`), bind
+  `thread → {handle, session_id, cwd, config_dir}`, and answer the question
+  (or post a ready notice).
+- `!list` / `!handles` (channel, thread, or DM): post the active handles +
+  their project names.
 - Thread message: a follow-up routed to the bound fork.
 - `!done` / `!close` / `!end` in a thread (or DM): tear down that fork
   immediately (kill window, drop binding, confirm).
 - DMs (optional, off by default): `\<handle\> …` (re)binds the DM; bare text
   follows up.
+
+## Config-dir awareness (multiple `CLAUDE_CONFIG_DIR`s)
+
+A session created under one config dir (e.g. work `~/.claude-rja`) can't be
+resumed/forked by a daemon running under another (e.g. personal `~/.claude`):
+its transcript and folder-trust live under the originating dir. So the config
+dir is propagated end to end:
+
+- `>share` derives it path-agnostically from the hook's `transcript_path`
+  (`<config-dir>/projects/...`) and records it on the registry record.
+- The daemon pins each fork to that dir via `CLAUDE_CONFIG_DIR`, searches that
+  dir's `projects/` for the transcript, and pre-trusts that dir's
+  `.claude.json`. Work sessions thus fork under the work config/account,
+  personal under personal — automatically.
 
 ## Cleanup
 

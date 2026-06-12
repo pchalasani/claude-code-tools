@@ -14,6 +14,8 @@ Schema (``registry.json``)::
           "handle": "<handle>",
           "session_id": "<claude session uuid>",
           "cwd": "<absolute project dir of that session>",
+          "config_dir": "<claude config dir the session lives under>",
+          "access": "read" | "write",
           "label": "<optional friendly label>",
           "transcript_path": "<absolute .jsonl path, best-effort>",
           "created_at": <float epoch seconds>,
@@ -60,6 +62,8 @@ class PublishRecord:
     handle: str
     session_id: str
     cwd: str
+    config_dir: str = ""  # Claude config dir the session lives under
+    access: str = "read"  # "read" or "write" (set via >share --write)
     label: str = ""
     transcript_path: str = ""
     created_at: float = field(default_factory=time.time)
@@ -89,9 +93,14 @@ class Registry:
         for handle, rec in data.get("records", {}).items():
             fields = {k: v for k, v in rec.items() if k in known}
             try:
-                out[handle] = PublishRecord(**fields)
+                record = PublishRecord(**fields)
             except TypeError:
                 continue
+            # Backfill config_dir for records written before it was tracked:
+            # the transcript path is <config-dir>/projects/...
+            if not record.config_dir and "/projects/" in record.transcript_path:
+                record.config_dir = record.transcript_path.split("/projects/")[0]
+            out[handle] = record
         return out
 
     def _write(self, records: dict[str, PublishRecord]) -> None:

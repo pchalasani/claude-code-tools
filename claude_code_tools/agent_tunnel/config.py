@@ -48,6 +48,14 @@ DEFAULT_DISALLOWED_TOOLS = [
     "WebFetch",
     "WebSearch",
 ]
+# "write" access also permits file edits, but never Bash/command execution.
+WRITE_ALLOWED_TOOLS = ["Read", "Grep", "Glob", "Write", "Edit", "NotebookEdit"]
+WRITE_DISALLOWED_TOOLS = ["Bash", "Task", "Agent", "WebFetch", "WebSearch"]
+# Tool presets keyed by the `access` level.
+ACCESS_PRESETS = {
+    "read": (DEFAULT_ALLOWED_TOOLS, DEFAULT_DISALLOWED_TOOLS),
+    "write": (WRITE_ALLOWED_TOOLS, WRITE_DISALLOWED_TOOLS),
+}
 
 
 @dataclass
@@ -70,16 +78,33 @@ class ClaudeConfig:
 
     binary: str = "claude"
     model: str = ""
-    allowed_tools: list[str] = field(
-        default_factory=lambda: list(DEFAULT_ALLOWED_TOOLS)
-    )
-    disallowed_tools: list[str] = field(
-        default_factory=lambda: list(DEFAULT_DISALLOWED_TOOLS)
-    )
+    # Per-handle access ("read"/"write") is set at share time (>share --write).
+    # Explicit tool lists here override that preset; empty = use the preset.
+    allowed_tools: list[str] = field(default_factory=list)
+    disallowed_tools: list[str] = field(default_factory=list)
     permission_mode: str = "dontAsk"
     persona: str = DEFAULT_PERSONA
     headless_extra_args: list[str] = field(default_factory=list)
     tmux_extra_args: list[str] = field(default_factory=list)
+    # Pre-trust a shared folder in ~/.claude.json before forking, so the
+    # interactive (tmux) fork doesn't pop the trust dialog. Set false to
+    # disable touching that config.
+    auto_trust: bool = True
+    # Override the config file holding trust state (default: ~/.claude.json,
+    # honoring CLAUDE_CONFIG_DIR).
+    trust_config_path: str = ""
+
+
+def resolve_tools(
+    claude: "ClaudeConfig", access: str = "read"
+) -> tuple[list[str], list[str]]:
+    """(allowed, disallowed) tools for a fork at the given per-handle access
+    level ('read'/'write'); explicit config lists override the preset."""
+    allowed_p, disallowed_p = ACCESS_PRESETS.get(access, ACCESS_PRESETS["read"])
+    return (
+        claude.allowed_tools or list(allowed_p),
+        claude.disallowed_tools or list(disallowed_p),
+    )
 
 
 @dataclass
@@ -211,8 +236,11 @@ respond_to_dms = false
 binary = "claude"
 # Empty string = the published session's default model.
 model = ""
-allowed_tools = {DEFAULT_ALLOWED_TOOLS!r}
-disallowed_tools = {DEFAULT_DISALLOWED_TOOLS!r}
+# Remote turns are read-only by default. Grant write access per session at
+# share time:  >share --write <name>  (never enables Bash/command execution).
+# Advanced: explicit tool lists override the per-handle preset (empty = preset).
+allowed_tools = []
+disallowed_tools = []
 permission_mode = "dontAsk"
 # Appended system prompt for remote turns; set to "" to disable.
 # persona = "..."
@@ -220,6 +248,9 @@ permission_mode = "dontAsk"
 # auth ("Not logged in") since it skips loading user configuration.
 headless_extra_args = []
 tmux_extra_args = []
+# Pre-trust a shared folder in ~/.claude.json before forking (tmux backend),
+# so the fork doesn't hit the "trust this folder?" dialog. false = don't touch.
+auto_trust = true
 
 [limits]
 max_concurrent = 2

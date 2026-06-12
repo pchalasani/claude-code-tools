@@ -41,18 +41,21 @@ Nothing to install. You hand them a handle; they:
 
 <Steps>
 
-1. In the channel, post `<handle> <question>` — e.g. `pay-7Q2 how does token
-   refresh work?`
+1. Not sure what's shared? Post **`!list`** (or `!handles`) in the channel to
+   see every available handle.
 
-2. The bot opens a **thread** and answers there. They keep asking **in that
-   thread** — no handle needed again.
+2. Post `<handle> <question>` — e.g. `pay-7Q2 how does token refresh work?`
 
-3. When done, they type **`!done`** (or `!close` / `!end`) in the thread to
+3. The bot opens a **thread** (named `<handle>: <question>`) and answers there.
+   They keep asking **in that thread** — no handle needed again.
+
+4. When done, they type **`!done`** (or `!close` / `!end`) in the thread to
    close it.
 
 </Steps>
 
-That's the whole colleague experience.
+So the whole colleague vocabulary is just three things: **`!list`** to
+discover, **`<handle> <question>`** to ask, **`!done`** to close.
 
 ## Where to run each command
 
@@ -76,12 +79,37 @@ is intercepted — it never reaches the model; you just see the handle):
 | --- | --- |
 | `>share` | Publish this session; mint/show a handle |
 | `>share <label>` | Publish under a friendly handle, e.g. `>share payments` |
+| `>share --write <label>` | Publish with **write access** (file edits); read-only otherwise |
+| `>share --read <label>` | Downgrade a handle back to read-only |
 | `>share status` | Show this session's handle, if any |
 | `>share off` | Stop sharing (revoke the handle) |
+
+Access is **per handle**: only the sessions you publish with `--write` are
+writable, everything else stays read-only, and re-sharing without a flag keeps
+the current level. Even with write, the fork can edit files but **never** runs
+`Bash`/shell commands. `agent-tunnel published` tags writable handles with ✍️.
 
 A labeled handle also makes the Discord thread and the tmux window readable
 (`payments-…` instead of a cryptic id). Colleagues end a conversation with
 `!done` in their thread; that tears the fork down immediately.
+
+## Multiple Claude config dirs (e.g. work vs personal)
+
+If you run separate `CLAUDE_CONFIG_DIR`s — say `~/.claude` for personal and
+`~/.claude-rja` for work — agent-tunnel handles it **automatically**: `>share`
+detects which config dir the session lives under (from its transcript path),
+and the daemon forks each session under *that* config dir. So a work session
+forks with your work config and account, a personal one with your personal —
+nothing to configure, even though the daemon itself runs under one of them.
+`agent-tunnel published` tags each handle with its config dir
+(`[.claude-rja]` vs `[.claude]`) so you can tell them apart at a glance.
+
+<Aside type="note">
+**First-time folders:** before forking, the tmux backend pre-trusts the shared
+folder in the right config dir, so you don't hit Claude's "Do you trust this
+folder?" dialog (which would otherwise block the fork). Disable with
+`[claude] auto_trust = false`.
+</Aside>
 
 ## Setup — for developers / self-hosters
 
@@ -204,7 +232,11 @@ off` when done.
 **They can read what that session can read.** Read-only tools are hard-enforced
 by the CLI permission layer — no writes, edits, or commands — but a determined
 asker can surface anything in the session context or readable project tree.
-Only `>share` sessions whose context you're willing to expose.
+Only `>share` sessions whose context you're willing to expose. If you grant
+**write access** (`>share --write`), a colleague's message — or a prompt
+injection in your channel — can also *edit files* in that folder, so reserve it
+for sessions/folders where that's acceptable (it still never runs shell
+commands).
 </Aside>
 
 <Aside type="note">

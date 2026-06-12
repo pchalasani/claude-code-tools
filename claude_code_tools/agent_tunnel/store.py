@@ -29,6 +29,8 @@ class ThreadRecord:
     handle: str = ""
     expert_session_id: str = ""
     project_dir: str = ""
+    config_dir: str = ""
+    access: str = "read"
     fork_session_id: str = ""
     backend: str = ""
     asker: str = ""
@@ -85,6 +87,8 @@ class TunnelStore:
         expert_session_id: str,
         project_dir: str,
         backend: str,
+        config_dir: str = "",
+        access: str = "read",
         asker: str = "",
     ) -> ThreadRecord:
         """Create a pending binding for a thread if not already present.
@@ -101,6 +105,8 @@ class TunnelStore:
                 handle=handle,
                 expert_session_id=expert_session_id,
                 project_dir=project_dir,
+                config_dir=config_dir,
+                access=access,
                 backend=backend,
                 asker=asker,
             )

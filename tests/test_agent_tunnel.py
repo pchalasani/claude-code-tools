@@ -21,6 +21,7 @@ from claude_code_tools.agent_tunnel.backends import (
 from claude_code_tools.agent_tunnel.config import TunnelConfig, load_config
 from claude_code_tools.agent_tunnel.discord_bot import (
     is_close_command,
+    is_list_command,
     resolve_token,
     split_chunks,
 )
@@ -112,13 +113,48 @@ def test_registry_roundtrip(tmp_path: Path) -> None:
     assert reg.revoke("pay-nope") is False
 
 
+def test_registry_backfills_config_dir(tmp_path: Path) -> None:
+    # An old record with no config_dir but a transcript path gets it derived.
+    path = tmp_path / "registry.json"
+    path.write_text(
+        json.dumps(
+            {
+                "records": {
+                    "h": {
+                        "handle": "h",
+                        "session_id": SID_A,
+                        "cwd": "/proj",
+                        "transcript_path": (
+                            f"/u/.claude-rja/projects/-proj/{SID_A}.jsonl"
+                        ),
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    rec = Registry(path).get("h")
+    assert rec is not None and rec.config_dir == "/u/.claude-rja"
+
+
 # -------------------------------------------------------------- >share hook
 
 
-def _run_hook(prompt: str, session_id: str, cwd: str, registry: Path) -> dict:
+def _run_hook(
+    prompt: str,
+    session_id: str,
+    cwd: str,
+    registry: Path,
+    transcript_path: str = "",
+) -> dict:
     env = {**os.environ, "AGENT_TUNNEL_REGISTRY": str(registry)}
     payload = json.dumps(
-        {"session_id": session_id, "prompt": prompt, "cwd": cwd}
+        {
+            "session_id": session_id,
+            "prompt": prompt,
+            "cwd": cwd,
+            "transcript_path": transcript_path,
+        }
     )
     result = subprocess.run(
         [sys.executable, str(HOOK)],
@@ -139,14 +175,22 @@ def test_share_hook_publishes_current_session(tmp_path: Path) -> None:
     assert out == {}
     assert not reg_path.exists()
 
-    # >share publishes THIS session.
-    out = _run_hook(">share", SID_A, "/work/proj", reg_path)
+    # >share publishes THIS session, detecting its config dir from the
+    # transcript path (.../<config-dir>/projects/...).
+    out = _run_hook(
+        ">share",
+        SID_A,
+        "/work/proj",
+        reg_path,
+        transcript_path=f"/home/u/.claude-work/projects/-work-proj/{SID_A}.jsonl",
+    )
     assert out["decision"] == "block"
     reg = Registry(reg_path)
     handle = derive_handle(SID_A)
     rec = reg.get(handle)
     assert rec is not None
     assert rec.session_id == SID_A and rec.cwd == "/work/proj"
+    assert rec.config_dir == "/home/u/.claude-work"
 
     # Idempotent: same session, same handle.
     _run_hook(">share", SID_A, "/work/proj", reg_path)
@@ -164,6 +208,23 @@ def test_share_hook_publishes_current_session(tmp_path: Path) -> None:
     assert "my-label" in status["reason"]
     _run_hook(">share off", SID_A, "/work/proj", reg_path)
     assert reg.get("my-label") is None
+
+
+def test_share_hook_write_access(tmp_path: Path) -> None:
+    reg_path = tmp_path / "registry.json"
+    _run_hook(">share --write wtest", SID_A, "/p", reg_path)
+    rec = Registry(reg_path).get("wtest")
+    assert rec is not None and rec.access == "write"
+
+    # re-share with no flag preserves the existing write access.
+    _run_hook(">share wtest", SID_A, "/p", reg_path)
+    rec = Registry(reg_path).get("wtest")
+    assert rec is not None and rec.access == "write"
+
+    # --read downgrades back to read-only.
+    _run_hook(">share --read wtest", SID_A, "/p", reg_path)
+    rec = Registry(reg_path).get("wtest")
+    assert rec is not None and rec.access == "read"
 
 
 def test_share_hook_label_collision(tmp_path: Path) -> None:
@@ -312,11 +373,52 @@ def test_split_chunks_roundtrip() -> None:
 # ------------------------------------------------------------ claude flags
 
 
+def test_ensure_folder_trusted(tmp_path: Path) -> None:
+    from claude_code_tools.agent_tunnel.trust import (
+        TRUST_KEYS,
+        ensure_folder_trusted,
+    )
+
+    cfg = tmp_path / ".claude.json"
+    cfg.write_text(
+        json.dumps({"projects": {"/other": {"foo": 1}}, "top": 5}),
+        encoding="utf-8",
+    )
+    proj = tmp_path / "myproj"
+    proj.mkdir()
+
+    assert ensure_folder_trusted(proj, cfg) is True
+    data = json.loads(cfg.read_text())
+    assert data["top"] == 5  # unrelated content preserved
+    assert data["projects"]["/other"] == {"foo": 1}  # other projects preserved
+    assert all(data["projects"][str(proj)][k] is True for k in TRUST_KEYS)
+
+    assert ensure_folder_trusted(proj, cfg) is False  # idempotent
+
+    fresh = tmp_path / "fresh.json"  # missing file -> created
+    assert ensure_folder_trusted(proj, fresh) is True
+    assert json.loads(fresh.read_text())["projects"][str(proj)][
+        "hasTrustDialogAccepted"
+    ]
+
+    bad = tmp_path / "bad.json"  # corrupt -> left untouched
+    bad.write_text("{not json", encoding="utf-8")
+    assert ensure_folder_trusted(proj, bad) is False
+    assert bad.read_text() == "{not json"
+
+
 def test_is_close_command() -> None:
     for ok in ("!done", "!close", "!end", "  !DONE ", "!End"):
         assert is_close_command(ok)
     for no in ("done", "!finished", "!done now", "what is done?", ""):
         assert not is_close_command(no)
+
+
+def test_is_list_command() -> None:
+    for ok in ("!list", "!handles", "  !LIST ", "!Handles"):
+        assert is_list_command(ok)
+    for no in ("list", "!list me", "what's the list?", ""):
+        assert not is_list_command(no)
 
 
 def test_window_name() -> None:
@@ -354,6 +456,13 @@ def test_build_claude_flags() -> None:
     assert "--permission-mode dontAsk" in joined
     flags = build_claude_flags(cfg, resume_id=SID_B, fork=False)
     assert "--fork-session" not in flags
+
+    # write access adds file tools but never Bash.
+    w = build_claude_flags(cfg, resume_id=SID_A, fork=False, access="write")
+    allowed = w[w.index("--allowedTools") + 1]
+    disallowed = w[w.index("--disallowedTools") + 1]
+    assert "Write" in allowed and "Edit" in allowed
+    assert "Bash" in disallowed and "Write" not in disallowed
 
 
 # --------------------------------------------------------------- config

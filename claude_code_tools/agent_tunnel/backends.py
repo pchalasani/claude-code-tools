@@ -22,6 +22,7 @@ Both apply the same hard read-only tool restrictions per turn.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -30,7 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Protocol
 
-from .config import TunnelConfig
+from .config import TunnelConfig, resolve_tools
 from .session import (
     extract_answer,
     list_session_files,
@@ -39,6 +40,11 @@ from .session import (
 )
 from .store import ThreadRecord, TunnelStore
 from .tmux import TmuxSession
+from .trust import (
+    default_trust_config_path,
+    ensure_folder_trusted,
+    trust_config_path_for,
+)
 
 
 class BackendError(RuntimeError):
@@ -71,7 +77,7 @@ class Backend(Protocol):
 
 
 def build_claude_flags(
-    cfg: TunnelConfig, resume_id: str, fork: bool
+    cfg: TunnelConfig, resume_id: str, fork: bool, access: str = "read"
 ) -> list[str]:
     """Common claude CLI flags for a fork invocation/launch.
 
@@ -80,18 +86,20 @@ def build_claude_flags(
         resume_id: Session id to resume (expert id when forking, else the
             fork's own id).
         fork: Whether to create a new fork of `resume_id`.
+        access: Per-handle access level ("read"/"write") set via >share.
 
     Returns:
         Argument list (excluding the binary, -p, and the prompt).
     """
     claude = cfg.claude
+    allowed, disallowed = resolve_tools(claude, access)
     flags = ["--resume", resume_id]
     if fork:
         flags.append("--fork-session")
-    if claude.allowed_tools:
-        flags += ["--allowedTools", ",".join(claude.allowed_tools)]
-    if claude.disallowed_tools:
-        flags += ["--disallowedTools", ",".join(claude.disallowed_tools)]
+    if allowed:
+        flags += ["--allowedTools", ",".join(allowed)]
+    if disallowed:
+        flags += ["--disallowedTools", ",".join(disallowed)]
     if claude.permission_mode:
         flags += ["--permission-mode", claude.permission_mode]
     if claude.model:
@@ -134,6 +142,17 @@ class _BaseBackend:
             )
         return rec
 
+    def _home(self, rec: ThreadRecord) -> Optional[Path]:
+        """Claude config dir the session lives under (for transcript lookup)."""
+        return Path(rec.config_dir) if rec.config_dir else self.cfg.claude_home
+
+    def _env(self, rec: ThreadRecord) -> dict[str, str]:
+        """Subprocess env with CLAUDE_CONFIG_DIR pinned to the session's dir."""
+        env = dict(os.environ)
+        if rec.config_dir:
+            env["CLAUDE_CONFIG_DIR"] = rec.config_dir
+        return env
+
     def reap_idle(self) -> int:
         """Default: nothing to reap."""
         return 0
@@ -162,7 +181,7 @@ class HeadlessBackend(_BaseBackend):
             "-p",
             "--output-format",
             "json",
-            *build_claude_flags(self.cfg, resume_id, fork),
+            *build_claude_flags(self.cfg, resume_id, fork, rec.access),
             *self.cfg.claude.headless_extra_args,
         ]
         try:
@@ -172,6 +191,7 @@ class HeadlessBackend(_BaseBackend):
                 capture_output=True,
                 text=True,
                 cwd=rec.project_dir,
+                env=self._env(rec),
                 timeout=self.cfg.limits.answer_timeout_s,
             )
         except subprocess.TimeoutExpired as exc:
@@ -222,9 +242,16 @@ class TmuxBackend(_BaseBackend):
         project_dir: str,
         resume_id: str,
         fork: bool,
+        config_dir: str = "",
+        access: str = "read",
         initial_prompt: Optional[str] = None,
     ) -> None:
         """Launch an interactive fork in `window`.
+
+        `config_dir` pins the fork to the session's Claude config dir (via
+        `CLAUDE_CONFIG_DIR`) so it finds the transcript and the folder's trust
+        — essential when the daemon runs under a different config dir than the
+        shared session (e.g. work vs personal).
 
         With `initial_prompt`, the question is passed as claude's positional
         prompt argument, so claude auto-submits it once it is ready — no
@@ -234,11 +261,15 @@ class TmuxBackend(_BaseBackend):
         """
         argv = [
             self.cfg.claude.binary,
-            *build_claude_flags(self.cfg, resume_id, fork),
+            *build_claude_flags(self.cfg, resume_id, fork, access),
             *self.cfg.claude.tmux_extra_args,
         ]
         if initial_prompt is not None:
             argv.append(initial_prompt)
+        if config_dir:
+            argv = ["env", f"CLAUDE_CONFIG_DIR={config_dir}", *argv]
+        if self.cfg.claude.auto_trust:
+            self._pretrust(project_dir, config_dir)
         self.tmux.kill_window(window)
         self.tmux.new_window(window, shlex.join(argv), cwd=project_dir)
         if initial_prompt is None:
@@ -248,6 +279,14 @@ class TmuxBackend(_BaseBackend):
         else:
             ready = True
             time.sleep(2.0)  # let claude spin up; it auto-submits the prompt
+        screen = self.tmux.capture(window, lines=40).lower()
+        if "trust the files" in screen or "do you trust" in screen:
+            self.tmux.kill_window(window)
+            raise BackendError(
+                "Project folder is not trusted and auto-trust did not take. "
+                "Open it once in Claude and accept the prompt, or check "
+                "[claude] auto_trust / trust_config_path."
+            )
         if self.tmux.pane_dead(window):
             tail = self.tmux.capture(window, lines=30).strip()[-500:]
             self.tmux.kill_window(window)
@@ -258,9 +297,25 @@ class TmuxBackend(_BaseBackend):
                 f"{self.cfg.limits.launch_timeout_s:.0f}s"
             )
 
-    def _fork_file(self, project_dir: Path, fork_id: str) -> Optional[Path]:
+    def _pretrust(self, project_dir: str, config_dir: str = "") -> None:
+        """Best-effort: mark the project folder trusted before launching,
+        in the same config dir the fork will use."""
+        try:
+            if self.cfg.claude.trust_config_path:
+                path = Path(self.cfg.claude.trust_config_path).expanduser()
+            elif config_dir:
+                path = trust_config_path_for(config_dir)
+            else:
+                path = default_trust_config_path()
+            ensure_folder_trusted(Path(project_dir).resolve(), path)
+        except Exception:
+            pass  # if it fails, the trust-dialog check below reports it
+
+    def _fork_file(
+        self, project_dir: Path, fork_id: str, claude_home: Optional[Path]
+    ) -> Optional[Path]:
         """Locate a fork's transcript by session id."""
-        for path in list_session_files(project_dir, self.cfg.claude_home):
+        for path in list_session_files(project_dir, claude_home):
             if path.stem == fork_id:
                 return path
         return None
@@ -277,19 +332,21 @@ class TmuxBackend(_BaseBackend):
         rec = self._require_binding(thread_key)
         window = _window_name(rec.handle, thread_key)
         project_dir = Path(rec.project_dir)
+        home = self._home(rec)
         marker = make_marker(question)
         fork = not rec.fork_session_id
 
         if fork:
             before = {
-                p.stem
-                for p in list_session_files(project_dir, self.cfg.claude_home)
+                p.stem for p in list_session_files(project_dir, home)
             }
             self._launch(
                 window,
                 rec.project_dir,
                 rec.expert_session_id,
                 fork=True,
+                config_dir=rec.config_dir,
+                access=rec.access,
                 initial_prompt=question,
             )
             fork_file = wait_for_new_session_file(
@@ -297,14 +354,14 @@ class TmuxBackend(_BaseBackend):
                 before=before,
                 exclude=self.store.known_fork_ids(),
                 deadline=time.time() + 90,
-                claude_home=self.cfg.claude_home,
+                claude_home=home,
             )
             if fork_file is None:
                 raise BackendError(
                     "Fork transcript did not appear — did the fork launch?"
                 )
         else:
-            fork_file = self._fork_file(project_dir, rec.fork_session_id)
+            fork_file = self._fork_file(project_dir, rec.fork_session_id, home)
             if fork_file is None:
                 raise BackendError(
                     f"Fork transcript {rec.fork_session_id} not found"
@@ -325,6 +382,8 @@ class TmuxBackend(_BaseBackend):
                     rec.project_dir,
                     rec.fork_session_id,
                     fork=False,
+                    config_dir=rec.config_dir,
+                    access=rec.access,
                     initial_prompt=question,
                 )
 

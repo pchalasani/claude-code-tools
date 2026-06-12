@@ -61,8 +61,26 @@ def _atomic_write(path, records):
     os.replace(tmp, path)
 
 
-def _publish(session_id, cwd, transcript_path, label):
-    """Insert/update this session's record under a read-modify-write lock."""
+def _config_dir(transcript_path):
+    """Detect the Claude config dir this session lives under, path-agnostically.
+
+    The transcript path is <config-dir>/projects/<encoded-cwd>/<id>.jsonl, so
+    the config dir is everything before /projects/. Falls back to
+    CLAUDE_CONFIG_DIR, then ~/.claude.
+    """
+    if transcript_path and "/projects/" in transcript_path:
+        return transcript_path.split("/projects/")[0]
+    env = os.environ.get("CLAUDE_CONFIG_DIR")
+    if env:
+        return os.path.expanduser(env)
+    return os.path.expanduser("~/.claude")
+
+
+def _publish(session_id, cwd, transcript_path, config_dir, access, label):
+    """Insert/update this session's record under a read-modify-write lock.
+
+    access is "read"/"write", or None to preserve an existing record's level.
+    """
     os.makedirs(os.path.dirname(REGISTRY_PATH), exist_ok=True)
     lock_path = REGISTRY_PATH + ".lock"
     with open(lock_path, "w") as lock:
@@ -90,6 +108,10 @@ def _publish(session_id, cwd, transcript_path, label):
                 "handle": handle,
                 "session_id": session_id,
                 "cwd": cwd,
+                "config_dir": config_dir,
+                "access": access
+                if access is not None
+                else records.get(handle, {}).get("access", "read"),
                 "label": label or records.get(handle, {}).get("label", ""),
                 "transcript_path": transcript_path,
                 "created_at": records.get(handle, {}).get(
@@ -169,15 +191,22 @@ def main():
         elif arg.lower() == "status":
             message = _status(session_id)
         else:
-            label = _sanitize_label(arg) if arg else ""
-            if arg and not label:
+            tokens = arg.split()
+            write = "--write" in tokens or "-w" in tokens
+            read = "--read" in tokens or "-r" in tokens
+            # None preserves an existing record's access on re-share.
+            access = "write" if write else ("read" if read else None)
+            label_raw = next((t for t in tokens if not t.startswith("-")), "")
+            label = _sanitize_label(label_raw) if label_raw else ""
+            if label_raw and not label:
                 message = (
                     f"{YELLOW}Invalid handle. Use letters, digits, dashes "
                     f"(2-32 chars), e.g. >share payments-auth.{RESET}"
                 )
             else:
+                config_dir = _config_dir(transcript_path)
                 handle, collision = _publish(
-                    session_id, cwd, transcript_path, label
+                    session_id, cwd, transcript_path, config_dir, access, label
                 )
                 if collision:
                     message = (
@@ -185,9 +214,15 @@ def main():
                         f"another session. Pick a different name.{RESET}"
                     )
                 else:
+                    note = (
+                        f"\n{YELLOW}WRITE access: colleagues can edit files in "
+                        f"this folder.{RESET}"
+                        if access == "write"
+                        else ""
+                    )
                     message = (
-                        f"{GREEN}Sharing this session as: {handle}{RESET}\n"
-                        f"{BLUE}Give colleagues this handle; they post  "
+                        f"{GREEN}Sharing this session as: {handle}{RESET}{note}"
+                        f"\n{BLUE}Give colleagues this handle; they post  "
                         f"{handle} <question>  in the agent-tunnel channel.\n"
                         f"Revoke anytime with >share off.{RESET}"
                     )

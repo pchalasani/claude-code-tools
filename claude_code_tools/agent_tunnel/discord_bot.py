@@ -49,11 +49,17 @@ def resolve_token(cfg: TunnelConfig) -> str:
 
 
 CLOSE_COMMANDS = {"!done", "!close", "!end"}
+LIST_COMMANDS = {"!list", "!handles"}
 
 
 def is_close_command(text: str) -> bool:
     """True if a thread/DM message is a close-out command (e.g. !done)."""
     return text.strip().lower() in CLOSE_COMMANDS
+
+
+def is_list_command(text: str) -> bool:
+    """True if a message asks for the list of shared handles (!list)."""
+    return text.strip().lower() in LIST_COMMANDS
 
 
 def split_chunks(text: str, limit: int = DISCORD_MSG_LIMIT) -> list[str]:
@@ -172,6 +178,10 @@ def run_bot(
             self, message: discord.Message, content: str
         ) -> None:
             """A message in a watched channel: try to open a handle thread."""
+            if is_list_command(content):
+                if self._allowed(message.author):
+                    await self._list_handles(message.channel)
+                return
             token, _, remainder = content.partition(" ")
             handle = token.strip().lower()
             rec = registry.get(handle)
@@ -188,9 +198,11 @@ def run_bot(
 
             question = remainder.strip()
             label = rec.label or rec.handle
-            # Name the thread after the question (readable) — fall back to
-            # the label/handle when the opener carried no question.
-            thread_name = (question or label)[:THREAD_NAME_MAX]
+            # Lead with the handle (recognizable), then the question so that
+            # multiple threads for the same handle stay distinguishable.
+            thread_name = (
+                f"{label}: {question}" if question else label
+            )[:THREAD_NAME_MAX]
             thread = await message.create_thread(name=thread_name)
             logger.info(
                 "Opened thread for handle %s (session %s) asked by %s",
@@ -203,6 +215,8 @@ def run_bot(
                 handle=rec.handle,
                 expert_session_id=rec.session_id,
                 project_dir=rec.cwd,
+                config_dir=rec.config_dir,
+                access=rec.access,
                 backend=cfg.backend,
                 asker=message.author.display_name,
             )
@@ -223,6 +237,9 @@ def run_bot(
                 return
             if not self._allowed(message.author):
                 return
+            if is_list_command(content):
+                await self._list_handles(thread)
+                return
             if is_close_command(content):
                 await self._close(thread, thread_key)
                 return
@@ -236,6 +253,10 @@ def run_bot(
         ) -> None:
             """DM handling: `<handle> ...` (re)binds; bare text follows up."""
             thread_key = f"dm:{message.channel.id}"
+            if is_list_command(content):
+                if self._allowed(message.author):
+                    await self._list_handles(message.channel)
+                return
             if is_close_command(content) and store.get(thread_key) is not None:
                 if self._allowed(message.author):
                     await self._close(message.channel, thread_key)
@@ -250,6 +271,8 @@ def run_bot(
                     handle=rec.handle,
                     expert_session_id=rec.session_id,
                     project_dir=rec.cwd,
+                    config_dir=rec.config_dir,
+                    access=rec.access,
                     backend=cfg.backend,
                     asker=message.author.display_name,
                 )
@@ -270,6 +293,23 @@ def run_bot(
                 await message.add_reaction("⏳")
                 return
             await self._answer(message.channel, thread_key, content)
+
+        async def _list_handles(self, dest: Any) -> None:
+            """Post the list of currently shared handles."""
+            recs = registry.active()
+            if not recs:
+                await dest.send("No sessions are shared right now.")
+                return
+            lines = ["**Available handles** — post `<handle> your question`:"]
+            for rec in recs:
+                proj = Path(rec.cwd).name
+                label = (
+                    f" ({rec.label})"
+                    if rec.label and rec.label != rec.handle
+                    else ""
+                )
+                lines.append(f"• `{rec.handle}`{label} — {proj}")
+            await dest.send("\n".join(lines)[:1900])
 
         async def _close(self, dest: Any, thread_key: str) -> None:
             """Close a thread: tear down its fork and confirm."""

@@ -114,6 +114,9 @@ def serve(
     show_default=True,
     help="Thread key (reuse to test follow-up continuity).",
 )
+@click.option(
+    "--write", is_flag=True, help="Grant write access (with --session/auto)."
+)
 @click.argument("question")
 def ask(
     config: Optional[str],
@@ -122,6 +125,7 @@ def ask(
     session: Optional[str],
     project: Optional[str],
     thread: str,
+    write: bool,
     question: str,
 ) -> None:
     """Ask one question through the full pipeline (no Discord).
@@ -135,14 +139,16 @@ def ask(
     thread_key = f"cli:{thread}"
 
     if store.get(thread_key) is None:
-        expert_id, project_dir, hname = _resolve_target(
-            cfg, store, handle, session, project
+        expert_id, project_dir, hname, config_dir, access = _resolve_target(
+            cfg, store, handle, session, project, write
         )
         store.bind(
             thread_key,
             handle=hname,
             expert_session_id=expert_id,
             project_dir=str(project_dir),
+            config_dir=config_dir,
+            access=access,
             backend=cfg.backend,
             asker="cli",
         )
@@ -164,16 +170,21 @@ def _resolve_target(
     handle: Optional[str],
     session: Optional[str],
     project: Optional[str],
-) -> tuple[str, Path, str]:
-    """Resolve (expert_session_id, project_dir, handle_name) for `ask`."""
+    write: bool = False,
+) -> tuple[str, Path, str, str, str]:
+    """Resolve (expert_session_id, project_dir, handle, config_dir, access)."""
     if handle:
         rec = Registry(cfg.registry_path).get(handle)
         if rec is None:
             raise click.ClickException(f"No live handle {handle!r}.")
-        return rec.session_id, Path(rec.cwd), rec.handle
+        return rec.session_id, Path(rec.cwd), rec.handle, rec.config_dir, (
+            rec.access
+        )
+    access = "write" if write else "read"
     project_dir = Path(project or os.getcwd()).expanduser().resolve()
+    env_dir = os.environ.get("CLAUDE_CONFIG_DIR", "")
     if session:
-        return session, project_dir, "cli"
+        return session, project_dir, "cli", env_dir, access
     latest = find_latest_session(
         project_dir, exclude=store.known_fork_ids(), claude_home=cfg.claude_home
     )
@@ -182,7 +193,9 @@ def _resolve_target(
             f"No Claude session found in {project_dir}. Pass --session, "
             "--handle, or run from a project with a session."
         )
-    return latest.stem, project_dir, "cli"
+    sp = str(latest)
+    cfg_dir = sp.split("/projects/")[0] if "/projects/" in sp else env_dir
+    return latest.stem, project_dir, "cli", cfg_dir, access
 
 
 @cli.command()
@@ -195,8 +208,14 @@ def published(config: Optional[str]) -> None:
         click.echo("No live handles. Type >share inside a session to add one.")
         return
     for rec in recs:
-        label = f" ({rec.label})" if rec.label and rec.label != rec.handle else ""
-        click.echo(f"{rec.handle}{label}: {rec.session_id[:8]} @ {rec.cwd}")
+        label = (
+            f" ({rec.label})" if rec.label and rec.label != rec.handle else ""
+        )
+        cfgdir = f"  [{Path(rec.config_dir).name}]" if rec.config_dir else ""
+        wr = "  ✍️ write" if rec.access == "write" else ""
+        click.echo(
+            f"{rec.handle}{label}: {rec.session_id[:8]} @ {rec.cwd}{cfgdir}{wr}"
+        )
 
 
 @cli.command()
