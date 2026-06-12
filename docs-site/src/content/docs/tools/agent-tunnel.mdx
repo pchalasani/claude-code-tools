@@ -13,6 +13,10 @@ specific session** with `>share`, hand the resulting **handle** to teammates,
 and have them ask it questions over Discord — each answered against a private,
 read-only **fork** of that session.
 
+In short, it lets colleagues talk to a Claude Code session running on your Mac
+— answered either by an interactive session driven through tmux or a headless
+`claude -p` run (details below).
+
 ## How it works
 
 - Inside any session, you type `>share`. A hook reads *that* session's own id
@@ -56,6 +60,27 @@ Nothing to install. You hand them a handle; they:
 
 So the whole colleague vocabulary is just three things: **`!list`** to
 discover, **`<handle> <question>`** to ask, **`!done`** to close.
+
+## The `agent-tunnel` command group
+
+Installing the package adds a single console command, **`agent-tunnel`** — a
+command group (like `aichat`) whose subcommands are:
+
+| Subcommand | What it does |
+| --- | --- |
+| `agent-tunnel serve` | Run the Discord daemon — the long-lived bridge that answers questions |
+| `agent-tunnel published` | List the sessions you've shared (handles in the registry) |
+| `agent-tunnel status` | Show active conversation threads and their forks |
+| `agent-tunnel watch` | Attach to the private tmux server to watch live forks |
+| `agent-tunnel doctor` | Readiness check (token found, channel set, `claude`/`tmux` on PATH) |
+| `agent-tunnel ask "Q" --handle H` | Ask one question through the full pipeline, no Discord (local test) |
+| `agent-tunnel forget --thread T \| --all` | Drop thread bindings and kill their tmux windows |
+| `agent-tunnel init` | Write a commented sample config |
+| `agent-tunnel help` | Extensive help — overview, where-to-run, and every command's details |
+
+The one piece that is **not** a subcommand is **`>share`** (and `!list` /
+`!done`): `>share` runs *inside* a Claude session as a hook, and `!list` /
+`!done` are typed by colleagues in Discord.
 
 ## Where to run each command
 
