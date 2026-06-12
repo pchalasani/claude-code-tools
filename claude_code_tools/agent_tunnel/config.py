@@ -55,6 +55,9 @@ class DiscordConfig:
     """Discord-facing settings."""
 
     token_env: str = "AGENT_TUNNEL_DISCORD_TOKEN"
+    # Optional file holding the bot token; used when the env var is unset, so
+    # you can run `serve` without exporting anything each time.
+    token_file: str = ""
     channel_ids: list[int] = field(default_factory=list)
     allowed_user_ids: list[int] = field(default_factory=list)
     allowed_role_ids: list[int] = field(default_factory=list)
@@ -87,7 +90,9 @@ class LimitsConfig:
     per_user_cooldown_s: float = 15.0
     answer_timeout_s: float = 600.0
     launch_timeout_s: float = 90.0
-    pane_idle_ttl_min: float = 60.0
+    # Backstop only: colleagues close threads with !done. Forks idle longer
+    # than this are reaped so abandoned ones can't pile up. 0 disables it.
+    pane_idle_ttl_min: float = 180.0
     max_inline_chars: int = 5500
 
 
@@ -192,6 +197,9 @@ tmux_session = "agent-tunnel"
 [discord]
 # Env var that holds the bot token (never put the token itself here).
 token_env = "AGENT_TUNNEL_DISCORD_TOKEN"
+# Optional: file holding the token, used if the env var is unset — lets you
+# run `serve` without exporting anything. (Path to a plain text file.)
+# token_file = "~/Documents/tokens/discord-token.txt"
 # Channel ids the bot watches (developer mode -> Copy Channel ID).
 channel_ids = []
 # Empty lists mean: anyone in the watched channels may ask.
@@ -218,7 +226,9 @@ max_concurrent = 2
 per_user_cooldown_s = 15.0
 answer_timeout_s = 600.0
 launch_timeout_s = 90.0
-pane_idle_ttl_min = 60.0
+# Backstop only — colleagues close threads with !done. Forks idle longer
+# than this are reaped so abandoned ones can't pile up. Set 0 to disable.
+pane_idle_ttl_min = 180.0
 # Answers longer than this are attached as answer.md instead of inlined.
 max_inline_chars = 5500
 '''

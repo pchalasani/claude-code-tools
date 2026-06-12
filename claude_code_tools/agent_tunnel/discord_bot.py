@@ -23,6 +23,7 @@ import logging
 import os
 import time
 from collections import defaultdict
+from pathlib import Path
 from typing import Any
 
 from .backends import Backend, BackendError
@@ -34,6 +35,25 @@ logger = logging.getLogger("agent_tunnel")
 
 DISCORD_MSG_LIMIT = 2000
 REAP_INTERVAL_S = 300
+THREAD_NAME_MAX = 90
+
+
+def resolve_token(cfg: TunnelConfig) -> str:
+    """Resolve the Discord bot token: env var first, then token_file."""
+    token = os.environ.get(cfg.discord.token_env, "").strip()
+    if not token and cfg.discord.token_file:
+        path = Path(cfg.discord.token_file).expanduser()
+        if path.exists():
+            token = path.read_text(encoding="utf-8").strip()
+    return token
+
+
+CLOSE_COMMANDS = {"!done", "!close", "!end"}
+
+
+def is_close_command(text: str) -> bool:
+    """True if a thread/DM message is a close-out command (e.g. !done)."""
+    return text.strip().lower() in CLOSE_COMMANDS
 
 
 def split_chunks(text: str, limit: int = DISCORD_MSG_LIMIT) -> list[str]:
@@ -73,10 +93,11 @@ def run_bot(
     """
     import discord  # deferred: keep core importable without discord.py
 
-    token = os.environ.get(cfg.discord.token_env, "")
+    token = resolve_token(cfg)
     if not token:
         raise RuntimeError(
-            f"Discord token env var {cfg.discord.token_env} is not set"
+            f"No Discord token found (set {cfg.discord.token_env} or "
+            "discord.token_file in the config)"
         )
     if not cfg.discord.channel_ids and not cfg.discord.respond_to_dms:
         raise RuntimeError(
@@ -165,8 +186,18 @@ def run_bot(
             if not self._allowed(message.author):
                 return
 
+            question = remainder.strip()
             label = rec.label or rec.handle
-            thread = await message.create_thread(name=label[:90])
+            # Name the thread after the question (readable) — fall back to
+            # the label/handle when the opener carried no question.
+            thread_name = (question or label)[:THREAD_NAME_MAX]
+            thread = await message.create_thread(name=thread_name)
+            logger.info(
+                "Opened thread for handle %s (session %s) asked by %s",
+                rec.handle,
+                rec.session_id[:8],
+                message.author.display_name,
+            )
             store.bind(
                 f"th:{thread.id}",
                 handle=rec.handle,
@@ -175,7 +206,6 @@ def run_bot(
                 backend=cfg.backend,
                 asker=message.author.display_name,
             )
-            question = remainder.strip()
             if question:
                 await self._answer(thread, f"th:{thread.id}", question)
             else:
@@ -193,6 +223,9 @@ def run_bot(
                 return
             if not self._allowed(message.author):
                 return
+            if is_close_command(content):
+                await self._close(thread, thread_key)
+                return
             if not self._cooldown_ok(message.author.id):
                 await message.add_reaction("⏳")
                 return
@@ -203,6 +236,10 @@ def run_bot(
         ) -> None:
             """DM handling: `<handle> ...` (re)binds; bare text follows up."""
             thread_key = f"dm:{message.channel.id}"
+            if is_close_command(content) and store.get(thread_key) is not None:
+                if self._allowed(message.author):
+                    await self._close(message.channel, thread_key)
+                return
             token, _, remainder = content.partition(" ")
             handle = token.strip().lower()
             rec = registry.get(handle)
@@ -233,6 +270,18 @@ def run_bot(
                 await message.add_reaction("⏳")
                 return
             await self._answer(message.channel, thread_key, content)
+
+        async def _close(self, dest: Any, thread_key: str) -> None:
+            """Close a thread: tear down its fork and confirm."""
+            try:
+                await asyncio.to_thread(backend.forget, thread_key)
+            except Exception:
+                logger.exception("Error closing %s", thread_key)
+            logger.info("Closed thread %s on request", thread_key)
+            await dest.send(
+                "✅ Closed and cleaned up. Post the handle in the channel "
+                "to start a fresh thread anytime."
+            )
 
         async def _answer(
             self, dest: Any, thread_key: str, question: str

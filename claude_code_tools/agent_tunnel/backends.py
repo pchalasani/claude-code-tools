@@ -101,10 +101,15 @@ def build_claude_flags(
     return flags
 
 
-def _window_name(thread_key: str) -> str:
-    """Stable tmux window name for a thread key."""
-    safe = re.sub(r"[^A-Za-z0-9]", "", thread_key)
-    return f"t{safe[-12:] or '0'}"
+def _window_name(handle: str, thread_key: str) -> str:
+    """Readable, unique tmux window name: ``<handle>-<short>``.
+
+    The handle makes it recognizable when attached; the thread-key suffix
+    keeps it unique when the same handle opens more than one thread.
+    """
+    base = (re.sub(r"[^A-Za-z0-9-]", "", handle) or "s")[:24]
+    suffix = re.sub(r"[^A-Za-z0-9]", "", thread_key)[-4:] or "0"
+    return f"{base}-{suffix}"
 
 
 class _BaseBackend:
@@ -212,21 +217,37 @@ class TmuxBackend(_BaseBackend):
         self.tmux = TmuxSession(cfg.tmux_session)
 
     def _launch(
-        self, window: str, project_dir: str, resume_id: str, fork: bool
+        self,
+        window: str,
+        project_dir: str,
+        resume_id: str,
+        fork: bool,
+        initial_prompt: Optional[str] = None,
     ) -> None:
-        """Launch an interactive fork in `window` and wait until ready."""
+        """Launch an interactive fork in `window`.
+
+        With `initial_prompt`, the question is passed as claude's positional
+        prompt argument, so claude auto-submits it once it is ready — no
+        keystroke simulation, which sidesteps the slow-to-accept-input window
+        right after a cold launch. Without it, we wait for the prompt to go
+        idle (used only for warm reuse paths).
+        """
         argv = [
             self.cfg.claude.binary,
             *build_claude_flags(self.cfg, resume_id, fork),
             *self.cfg.claude.tmux_extra_args,
         ]
+        if initial_prompt is not None:
+            argv.append(initial_prompt)
         self.tmux.kill_window(window)
         self.tmux.new_window(window, shlex.join(argv), cwd=project_dir)
-        ready = self.tmux.wait_for_idle(
-            window,
-            idle_s=2.5,
-            timeout_s=self.cfg.limits.launch_timeout_s,
-        )
+        if initial_prompt is None:
+            ready = self.tmux.wait_for_idle(
+                window, idle_s=2.5, timeout_s=self.cfg.limits.launch_timeout_s
+            )
+        else:
+            ready = True
+            time.sleep(2.0)  # let claude spin up; it auto-submits the prompt
         if self.tmux.pane_dead(window):
             tail = self.tmux.capture(window, lines=30).strip()[-500:]
             self.tmux.kill_window(window)
@@ -237,68 +258,83 @@ class TmuxBackend(_BaseBackend):
                 f"{self.cfg.limits.launch_timeout_s:.0f}s"
             )
 
+    def _fork_file(self, project_dir: Path, fork_id: str) -> Optional[Path]:
+        """Locate a fork's transcript by session id."""
+        for path in list_session_files(project_dir, self.cfg.claude_home):
+            if path.stem == fork_id:
+                return path
+        return None
+
     def ask(self, thread_key: str, question: str) -> Answer:
-        """Paste the question into the thread's window and extract the
-        answer from the fork's transcript."""
+        """Answer a question in the thread's fork.
+
+        Cold paths (a new fork, or a follow-up whose window was reaped) launch
+        with the question as claude's initial prompt — claude auto-submits it
+        once ready, sidestepping the slow-startup keystroke problem. A warm
+        follow-up window is reused by pasting + Enter. The answer is read from
+        the fork's JSONL transcript either way.
+        """
         rec = self._require_binding(thread_key)
-        window = _window_name(thread_key)
+        window = _window_name(rec.handle, thread_key)
         project_dir = Path(rec.project_dir)
-        fork = not rec.fork_session_id
-        before = {
-            p.stem
-            for p in list_session_files(project_dir, self.cfg.claude_home)
-        }
-
-        if not fork:
-            if not self.tmux.window_alive(window) or self.tmux.pane_dead(
-                window
-            ):
-                self._launch(
-                    window, rec.project_dir, rec.fork_session_id, fork=False
-                )
-        else:
-            self._launch(
-                window, rec.project_dir, rec.expert_session_id, fork=True
-            )
-
         marker = make_marker(question)
-        self.tmux.paste_text(window, question)
-        time.sleep(0.8)
-        if not self.tmux.send_enter(window):
-            raise BackendError("Question was not accepted by the session")
+        fork = not rec.fork_session_id
 
-        deadline = time.time() + self.cfg.limits.answer_timeout_s
-        fork_file: Optional[Path] = None
-        if not fork:
-            for path in list_session_files(project_dir, self.cfg.claude_home):
-                if path.stem == rec.fork_session_id:
-                    fork_file = path
-                    break
-            if fork_file is None:
-                raise BackendError(
-                    f"Fork transcript {rec.fork_session_id} not found"
-                )
-        else:
+        if fork:
+            before = {
+                p.stem
+                for p in list_session_files(project_dir, self.cfg.claude_home)
+            }
+            self._launch(
+                window,
+                rec.project_dir,
+                rec.expert_session_id,
+                fork=True,
+                initial_prompt=question,
+            )
             fork_file = wait_for_new_session_file(
                 project_dir,
                 before=before,
                 exclude=self.store.known_fork_ids(),
-                deadline=time.time() + 60,
+                deadline=time.time() + 90,
                 claude_home=self.cfg.claude_home,
             )
             if fork_file is None:
                 raise BackendError(
                     "Fork transcript did not appear — did the fork launch?"
                 )
+        else:
+            fork_file = self._fork_file(project_dir, rec.fork_session_id)
+            if fork_file is None:
+                raise BackendError(
+                    f"Fork transcript {rec.fork_session_id} not found"
+                )
+            if self.tmux.window_alive(window) and not self.tmux.pane_dead(
+                window
+            ):
+                # Warm session: paste + Enter (no startup delay when warm).
+                if not self.tmux.submit_text(window, question):
+                    raise BackendError(
+                        "Question pasted but never submitted (Enter not "
+                        "accepted)."
+                    )
+            else:
+                # Window was reaped — relaunch cold with the prompt arg.
+                self._launch(
+                    window,
+                    rec.project_dir,
+                    rec.fork_session_id,
+                    fork=False,
+                    initial_prompt=question,
+                )
 
+        deadline = time.time() + self.cfg.limits.answer_timeout_s
         while True:
-            remaining = deadline - time.time()
-            if remaining <= 0:
+            if time.time() > deadline:
                 raise BackendError(
                     "Timed out waiting for the answer "
                     f"({self.cfg.limits.answer_timeout_s:.0f}s)"
                 )
-            self.tmux.wait_for_idle(window, idle_s=3.0, timeout_s=remaining)
             if self.tmux.pane_dead(window):
                 tail = self.tmux.capture(window, lines=30).strip()[-500:]
                 raise BackendError(f"Forked session died:\n{tail}")
@@ -323,8 +359,14 @@ class TmuxBackend(_BaseBackend):
             self.tmux.kill_window(rec.tmux_window)
 
     def reap_idle(self) -> int:
-        """Kill windows idle longer than the configured TTL."""
+        """Kill windows idle longer than the configured TTL (backstop).
+
+        A TTL of 0 (or less) disables reaping entirely — threads then live
+        until closed with !done, ``forget``, or a server kill.
+        """
         ttl_s = self.cfg.limits.pane_idle_ttl_min * 60
+        if ttl_s <= 0:
+            return 0
         reaped = 0
         for rec in self.store.all_records():
             if not rec.tmux_window or rec.backend != self.name:

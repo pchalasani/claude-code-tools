@@ -15,10 +15,15 @@ from pathlib import Path
 
 from claude_code_tools.agent_tunnel.backends import (
     HeadlessBackend,
+    _window_name,
     build_claude_flags,
 )
 from claude_code_tools.agent_tunnel.config import TunnelConfig, load_config
-from claude_code_tools.agent_tunnel.discord_bot import split_chunks
+from claude_code_tools.agent_tunnel.discord_bot import (
+    is_close_command,
+    resolve_token,
+    split_chunks,
+)
 from claude_code_tools.agent_tunnel.registry import (
     Registry,
     PublishRecord,
@@ -305,6 +310,37 @@ def test_split_chunks_roundtrip() -> None:
 
 
 # ------------------------------------------------------------ claude flags
+
+
+def test_is_close_command() -> None:
+    for ok in ("!done", "!close", "!end", "  !DONE ", "!End"):
+        assert is_close_command(ok)
+    for no in ("done", "!finished", "!done now", "what is done?", ""):
+        assert not is_close_command(no)
+
+
+def test_window_name() -> None:
+    w = _window_name("3dd5d0", "th:288325525675")
+    assert w.startswith("3dd5d0-") and " " not in w
+    # dashes in a label handle are preserved.
+    assert _window_name("payments-auth", "th:99").startswith("payments-auth-")
+    # unique per thread even with the same handle.
+    assert _window_name("h", "th:1111") != _window_name("h", "th:2222")
+
+
+def test_resolve_token(tmp_path: Path, monkeypatch) -> None:
+    cfg = TunnelConfig()
+    cfg.discord.token_env = "AGENT_TUNNEL_TEST_TOKEN_X"
+    monkeypatch.delenv("AGENT_TUNNEL_TEST_TOKEN_X", raising=False)
+    assert resolve_token(cfg) == ""  # nothing set
+
+    tf = tmp_path / "tok.txt"
+    tf.write_text("file-token-123\n", encoding="utf-8")
+    cfg.discord.token_file = str(tf)
+    assert resolve_token(cfg) == "file-token-123"  # file fallback
+
+    monkeypatch.setenv("AGENT_TUNNEL_TEST_TOKEN_X", "env-token-999")
+    assert resolve_token(cfg) == "env-token-999"  # env wins
 
 
 def test_build_claude_flags() -> None:

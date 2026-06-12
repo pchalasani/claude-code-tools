@@ -73,20 +73,26 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
   Defines the JSON schema duplicated in the hook; `Registry` + helpers
   (`derive_handle`, `sanitize_label`).
 - `config.py` — TOML config (Discord + limits + backend). No project/session
-  here; `AGENT_TUNNEL_REGISTRY` env overrides the registry path (hook + daemon
+  here. `discord.token_file` reads the bot token from a file (no export);
+  `AGENT_TUNNEL_REGISTRY` env overrides the registry path (hook + daemon
   honor it).
 - `store.py` — daemon state: `thread_key → ThreadRecord` (handle, expert
   session id, project dir, fork id, tmux window). `bind()` records a pending
   thread before the first answer; fork id filled on completion.
 - `session.py` — transcript-dir resolution and fork-transcript parsing
   (locate the question, detect turn completion, extract the answer).
-- `tmux.py` — minimal ops on a dedicated tmux session: named windows,
-  bracketed paste, Enter-with-verify, idle detection, liveness/reaping.
+- `tmux.py` — minimal ops on a DEDICATED private tmux server
+  (`tmux -L <socket>`), isolated from the user's main server (own fd budget,
+  out of their `tmux ls`): named windows (`<handle>-<short>`), bracketed
+  paste, Enter-with-verify, idle detection, liveness/reaping.
 - `backends.py` — `HeadlessBackend` / `TmuxBackend` behind one interface;
   both read the thread's binding to decide what to fork.
-- `discord_bot.py` — handle→thread routing, allowlists, cooldown,
-  concurrency, 2000-char chunking, long answers as `answer.md`.
-- `cli.py` — `serve | ask | published | status | forget | init`.
+- `discord_bot.py` — handle→thread routing, `!done`/`!close`/`!end` teardown,
+  question-named threads, allowlists, cooldown, concurrency, 2000-char
+  chunking, long answers as `answer.md`; `token_file` resolution.
+- `cli.py` — `serve | ask | published | status | watch | doctor | forget |
+  init | help`. `watch` attaches to the private tmux server; `doctor` runs a
+  readiness checklist; `help` prints extensive per-command help.
 
 ## `>share` semantics
 
@@ -103,14 +109,29 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
   a public thread, bind `thread → {handle, session_id, cwd}`, and answer the
   question (or post a ready notice).
 - Thread message: a follow-up routed to the bound fork.
+- `!done` / `!close` / `!end` in a thread (or DM): tear down that fork
+  immediately (kill window, drop binding, confirm).
 - DMs (optional, off by default): `\<handle\> …` (re)binds the DM; bare text
   follows up.
 
+## Cleanup
+
+- Primary: colleagues close threads with `!done` (immediate teardown).
+- Backstop: a reaper kills forks idle longer than `pane_idle_ttl_min`
+  (default 180 min; `0` disables) so abandoned threads can't exhaust the
+  private server's own fd budget.
+- Owner: `agent-tunnel forget`, `tmux -L <socket> kill-server`, or stop serve.
+
 ## Backends and billing
 
-- `tmux` (default): one interactive `claude` per thread in a window of a
-  dedicated tmux session; question pasted in, answer read from the fork's
-  transcript. Metered as interactive subscription usage; idle windows reaped.
+- `tmux` (default): one interactive `claude` per thread in a window of the
+  private tmux server. Submission is hybrid to dodge Claude's slow-to-accept
+  input right after a cold launch: a new fork (or a follow-up whose window
+  was reaped) is launched with the question as claude's positional prompt
+  (`claude "<q>" --resume <id> [--fork-session]`), so claude auto-submits it
+  once ready — no simulated keystrokes; a warm follow-up window is reused via
+  bracketed paste + verified Enter. The answer is read from the fork's JSONL
+  transcript either way. Metered as interactive subscription usage.
 - `headless`: `claude -p` per question (JSON in/out). From 2026-06-15,
   subscription `claude -p` draws from a separate Agent SDK credit pool, then
   API rates. Do NOT auto-add `--bare` (it can break subscription auth).
@@ -138,10 +159,11 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
 - Live end-to-end (headless): `>share` → registry → `ask --handle` forked the
   exact published session, inherited context, and follow-ups continued the
   same fork.
-- Live (tmux, pre-refactor): fork launch, bracketed paste, Enter, fork-file
-  detection, idle, answer extraction validated in a real pane. Same code path
-  post-refactor; not re-run live.
-- Not yet live-tested: the Discord transport itself (needs a bot token).
+- Live end-to-end (tmux, over Discord): `>share <label>` → handle posted in a
+  private Discord channel → bot opened a thread → cold launch-with-prompt
+  auto-submitted, answer captured from the transcript and posted back;
+  follow-ups and `!done` exercised. Confirmed against a private `-L` tmux
+  server while the main server was fd-saturated.
 
 ## Roadmap
 

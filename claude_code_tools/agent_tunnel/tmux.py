@@ -1,10 +1,17 @@
 """Minimal tmux operations for the agent-tunnel tmux backend.
 
-Manages a dedicated detached tmux session (default name "agent-tunnel") with
-one window per conversation thread. Windows are addressed by exact name
-(stable across reaping, unlike indices), created with an explicit working
-directory, and receive questions via bracketed paste so multi-line text does
-not submit prematurely.
+Runs on a DEDICATED tmux server (its own socket via ``tmux -L <socket>``),
+completely separate from the user's main tmux server. This isolates it from
+the main server's file-descriptor budget (macOS caps a process at ~256 open
+files, which a busy main server with many sessions can exhaust) and keeps
+agent-tunnel's fork windows out of the user's normal ``tmux ls``. It can
+neither see nor affect sessions on the main server.
+
+Manages a detached session (default name "agent-tunnel") on that private
+server with one window per conversation thread. Windows are addressed by
+exact name (stable across reaping, unlike indices), created with an explicit
+working directory, and receive questions via bracketed paste so multi-line
+text does not submit prematurely.
 """
 
 from __future__ import annotations
@@ -22,15 +29,26 @@ class TmuxError(RuntimeError):
 class TmuxSession:
     """Operations on windows inside one dedicated tmux session."""
 
-    def __init__(self, session: str = "agent-tunnel") -> None:
-        """Remember the session name; the session is created lazily."""
+    def __init__(
+        self, session: str = "agent-tunnel", socket: Optional[str] = None
+    ) -> None:
+        """Remember the session name and private socket.
+
+        Args:
+            session: tmux session name (created lazily).
+            socket: tmux server socket name (``-L``); defaults to the session
+                name, giving agent-tunnel its own isolated server.
+        """
         self.session = session
+        self.socket = socket or session
 
     def _run(
         self, args: list[str], stdin: Optional[str] = None
     ) -> tuple[str, int]:
+        # -L runs against a private tmux server (own socket), never the
+        # user's default/main server.
         result = subprocess.run(
-            ["tmux"] + args,
+            ["tmux", "-L", self.socket] + args,
             input=stdin,
             capture_output=True,
             text=True,
@@ -150,22 +168,39 @@ class TmuxSession:
         if code != 0:
             raise TmuxError("tmux paste-buffer failed")
 
-    def send_enter(
-        self, window: str, retries: int = 3, settle_s: float = 0.5
+    def submit_text(
+        self,
+        window: str,
+        text: str,
+        settle_idle_s: float = 1.0,
+        settle_timeout_s: float = 20.0,
+        retries: int = 5,
+        enter_settle_s: float = 0.8,
     ) -> bool:
-        """Press Enter, verifying the pane content changed (with retries).
+        """Paste `text` and submit it, robustly.
+
+        Mirrors tmux-cli's proven approach: deliver the text, wait for the
+        pane to actually go idle (so the TUI has finished rendering the
+        paste), THEN press Enter and verify the pane reacted, retrying with
+        backoff. Sending Enter before the paste settles is the main cause of
+        an un-submitted question.
 
         Returns:
-            True if the pane visibly reacted to Enter, False otherwise.
+            True if the input was accepted (pane changed after Enter).
         """
+        self.paste_text(window, text)
+        # Let the pasted text fully render before we try to submit it.
+        self.wait_for_idle(
+            window, idle_s=settle_idle_s, timeout_s=settle_timeout_s
+        )
         target = self._target(window)
-        before = self.capture(window, lines=25)
+        before = self.capture(window, lines=30)
         for attempt in range(retries):
             self._run(["send-keys", "-t", target, "Enter"])
-            time.sleep(settle_s)
-            if self.capture(window, lines=25) != before:
+            time.sleep(enter_settle_s)
+            if self.capture(window, lines=30) != before:
                 return True
-            time.sleep(0.5 * (attempt + 1))
+            time.sleep(0.4 * (attempt + 1))
         return False
 
     def wait_for_idle(
