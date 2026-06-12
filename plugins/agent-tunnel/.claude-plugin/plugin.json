@@ -1,0 +1,8 @@
+{
+  "name": "agent-tunnel",
+  "version": "0.1.0",
+  "description": "Publish the current Claude session via >share so teammates can ask it questions through the agent-tunnel Discord bot",
+  "author": {
+    "name": "Prasad Chalasani"
+  }
+}

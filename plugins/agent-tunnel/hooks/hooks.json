@@ -1,0 +1,16 @@
+{
+  "description": "Publish the current Claude session for agent-tunnel via >share",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'if test -f \"${CLAUDE_PLUGIN_ROOT}/hooks/share_hook.py\"; then python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/share_hook.py\"; else echo \"{}\"; fi'",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
