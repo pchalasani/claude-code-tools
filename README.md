@@ -1,14 +1,14 @@
 <div align="center">
 
 <a href="https://pchalasani.github.io/claude-code-tools/">
-<img src="assets/logo-nyc-subway.png" alt="CLAUDE CODE TOOLS"
+<img src="assets/title-blade-runner-theme.png" alt="CLAUDE CODE TOOLS"
      width="500"/>
 </a>
 
 CLI tools, skills, agents, hooks, and plugins for enhancing productivity with Claude Code and other coding agents.
 
 [![Documentation](https://img.shields.io/badge/%F0%9F%93%96-documentation-blue)](https://pchalasani.github.io/claude-code-tools/)
-[![aichat-search](https://img.shields.io/github/v/release/pchalasani/claude-code-tools?filter=rust-v*&label=aichat-search&color=orange)](https://github.com/pchalasani/claude-code-tools/releases?q=rust)
+[![aichat-search](https://img.shields.io/crates/v/aichat-search?label=aichat-search&color=orange)](https://crates.io/crates/aichat-search)
 [![Mentioned in Awesome Codex CLI](https://awesome.re/mentioned-badge.svg)](https://github.com/RoggeOhta/awesome-codex-cli)
 
 </div>
