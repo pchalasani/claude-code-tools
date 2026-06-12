@@ -27,6 +27,7 @@ This repo provides plugins for the
 | `safety-hooks` | Prevent destructive operations |
 | `langroid` | Design patterns for the [Langroid](https://github.com/langroid/langroid) framework |
 | `voice` | Spoken audio summaries |
+| `agent-tunnel` | `>share` a live session so teammates can ask it questions over Discord |
 
 ## Installation
 
@@ -57,6 +58,7 @@ This repo provides plugins for the
    claude plugin install "safety-hooks@cctools-plugins"
    claude plugin install "langroid@cctools-plugins"
    claude plugin install "voice@cctools-plugins"
+   claude plugin install "agent-tunnel@cctools-plugins"
    ```
 
    Or use `/plugin` without arguments inside a
@@ -174,3 +176,20 @@ See the
 for prerequisites, configuration, architecture
 details, and recommended speech-to-text
 companions.
+
+---
+
+## agent-tunnel Plugin
+
+Publishes the **current** Claude Code session so teammates can ask it
+questions over Discord — each answered against a private, read-only **fork**.
+
+| Type | Name | What it does |
+|------|------|--------------|
+| Hook | `>share` | Publish this session and mint a handle to hand to colleagues (`>share <label>`, `>share --write`, `>share status`, `>share off`) |
+
+This plugin provides only the `>share` hook. The daemon that answers the
+questions — `agent-tunnel serve` and the rest of the CLI — ships with the
+`claude-code-tools` package (`uv tool install claude-code-tools`). See the
+[agent-tunnel tool page](/claude-code-tools/tools/agent-tunnel/) for the full
+setup: creating the Discord bot, configuration, and running the daemon.
