@@ -179,6 +179,27 @@ folder?" dialog (which would otherwise block the fork). Disable with
 
 </Steps>
 
+<Aside type="tip" title="On a company / shared server (the admin dance)">
+
+Steps 5–6 assume you can add a bot and make channels. On a server you don't
+own you usually **lack the "Manage Server" permission**, so only steps 1–4
+(building the bot + token) are yours — the rest needs a Discord admin:
+
+- **Send the admin the OAuth invite URL** from step 4. Only someone with
+  *Manage Server* can add the bot: they open the link → pick the server →
+  **Authorize**. (You'll find the server isn't even in your own "Add to
+  Server" dropdown without that permission.)
+- **Ask the admin to create a dedicated (private) channel and add the bot to
+  it** — a private channel is invisible to the bot until it's explicitly
+  added.
+- Then grab that channel's ID (**Developer Mode** → right-click → **Copy
+  Channel ID**) for your config.
+
+The bot only ever acts in the channel ID(s) you configure, so it stays silent
+in every other channel regardless of what it can technically see.
+
+</Aside>
+
 ### Part B: install the plugin + configure
 
 <Steps>
