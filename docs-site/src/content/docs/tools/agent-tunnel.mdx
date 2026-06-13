@@ -17,6 +17,20 @@ In short, it lets colleagues talk to a Claude Code session running on your Mac
 — answered either by an interactive session driven through tmux or a headless
 `claude -p` run (details below).
 
+<Aside type="note" title="You need two installs">
+
+1. **The package** (CLI + daemon) — the usual way:
+   `uv tool install claude-code-tools` (or `uvx` / `pipx`). This gives you the
+   `agent-tunnel serve / ask / published / watch / doctor / …` commands.
+2. **The plugin** (the `>share` publish hook) —
+   `claude plugin install agent-tunnel@cctools-plugins`, then restart Claude
+   Code.
+
+Both are required: the package runs the daemon, the plugin lets you `>share` a
+session from inside Claude Code. Full setup is below.
+
+</Aside>
+
 ## How it works
 
 - Inside any session, you type `>share`. A hook reads *that* session's own id
