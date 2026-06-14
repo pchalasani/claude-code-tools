@@ -407,6 +407,31 @@ def test_ensure_folder_trusted(tmp_path: Path) -> None:
     assert bad.read_text() == "{not json"
 
 
+def test_count_turns(tmp_path: Path) -> None:
+    from claude_code_tools.agent_tunnel.session import count_turns
+
+    f = tmp_path / "s.jsonl"
+    rows = [
+        {"type": "user", "message": {"role": "user", "content": "q1"}},
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "a1"}],
+            },
+        },
+        {"type": "user", "message": {"role": "user", "content": "q2"}},
+        {  # meta entries don't count
+            "type": "user",
+            "isMeta": True,
+            "message": {"role": "user", "content": "meta"},
+        },
+        {"type": "summary", "summary": "x"},  # nor summary lines
+    ]
+    f.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+    assert count_turns(f) == 2
+
+
 def test_is_close_command() -> None:
     for ok in ("!done", "!close", "!end", "  !DONE ", "!End"):
         assert is_close_command(ok)

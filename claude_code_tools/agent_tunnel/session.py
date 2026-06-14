@@ -121,6 +121,16 @@ def make_marker(question: str) -> str:
     return first_line[:60]
 
 
+def count_turns(session_file: Path) -> int:
+    """Number of real user turns in a transcript (a rough 'how much context'
+    signal), excluding meta/sidechain entries."""
+    return sum(
+        1
+        for entry in _iter_entries(session_file)
+        if _message_text(entry, "user")
+    )
+
+
 def _iter_entries(session_file: Path) -> Iterator[dict[str, Any]]:
     """Yield JSON entries, skipping blank/malformed lines."""
     try:

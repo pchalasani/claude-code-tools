@@ -98,10 +98,14 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
   `!done`/`!close`/`!end` teardown, `<handle>: <question>` thread names,
   allowlists, cooldown, concurrency, 2000-char chunking, long answers as
   `answer.md`; `token_file` resolution.
-- `cli.py` — `serve | ask | published | status | watch | doctor | forget |
-  init | help`. `watch` attaches to the private tmux server; `doctor` runs a
-  readiness checklist; `published` tags each handle with its config dir;
-  `help` prints extensive per-command help.
+- `cli.py` — `serve | ask | published | forks | resume | status | watch |
+  doctor | forget | init | help`. `forks` lists fork sessions (handle, asker,
+  last active, turn count, fork id) from the store; `resume <handle>` execs
+  `claude --resume <fork-id>` in the fork's project + config dir (most recent
+  by default, `--fork <id>` to pick another) — using recorded fork ids to
+  dodge the duplicate-name problem in `/resume`. `watch` attaches to the
+  private tmux server; `doctor` runs a readiness checklist; `published` tags
+  each handle with its config dir; `help` prints extensive per-command help.
 
 ## `>share` semantics
 

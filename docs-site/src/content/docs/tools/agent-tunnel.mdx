@@ -85,6 +85,8 @@ command group (like `aichat`) whose subcommands are:
 | `agent-tunnel serve` | Run the Discord daemon — the long-lived bridge that answers questions |
 | `agent-tunnel published` | List the sessions you've shared (handles in the registry) |
 | `agent-tunnel status` | Show active conversation threads and their forks |
+| `agent-tunnel forks [<handle>]` | List fork sessions colleagues built up (asker, last active, turn count, fork id) |
+| `agent-tunnel resume <handle>` | Resume a colleague-accumulated fork in Claude Code (most recent, or `--fork <id>`) |
 | `agent-tunnel watch` | Attach to the private tmux server to watch live forks |
 | `agent-tunnel doctor` | Readiness check (token found, channel set, `claude`/`tmux` on PATH) |
 | `agent-tunnel ask "Q" --handle H` | Ask one question through the full pipeline, no Discord (local test) |
@@ -105,7 +107,8 @@ Most commands are plain CLI; only two care about tmux:
 | `agent-tunnel serve` | Anywhere it stays alive — a tmux pane is handy. It drives its **own** private tmux server, so it never touches your main one. |
 | `agent-tunnel watch` | Best from a **plain terminal tab (outside tmux)** to avoid nesting. It works inside tmux too (it warns you), just with awkward prefix keys. |
 | `>share` | **Inside** the Claude session you want to publish — it's a hook from the plugin, not a subcommand. |
-| `ask` · `published` · `status` · `doctor` · `forget` · `init` | Anywhere — tmux context is irrelevant. |
+| `agent-tunnel resume` | A **normal terminal** where you want the Claude session — it `exec`s `claude --resume`, dropping you into the fork. |
+| `ask` · `published` · `status` · `forks` · `doctor` · `forget` · `init` | Anywhere — tmux context is irrelevant. |
 
 `agent-tunnel help` prints all of this plus every command's details.
 
@@ -268,6 +271,44 @@ then `d`.
   (default **3h** — only catches abandoned threads; set `0` to disable).
 - You can also `agent-tunnel forget --all`, `tmux -L agent-tunnel
   kill-server`, or just Ctrl-C `serve`.
+
+## Resuming a fork (pick up colleague context)
+
+A fork keeps its JSONL transcript after the tmux window is reaped — so the
+**extra context your colleagues built up lives on**, and you can continue it
+yourself. The catch: a fork copies the *original* session's name, so multiple
+forks show the **same name** in Claude's `/resume` picker and you can't tell
+them apart. `forks` and `resume` sidestep that entirely by using the exact
+fork id the daemon recorded:
+
+```bash
+agent-tunnel forks          # all forks: handle, asker, last active, turns, id
+agent-tunnel forks cmmc     # filter to one handle
+agent-tunnel resume cmmc    # resume cmmc's fork in Claude Code
+```
+
+A handle can have **several forks** (each colleague's thread is its own). When
+there's more than one, `resume` picks the **most recently active** and lists
+the rest so you can choose:
+
+```
+handle 'cmmc' has 3 forks (resuming the most recent, ←):
+  ← alice   2h ago   14 turns   fork c75f3a83
+    bob     1d ago    6 turns   fork 9e21ab04
+    you     3d ago    2 turns   fork 1f0b40e6
+  pick another:  agent-tunnel resume cmmc --fork 9e21ab04
+```
+
+The **turn count** is your "how much context" signal. `resume` runs
+`claude --resume <fork-id>` in that fork's project dir and config dir (work vs
+personal), so you land in the right session — no `/resume` name ambiguity.
+
+<Aside type="caution">
+Prefer resuming forks that are **idle/reaped**. If you resume a fork whose
+tmux window is still live and a colleague asks in that thread at the same
+moment, both sessions write to the same transcript (interleaving). Once the
+window is reaped, it's completely safe.
+</Aside>
 
 ## Backends & billing
 

@@ -1,4 +1,5 @@
-"""CLI for agent-tunnel: serve, ask, status, published, forget, init."""
+"""CLI for agent-tunnel: serve, ask, published, forks, resume, status, watch,
+doctor, forget, init, help."""
 
 from __future__ import annotations
 
@@ -19,8 +20,8 @@ from .config import (
     sample_config,
 )
 from .registry import Registry
-from .session import find_latest_session
-from .store import TunnelStore
+from .session import count_turns, find_latest_session, transcript_dir
+from .store import ThreadRecord, TunnelStore
 
 
 def _build(
@@ -218,6 +219,134 @@ def published(config: Optional[str]) -> None:
         )
 
 
+def _relative_time(ts: float) -> str:
+    """Human 'time ago' for an epoch timestamp."""
+    secs = max(0.0, time.time() - ts)
+    if secs < 90:
+        return f"{int(secs)}s ago"
+    if secs < 5400:
+        return f"{int(secs / 60)}m ago"
+    if secs < 129600:
+        return f"{int(secs / 3600)}h ago"
+    return f"{int(secs / 86400)}d ago"
+
+
+def _forks(
+    store: TunnelStore, handle: Optional[str] = None
+) -> list[ThreadRecord]:
+    """Bound threads that have a fork, newest activity first."""
+    recs = [
+        r
+        for r in store.all_records()
+        if r.fork_session_id and (handle is None or r.handle == handle)
+    ]
+    recs.sort(key=lambda r: r.last_used, reverse=True)
+    return recs
+
+
+def _fork_path(rec: ThreadRecord) -> Optional[Path]:
+    """Locate a fork's transcript file (under its own config dir)."""
+    home = Path(rec.config_dir) if rec.config_dir else None
+    path = transcript_dir(Path(rec.project_dir), home) / (
+        f"{rec.fork_session_id}.jsonl"
+    )
+    return path if path.exists() else None
+
+
+def _fork_line(rec: ThreadRecord, marker: str = "") -> str:
+    fp = _fork_path(rec)
+    turns = count_turns(fp) if fp else 0
+    cfgdir = f" [{Path(rec.config_dir).name}]" if rec.config_dir else ""
+    return (
+        f"{marker}{rec.handle}{cfgdir}  asker={rec.asker or '?'}  "
+        f"{_relative_time(rec.last_used)}  {turns} turns  "
+        f"fork={rec.fork_session_id[:8]}"
+    )
+
+
+@cli.command()
+@click.argument("handle", required=False)
+@click.option("--config", type=click.Path(), help="Config TOML path.")
+def forks(handle: Optional[str], config: Optional[str]) -> None:
+    """List fork sessions (one per Discord thread) and their context size.
+
+    Optionally filter by HANDLE. Resume one with `agent-tunnel resume`.
+    """
+    cfg = _build(config)
+    store = TunnelStore(cfg.state_path)
+    recs = _forks(store, handle)
+    if not recs:
+        where = f" for handle {handle!r}" if handle else ""
+        click.echo(f"No fork sessions{where} yet.")
+        return
+    for rec in recs:
+        click.echo(_fork_line(rec))
+
+
+@cli.command()
+@click.argument("handle")
+@click.option(
+    "--fork",
+    "fork_id",
+    default=None,
+    help="Resume a specific fork id (a prefix is fine).",
+)
+@click.option("--config", type=click.Path(), help="Config TOML path.")
+def resume(
+    handle: str, fork_id: Optional[str], config: Optional[str]
+) -> None:
+    """Resume a colleague-accumulated fork for HANDLE in Claude Code.
+
+    One fork: resumes it. Several: resumes the most recent and lists the
+    alternatives (pick one with --fork <id>).
+    """
+    cfg = _build(config)
+    store = TunnelStore(cfg.state_path)
+    recs = _forks(store, handle)
+    if not recs:
+        raise click.ClickException(
+            f"No fork sessions for handle {handle!r}."
+        )
+
+    if fork_id:
+        matches = [r for r in recs if r.fork_session_id.startswith(fork_id)]
+        if not matches:
+            raise click.ClickException(
+                f"No fork id starting with {fork_id!r} for {handle!r}."
+            )
+        chosen = matches[0]
+    else:
+        chosen = recs[0]
+        if len(recs) > 1:
+            click.echo(
+                f"handle {handle!r} has {len(recs)} forks "
+                "(resuming the most recent, ←):",
+                err=True,
+            )
+            for rec in recs:
+                mark = "  ← " if rec is chosen else "    "
+                click.echo(_fork_line(rec, marker=mark), err=True)
+            click.echo(
+                f"  pick another:  agent-tunnel resume {handle} --fork <id>",
+                err=True,
+            )
+
+    env = {**os.environ}
+    if chosen.config_dir:
+        env["CLAUDE_CONFIG_DIR"] = chosen.config_dir
+    try:
+        os.chdir(chosen.project_dir)
+    except OSError as exc:
+        raise click.ClickException(
+            f"Cannot enter {chosen.project_dir}: {exc}"
+        )
+    os.execvpe(
+        cfg.claude.binary,
+        [cfg.claude.binary, "--resume", chosen.fork_session_id],
+        env,
+    )
+
+
 @cli.command()
 @click.option("--config", type=click.Path(), help="Config TOML path.")
 def watch(config: Optional[str]) -> None:
@@ -371,7 +500,9 @@ Where to run each command:
              works inside tmux too, just with awkward prefix keys
   >share     inside the Claude Code session you want to publish (it's a hook
              from the agent-tunnel plugin, not a subcommand)
-  ask / published / status / doctor / forget / init
+  resume     a normal terminal where you want the Claude session — it execs
+             `claude --resume` and drops you into the fork
+  ask / published / status / forks / doctor / forget / init
              plain CLI — run anywhere, tmux context does not matter
 """
 
