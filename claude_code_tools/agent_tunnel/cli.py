@@ -13,7 +13,7 @@ from typing import Optional
 
 import click
 
-from .backends import Backend, BackendError, make_backend
+from .backends import Backend, BackendError, _window_name, make_backend
 from .config import (
     DEFAULT_CONFIG_PATH,
     TunnelConfig,
@@ -504,6 +504,43 @@ def resume(
 
 
 @cli.command()
+@click.argument("old")
+@click.argument("new")
+@click.option("--config", type=click.Path(), help="Config TOML path.")
+def rename(old: str, new: str, config: Optional[str]) -> None:
+    """Rename a shared handle OLD to NEW.
+
+    Updates the registry, the bound fork records, and any live tmux windows,
+    so colleagues address NEW and `published`/`forks`/`resume` all agree. Works
+    out-of-session (no need to be in the Claude session).
+    """
+    cfg = _build(config)
+    registry = Registry(cfg.registry_path)
+    ok, msg = registry.rename(old, new)
+    if not ok:
+        raise click.ClickException(msg)
+    old_h, new_h = old.strip().lower(), new.strip().lower()
+    store = TunnelStore(cfg.state_path)
+    renamed = store.rename_handle(old_h, new_h)
+    windows = 0
+    if cfg.backend == "tmux" and renamed:
+        tmux = getattr(make_backend(cfg, store), "tmux", None)
+        for rec in renamed:
+            if not rec.tmux_window or tmux is None:
+                continue
+            new_win = _window_name(new_h, rec.thread_key)
+            if tmux.rename_window(rec.tmux_window, new_win):
+                rec.tmux_window = new_win
+                store.upsert(rec)
+                windows += 1
+    suffix = f", {windows} live window(s)" if windows else ""
+    click.echo(
+        f"Renamed '{old_h}' → '{new_h}' "
+        f"(registry, {len(renamed)} fork(s){suffix})."
+    )
+
+
+@cli.command()
 @click.option("--config", type=click.Path(), help="Config TOML path.")
 def watch(config: Optional[str]) -> None:
     """Attach to the private tmux server to watch live fork sessions.
@@ -664,7 +701,7 @@ Where to run each command:
              from the agent-tunnel plugin, not a subcommand)
   resume     a normal terminal where you want the Claude session — it execs
              `claude --resume` and drops you into the fork
-  ask / published / status / forks / doctor / forget / init
+  ask / published / status / forks / rename / doctor / forget / init
              plain CLI — run anywhere, tmux context does not matter
 """
 

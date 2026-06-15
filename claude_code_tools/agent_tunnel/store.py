@@ -131,6 +131,20 @@ class TunnelStore:
                 self._save_locked()
             return rec
 
+    def rename_handle(self, old: str, new: str) -> list[ThreadRecord]:
+        """Point every bound thread on handle `old` at `new`.
+
+        Returns the updated records (live references) so the caller can also
+        fix their tmux windows.
+        """
+        with self._lock:
+            renamed = [r for r in self._records.values() if r.handle == old]
+            for rec in renamed:
+                rec.handle = new
+            if renamed:
+                self._save_locked()
+            return renamed
+
     def all_records(self) -> list[ThreadRecord]:
         """Return a snapshot of all records."""
         with self._lock:

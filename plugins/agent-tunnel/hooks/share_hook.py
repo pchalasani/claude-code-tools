@@ -112,9 +112,11 @@ def _publish(session_id, cwd, transcript_path, config_dir, access, label):
                 "session_id": session_id,
                 "cwd": cwd,
                 "config_dir": config_dir,
+                # `or "read"` (not a .get default) so a pre-existing null
+                # access — written by an old hook — can't persist on re-share.
                 "access": access
                 if access is not None
-                else records.get(handle, {}).get("access", "read"),
+                else (records.get(handle, {}).get("access") or "read"),
                 "label": label or records.get(handle, {}).get("label", ""),
                 "transcript_path": transcript_path,
                 "created_at": records.get(handle, {}).get(

@@ -88,8 +88,9 @@ command group (like `aichat`) whose subcommands are:
 | `agent-tunnel serve` | Run the Discord daemon — the long-lived bridge that answers questions |
 | `agent-tunnel published` | List the sessions you've shared (handles in the registry) |
 | `agent-tunnel status` | Show active conversation threads and their forks |
-| `agent-tunnel forks [<handle>]` | List fork sessions colleagues built up (asker, last active, turn count, fork id) |
+| `agent-tunnel forks [<handle>]` | Table of fork sessions (handle, access, asker, last active, turns, live/idle, fork id); `--json` to script, `--manage` to select-and-clear |
 | `agent-tunnel resume <handle>` | Resume a colleague-accumulated fork in Claude Code (most recent, or `--fork <id>`) |
+| `agent-tunnel rename <old> <new>` | Rename a shared handle (registry + bound forks + live tmux windows) |
 | `agent-tunnel watch` | Attach to the private tmux server to watch live forks |
 | `agent-tunnel doctor` | Readiness check (token found, channel set, `claude`/`tmux` on PATH) |
 | `agent-tunnel ask "Q" --handle H` | Ask one question through the full pipeline, no Discord (local test) |

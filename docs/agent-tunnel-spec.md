@@ -110,7 +110,7 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
   allowlists, cooldown, concurrency, 2000-char chunking, long answers as
   `answer.md`; `token_file` resolution. Downloads inbound attachments and posts
   outbound deliverables (`discord.File`), within size/count caps.
-- `cli.py` — `serve | ask | published | forks | resume | status | watch |
+- `cli.py` — `serve | ask | published | forks | resume | rename | status | watch |
   doctor | forget | init | help`. `forks` lists fork sessions (handle, asker,
   last active, turn count, fork id) from the store; `resume <handle>` execs
   `claude --resume <fork-id>` in the fork's project + config dir (most recent

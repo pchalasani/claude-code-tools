@@ -98,6 +98,9 @@ class Registry:
                 record = PublishRecord(**fields)
             except TypeError:
                 continue
+            # Defensive: an old hook could write access=null; treat it as read
+            # so it never displays or behaves oddly (null != "write" anyway).
+            record.access = record.access or "read"
             # Backfill config_dir for records written before it was tracked:
             # the transcript path is <config-dir>/projects/...
             if not record.config_dir and "/projects/" in record.transcript_path:
@@ -140,3 +143,35 @@ class Registry:
         rec.revoked = True
         self._write(records)
         return True
+
+    def rename(self, old: str, new: str) -> tuple[bool, str]:
+        """Rename handle `old` to `new`.
+
+        Returns (ok, message). Fails if `new` is malformed, `old` is missing,
+        or `new` is an active handle of a different session.
+        """
+        old = old.strip().lower()
+        new = new.strip().lower()
+        if not HANDLE_RE.match(new):
+            return (
+                False,
+                f"Invalid handle {new!r}: letters, digits, dashes (2-32).",
+            )
+        if new == old:
+            return (False, "New handle is the same as the old one.")
+        records = self._read()
+        rec = records.get(old)
+        if rec is None:
+            return (False, f"No handle {old!r} in the registry.")
+        taken = records.get(new)
+        if (
+            taken is not None
+            and not taken.revoked
+            and taken.session_id != rec.session_id
+        ):
+            return (False, f"Handle {new!r} is already used by another session.")
+        records.pop(old, None)
+        rec.handle = new
+        records[new] = rec
+        self._write(records)
+        return (True, f"Renamed {old!r} to {new!r}.")

@@ -824,3 +824,69 @@ def test_fork_row_fields() -> None:
     assert row["fork"] == "abcdef12"  # first 8 chars
     assert row["turns"] == "0"  # no transcript on disk
     assert row["project"] == "proj [.claude-rja]"
+
+
+# --------------------------------------------------------------- rename
+
+
+def test_registry_rename(tmp_path: Path) -> None:
+    reg = Registry(tmp_path / "registry.json")
+    reg.upsert(
+        PublishRecord(handle="old", session_id=SID_A, cwd="/p", access="write")
+    )
+
+    ok, _ = reg.rename("old", "new")
+    assert ok
+    assert reg.get("old") is None
+    got = reg.get("new")
+    assert got is not None
+    assert got.handle == "new" and got.session_id == SID_A
+    assert got.access == "write"  # access carried over
+
+    assert reg.rename("missing", "x")[0] is False  # no such old handle
+    assert reg.rename("new", "!!!")[0] is False  # malformed new handle
+
+    # Collision with a different session's active handle is refused.
+    reg.upsert(PublishRecord(handle="taken", session_id=SID_B, cwd="/q"))
+    ok, msg = reg.rename("new", "taken")
+    assert not ok and "already used" in msg
+    assert reg.get("new") is not None  # original left intact
+
+
+def test_registry_coerces_null_access(tmp_path: Path) -> None:
+    # An old hook could write access=null; it must load as "read".
+    path = tmp_path / "registry.json"
+    path.write_text(
+        json.dumps(
+            {
+                "records": {
+                    "h": {
+                        "handle": "h",
+                        "session_id": SID_A,
+                        "cwd": "/p",
+                        "access": None,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    rec = Registry(path).get("h")
+    assert rec is not None and rec.access == "read"
+
+
+def test_store_rename_handle(tmp_path: Path) -> None:
+    store = TunnelStore(tmp_path / "state.json")
+    store.bind("th:1", "old", SID_A, "/p", "tmux")
+    store.bind("th:2", "old", SID_B, "/q", "tmux")
+    store.bind("th:3", "other", SID_A, "/p", "tmux")
+
+    renamed = store.rename_handle("old", "new")
+    assert len(renamed) == 2
+
+    reloaded = TunnelStore(tmp_path / "state.json")
+    r1, r2, r3 = (reloaded.get(k) for k in ("th:1", "th:2", "th:3"))
+    assert r1 is not None and r2 is not None and r3 is not None
+    assert r1.handle == "new"
+    assert r2.handle == "new"
+    assert r3.handle == "other"  # untouched
