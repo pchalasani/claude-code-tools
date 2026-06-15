@@ -15,7 +15,7 @@ Schema (``registry.json``)::
           "session_id": "<claude session uuid>",
           "cwd": "<absolute project dir of that session>",
           "config_dir": "<claude config dir the session lives under>",
-          "access": "read" | "write",
+          "access": "read" | "write" | "bash",
           "label": "<optional friendly label>",
           "transcript_path": "<absolute .jsonl path, best-effort>",
           "created_at": <float epoch seconds>,
@@ -63,7 +63,9 @@ class PublishRecord:
     session_id: str
     cwd: str
     config_dir: str = ""  # Claude config dir the session lives under
-    access: str = "read"  # "read" or "write" (set via >share --write)
+    # "read", "write" (>share --write), or "bash"
+    # (>share --dangerously-allow-bash; also enables command execution).
+    access: str = "read"
     label: str = ""
     transcript_path: str = ""
     created_at: float = field(default_factory=time.time)

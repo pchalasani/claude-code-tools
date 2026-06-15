@@ -91,13 +91,25 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
   paste, Enter-with-verify, idle detection, liveness/reaping.
 - `trust.py` — pre-trust a folder in the right config's `.claude.json`
   (surgical, atomic) so the interactive fork doesn't hit the trust dialog.
+- `paths.py` — per-thread filesystem layout for the attachment round-trip:
+  inbound upload dir (under the state dir), outbox dir (`.agent-tunnel-out/`
+  inside the project, with a `*` `.gitignore` guard), and the pure
+  snapshot/diff + question-preamble helpers. Stdlib-only and unit-tested.
+- `convert.py` — best-effort conversion of attached Office files into a
+  `Read`-openable format, using whatever converter is on `PATH`
+  (LibreOffice→PDF / pandoc→md / textutil→txt) or an owner-set command. A clean
+  no-op when none is installed; never a hard dependency.
 - `backends.py` — `HeadlessBackend` / `TmuxBackend` behind one interface; both
   read the thread's binding to decide what to fork, and pin the fork to the
-  session's config dir via `CLAUDE_CONFIG_DIR`.
+  session's config dir via `CLAUDE_CONFIG_DIR`. Per turn they expose the
+  upload dir via `--add-dir`, append the outbox instruction to the persona for
+  write/bash handles, and diff the outbox to collect deliverables onto
+  `Answer.attachments`.
 - `discord_bot.py` — handle→thread routing, `!list`/`!handles` discovery,
   `!done`/`!close`/`!end` teardown, `<handle>: <question>` thread names,
   allowlists, cooldown, concurrency, 2000-char chunking, long answers as
-  `answer.md`; `token_file` resolution.
+  `answer.md`; `token_file` resolution. Downloads inbound attachments and posts
+  outbound deliverables (`discord.File`), within size/count caps.
 - `cli.py` — `serve | ask | published | forks | resume | status | watch |
   doctor | forget | init | help`. `forks` lists fork sessions (handle, asker,
   last active, turn count, fork id) from the store; `resume <handle>` execs
@@ -116,6 +128,10 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
   (write = read tools + Write/Edit/NotebookEdit, never Bash; read = read-only).
   Re-sharing without a flag preserves the current level. The access level rides
   on the registry record → ThreadRecord → `build_claude_flags(access=…)`.
+- `>share --dangerously-allow-bash <label>` — the strongest level: write tools
+  **plus `Bash`/command execution**, so a fork can build real PDFs/docx (e.g.
+  via pandoc) as deliverables. It removes the read-only sandbox — grant it only
+  to fully trusted colleagues. Access escalates linearly: read ⊂ write ⊂ bash.
 - `>share status` — show this session's handle, if any.
 - `>share off` — revoke (new threads can't open; existing forks keep working,
   since a fork holds its own copy of history).
@@ -133,6 +149,42 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
   immediately (kill window, drop binding, confirm).
 - DMs (optional, off by default): `\<handle\> …` (re)binds the DM; bare text
   follows up.
+
+## File attachments (round-trip)
+
+A thread can carry files both ways, so a colleague can hand the expert a
+document and get a generated deliverable back.
+
+**Inbound (any handle).** When a colleague attaches files to a message
+(text optional), the bot downloads each into a per-thread dir *outside* any
+repo — `<state>/uploads/<thread>/` — and prepends the absolute paths to the
+question. The fork is launched with that dir on `--add-dir`, so the read-only
+`Read` tool (which handles PDF/image/markdown natively) can open them. The
+upload dir is always `--add-dir`'d (even empty) so files dropped into a *warm*
+follow-up window stay readable. Per-file size and count caps
+(`limits.max_attachment_mb`, `limits.max_attachments`) apply; oversized/excess
+files are skipped with a heads-up.
+
+`Read` can't open binary Office files (`.docx`/`.pptx`/`.xlsx`), so those are
+**best-effort converted** to a readable format using whatever converter is on
+the host's `PATH` — fidelity-ordered **LibreOffice→PDF** (preferred; `Read`
+renders PDF pages visually), else **pandoc→Markdown** (media extracted), else
+macOS **textutil→text**. No converter is a hard dependency: with none present
+the colleague is told to send a PDF, and PDF/images/text always work unaided.
+Controlled by `[attachments] convert = "auto" | "off"` (plus a `convert_command`
+escape hatch). See `convert.py`.
+
+**Outbound (write/bash handles only).** A write/bash fork is told — via a
+per-thread line appended to the persona — to save anything it wants to deliver
+into its outbox: `<project>/.agent-tunnel-out/<thread>/`. The bot snapshots
+that dir before the turn and diffs it after, posting whatever was created or
+modified as Discord attachments. Diffing the directory (rather than parsing the
+transcript for `Write` tool calls) means a **Bash-generated** PDF is delivered
+just like a `Write`-tool markdown file. A `.gitignore` holding `*` is dropped
+at `.agent-tunnel-out/` so deliverables never dirty the owner's `git status`.
+Read handles can't write, so they produce nothing outbound.
+
+Both per-thread dirs are removed on `!done`/`forget` (best-effort).
 
 ## Config-dir awareness (multiple `CLAUDE_CONFIG_DIR`s)
 
@@ -175,11 +227,18 @@ dir is propagated end to end:
 
 ## Security model
 
-- Read-only tools, hard-enforced by the CLI permission layer.
+- Read-only tools by default, hard-enforced by the CLI permission layer.
+  `>share --write` adds file edits (still no Bash); `>share
+  --dangerously-allow-bash` additionally permits command execution and so
+  drops the sandbox — reserve it for fully trusted colleagues.
 - Access = Discord channel membership + optional user/role allowlists. Anyone
   who can ask can surface anything in the session context or readable project
   tree — publish accordingly; the persona discourages leaking secrets but is a
   soft layer only.
+- Inbound attachments land in a contained per-thread dir exposed via
+  `--add-dir`; uploaded filenames are sanitized to a basename (no path
+  traversal). Outbound delivery is limited to files the fork places in its
+  outbox, so unrelated project files are never auto-posted.
 - ToS: consumer plans prohibit making your *account* available to others; an
   owner-operated relay is a gray area. Headless + API key is the unambiguous
   path.
@@ -188,8 +247,10 @@ dir is propagated end to end:
 
 - Unit tested (real files, no mocks): registry roundtrip/revoke, the `>share`
   hook via subprocess (publish/idempotent/distinct-session/label/collision/
-  status/off), store bind+follow-up, session discovery & answer extraction,
-  chunking, flag building, config.
+  status/off, write + bash access), store bind+follow-up, session discovery &
+  answer extraction, chunking, flag building (incl. bash tools, `--add-dir`,
+  persona append), config, attachment layout/diff/preamble + the backend's
+  upload/outbox setup and cleanup, filename sanitization.
 - Live end-to-end (headless): `>share` → registry → `ask --handle` forked the
   exact published session, inherited context, and follow-ups continued the
   same fork.

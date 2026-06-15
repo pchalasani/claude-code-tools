@@ -73,7 +73,10 @@ Nothing to install. You hand them a handle; they:
 </Steps>
 
 So the whole colleague vocabulary is just three things: **`!list`** to
-discover, **`<handle> <question>`** to ask, **`!done`** to close.
+discover, **`<handle> <question>`** to ask, **`!done`** to close. They can also
+**attach a file** to a question (a PDF, CSV, image…) and the agent will read
+it; on write-enabled handles the agent can hand a generated file back into the
+thread.
 
 ## The `agent-tunnel` command group
 
@@ -122,18 +125,55 @@ is intercepted — it never reaches the model; you just see the handle):
 | `>share` | Publish this session; mint/show a handle |
 | `>share <label>` | Publish under a friendly handle, e.g. `>share payments` |
 | `>share --write <label>` | Publish with **write access** (file edits); read-only otherwise |
+| `>share --dangerously-allow-bash <label>` | Write **plus shell commands** (for real PDFs/docx) — trusted people only |
 | `>share --read <label>` | Downgrade a handle back to read-only |
 | `>share status` | Show this session's handle, if any |
 | `>share off` | Stop sharing (revoke the handle) |
 
-Access is **per handle**: only the sessions you publish with `--write` are
-writable, everything else stays read-only, and re-sharing without a flag keeps
-the current level. Even with write, the fork can edit files but **never** runs
-`Bash`/shell commands. `agent-tunnel published` tags writable handles with ✍️.
+Access is **per handle** and escalates **read ⊂ write ⊂ bash**: read-only by
+default, `--write` adds file edits (but still **never** `Bash`), and
+`--dangerously-allow-bash` additionally allows shell commands — which drops the
+sandbox, so reserve it for fully trusted colleagues. Re-sharing without a flag
+keeps the current level. `agent-tunnel published` tags writable handles with ✍️
+and bash handles with 💥.
 
 A labeled handle also makes the Discord thread and the tmux window readable
 (`payments-…` instead of a cryptic id). Colleagues end a conversation with
 `!done` in their thread; that tears the fork down immediately.
+
+## Sharing files both ways (attachments)
+
+A thread can move files in both directions — hand the expert a document, get a
+generated deliverable back.
+
+**Inbound — a colleague attaches a file (any handle).** Drop a PDF, image,
+CSV, or markdown file onto a message (with or without text) and the agent reads
+it: the bot saves it to a contained per-thread folder and points the fork's
+`Read` tool at it. Works for every handle, since reading is always allowed.
+Per-file size and count caps apply (`limits.max_attachment_mb` /
+`max_attachments`); anything over is skipped with a note.
+
+**Office files** (`.docx` / `.pptx` / `.xlsx`) can't be opened by `Read`
+directly, so they're **best-effort auto-converted** — to PDF if LibreOffice is
+on the host (highest fidelity), otherwise to Markdown (pandoc) or text. It's
+purely opportunistic: nothing needs installing, and if no converter is present
+the bot just asks the colleague to send a PDF. Toggle with `[attachments]
+convert = "auto" | "off"`. **PDF is the universal "attach this and it works"
+format** — it needs no converter and `Read` renders its pages visually.
+
+**Outbound — the agent hands a file back (write/bash handles).** A
+write-or-bash fork is told to drop anything it wants to deliver into an
+**outbox** inside the project — `.agent-tunnel-out/` — and the bot posts
+whatever appears there back into the thread as attachments. That folder carries
+a `.gitignore` of `*`, so deliverables never show up in your `git status`.
+
+<Aside type="note">
+Without shell access a fork can only deliver what it can write directly —
+Markdown, CSV, text, code, HTML. To get a real **PDF or .docx** (e.g. built
+with pandoc), publish the handle with `>share --dangerously-allow-bash`, which
+also lets that fork run shell commands. Read-only handles produce nothing
+outbound (they can't write).
+</Aside>
 
 ## Multiple Claude config dirs (e.g. work vs personal)
 
@@ -230,6 +270,11 @@ in every other channel regardless of what it can technically see.
    # No need to export anything: point at a file holding the token.
    token_file = "~/Documents/tokens/discord-token.txt"
    channel_ids = [123456789012345678]
+
+   # Optional — Office attachments (.docx/.pptx/.xlsx) are auto-converted to a
+   # readable format when a converter (LibreOffice/pandoc) is on PATH:
+   # [attachments]
+   # convert = "auto"      # or "off"
    ```
 
 3. Check readiness:
@@ -335,9 +380,10 @@ by the CLI permission layer — no writes, edits, or commands — but a determin
 asker can surface anything in the session context or readable project tree.
 Only `>share` sessions whose context you're willing to expose. If you grant
 **write access** (`>share --write`), a colleague's message — or a prompt
-injection in your channel — can also *edit files* in that folder, so reserve it
-for sessions/folders where that's acceptable (it still never runs shell
-commands).
+injection in your channel — can also *edit files* in that folder (it still
+never runs shell commands). `>share --dangerously-allow-bash` goes further and
+lets the fork **run shell commands** — that removes the sandbox entirely, so
+use it only for folders and people you fully trust.
 </Aside>
 
 <Aside type="note">

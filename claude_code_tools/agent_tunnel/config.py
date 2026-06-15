@@ -51,10 +51,16 @@ DEFAULT_DISALLOWED_TOOLS = [
 # "write" access also permits file edits, but never Bash/command execution.
 WRITE_ALLOWED_TOOLS = ["Read", "Grep", "Glob", "Write", "Edit", "NotebookEdit"]
 WRITE_DISALLOWED_TOOLS = ["Bash", "Task", "Agent", "WebFetch", "WebSearch"]
+# "bash" access additionally permits command execution (>share
+# --dangerously-allow-bash) so a fork can produce real PDFs/docx via pandoc &
+# co. It is a strict escalation of "write": read < write < bash.
+BASH_ALLOWED_TOOLS = WRITE_ALLOWED_TOOLS + ["Bash"]
+BASH_DISALLOWED_TOOLS = ["Task", "Agent", "WebFetch", "WebSearch"]
 # Tool presets keyed by the `access` level.
 ACCESS_PRESETS = {
     "read": (DEFAULT_ALLOWED_TOOLS, DEFAULT_DISALLOWED_TOOLS),
     "write": (WRITE_ALLOWED_TOOLS, WRITE_DISALLOWED_TOOLS),
+    "bash": (BASH_ALLOWED_TOOLS, BASH_DISALLOWED_TOOLS),
 }
 
 
@@ -119,6 +125,28 @@ class LimitsConfig:
     # than this are reaped so abandoned ones can't pile up. 0 disables it.
     pane_idle_ttl_min: float = 180.0
     max_inline_chars: int = 5500
+    # Per-file size cap (MB) for both inbound uploads a colleague attaches and
+    # outbound deliverables the bot posts back. 24 keeps us under Discord's
+    # default 25 MB attachment limit on un-boosted servers.
+    max_attachment_mb: float = 24.0
+    # Most attachments accepted from a single colleague message.
+    max_attachments: int = 10
+
+
+@dataclass
+class AttachmentsConfig:
+    """Inbound-attachment handling (downloads + best-effort conversion)."""
+
+    # Office files (.docx/.pptx/.xlsx/…) can't be opened by the Read tool, so
+    # we best-effort convert them with whatever converter is on the host's
+    # PATH. "auto" = use the best one found (LibreOffice→PDF, else pandoc→md,
+    # else macOS textutil→txt); "off" = never convert. No converter is ever a
+    # hard dependency — PDF/images/text always work without one.
+    convert: str = "auto"
+    # Advanced: a custom converter command overriding auto-detection. Tokens
+    # {input} (the file) and {outdir} (where to drop the result) are
+    # substituted; the new file appearing in {outdir} is taken as the output.
+    convert_command: str = ""
 
 
 @dataclass
@@ -136,6 +164,7 @@ class TunnelConfig:
     discord: DiscordConfig = field(default_factory=DiscordConfig)
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
     limits: LimitsConfig = field(default_factory=LimitsConfig)
+    attachments: AttachmentsConfig = field(default_factory=AttachmentsConfig)
 
 
 def _apply(dc: Any, data: dict[str, Any]) -> None:
@@ -189,6 +218,7 @@ def load_config(
     _apply(cfg.discord, data.get("discord", {}))
     _apply(cfg.claude, data.get("claude", {}))
     _apply(cfg.limits, data.get("limits", {}))
+    _apply(cfg.attachments, data.get("attachments", {}))
 
     if backend:
         cfg.backend = backend
@@ -236,8 +266,12 @@ respond_to_dms = false
 binary = "claude"
 # Empty string = the published session's default model.
 model = ""
-# Remote turns are read-only by default. Grant write access per session at
-# share time:  >share --write <name>  (never enables Bash/command execution).
+# Remote turns are read-only by default. Grant access per session at share
+# time:  >share --write <name>  (adds Write/Edit, never Bash), or
+# >share --dangerously-allow-bash <name>  (also adds Bash/command execution,
+# so a fork can build real PDFs/docx — only do this for trusted colleagues).
+# Write/bash handles can hand deliverables back: a fork writes them into
+# <project>/.agent-tunnel-out/ (git-ignored) and the bot posts them to chat.
 # Advanced: explicit tool lists override the per-handle preset (empty = preset).
 allowed_tools = []
 disallowed_tools = []
@@ -262,4 +296,20 @@ launch_timeout_s = 90.0
 pane_idle_ttl_min = 180.0
 # Answers longer than this are attached as answer.md instead of inlined.
 max_inline_chars = 5500
+# Per-file size cap (MB) for inbound uploads and outbound deliverables.
+# 24 stays under Discord's default 25 MB limit on un-boosted servers.
+max_attachment_mb = 24.0
+# Most attachments accepted from a single colleague message.
+max_attachments = 10
+
+[attachments]
+# The Read tool can't open Office files (.docx/.pptx/.xlsx). When a colleague
+# attaches one, best-effort convert it with whatever is on PATH: "auto" picks
+# the best converter found (LibreOffice -> PDF, else pandoc -> Markdown, else
+# macOS textutil -> text); "off" disables it. Nothing is a hard dependency —
+# PDF, images, and text always work without any converter installed.
+convert = "auto"
+# Advanced: a custom converter command, overriding auto-detection. {{input}}
+# and {{outdir}} are substituted; the file it drops into {{outdir}} is used.
+# convert_command = "soffice --headless --convert-to pdf --outdir {{outdir}} {{input}}"
 '''

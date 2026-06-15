@@ -4,6 +4,9 @@
 Triggers (typed as a prompt inside any Claude Code session):
 - '>share'            : publish this session, mint/show a handle
 - '>share <label>'    : publish with a chosen handle (e.g. >share payments)
+- '>share --write <label>' : also let colleagues edit files (no shell)
+- '>share --dangerously-allow-bash <label>' : also let them run shell
+  commands (so a fork can build real PDFs/docx) — trusted people only
 - '>share status'     : show this session's handle, if any
 - '>share off'        : revoke this session's handle
 
@@ -192,10 +195,16 @@ def main():
             message = _status(session_id)
         else:
             tokens = arg.split()
+            bash = "--dangerously-allow-bash" in tokens
             write = "--write" in tokens or "-w" in tokens
             read = "--read" in tokens or "-r" in tokens
-            # None preserves an existing record's access on re-share.
-            access = "write" if write else ("read" if read else None)
+            # None preserves an existing record's access on re-share. bash is
+            # the strongest level (also runs shell commands), then write, read.
+            access = (
+                "bash"
+                if bash
+                else ("write" if write else ("read" if read else None))
+            )
             label_raw = next((t for t in tokens if not t.startswith("-")), "")
             label = _sanitize_label(label_raw) if label_raw else ""
             if label_raw and not label:
@@ -214,12 +223,19 @@ def main():
                         f"another session. Pick a different name.{RESET}"
                     )
                 else:
-                    note = (
-                        f"\n{YELLOW}WRITE access: colleagues can edit files in "
-                        f"this folder.{RESET}"
-                        if access == "write"
-                        else ""
-                    )
+                    if access == "bash":
+                        note = (
+                            f"\n{YELLOW}⚠️ BASH access: the colleague's agent "
+                            f"can RUN SHELL COMMANDS and edit files in this "
+                            f"folder. Only for fully trusted people.{RESET}"
+                        )
+                    elif access == "write":
+                        note = (
+                            f"\n{YELLOW}WRITE access: colleagues can edit "
+                            f"files in this folder.{RESET}"
+                        )
+                    else:
+                        note = ""
                     message = (
                         f"{GREEN}Sharing this session as: {handle}{RESET}{note}"
                         f"\n{BLUE}Give colleagues this handle; they post  "

@@ -118,6 +118,12 @@ def serve(
 @click.option(
     "--write", is_flag=True, help="Grant write access (with --session/auto)."
 )
+@click.option(
+    "--dangerously-allow-bash",
+    "allow_bash",
+    is_flag=True,
+    help="Grant write + shell execution (with --session/auto).",
+)
 @click.argument("question")
 def ask(
     config: Optional[str],
@@ -127,6 +133,7 @@ def ask(
     project: Optional[str],
     thread: str,
     write: bool,
+    allow_bash: bool,
     question: str,
 ) -> None:
     """Ask one question through the full pipeline (no Discord).
@@ -141,7 +148,7 @@ def ask(
 
     if store.get(thread_key) is None:
         expert_id, project_dir, hname, config_dir, access = _resolve_target(
-            cfg, store, handle, session, project, write
+            cfg, store, handle, session, project, write, allow_bash
         )
         store.bind(
             thread_key,
@@ -172,6 +179,7 @@ def _resolve_target(
     session: Optional[str],
     project: Optional[str],
     write: bool = False,
+    allow_bash: bool = False,
 ) -> tuple[str, Path, str, str, str]:
     """Resolve (expert_session_id, project_dir, handle, config_dir, access)."""
     if handle:
@@ -181,7 +189,7 @@ def _resolve_target(
         return rec.session_id, Path(rec.cwd), rec.handle, rec.config_dir, (
             rec.access
         )
-    access = "write" if write else "read"
+    access = "bash" if allow_bash else ("write" if write else "read")
     project_dir = Path(project or os.getcwd()).expanduser().resolve()
     env_dir = os.environ.get("CLAUDE_CONFIG_DIR", "")
     if session:
@@ -213,9 +221,12 @@ def published(config: Optional[str]) -> None:
             f" ({rec.label})" if rec.label and rec.label != rec.handle else ""
         )
         cfgdir = f"  [{Path(rec.config_dir).name}]" if rec.config_dir else ""
-        wr = "  ✍️ write" if rec.access == "write" else ""
+        access = {"write": "  ✍️ write", "bash": "  💥 bash"}.get(
+            rec.access, ""
+        )
         click.echo(
-            f"{rec.handle}{label}: {rec.session_id[:8]} @ {rec.cwd}{cfgdir}{wr}"
+            f"{rec.handle}{label}: {rec.session_id[:8]} @ {rec.cwd}{cfgdir}"
+            f"{access}"
         )
 
 
@@ -388,6 +399,7 @@ def doctor(config: Optional[str]) -> None:
     """Check that agent-tunnel is configured and ready to serve."""
     import shutil
 
+    from .convert import detect_converter
     from .discord_bot import resolve_token
 
     cfg = _build(config)
@@ -415,6 +427,11 @@ def doctor(config: Optional[str]) -> None:
         ok_all = ok_all and ok
     n = len(Registry(cfg.registry_path).active())
     click.echo(f"  • {n} published session(s) live")
+    if cfg.attachments.convert == "off":
+        conv = "off (config)"
+    else:
+        conv = detect_converter() or "none — colleagues should attach PDFs"
+    click.echo(f"  • Office-attachment converter: {conv}")
     click.echo(f"\nbackend={cfg.backend}  registry={cfg.registry_path}")
     if not ok_all:
         raise click.ClickException("Some checks failed — see above.")

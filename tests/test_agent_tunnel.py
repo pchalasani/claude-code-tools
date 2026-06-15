@@ -227,6 +227,26 @@ def test_share_hook_write_access(tmp_path: Path) -> None:
     assert rec is not None and rec.access == "read"
 
 
+def test_share_hook_bash_access(tmp_path: Path) -> None:
+    reg_path = tmp_path / "registry.json"
+    out = _run_hook(
+        ">share --dangerously-allow-bash btest", SID_A, "/p", reg_path
+    )
+    rec = Registry(reg_path).get("btest")
+    assert rec is not None and rec.access == "bash"
+    assert "BASH access" in out["reason"]
+
+    # re-share with no flag preserves the existing bash access.
+    _run_hook(">share btest", SID_A, "/p", reg_path)
+    rec = Registry(reg_path).get("btest")
+    assert rec is not None and rec.access == "bash"
+
+    # --read downgrades all the way back to read-only.
+    _run_hook(">share --read btest", SID_A, "/p", reg_path)
+    rec = Registry(reg_path).get("btest")
+    assert rec is not None and rec.access == "read"
+
+
 def test_share_hook_label_collision(tmp_path: Path) -> None:
     reg_path = tmp_path / "registry.json"
     _run_hook(">share shared", SID_A, "/p", reg_path)
@@ -489,6 +509,27 @@ def test_build_claude_flags() -> None:
     assert "Write" in allowed and "Edit" in allowed
     assert "Bash" in disallowed and "Write" not in disallowed
 
+    # bash access promotes Bash into allowed; network tools still blocked.
+    b = build_claude_flags(cfg, resume_id=SID_A, fork=False, access="bash")
+    b_allowed = b[b.index("--allowedTools") + 1]
+    b_disallowed = b[b.index("--disallowedTools") + 1]
+    assert "Bash" in b_allowed and "Write" in b_allowed
+    assert "Bash" not in b_disallowed and "WebFetch" in b_disallowed
+
+    # add_dirs emit one --add-dir each; extra_system appends to the persona.
+    e = build_claude_flags(
+        cfg,
+        resume_id=SID_A,
+        fork=False,
+        add_dirs=("/tmp/up", "/tmp/out"),
+        extra_system="OUTBOX HERE",
+    )
+    assert e.count("--add-dir") == 2
+    assert "/tmp/up" in e and "/tmp/out" in e
+    system_prompt = e[e.index("--append-system-prompt") + 1]
+    assert "OUTBOX HERE" in system_prompt
+    assert cfg.claude.persona in system_prompt  # persona preserved
+
 
 # --------------------------------------------------------------- config
 
@@ -505,6 +546,9 @@ channel_ids = [111]
 
 [limits]
 max_concurrent = 5
+
+[attachments]
+convert = "off"
 """,
         encoding="utf-8",
     )
@@ -512,6 +556,206 @@ max_concurrent = 5
     assert cfg.backend == "headless"
     assert cfg.discord.channel_ids == [111]
     assert cfg.limits.max_concurrent == 5
+    assert cfg.attachments.convert == "off"
     cfg = load_config(path=cfg_file, backend="tmux", channel_ids=[222])
     assert cfg.backend == "tmux"
     assert cfg.discord.channel_ids == [222]
+
+
+# --------------------------------------------------- attachment plumbing
+
+
+def test_paths_layout(tmp_path: Path) -> None:
+    from claude_code_tools.agent_tunnel.paths import (
+        OUTBOX_DIRNAME,
+        ensure_outbox,
+        outbox_dir_for,
+        safe_key,
+        uploads_dir_for,
+    )
+
+    assert safe_key("th:123") == "th-123"
+    assert safe_key("dm:99/x") == "dm-99-x"
+    assert safe_key("") == "thread"
+
+    state = tmp_path / "state"
+    assert uploads_dir_for(state, "th:1") == state / "uploads" / "th-1"
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    assert outbox_dir_for(proj, "th:1") == proj / OUTBOX_DIRNAME / "th-1"
+
+    made = ensure_outbox(proj, "th:1")
+    assert made.is_dir()
+    # A git-ignore-everything guard keeps the outbox out of `git status`.
+    assert (proj / OUTBOX_DIRNAME / ".gitignore").read_text() == "*\n"
+
+
+def test_paths_snapshot_diff(tmp_path: Path) -> None:
+    from claude_code_tools.agent_tunnel.paths import (
+        changed_files,
+        snapshot_dir,
+    )
+
+    out = tmp_path / "out"
+    out.mkdir()
+    assert snapshot_dir(tmp_path / "missing") == {}
+
+    a = out / "a.md"
+    a.write_text("one", encoding="utf-8")
+    old = time.time() - 100
+    os.utime(a, (old, old))
+    snap = snapshot_dir(out)
+    assert set(snap) == {"a.md"}
+    assert changed_files(out, snap) == []  # untouched
+
+    # a new file in a subdir is detected.
+    b = out / "sub" / "b.csv"
+    b.parent.mkdir()
+    b.write_text("x,y", encoding="utf-8")
+    assert [p.name for p in changed_files(out, snap)] == ["b.csv"]
+
+    # modifying an existing file (mtime advances) is detected too.
+    a.write_text("two", encoding="utf-8")
+    os.utime(a, (old + 200, old + 200))
+    assert sorted(p.name for p in changed_files(out, snap)) == [
+        "a.md",
+        "b.csv",
+    ]
+
+
+def test_attachment_preamble() -> None:
+    from claude_code_tools.agent_tunnel.paths import attachment_preamble
+
+    assert attachment_preamble([], "hi") == "hi"
+
+    one = attachment_preamble([Path("/up/r.pdf")], "summarize this")
+    assert "/up/r.pdf" in one
+    assert "Read tool" in one
+    assert one.rstrip().endswith("summarize this")
+
+    # no question text -> a default review instruction stands in.
+    empty = attachment_preamble(
+        [Path("/up/a.csv"), Path("/up/b.csv")], ""
+    )
+    assert "/up/a.csv" in empty and "/up/b.csv" in empty
+    assert "review" in empty.lower()
+
+
+def test_backend_attachment_dirs(tmp_path: Path) -> None:
+    project, claude_home = _make_project(tmp_path)
+    cfg = TunnelConfig(
+        state_path=tmp_path / "state.json", claude_home=claude_home
+    )
+    store = TunnelStore(cfg.state_path)
+    backend = HeadlessBackend(cfg, store)
+
+    # read handle: no outbox, but the uploads dir is still created + exposed.
+    rec_r = store.bind(
+        "th:r", "h", SID_A, str(project), "headless", access="read"
+    )
+    add_dirs, extra, outbox, snap = backend._begin_turn(rec_r)
+    assert outbox is None and extra == ""
+    assert len(add_dirs) == 1 and Path(add_dirs[0]).is_dir()
+    assert add_dirs[0].endswith("th-r")
+    assert backend._end_turn(outbox, snap) == []
+
+    # write handle: outbox created + named in the system prompt, and the
+    # before/after diff surfaces exactly what the fork wrote this turn.
+    rec_w = store.bind(
+        "th:w", "h", SID_A, str(project), "headless", access="write"
+    )
+    add_dirs, extra, outbox, snap = backend._begin_turn(rec_w)
+    assert outbox is not None and str(outbox) in extra
+    assert (project / ".agent-tunnel-out" / ".gitignore").read_text() == "*\n"
+    assert backend._end_turn(outbox, snap) == []  # nothing yet
+    (outbox / "report.md").write_text("hello", encoding="utf-8")
+    delivered = backend._end_turn(outbox, snap)
+    assert [p.name for p in delivered] == ["report.md"]
+
+    # forget cleans up both per-thread dirs.
+    uploads_w = Path(add_dirs[0])
+    backend.forget("th:w")
+    assert not outbox.exists() and not uploads_w.exists()
+
+
+def test_safe_filename() -> None:
+    from claude_code_tools.agent_tunnel.discord_bot import _safe_filename
+
+    assert _safe_filename("report.pdf") == "report.pdf"
+    assert _safe_filename("../../etc/passwd") == "passwd"
+    assert _safe_filename("my file (1).csv") == "my_file_1_.csv"
+    assert _safe_filename("") == "file"
+    assert _safe_filename("   ") == "file"
+
+
+# ------------------------------------------------- office-file conversion
+
+
+def test_convert_off_and_passthrough(tmp_path: Path) -> None:
+    from claude_code_tools.agent_tunnel.convert import (
+        CONVERTIBLE_EXTS,
+        convert_attachment,
+    )
+
+    work = tmp_path / "up"
+    work.mkdir()
+    docx = work / "a.docx"
+    docx.write_bytes(b"not really a docx")
+    assert ".docx" in CONVERTIBLE_EXTS
+
+    # "off" never converts, even for a convertible type.
+    assert convert_attachment(docx, work, mode="off").path is None
+    # A natively-readable type is a no-op (Read opens it directly).
+    txt = work / "a.txt"
+    txt.write_text("hi", encoding="utf-8")
+    assert convert_attachment(txt, work, mode="auto").path is None
+
+
+def test_convert_custom_command(tmp_path: Path) -> None:
+    # A portable custom command (cp) exercises the run + output-discovery path
+    # without depending on any Office converter being installed.
+    from claude_code_tools.agent_tunnel.convert import convert_attachment
+
+    work = tmp_path / "up"
+    work.mkdir()
+    src = work / "report.docx"
+    src.write_bytes(b"dummy docx bytes")
+    conv = convert_attachment(
+        src, work, mode="auto", custom_command="cp {input} {outdir}/out.txt"
+    )
+    assert conv.converter == "custom"
+    assert conv.path is not None and conv.path.name == "out.txt"
+    assert conv.path.read_bytes() == b"dummy docx bytes"
+
+
+def test_convert_auto_docx(tmp_path: Path) -> None:
+    # Real auto path — guarded so it skips on hosts with no converter.
+    import shutil
+
+    import pytest
+
+    from claude_code_tools.agent_tunnel.convert import (
+        convert_attachment,
+        converters_available,
+    )
+
+    pandoc = shutil.which("pandoc")
+    if pandoc is None:
+        pytest.skip("pandoc not installed; cannot build a .docx fixture")
+    assert converters_available()
+
+    md = tmp_path / "src.md"
+    md.write_text(
+        "# Title\n\nA word doc with token AUTO-CONV-42.\n", encoding="utf-8"
+    )
+    work = tmp_path / "up"
+    work.mkdir()
+    src = work / "doc.docx"
+    subprocess.run([pandoc, str(md), "-o", str(src)], check=True)
+    assert src.exists()
+
+    conv = convert_attachment(src, work, mode="auto")
+    assert conv.path is not None and conv.path.exists()
+    assert conv.path.stat().st_size > 0
+    assert conv.converter in ("libreoffice→pdf", "pandoc→md", "textutil→txt")

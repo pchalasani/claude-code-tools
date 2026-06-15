@@ -21,13 +21,16 @@ import asyncio
 import io
 import logging
 import os
+import re
 import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from .backends import Backend, BackendError
+from .backends import Answer, Backend, BackendError
 from .config import TunnelConfig
+from .convert import CONVERTIBLE_EXTS, convert_attachment
+from .paths import attachment_preamble, uploads_dir_for
 from .registry import HANDLE_RE, Registry
 from .store import TunnelStore
 
@@ -60,6 +63,13 @@ def is_close_command(text: str) -> bool:
 def is_list_command(text: str) -> bool:
     """True if a message asks for the list of shared handles (!list)."""
     return text.strip().lower() in LIST_COMMANDS
+
+
+def _safe_filename(name: str) -> str:
+    """Basename of an uploaded file, stripped to safe chars (no traversal)."""
+    base = os.path.basename(name or "").strip() or "file"
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("._") or "file"
+    return cleaned[:120]
 
 
 def split_chunks(text: str, limit: int = DISCORD_MSG_LIMIT) -> list[str]:
@@ -162,7 +172,9 @@ def run_bot(
             if message.author.bot:
                 return
             content = (message.content or "").strip()
-            if not content:
+            # An attachment-only message has empty content but still carries a
+            # file for the agent to read — don't drop it.
+            if not content and not message.attachments:
                 return
             channel = message.channel
 
@@ -220,8 +232,10 @@ def run_bot(
                 backend=cfg.backend,
                 asker=message.author.display_name,
             )
-            if question:
-                await self._answer(thread, f"th:{thread.id}", question)
+            if question or message.attachments:
+                await self._answer(
+                    thread, f"th:{thread.id}", question, message.attachments
+                )
             else:
                 await thread.send(
                     f"Connected to **{label}**. Ask your question here; "
@@ -246,7 +260,7 @@ def run_bot(
             if not self._cooldown_ok(message.author.id):
                 await message.add_reaction("⏳")
                 return
-            await self._answer(thread, thread_key, content)
+            await self._answer(thread, thread_key, content, message.attachments)
 
         async def _on_direct(
             self, message: discord.Message, content: str
@@ -277,7 +291,7 @@ def run_bot(
                     asker=message.author.display_name,
                 )
                 content = remainder.strip()
-                if not content:
+                if not content and not message.attachments:
                     await message.channel.send(
                         f"Connected to **{rec.label or rec.handle}**."
                     )
@@ -292,7 +306,9 @@ def run_bot(
             if not self._cooldown_ok(message.author.id):
                 await message.add_reaction("⏳")
                 return
-            await self._answer(message.channel, thread_key, content)
+            await self._answer(
+                message.channel, thread_key, content, message.attachments
+            )
 
         async def _list_handles(self, dest: Any) -> None:
             """Post the list of currently shared handles."""
@@ -324,7 +340,11 @@ def run_bot(
             )
 
         async def _answer(
-            self, dest: Any, thread_key: str, question: str
+            self,
+            dest: Any,
+            thread_key: str,
+            question: str,
+            attachments: Any = None,
         ) -> None:
             lock = locks[thread_key]
             if lock.locked():
@@ -335,6 +355,16 @@ def run_bot(
             async with lock, sem:
                 try:
                     async with dest.typing():
+                        question = await self._ingest_attachments(
+                            dest, thread_key, question, attachments or []
+                        )
+                        if not question.strip():
+                            await dest.send(
+                                "⚠️ Nothing to act on — the attachment(s) "
+                                "were too large or unreadable. Add a question "
+                                "or a smaller file."
+                            )
+                            return
                         answer = await asyncio.to_thread(
                             backend.ask, thread_key, question
                         )
@@ -356,8 +386,113 @@ def run_bot(
                     io.BytesIO(text.encode("utf-8")), filename="answer.md"
                 )
                 await dest.send(preview, file=file)
+            else:
+                for chunk in split_chunks(text):
+                    await dest.send(chunk)
+            await self._post_deliverables(dest, answer)
+
+        async def _ingest_attachments(
+            self,
+            dest: Any,
+            thread_key: str,
+            question: str,
+            attachments: Any,
+        ) -> str:
+            """Download a colleague's attachments and point the fork at them.
+
+            Saves each (within size/count caps) into the thread's upload dir —
+            which the backend exposes to the fork via ``--add-dir`` — and
+            prepends the absolute paths to the question. Oversized or excess
+            files are skipped with a heads-up. Returns the (possibly
+            preamble-prefixed) question.
+            """
+            if not attachments:
+                return question
+            cap = int(cfg.limits.max_attachment_mb * 1024 * 1024)
+            limit = cfg.limits.max_attachments
+            upload_dir = uploads_dir_for(cfg.state_path.parent, thread_key)
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            saved: list[Path] = []
+            skipped: list[str] = []
+            unreadable: list[str] = []
+            for att in list(attachments)[:limit]:
+                size = getattr(att, "size", 0) or 0
+                if size > cap:
+                    skipped.append(f"{att.filename} ({size / 1048576:.1f} MB)")
+                    continue
+                target = upload_dir / _safe_filename(att.filename)
+                try:
+                    await att.save(str(target))
+                except Exception:
+                    logger.exception("Download failed: %s", att.filename)
+                    skipped.append(att.filename)
+                    continue
+                # Office files the Read tool can't open: best-effort convert to
+                # a readable format (PDF/Markdown/text). Point the agent at the
+                # converted file, not the unreadable original.
+                ext = target.suffix.lower()
+                if ext in CONVERTIBLE_EXTS and cfg.attachments.convert != "off":
+                    conv = await asyncio.to_thread(
+                        convert_attachment,
+                        target,
+                        upload_dir,
+                        cfg.attachments.convert,
+                        cfg.attachments.convert_command,
+                    )
+                    if conv.path is not None:
+                        saved.append(conv.path)
+                    else:
+                        unreadable.append(att.filename)
+                else:
+                    saved.append(target)
+            if len(list(attachments)) > limit:
+                extra = len(list(attachments)) - limit
+                skipped.append(f"+{extra} more (max {limit} per message)")
+            if skipped:
+                await dest.send("⚠️ Skipped: " + ", ".join(skipped))
+            if unreadable:
+                await dest.send(
+                    "⚠️ Couldn't open " + ", ".join(unreadable) + " here (no "
+                    "converter available) — attach a PDF or paste the text."
+                )
+            return attachment_preamble(saved, question)
+
+        async def _post_deliverables(self, dest: Any, answer: Answer) -> None:
+            """Post files the fork wrote to its outbox back to the thread."""
+            files = list(getattr(answer, "attachments", None) or [])
+            if not files:
                 return
-            for chunk in split_chunks(text):
-                await dest.send(chunk)
+            cap = int(cfg.limits.max_attachment_mb * 1024 * 1024)
+            sendable: list[Path] = []
+            skipped: list[str] = []
+            for path in files:
+                try:
+                    size = path.stat().st_size
+                except OSError:
+                    continue
+                if size > cap:
+                    skipped.append(f"{path.name} ({size / 1048576:.1f} MB)")
+                else:
+                    sendable.append(path)
+            # Discord caps a single message at 10 attachments.
+            for start in range(0, len(sendable), 10):
+                batch = sendable[start : start + 10]
+                dfiles = [
+                    discord.File(str(p), filename=p.name) for p in batch
+                ]
+                caption = (
+                    "📎 Deliverable(s) from the agent:"
+                    if start == 0
+                    else "📎 More deliverables:"
+                )
+                try:
+                    await dest.send(caption, files=dfiles)
+                except Exception:
+                    logger.exception("Failed to post deliverables batch")
+            if skipped:
+                await dest.send(
+                    "⚠️ Produced but too large to post (raise "
+                    "limits.max_attachment_mb): " + ", ".join(skipped)
+                )
 
     TunnelClient(intents=intents).run(token, log_handler=None)
