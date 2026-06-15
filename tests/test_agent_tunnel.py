@@ -796,3 +796,31 @@ def test_convert_auto_docx(tmp_path: Path) -> None:
     assert conv.path is not None and conv.path.exists()
     assert conv.path.stat().st_size > 0
     assert conv.converter in ("libreoffice→pdf", "pandoc→md", "textutil→txt")
+
+
+# ----------------------------------------------------------- forks table
+
+
+def test_fork_row_fields() -> None:
+    from claude_code_tools.agent_tunnel.cli import _fork_row
+    from claude_code_tools.agent_tunnel.store import ThreadRecord
+
+    rec = ThreadRecord(
+        thread_key="th:42",
+        handle="pay",
+        access="bash",
+        asker="bob",
+        fork_session_id="abcdef123456",
+        project_dir="/work/proj",
+        config_dir="/home/u/.claude-rja",
+        backend="tmux",
+    )
+    row = _fork_row(rec, status="idle")
+    assert row["thread_key"] == "th:42"
+    assert row["handle"] == "pay"
+    assert row["access"] == "bash"
+    assert row["asker"] == "bob"
+    assert row["status"] == "idle"
+    assert row["fork"] == "abcdef12"  # first 8 chars
+    assert row["turns"] == "0"  # no transcript on disk
+    assert row["project"] == "proj [.claude-rja]"

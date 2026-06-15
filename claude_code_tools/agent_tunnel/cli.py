@@ -3,6 +3,7 @@ doctor, forget, init, help."""
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
@@ -12,7 +13,7 @@ from typing import Optional
 
 import click
 
-from .backends import BackendError, make_backend
+from .backends import Backend, BackendError, make_backend
 from .config import (
     DEFAULT_CONFIG_PATH,
     TunnelConfig,
@@ -275,23 +276,167 @@ def _fork_line(rec: ThreadRecord, marker: str = "") -> str:
     )
 
 
+# Per-access-level (label, rich style) for the forks table / picker.
+_ACCESS_DISPLAY = {
+    "read": ("read", "dim"),
+    "write": ("✍️ write", "yellow"),
+    "bash": ("💥 bash", "red"),
+}
+
+
+def _fork_status(backend: Backend, rec: ThreadRecord) -> str:
+    """'live' if the fork's tmux window is up, 'idle' if reaped, '-' if n/a."""
+    tmux = getattr(backend, "tmux", None)
+    if tmux is None or rec.backend != "tmux":
+        return "-"
+    if not rec.tmux_window:
+        return "idle"
+    try:
+        if tmux.window_alive(rec.tmux_window) and not tmux.pane_dead(
+            rec.tmux_window
+        ):
+            return "live"
+    except Exception:
+        pass
+    return "idle"
+
+
+def _fork_row(rec: ThreadRecord, status: str) -> dict[str, str]:
+    """Display fields for one fork (shared by the table, JSON, and picker)."""
+    fp = _fork_path(rec)
+    turns = count_turns(fp) if fp else 0
+    cfgdir = Path(rec.config_dir).name if rec.config_dir else ""
+    proj = Path(rec.project_dir).name if rec.project_dir else "?"
+    return {
+        "thread_key": rec.thread_key,
+        "handle": rec.handle or "?",
+        "access": rec.access or "read",
+        "asker": rec.asker or "?",
+        "last_active": _relative_time(rec.last_used),
+        "turns": str(turns),
+        "status": status,
+        "project": f"{proj} [{cfgdir}]" if cfgdir else proj,
+        "fork": rec.fork_session_id[:8],
+    }
+
+
+def _status_cell(status: str) -> str:
+    if status == "live":
+        return "[green]● live[/]"
+    if status == "idle":
+        return "[dim]○ idle[/]"
+    return "[dim]—[/]"
+
+
+def _render_forks_table(rows: list[dict[str, str]]) -> None:
+    """Pretty-print fork rows as a rich table."""
+    from rich.console import Console
+    from rich.table import Table
+
+    table = Table(
+        title="agent-tunnel forks",
+        title_justify="left",
+        title_style="bold",
+        header_style="bold",
+    )
+    table.add_column("Handle", style="cyan", no_wrap=True)
+    table.add_column("Access", no_wrap=True)
+    table.add_column("Asker")
+    table.add_column("Last active", no_wrap=True)
+    table.add_column("Turns", justify="right")
+    table.add_column("Status", no_wrap=True)
+    table.add_column("Project", style="dim")
+    table.add_column("Fork", style="dim", no_wrap=True)
+    for r in rows:
+        label, style = _ACCESS_DISPLAY.get(r["access"], (r["access"], ""))
+        access = f"[{style}]{label}[/]" if style else label
+        table.add_row(
+            r["handle"],
+            access,
+            r["asker"],
+            r["last_active"],
+            r["turns"],
+            _status_cell(r["status"]),
+            r["project"],
+            r["fork"],
+        )
+    Console().print(table)
+
+
+def _manage_forks(backend: Backend, rows: list[dict[str, str]]) -> None:
+    """Interactively select forks and clear (forget) them."""
+    import questionary
+
+    choices = []
+    for r in rows:
+        label = _ACCESS_DISPLAY.get(r["access"], (r["access"], ""))[0]
+        title = (
+            f"{r['handle']:<16} {label:<9} {r['asker']:<12} "
+            f"{r['last_active']:<10} {r['turns']:>3}t  {r['status']:<4} "
+            f"{r['fork']}"
+        )
+        choices.append(questionary.Choice(title=title, value=r["thread_key"]))
+    selected = questionary.checkbox(
+        "Select forks to clear (space toggles, enter confirms):",
+        choices=choices,
+    ).ask()
+    if not selected:
+        click.echo("Nothing selected.")
+        return
+    if not questionary.confirm(
+        f"Clear {len(selected)} fork(s)? This kills their windows and drops "
+        "the bindings (the transcripts stay on disk).",
+        default=False,
+    ).ask():
+        click.echo("Cancelled.")
+        return
+    for key in selected:
+        try:
+            backend.forget(key)
+            click.echo(f"Cleared {key}")
+        except Exception as exc:
+            click.echo(f"Failed to clear {key}: {exc}", err=True)
+
+
 @cli.command()
 @click.argument("handle", required=False)
 @click.option("--config", type=click.Path(), help="Config TOML path.")
-def forks(handle: Optional[str], config: Optional[str]) -> None:
-    """List fork sessions (one per Discord thread) and their context size.
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable JSON.")
+@click.option(
+    "--manage",
+    "-m",
+    is_flag=True,
+    help="Interactively select forks to clear (needs a TTY).",
+)
+def forks(
+    handle: Optional[str], config: Optional[str], as_json: bool, manage: bool
+) -> None:
+    """List fork sessions (one per Discord thread) as a table.
 
-    Optionally filter by HANDLE. Resume one with `agent-tunnel resume`.
+    Optionally filter by HANDLE. `--json` prints machine-readable rows;
+    `--manage` lets you select forks to clear. Resume one with
+    `agent-tunnel resume`.
     """
     cfg = _build(config)
     store = TunnelStore(cfg.state_path)
     recs = _forks(store, handle)
     if not recs:
         where = f" for handle {handle!r}" if handle else ""
-        click.echo(f"No fork sessions{where} yet.")
+        click.echo("[]" if as_json else f"No fork sessions{where} yet.")
         return
-    for rec in recs:
-        click.echo(_fork_line(rec))
+    backend = make_backend(cfg, store)
+    rows = [_fork_row(rec, _fork_status(backend, rec)) for rec in recs]
+    if as_json:
+        click.echo(json.dumps(rows, indent=2))
+        return
+    if manage:
+        if not sys.stdin.isatty():
+            raise click.ClickException(
+                "--manage needs an interactive terminal."
+            )
+        _manage_forks(backend, rows)
+        return
+    _render_forks_table(rows)
 
 
 @cli.command()
