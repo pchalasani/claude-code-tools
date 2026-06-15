@@ -20,6 +20,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from .locking import file_lock
+
 
 @dataclass
 class ThreadRecord:
@@ -63,6 +65,17 @@ class TunnelStore:
             self._records[key] = ThreadRecord(**fields)
         self._fork_ids = set(data.get("fork_ids", []))
 
+    def _reload_locked(self) -> None:
+        """Re-read state from disk, replacing the in-memory snapshot.
+
+        Called inside the file lock before a mutation so a write merges into
+        the latest on-disk state instead of clobbering concurrent changes from
+        the daemon or another CLI process.
+        """
+        self._records = {}
+        self._fork_ids = set()
+        self._load()
+
     def _save_locked(self) -> None:
         payload = {
             "records": {k: asdict(r) for k, r in self._records.items()},
@@ -96,7 +109,8 @@ class TunnelStore:
         Returns the existing record if the thread is already bound, so
         re-binding (e.g. a duplicate open) is a no-op.
         """
-        with self._lock:
+        with self._lock, file_lock(self.path):
+            self._reload_locked()
             existing = self._records.get(thread_key)
             if existing is not None:
                 return existing
@@ -116,7 +130,8 @@ class TunnelStore:
 
     def upsert(self, record: ThreadRecord) -> None:
         """Insert or update a record; tracks its fork id permanently."""
-        with self._lock:
+        with self._lock, file_lock(self.path):
+            self._reload_locked()
             record.last_used = time.time()
             self._records[record.thread_key] = record
             if record.fork_session_id:
@@ -125,7 +140,8 @@ class TunnelStore:
 
     def remove(self, thread_key: str) -> Optional[ThreadRecord]:
         """Drop a thread mapping (its fork id stays in the exclusion set)."""
-        with self._lock:
+        with self._lock, file_lock(self.path):
+            self._reload_locked()
             rec = self._records.pop(thread_key, None)
             if rec is not None:
                 self._save_locked()
@@ -137,7 +153,8 @@ class TunnelStore:
         Returns the updated records (live references) so the caller can also
         fix their tmux windows.
         """
-        with self._lock:
+        with self._lock, file_lock(self.path):
+            self._reload_locked()
             renamed = [r for r in self._records.values() if r.handle == old]
             for rec in renamed:
                 rec.handle = new

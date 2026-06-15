@@ -890,3 +890,21 @@ def test_store_rename_handle(tmp_path: Path) -> None:
     assert r1.handle == "new"
     assert r2.handle == "new"
     assert r3.handle == "other"  # untouched
+
+
+def test_store_write_preserves_concurrent_changes(tmp_path: Path) -> None:
+    # Two TunnelStore instances simulate the daemon and a CLI process. The
+    # second writer must re-read under the lock so it doesn't clobber a change
+    # the first one made after the second loaded its (now stale) snapshot.
+    path = tmp_path / "state.json"
+    daemon = TunnelStore(path)
+    daemon.bind("th:1", "h", SID_A, "/p", "tmux")
+
+    cli = TunnelStore(path)  # loads now: knows only th:1
+    daemon.bind("th:2", "h", SID_B, "/q", "tmux")  # daemon adds th:2
+
+    cli.remove("th:1")  # stale snapshot would drop th:2; reload-merge keeps it
+
+    final = TunnelStore(path)
+    assert final.get("th:1") is None  # cli's removal applied
+    assert final.get("th:2") is not None  # daemon's concurrent add survived

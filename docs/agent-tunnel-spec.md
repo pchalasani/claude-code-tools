@@ -81,7 +81,13 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
 - `store.py` — daemon state: `thread_key → ThreadRecord` (handle, expert
   session id, project dir, **config dir**, fork id, tmux window). `bind()`
   records a pending thread before the first answer; fork id filled on
-  completion.
+  completion. Each mutation re-reads the file under a cross-process lock and
+  merges, so a CLI command (`forget`/`rename`) and the live daemon don't
+  clobber each other's writes.
+- `locking.py` — best-effort `fcntl` advisory file lock (`<path>.lock`) shared
+  by the store, the registry, and the standalone `>share` hook (same
+  `registry.json.lock`), serializing concurrent read-modify-write across
+  processes. No-ops where `fcntl` is unavailable.
 - `session.py` — transcript-dir resolution (per config dir) and
   fork-transcript parsing (locate the question, detect turn completion,
   extract the answer).

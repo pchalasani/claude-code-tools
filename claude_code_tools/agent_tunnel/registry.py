@@ -35,6 +35,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from .locking import file_lock
+
 HANDLE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")
 
 
@@ -130,19 +132,21 @@ class Registry:
 
     def upsert(self, record: PublishRecord) -> None:
         """Insert or replace a record (used by CLI/tests; hook writes its own)."""
-        records = self._read()
-        records[record.handle] = record
-        self._write(records)
+        with file_lock(self.path):
+            records = self._read()
+            records[record.handle] = record
+            self._write(records)
 
     def revoke(self, handle: str) -> bool:
         """Mark a handle revoked. Returns True if it existed."""
-        records = self._read()
-        rec = records.get(handle.strip().lower())
-        if rec is None:
-            return False
-        rec.revoked = True
-        self._write(records)
-        return True
+        with file_lock(self.path):
+            records = self._read()
+            rec = records.get(handle.strip().lower())
+            if rec is None:
+                return False
+            rec.revoked = True
+            self._write(records)
+            return True
 
     def rename(self, old: str, new: str) -> tuple[bool, str]:
         """Rename handle `old` to `new`.
@@ -159,19 +163,23 @@ class Registry:
             )
         if new == old:
             return (False, "New handle is the same as the old one.")
-        records = self._read()
-        rec = records.get(old)
-        if rec is None:
-            return (False, f"No handle {old!r} in the registry.")
-        taken = records.get(new)
-        if (
-            taken is not None
-            and not taken.revoked
-            and taken.session_id != rec.session_id
-        ):
-            return (False, f"Handle {new!r} is already used by another session.")
-        records.pop(old, None)
-        rec.handle = new
-        records[new] = rec
-        self._write(records)
+        with file_lock(self.path):
+            records = self._read()
+            rec = records.get(old)
+            if rec is None:
+                return (False, f"No handle {old!r} in the registry.")
+            taken = records.get(new)
+            if (
+                taken is not None
+                and not taken.revoked
+                and taken.session_id != rec.session_id
+            ):
+                return (
+                    False,
+                    f"Handle {new!r} is already used by another session.",
+                )
+            records.pop(old, None)
+            rec.handle = new
+            records[new] = rec
+            self._write(records)
         return (True, f"Renamed {old!r} to {new!r}.")
