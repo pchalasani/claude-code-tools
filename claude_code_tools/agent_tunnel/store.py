@@ -89,8 +89,14 @@ class TunnelStore:
         os.replace(tmp, self.path)
 
     def get(self, thread_key: str) -> Optional[ThreadRecord]:
-        """Return the record for a thread key, or None."""
-        with self._lock:
+        """Return the record for a thread key, or None.
+
+        Re-reads under the lock so the long-lived daemon never serves a stale
+        record — e.g. after a CLI `rename`/`forget` changed it on disk — which
+        would otherwise be `upsert`-ed back and undo the change.
+        """
+        with self._lock, file_lock(self.path):
+            self._reload_locked()
             return self._records.get(thread_key)
 
     def bind(
@@ -163,11 +169,13 @@ class TunnelStore:
             return renamed
 
     def all_records(self) -> list[ThreadRecord]:
-        """Return a snapshot of all records."""
-        with self._lock:
+        """Return a fresh snapshot of all records (re-read under the lock)."""
+        with self._lock, file_lock(self.path):
+            self._reload_locked()
             return list(self._records.values())
 
     def known_fork_ids(self) -> set[str]:
-        """All fork session ids ever created by this tunnel."""
-        with self._lock:
+        """All fork session ids ever created (re-read under the lock)."""
+        with self._lock, file_lock(self.path):
+            self._reload_locked()
             return set(self._fork_ids)

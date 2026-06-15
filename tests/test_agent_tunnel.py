@@ -687,6 +687,9 @@ def test_safe_filename() -> None:
     assert _safe_filename("my file (1).csv") == "my_file_1_.csv"
     assert _safe_filename("") == "file"
     assert _safe_filename("   ") == "file"
+    # Over-long names keep their extension (downstream picks type from suffix).
+    out = _safe_filename("a" * 200 + ".docx")
+    assert out.endswith(".docx") and len(out) <= 120
 
 
 def test_unique_name() -> None:
@@ -908,3 +911,23 @@ def test_store_write_preserves_concurrent_changes(tmp_path: Path) -> None:
     final = TunnelStore(path)
     assert final.get("th:1") is None  # cli's removal applied
     assert final.get("th:2") is not None  # daemon's concurrent add survived
+
+
+def test_store_get_reflects_external_rename(tmp_path: Path) -> None:
+    # The daemon's long-lived store must not serve a stale record after a CLI
+    # process renames it on disk — else the daemon's next upsert undoes it.
+    path = tmp_path / "state.json"
+    daemon = TunnelStore(path)
+    daemon.bind("th:1", "old", SID_A, "/p", "tmux")
+    daemon.get("th:1")  # cached in the daemon's memory
+
+    TunnelStore(path).rename_handle("old", "new")  # a separate CLI process
+
+    rec = daemon.get("th:1")
+    assert rec is not None and rec.handle == "new"  # get re-read disk
+    rec.fork_session_id = SID_FORK
+    daemon.upsert(rec)  # must preserve the rename, not clobber it
+
+    final = TunnelStore(path).get("th:1")
+    assert final is not None
+    assert final.handle == "new" and final.fork_session_id == SID_FORK

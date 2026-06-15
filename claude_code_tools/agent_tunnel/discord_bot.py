@@ -67,9 +67,19 @@ def is_list_command(text: str) -> bool:
 
 
 def _safe_filename(name: str) -> str:
-    """Basename of an uploaded file, stripped to safe chars (no traversal)."""
+    """Basename of an uploaded file, stripped to safe chars (no traversal).
+
+    Long names are shortened but keep their extension — downstream code decides
+    type/conversion from the suffix, so chopping `.docx` off the end would skip
+    conversion and hand the fork an unreadable path.
+    """
     base = os.path.basename(name or "").strip() or "file"
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("._") or "file"
+    if len(cleaned) <= 120:
+        return cleaned
+    ext = Path(cleaned).suffix
+    if 1 < len(ext) <= 12:  # plausible extension — keep it, trim the stem
+        return cleaned[: -len(ext)][: 120 - len(ext)] + ext
     return cleaned[:120]
 
 
