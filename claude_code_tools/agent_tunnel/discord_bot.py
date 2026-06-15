@@ -372,6 +372,20 @@ def run_bot(
             question: str,
             attachments: Any = None,
         ) -> None:
+            # Per-question log line so an unattended (esp. headless) daemon
+            # shows live activity + an audit trail of who-asked-what.
+            rec = store.get(thread_key)
+            handle = rec.handle if rec else "?"
+            asker = rec.asker if rec else "?"
+            n_att = len(attachments or [])
+            logger.info(
+                "Q [%s] %s ← %s%s: %r",
+                thread_key,
+                handle,
+                asker,
+                f" +{n_att} file(s)" if n_att else "",
+                (question or "").replace("\n", " ")[:120],
+            )
             lock = locks[thread_key]
             if lock.locked():
                 await dest.send(
@@ -379,6 +393,7 @@ def run_bot(
                     "I'll take this one next."
                 )
             async with lock, sem:
+                start = time.time()
                 try:
                     async with dest.typing():
                         question = await self._ingest_attachments(
@@ -390,21 +405,52 @@ def run_bot(
                                 "were too large or unreadable. Add a question "
                                 "or a smaller file."
                             )
+                            logger.info(
+                                "A [%s] %s: skipped (no usable content)",
+                                thread_key,
+                                handle,
+                            )
                             return
                         answer = await asyncio.to_thread(
                             backend.ask, thread_key, question
                         )
                 except BackendError as exc:
+                    logger.warning(
+                        "A [%s] %s: error after %.1fs — %s",
+                        thread_key,
+                        handle,
+                        time.time() - start,
+                        str(exc)[:200],
+                    )
                     await dest.send(f"⚠️ {str(exc)[:1500]}")
                     return
                 except Exception:
-                    logger.exception("Unexpected backend failure")
+                    logger.exception(
+                        "A [%s] %s: unexpected backend failure",
+                        thread_key,
+                        handle,
+                    )
                     await dest.send(
                         "⚠️ Unexpected error — the owner can check the "
                         "agent-tunnel logs."
                     )
                     return
 
+            deliverables = (
+                f", {len(answer.attachments)} deliverable(s)"
+                if answer.attachments
+                else ""
+            )
+            logger.info(
+                "A [%s] %s: %s in %.1fs, %d chars%s, fork %s",
+                thread_key,
+                handle,
+                "new" if answer.new_thread else "follow-up",
+                time.time() - start,
+                len(answer.text),
+                deliverables,
+                answer.fork_session_id[:8],
+            )
             text = answer.text
             if len(text) > cfg.limits.max_inline_chars:
                 preview = split_chunks(text)[0]
