@@ -28,6 +28,7 @@ import shlex
 import shutil
 import subprocess
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Protocol
@@ -442,7 +443,15 @@ class TmuxBackend(_BaseBackend):
         window = _window_name(rec.handle, thread_key)
         project_dir = Path(rec.project_dir)
         home = self._home(rec)
-        marker = make_marker(question)
+        # Tag the turn with a unique ref so its answer marker can't collide
+        # with a previous turn's. Attachment turns are the motivating case:
+        # their prompt prefix is otherwise identical every time, so on a warm
+        # follow-up or a reaped-window relaunch (both reuse a transcript that
+        # already holds the earlier turn) extract_answer could match the old
+        # turn and repost its stale answer. The ref is invisible to colleagues
+        # (it rides on the prompt submitted to the fork, not the chat).
+        prompt = f"[ref:{uuid.uuid4().hex[:8]}] {question}"
+        marker = make_marker(prompt)
         fork = not rec.fork_session_id
         add_dirs, extra_system, outbox, snapshot = self._begin_turn(rec)
 
@@ -457,7 +466,7 @@ class TmuxBackend(_BaseBackend):
                 fork=True,
                 config_dir=rec.config_dir,
                 access=rec.access,
-                initial_prompt=question,
+                initial_prompt=prompt,
                 add_dirs=add_dirs,
                 extra_system=extra_system,
             )
@@ -482,7 +491,7 @@ class TmuxBackend(_BaseBackend):
                 window
             ):
                 # Warm session: paste + Enter (no startup delay when warm).
-                if not self.tmux.submit_text(window, question):
+                if not self.tmux.submit_text(window, prompt):
                     raise BackendError(
                         "Question pasted but never submitted (Enter not "
                         "accepted)."
@@ -496,7 +505,7 @@ class TmuxBackend(_BaseBackend):
                     fork=False,
                     config_dir=rec.config_dir,
                     access=rec.access,
-                    initial_prompt=question,
+                    initial_prompt=prompt,
                     add_dirs=add_dirs,
                     extra_system=extra_system,
                 )

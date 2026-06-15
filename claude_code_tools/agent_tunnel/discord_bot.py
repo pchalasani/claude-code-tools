@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -70,6 +71,21 @@ def _safe_filename(name: str) -> str:
     base = os.path.basename(name or "").strip() or "file"
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("._") or "file"
     return cleaned[:120]
+
+
+def _unique_name(name: str, used: set[str]) -> str:
+    """`name` unless already in `used`, else suffixed `-2`/`-3`/… before the
+    extension. Records the chosen name in `used`."""
+    if name not in used:
+        used.add(name)
+        return name
+    stem, dot, ext = name.partition(".")
+    i = 2
+    while f"{stem}-{i}{dot}{ext}" in used:
+        i += 1
+    chosen = f"{stem}-{i}{dot}{ext}"
+    used.add(chosen)
+    return chosen
 
 
 def split_chunks(text: str, limit: int = DISCORD_MSG_LIMIT) -> list[str]:
@@ -410,17 +426,26 @@ def run_bot(
                 return question
             cap = int(cfg.limits.max_attachment_mb * 1024 * 1024)
             limit = cfg.limits.max_attachments
-            upload_dir = uploads_dir_for(cfg.state_path.parent, thread_key)
-            upload_dir.mkdir(parents=True, exist_ok=True)
+            # A unique per-turn subdir (plus per-turn dedup of basenames) keeps
+            # same-named files — two `report.pdf` in one message, or one reused
+            # across turns — from silently overwriting each other.
+            turn_dir = (
+                uploads_dir_for(cfg.state_path.parent, thread_key)
+                / uuid.uuid4().hex[:8]
+            )
+            turn_dir.mkdir(parents=True, exist_ok=True)
             saved: list[Path] = []
             skipped: list[str] = []
             unreadable: list[str] = []
+            used: set[str] = set()
             for att in list(attachments)[:limit]:
                 size = getattr(att, "size", 0) or 0
                 if size > cap:
                     skipped.append(f"{att.filename} ({size / 1048576:.1f} MB)")
                     continue
-                target = upload_dir / _safe_filename(att.filename)
+                target = turn_dir / _unique_name(
+                    _safe_filename(att.filename), used
+                )
                 try:
                     await att.save(str(target))
                 except Exception:
@@ -435,7 +460,7 @@ def run_bot(
                     conv = await asyncio.to_thread(
                         convert_attachment,
                         target,
-                        upload_dir,
+                        turn_dir,
                         cfg.attachments.convert,
                         cfg.attachments.convert_command,
                     )

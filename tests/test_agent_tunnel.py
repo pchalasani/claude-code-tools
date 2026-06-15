@@ -689,6 +689,22 @@ def test_safe_filename() -> None:
     assert _safe_filename("   ") == "file"
 
 
+def test_unique_name() -> None:
+    from claude_code_tools.agent_tunnel.discord_bot import _unique_name
+
+    used: set[str] = set()
+    # repeats get a numeric suffix before the extension, not overwritten.
+    assert _unique_name("report.pdf", used) == "report.pdf"
+    assert _unique_name("report.pdf", used) == "report-2.pdf"
+    assert _unique_name("report.pdf", used) == "report-3.pdf"
+    assert _unique_name("data.csv", used) == "data.csv"  # distinct name is free
+    # extension-less and multi-dot names suffix correctly.
+    assert _unique_name("notes", used) == "notes"
+    assert _unique_name("notes", used) == "notes-2"
+    assert _unique_name("a.tar.gz", used) == "a.tar.gz"
+    assert _unique_name("a.tar.gz", used) == "a-2.tar.gz"
+
+
 # ------------------------------------------------- office-file conversion
 
 
