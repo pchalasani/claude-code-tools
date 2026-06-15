@@ -35,8 +35,9 @@ safe.
   list, and `--permission-mode dontAsk`.
 - **No tunnel.** The Discord Gateway is an outbound websocket; nothing on the
   machine is internet-reachable.
-- **Swappable backends:** `tmux` (interactive forks, subscription metering)
-  and `headless` (`claude -p`, Agent SDK credit metering after 2026-06-15).
+- **Swappable backends (default `headless`):** `headless` (`claude -p`, clean
+  JSON I/O, more reliable, no tmux) and `tmux` (interactive forks you can watch
+  live with `agent-tunnel watch`).
 
 ## Architecture
 
@@ -214,22 +215,25 @@ dir is propagated end to end:
   private server's own fd budget.
 - Owner: `agent-tunnel forget`, `tmux -L <socket> kill-server`, or stop serve.
 
-## Backends and billing
+## Backends (server modes)
 
-- `tmux` (default): one interactive `claude` per thread in a window of the
-  private tmux server. Submission is hybrid to dodge Claude's slow-to-accept
-  input right after a cold launch: a new fork (or a follow-up whose window
-  was reaped) is launched with the question as claude's positional prompt
-  (`claude "<q>" --resume <id> [--fork-session]`), so claude auto-submits it
-  once ready — no simulated keystrokes; a warm follow-up window is reused via
+- `headless` (default): `claude -p` per question with clean JSON in/out — no
+  terminal scraping, no submit-timing heuristics, no tmux. Answer is the JSON
+  `result`; "done" is the process exit (definitive), and errors surface via
+  `is_error` + exit code. Launch: `agent-tunnel serve`.
+- `tmux`: one interactive `claude` per thread in a window of the private tmux
+  server, watchable live (`agent-tunnel watch`). Launch: `agent-tunnel serve
+  --backend tmux`. Submission is hybrid to dodge Claude's slow-to-accept input
+  right after a cold launch: a new fork (or a follow-up whose window was
+  reaped) is launched with the question as claude's positional prompt
+  (`claude --resume <id> [--fork-session] … -- "<q>"`), so claude auto-submits
+  it once ready — no simulated keystrokes; a warm follow-up window is reused via
   bracketed paste + verified Enter. The answer is read from the fork's JSONL
-  transcript either way. Metered as interactive subscription usage.
-- `headless`: `claude -p` per question (JSON in/out). From 2026-06-15,
-  subscription `claude -p` draws from a separate Agent SDK credit pool, then
-  API rates. Do NOT auto-add `--bare` (it can break subscription auth).
-- Each *new* thread replays the expert session's full context (~its token
-  count per cold question). Fine for Q&A; for volume use headless + an
-  `ANTHROPIC_API_KEY`.
+  transcript (located by a per-turn `[ref:…]` marker) either way.
+- Both run on your logged-in `claude` (no API key needed); do NOT auto-add
+  `--bare` (it skips user config and breaks subscription auth). Each *new*
+  thread replays the expert session's full context (~its token count per cold
+  question) — fine for Q&A.
 
 ## Security model
 

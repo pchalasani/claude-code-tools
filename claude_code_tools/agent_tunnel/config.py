@@ -153,7 +153,7 @@ class AttachmentsConfig:
 class TunnelConfig:
     """Top-level agent-tunnel configuration."""
 
-    backend: str = "tmux"
+    backend: str = "headless"
     tmux_session: str = "agent-tunnel"
     state_path: Path = DEFAULT_STATE_PATH
     registry_path: Path = DEFAULT_REGISTRY_PATH
@@ -243,10 +243,13 @@ def sample_config() -> str:
 # colleagues). This file only configures Discord and limits.
 
 [tunnel]
-# "tmux" = interactive forked sessions (subscription metering);
-# "headless" = claude -p (Agent SDK credit metering from 2026-06-15).
-backend = "tmux"
-# Name of the dedicated tmux session holding fork windows.
+# Server mode (default "headless"):
+#   "headless" = `claude -p` per question: clean JSON I/O, more reliable, no
+#                tmux needed.       Launch:  agent-tunnel serve
+#   "tmux"     = a real interactive claude per thread in a private tmux server
+#                you can watch live. Launch: agent-tunnel serve --backend tmux
+backend = "headless"
+# Name of the dedicated tmux session holding fork windows (tmux mode only).
 tmux_session = "agent-tunnel"
 
 [discord]

@@ -265,7 +265,7 @@ in every other channel regardless of what it can technically see.
 
    ```toml
    [tunnel]
-   backend = "tmux"        # or "headless"
+   backend = "headless"    # default; or "tmux" to watch forks live
 
    [discord]
    # No need to export anything: point at a file holding the token.
@@ -296,7 +296,11 @@ Keep it alive (a dedicated tmux pane is convenient). With `token_file` set you
 don't export anything. Your Mac must be awake and online; discord.py
 auto-reconnects after sleep.
 
-## Watching live (tmux backend)
+## Watching live (tmux mode only)
+
+This applies only when you run with `--backend tmux`. In **headless** mode
+(the default) there are no windows to watch — use the `agent-tunnel forks`
+table and the daemon's per-question log lines for visibility instead.
 
 The `tmux` backend runs each fork as a real `claude` in a window on a
 **dedicated, private tmux server** (`tmux -L agent-tunnel`) — isolated from
@@ -356,16 +360,22 @@ moment, both sessions write to the same transcript (interleaving). Once the
 window is reaped, it's completely safe.
 </Aside>
 
-## Backends & billing
+## Server modes (`headless` vs `tmux`)
 
-- `tmux` (default): interactive forks — metered like normal interactive
-  subscription usage; attachable/watchable.
-- `headless`: `claude -p` per question — cleaner I/O, but metered as Agent SDK
-  usage on subscription plans from 2026-06-15. (Do not add `--bare`; it can
-  break subscription auth.)
+Choose how the daemon answers with `--backend` or `[tunnel] backend` in the
+config. **The default is `headless`.**
 
-Each **new** thread replays the session's full context (~its token count per
-cold question). For volume, use `headless` with an `ANTHROPIC_API_KEY`.
+- **`headless`** — a `claude -p` subprocess per question, with clean JSON
+  in/out. More reliable (no terminal scraping or submit-timing heuristics) and
+  needs no tmux. **Launch:** `agent-tunnel serve`.
+- **`tmux`** — a real interactive `claude` per thread, each in a window of a
+  private tmux server you can **watch live** with `agent-tunnel watch`.
+  **Launch:** `agent-tunnel serve --backend tmux`.
+
+Both run on your logged-in `claude` (no API key needed). Do **not** put
+`--bare` in `[claude] headless_extra_args` — it skips your user config and
+breaks subscription auth. Each **new** thread replays the published session's
+full context (~its token count per cold question), which is fine for Q&A.
 
 ## Security notes
 

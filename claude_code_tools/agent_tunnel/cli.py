@@ -57,7 +57,10 @@ def cli() -> None:
 @cli.command()
 @click.option("--config", type=click.Path(), help="Config TOML path.")
 @click.option(
-    "--backend", type=click.Choice(["tmux", "headless"]), default=None
+    "--backend",
+    type=click.Choice(["tmux", "headless"]),
+    default=None,
+    help="Server mode: headless (default) or tmux. Overrides config.",
 )
 @click.option(
     "--channel",
@@ -73,7 +76,18 @@ def serve(
     channels: tuple[int, ...],
     token_env: Optional[str],
 ) -> None:
-    """Run the Discord daemon (blocking)."""
+    """Run the Discord daemon (blocking).
+
+    Two server modes, set with --backend or [tunnel] backend (default
+    headless):
+
+    \b
+    - headless: a `claude -p` subprocess per question — clean JSON I/O, more
+      reliable, no tmux. Launch with `agent-tunnel serve`.
+    - tmux: an interactive `claude` per thread in a private tmux server you can
+      watch live (`agent-tunnel watch`). Launch:
+      `agent-tunnel serve --backend tmux`.
+    """
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
