@@ -375,7 +375,11 @@ class TmuxBackend(_BaseBackend):
             *self.cfg.claude.tmux_extra_args,
         ]
         if initial_prompt is not None:
-            argv.append(initial_prompt)
+            # `--` ends option parsing so a prompt beginning with "-" (e.g.
+            # "- how are you?") is taken as the positional prompt, not a CLI
+            # flag (which would make claude die at launch with "invalid
+            # option"). Verified: `claude … -- "- text"` submits "- text".
+            argv += ["--", initial_prompt]
         if config_dir:
             argv = ["env", f"CLAUDE_CONFIG_DIR={config_dir}", *argv]
         if self.cfg.claude.auto_trust:
