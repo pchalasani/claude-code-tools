@@ -184,7 +184,11 @@ def convert_attachment(
     if mode == "off" or ext not in CONVERTIBLE_EXTS:
         return Conversion(path=None, converter="")
 
-    outdir = work_dir / "converted" / safe_key(src.stem)
+    # Key the output dir on the full filename, not just the stem, so two
+    # convertible files sharing a stem but differing in extension
+    # (report.docx + report.pptx) don't land in the same dir and overwrite
+    # each other's output (both converters derive the basename from the stem).
+    outdir = work_dir / "converted" / safe_key(src.name)
     outdir.mkdir(parents=True, exist_ok=True)
 
     if custom_command:

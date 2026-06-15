@@ -745,6 +745,27 @@ def test_convert_custom_command(tmp_path: Path) -> None:
     assert conv.path.read_bytes() == b"dummy docx bytes"
 
 
+def test_convert_same_stem_distinct_outputs(tmp_path: Path) -> None:
+    # Two convertible files sharing a stem but differing in extension must not
+    # share a conversion output path (else one overwrites the other).
+    from claude_code_tools.agent_tunnel.convert import convert_attachment
+
+    work = tmp_path / "up"
+    work.mkdir()
+    docx = work / "report.docx"
+    docx.write_bytes(b"AAA")
+    pptx = work / "report.pptx"
+    pptx.write_bytes(b"BBB")
+
+    cmd = "cp {input} {outdir}/out.txt"
+    a = convert_attachment(docx, work, mode="auto", custom_command=cmd)
+    b = convert_attachment(pptx, work, mode="auto", custom_command=cmd)
+    assert a.path is not None and b.path is not None
+    assert a.path != b.path
+    assert a.path.read_bytes() == b"AAA"  # not clobbered by the pptx conversion
+    assert b.path.read_bytes() == b"BBB"
+
+
 def test_convert_auto_docx(tmp_path: Path) -> None:
     # Real auto path — guarded so it skips on hosts with no converter.
     import shutil
