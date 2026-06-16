@@ -183,6 +183,11 @@ class Registry:
                 )
             records.pop(old, None)
             rec.handle = new
+            # `>share <label>` stores label == handle; keep them in sync so
+            # `published`/`!list` and new threads show the new name, not the
+            # old one. A distinct (custom) label is left untouched.
+            if rec.label == old:
+                rec.label = new
             records[new] = rec
             self._write(records)
         return (True, f"Renamed {old!r} to {new!r}.")
