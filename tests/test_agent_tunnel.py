@@ -944,3 +944,40 @@ def test_store_get_reflects_external_rename(tmp_path: Path) -> None:
     final = TunnelStore(path).get("th:1")
     assert final is not None
     assert final.handle == "new" and final.fork_session_id == SID_FORK
+
+
+def test_store_upsert_merges_into_external_rename(tmp_path: Path) -> None:
+    # The real race: a backend holds a record fetched BEFORE a CLI `rename`,
+    # runs a long turn, then upserts. The stale in-memory handle must NOT
+    # overwrite the rename that landed on disk meanwhile.
+    path = tmp_path / "state.json"
+    daemon = TunnelStore(path)
+    rec = daemon.bind("th:1", "old", SID_A, "/p", "tmux")  # handle="old"
+
+    TunnelStore(path).rename_handle("old", "new")  # CLI renames mid-turn
+
+    rec.fork_session_id = SID_FORK  # turn finished; record its fork id
+    daemon.upsert(rec)  # stale rec.handle == "old" must not clobber
+
+    final = TunnelStore(path).get("th:1")
+    assert final is not None
+    assert final.handle == "new"  # rename preserved, not undone
+    assert final.fork_session_id == SID_FORK  # caller's field merged in
+    assert SID_FORK in TunnelStore(path).known_fork_ids()
+
+
+def test_store_upsert_does_not_resurrect_forgotten(tmp_path: Path) -> None:
+    # A thread `forget`-ten while its turn runs must not be brought back by the
+    # trailing upsert — but its fork id stays excluded from future reuse.
+    path = tmp_path / "state.json"
+    daemon = TunnelStore(path)
+    rec = daemon.bind("th:1", "h", SID_A, "/p", "tmux")
+
+    TunnelStore(path).remove("th:1")  # a CLI `forget` mid-turn
+
+    rec.fork_session_id = SID_FORK
+    daemon.upsert(rec)  # must not resurrect th:1
+
+    other = TunnelStore(path)
+    assert other.get("th:1") is None  # stays gone
+    assert SID_FORK in other.known_fork_ids()  # fork id still excluded

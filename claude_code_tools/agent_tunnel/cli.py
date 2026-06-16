@@ -537,11 +537,15 @@ def rename(old: str, new: str, config: Optional[str]) -> None:
     store = TunnelStore(cfg.state_path)
     renamed = store.rename_handle(old_h, new_h)
     windows = 0
-    if cfg.backend == "tmux" and renamed:
-        tmux = getattr(make_backend(cfg, store), "tmux", None)
-        for rec in renamed:
-            if not rec.tmux_window or tmux is None:
-                continue
+    # Rename live tmux windows for records that actually run on the tmux
+    # backend — keyed on each record's own backend, not the current config
+    # (which defaults to headless even when `serve --backend tmux` is live).
+    tmux_recs = [r for r in renamed if r.backend == "tmux" and r.tmux_window]
+    if tmux_recs:
+        from .tmux import TmuxSession
+
+        tmux = TmuxSession(cfg.tmux_session)
+        for rec in tmux_recs:
             new_win = _window_name(new_h, rec.thread_key)
             if tmux.rename_window(rec.tmux_window, new_win):
                 rec.tmux_window = new_win

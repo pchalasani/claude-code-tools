@@ -135,13 +135,34 @@ class TunnelStore:
             return rec
 
     def upsert(self, record: ThreadRecord) -> None:
-        """Insert or update a record; tracks its fork id permanently."""
+        """Merge caller-owned fields into the latest on-disk record.
+
+        Re-reads under the lock, then copies only the fields the caller owns
+        (fork id, tmux window, ``last_used``) onto the freshly reloaded
+        record. A concurrent CLI ``rename``/``forget`` during a long backend
+        call is therefore not clobbered by this now-stale ``record``: a
+        renamed handle survives and a removed thread is not resurrected. The
+        fork id is always kept in the exclusion set so it is never reused,
+        even for a thread forgotten mid-call.
+        """
         with self._lock, file_lock(self.path):
             self._reload_locked()
-            record.last_used = time.time()
-            self._records[record.thread_key] = record
+            current = self._records.get(record.thread_key)
+            new_fork = bool(
+                record.fork_session_id
+                and record.fork_session_id not in self._fork_ids
+            )
             if record.fork_session_id:
                 self._fork_ids.add(record.fork_session_id)
+            if current is None:
+                # Thread was removed (e.g. `forget`) mid-call — don't
+                # resurrect it; just keep its fork id out of future reuse.
+                if new_fork:
+                    self._save_locked()
+                return
+            current.fork_session_id = record.fork_session_id
+            current.tmux_window = record.tmux_window
+            current.last_used = time.time()
             self._save_locked()
 
     def remove(self, thread_key: str) -> Optional[ThreadRecord]:
