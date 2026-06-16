@@ -421,7 +421,9 @@ class TmuxBackend(_BaseBackend):
                 path = trust_config_path_for(config_dir)
             else:
                 path = default_trust_config_path()
-            ensure_folder_trusted(Path(project_dir).resolve(), path)
+            # `project_dir` is already canonical (resolved by the caller), so
+            # the trust key matches the cwd/transcript paths exactly.
+            ensure_folder_trusted(Path(project_dir), path)
         except Exception:
             pass  # if it fails, the trust-dialog check below reports it
 
@@ -445,7 +447,12 @@ class TmuxBackend(_BaseBackend):
         """
         rec = self._require_binding(thread_key)
         window = _window_name(rec.handle, thread_key)
-        project_dir = Path(rec.project_dir)
+        # Resolve to the canonical path so the three things keyed on it agree
+        # with the directory Claude actually runs in (its process.cwd() is
+        # canonical): the launch cwd, the trust-config entry, and the
+        # transcript-dir lookup. A symlinked project dir would otherwise make
+        # the transcript lookup miss and re-trigger the trust dialog.
+        project_dir = Path(rec.project_dir).resolve()
         home = self._home(rec)
         # Tag the turn with a unique ref so its answer marker can't collide
         # with a previous turn's. Attachment turns are the motivating case:
@@ -465,7 +472,7 @@ class TmuxBackend(_BaseBackend):
             }
             self._launch(
                 window,
-                rec.project_dir,
+                str(project_dir),
                 rec.expert_session_id,
                 fork=True,
                 config_dir=rec.config_dir,
@@ -504,7 +511,7 @@ class TmuxBackend(_BaseBackend):
                 # Window was reaped — relaunch cold with the prompt arg.
                 self._launch(
                     window,
-                    rec.project_dir,
+                    str(project_dir),
                     rec.fork_session_id,
                     fork=False,
                     config_dir=rec.config_dir,
