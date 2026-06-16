@@ -34,6 +34,7 @@ from .backends import (
     BackendError,
     backend_by_name,
     backend_for_record,
+    effective_backend,
 )
 from .config import TunnelConfig
 from .convert import CONVERTIBLE_EXTS, convert_attachment
@@ -200,7 +201,10 @@ def run_bot(
             """
             cache: dict[str, Backend] = {}
             total = 0
-            names = {r.backend or cfg.backend for r in store.all_records()}
+            names = {
+                effective_backend(r, cfg.backend)
+                for r in store.all_records()
+            }
             for name in names:
                 total += backend_by_name(cfg, store, name, cache).reap_idle()
             return total

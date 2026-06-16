@@ -50,6 +50,12 @@ def test_backend_for_record_dispatches_by_record_backend(
     assert isinstance(
         backend_for_record(cfg, store, blank, cache), HeadlessBackend
     )
+    # Legacy record (pre-`backend` field) loads blank but owns a tmux_window:
+    # treat as tmux so its pane is still reaped/cleaned after a headless flip.
+    legacy = ThreadRecord(thread_key="L", backend="", tmux_window="agent:L")
+    assert isinstance(
+        backend_for_record(cfg, store, legacy, cache), TmuxBackend
+    )
     # The cache reuses one instance per backend name.
     assert backend_for_record(cfg, store, tmux_rec, cache) is cache["tmux"]
 

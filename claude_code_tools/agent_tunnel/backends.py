@@ -564,7 +564,11 @@ class TmuxBackend(_BaseBackend):
             return 0
         reaped = 0
         for rec in self.store.all_records():
-            if not rec.tmux_window or rec.backend != self.name:
+            # A legacy blank-backend record with a live window belongs to tmux.
+            if (
+                not rec.tmux_window
+                or effective_backend(rec, self.name) != self.name
+            ):
                 continue
             if time.time() - rec.last_used < ttl_s:
                 continue
@@ -581,6 +585,24 @@ def make_backend(cfg: TunnelConfig, store: TunnelStore) -> Backend:
     if cfg.backend == "headless":
         return HeadlessBackend(cfg, store)
     return TmuxBackend(cfg, store)
+
+
+def effective_backend(rec: Optional[ThreadRecord], default: str) -> str:
+    """The backend a record belongs to.
+
+    Prefers the record's stored ``backend``. A legacy record that predates the
+    ``backend`` field loads blank yet may still own a live ``tmux_window`` —
+    treat those as ``tmux`` so an upgraded (now headless-default) daemon still
+    reaps and cleans up their panes. Otherwise fall back to ``default`` (the
+    current config's backend).
+    """
+    if rec is None:
+        return default
+    if rec.backend:
+        return rec.backend
+    if rec.tmux_window:
+        return "tmux"
+    return default
 
 
 def backend_by_name(
@@ -619,5 +641,5 @@ def backend_for_record(
     window and its Claude process alive, so dispatch by ``rec.backend``
     (falling back to the config when a record has no recorded backend).
     """
-    name = rec.backend if rec is not None and rec.backend else cfg.backend
+    name = effective_backend(rec, cfg.backend)
     return backend_by_name(cfg, store, name, cache)
