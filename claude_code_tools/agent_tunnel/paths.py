@@ -60,31 +60,38 @@ def ensure_outbox(project_dir: Path, thread_key: str) -> Path:
     return thread_dir
 
 
-def snapshot_dir(directory: Path) -> dict[str, float]:
-    """Map each file under `directory` (recursively) to its mtime.
+def snapshot_dir(directory: Path) -> dict[str, tuple[int, int]]:
+    """Map each file under `directory` (recursively) to a change signature.
 
-    Returns an empty dict if the directory does not exist. Keys are POSIX
-    paths relative to `directory` so the snapshot survives being compared
-    against the same dir later.
+    The signature is ``(st_size, st_mtime_ns)`` — higher fidelity than a
+    second-resolution mtime, so a rewrite that preserves or coarsely rounds
+    the mtime (``cp -p``, FAT/network volumes, a rapid regenerate) still
+    registers as a change. Returns an empty dict if the directory does not
+    exist. Keys are POSIX paths relative to `directory` so the snapshot
+    survives being compared against the same dir later.
     """
     directory = Path(directory)
     if not directory.is_dir():
         return {}
-    snap: dict[str, float] = {}
+    snap: dict[str, tuple[int, int]] = {}
     for path in directory.rglob("*"):
         if path.is_file():
-            snap[path.relative_to(directory).as_posix()] = path.stat().st_mtime
+            st = path.stat()
+            snap[path.relative_to(directory).as_posix()] = (
+                st.st_size,
+                st.st_mtime_ns,
+            )
     return snap
 
 
 def changed_files(
-    directory: Path, snapshot: dict[str, float]
+    directory: Path, snapshot: dict[str, tuple[int, int]]
 ) -> list[Path]:
-    """Files under `directory` that are new or modified since `snapshot`.
+    """Files under `directory` that are new or changed since `snapshot`.
 
-    A file counts as changed when it was absent from the snapshot or its mtime
-    has advanced past the snapshotted value. Returned paths are absolute and
-    sorted for stable ordering.
+    A file counts as changed when it was absent from the snapshot or its
+    ``(st_size, st_mtime_ns)`` signature differs in any way (not merely a
+    later mtime). Returned paths are absolute and sorted for stable ordering.
     """
     directory = Path(directory)
     if not directory.is_dir():
@@ -95,7 +102,8 @@ def changed_files(
             continue
         rel = path.relative_to(directory).as_posix()
         prior = snapshot.get(rel)
-        if prior is None or path.stat().st_mtime > prior:
+        st = path.stat()
+        if prior is None or (st.st_size, st.st_mtime_ns) != prior:
             changed.append(path)
     return sorted(changed)
 

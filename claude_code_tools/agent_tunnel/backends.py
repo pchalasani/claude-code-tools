@@ -195,7 +195,7 @@ class _BaseBackend:
 
     def _begin_turn(
         self, rec: ThreadRecord
-    ) -> tuple[tuple[str, ...], str, Optional[Path], dict[str, float]]:
+    ) -> tuple[tuple[str, ...], str, Optional[Path], dict[str, tuple[int, int]]]:
         """Set up attachment I/O for a turn.
 
         Returns ``(add_dirs, extra_system, outbox, snapshot)``:
@@ -212,7 +212,7 @@ class _BaseBackend:
         add_dirs: tuple[str, ...] = (str(uploads),)
         extra_system = ""
         outbox: Optional[Path] = None
-        snapshot: dict[str, float] = {}
+        snapshot: dict[str, tuple[int, int]] = {}
         if self._can_write(rec):
             outbox = ensure_outbox(Path(rec.project_dir), rec.thread_key)
             extra_system = (
@@ -225,7 +225,7 @@ class _BaseBackend:
         return add_dirs, extra_system, outbox, snapshot
 
     def _end_turn(
-        self, outbox: Optional[Path], snapshot: dict[str, float]
+        self, outbox: Optional[Path], snapshot: dict[str, tuple[int, int]]
     ) -> list[Path]:
         """Files the fork created/updated in its outbox during the turn."""
         if outbox is None:

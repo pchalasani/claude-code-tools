@@ -628,9 +628,9 @@ def test_paths_snapshot_diff(tmp_path: Path) -> None:
     b.write_text("x,y", encoding="utf-8")
     assert [p.name for p in changed_files(out, snap)] == ["b.csv"]
 
-    # modifying an existing file (mtime advances) is detected too.
-    a.write_text("two", encoding="utf-8")
-    os.utime(a, (old + 200, old + 200))
+    # A rewrite with PRESERVED mtime (cp -p / coarse FS) is still caught now.
+    a.write_text("changed", encoding="utf-8")  # different size, same mtime
+    os.utime(a, (old, old))
     assert sorted(p.name for p in changed_files(out, snap)) == [
         "a.md",
         "b.csv",

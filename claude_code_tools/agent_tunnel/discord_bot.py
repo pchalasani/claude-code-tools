@@ -567,10 +567,12 @@ def run_bot(
                     skipped.append(att.filename)
                     continue
                 # Office files the Read tool can't open: best-effort convert to
-                # a readable format (PDF/Markdown/text). Point the agent at the
-                # converted file, not the unreadable original.
+                # a readable format (PDF/Markdown/text). convert_attachment
+                # returns path=None when conversion is "off" or no converter
+                # handled it — then mark the file unreadable rather than point
+                # the fork at a binary original it can't Read.
                 ext = target.suffix.lower()
-                if ext in CONVERTIBLE_EXTS and cfg.attachments.convert != "off":
+                if ext in CONVERTIBLE_EXTS:
                     conv = await asyncio.to_thread(
                         convert_attachment,
                         target,
