@@ -76,7 +76,9 @@ So the whole colleague vocabulary is just three things: **`!list`** to
 discover, **`<handle> <question>`** to ask, **`!done`** to close. They can also
 **attach a file** to a question (a PDF, CSV, image…) and the agent will read
 it; on write-enabled handles the agent can hand a generated file back into the
-thread.
+thread. Inside a thread the bot answers every message — *except* one that
+starts with **@someone-else** (a teammate, role, or `@everyone`), so you can
+side-chat with a human without the bot chiming in.
 
 ## The `agent-tunnel` command group
 

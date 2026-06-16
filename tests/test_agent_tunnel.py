@@ -708,6 +708,19 @@ def test_unique_name() -> None:
     assert _unique_name("a.tar.gz", used) == "a-2.tar.gz"
 
 
+def test_leading_mention_id() -> None:
+    from claude_code_tools.agent_tunnel.discord_bot import _leading_mention_id
+
+    assert _leading_mention_id("what is X?") is None  # no mention -> answer
+    assert _leading_mention_id("<@123> hey bot") == 123  # user mention
+    assert _leading_mention_id("<@!123> nick form") == 123  # nickname mention
+    assert _leading_mention_id("<@&456> role ping") == 456  # role mention
+    assert _leading_mention_id("  <@789> leading ws") == 789
+    assert _leading_mention_id("@everyone look") == -1  # broadcast
+    assert _leading_mention_id("@here look") == -1
+    assert _leading_mention_id("hey <@123> mid") is None  # not at the start
+
+
 # ------------------------------------------------- office-file conversion
 
 

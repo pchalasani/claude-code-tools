@@ -151,7 +151,10 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
   (or post a ready notice).
 - `!list` / `!handles` (channel, thread, or DM): post the active handles +
   their project names.
-- Thread message: a follow-up routed to the bound fork.
+- Thread message: a follow-up routed to the bound fork — unless it opens with
+  a mention of someone other than the bot (`@teammate`, a role, or
+  `@everyone`/`@here`), which is read as human side-chat and silently ignored.
+  A leading `@bot` is fine (stripped, then answered).
 - `!done` / `!close` / `!end` in a thread (or DM): tear down that fork
   immediately (kill window, drop binding, confirm).
 - DMs (optional, off by default): `\<handle\> …` (re)binds the DM; bare text

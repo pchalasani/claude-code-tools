@@ -26,7 +26,7 @@ import time
 import uuid
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from .backends import Answer, Backend, BackendError
 from .config import TunnelConfig
@@ -96,6 +96,21 @@ def _unique_name(name: str, used: set[str]) -> str:
     chosen = f"{stem}-{i}{dot}{ext}"
     used.add(chosen)
     return chosen
+
+
+def _leading_mention_id(content: str) -> Optional[int]:
+    """The id of a *leading* Discord mention, or None if there isn't one.
+
+    Returns the user/role id of a leading ``<@id>`` (also ``<@!id>`` nickname
+    or ``<@&id>`` role) mention; ``-1`` for a leading ``@everyone``/``@here``
+    broadcast; ``None`` when the message doesn't start with a mention. Used in
+    threads to silently skip messages addressed to someone other than the bot.
+    """
+    text = content.lstrip()
+    if text.startswith("@everyone") or text.startswith("@here"):
+        return -1
+    match = re.match(r"<@[!&]?(\d+)>", text)
+    return int(match.group(1)) if match else None
 
 
 def split_chunks(text: str, limit: int = DISCORD_MSG_LIMIT) -> list[str]:
@@ -277,6 +292,15 @@ def run_bot(
                 return
             if not self._allowed(message.author):
                 return
+            # A message that opens with @someone-else (or @everyone/@here/a
+            # role) is teammates talking among themselves — stay out silently.
+            # A leading @bot is fine: strip it and answer. No mention = answer
+            # (in a thread you never need to address the bot).
+            mention_id = _leading_mention_id(content)
+            if mention_id is not None:
+                if mention_id != getattr(self.user, "id", None):
+                    return
+                content = re.sub(r"^\s*<@[!&]?\d+>\s*", "", content)
             if is_list_command(content):
                 await self._list_handles(thread)
                 return
@@ -401,9 +425,8 @@ def run_bot(
                         )
                         if not question.strip():
                             await dest.send(
-                                "⚠️ Nothing to act on — the attachment(s) "
-                                "were too large or unreadable. Add a question "
-                                "or a smaller file."
+                                "⚠️ Nothing to act on — add a question, or a "
+                                "(smaller/readable) file."
                             )
                             logger.info(
                                 "A [%s] %s: skipped (no usable content)",
