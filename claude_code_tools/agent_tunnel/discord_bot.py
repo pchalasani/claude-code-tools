@@ -358,22 +358,31 @@ def run_bot(
                 # window) don't leak into the new handle's fork — the upload
                 # dir is keyed only by the DM channel and would otherwise be
                 # reused across handles.
-                existing = store.get(thread_key)
-                if existing is not None:
-                    await asyncio.to_thread(
-                        backend_for_record(cfg, store, existing).forget,
+                #
+                # Hold the thread lock around forget+bind so the rebind can't
+                # race a still-running turn on the OLD binding: that turn holds
+                # this same lock, and its trailing upsert() (which merges fork/
+                # window into whatever record now owns thread_key) would
+                # otherwise attach the old fork to the new handle. The lock is
+                # released here before _answer re-acquires it below — it is not
+                # reentrant — so the new turn simply queues behind the old one.
+                async with locks[thread_key]:
+                    existing = store.get(thread_key)
+                    if existing is not None:
+                        await asyncio.to_thread(
+                            backend_for_record(cfg, store, existing).forget,
+                            thread_key,
+                        )
+                    store.bind(
                         thread_key,
+                        handle=rec.handle,
+                        expert_session_id=rec.session_id,
+                        project_dir=rec.cwd,
+                        config_dir=rec.config_dir,
+                        access=rec.access,
+                        backend=cfg.backend,
+                        asker=message.author.display_name,
                     )
-                store.bind(
-                    thread_key,
-                    handle=rec.handle,
-                    expert_session_id=rec.session_id,
-                    project_dir=rec.cwd,
-                    config_dir=rec.config_dir,
-                    access=rec.access,
-                    backend=cfg.backend,
-                    asker=message.author.display_name,
-                )
                 content = remainder.strip()
                 if not content and not message.attachments:
                     await message.channel.send(
