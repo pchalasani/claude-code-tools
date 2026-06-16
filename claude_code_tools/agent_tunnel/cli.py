@@ -686,7 +686,16 @@ def forget(
     thread: Optional[str],
     forget_all: bool,
 ) -> None:
-    """Drop thread mappings (and kill their tmux windows)."""
+    """Drop thread mappings (and kill their tmux windows).
+
+    Known limitation: this runs in a separate process from the daemon, so it
+    does not coordinate with an in-flight turn. Running it while the daemon is
+    mid-answer for a thread can delete that thread's upload/outbox dirs or kill
+    its window before the turn finishes — the in-process per-thread lock that
+    guards the Discord ``!done`` path does not span processes. Prefer ``!done``
+    in-thread, or run ``forget`` when the thread is idle; fully closing this
+    would need a cross-process per-turn lock.
+    """
     if bool(thread) == forget_all:
         raise click.ClickException("Use exactly one of --thread or --all.")
     cfg = _build(config, backend)

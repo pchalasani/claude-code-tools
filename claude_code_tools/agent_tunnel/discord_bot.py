@@ -466,20 +466,24 @@ def run_bot(
                     "I'll take this one next."
                 )
             async with lock, sem:
-                # The thread may have been rebound to a different session (or
-                # closed) while this turn waited for the lock — e.g. a queued
-                # follow-up parked on the "still working" send above while a
-                # new-handle rebind jumped the lock queue. Don't answer it
-                # against the wrong binding.
+                # The thread may have been rebound (even to the same session,
+                # which resets the fork) or closed while this turn waited for
+                # the lock — e.g. a queued follow-up parked on the "still
+                # working" send above while a rebind jumped the lock queue. A
+                # fresh bind stamps a new created_at, so compare the full
+                # binding identity (session + created_at) and don't answer a
+                # queued question against a binding it was not asked under.
                 current = store.get(thread_key)
                 if current is None or (
                     rec is not None
-                    and current.expert_session_id != rec.expert_session_id
+                    and (
+                        current.expert_session_id != rec.expert_session_id
+                        or current.created_at != rec.created_at
+                    )
                 ):
                     await dest.send(
-                        "↪️ This conversation was switched to a different "
-                        "session before I got to your message — please "
-                        "resend it."
+                        "↪️ This conversation was restarted before I got to "
+                        "your message — please resend it."
                     )
                     return
                 start = time.time()
