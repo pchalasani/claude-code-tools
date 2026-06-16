@@ -87,3 +87,30 @@ def test_forget_removes_upload_dir(tmp_path: Path) -> None:
 
     assert not uploads.exists()  # stale uploads gone
     assert store.get("dm:1") is None  # binding dropped
+
+
+def test_store_backfills_legacy_blank_backend(tmp_path: Path) -> None:
+    # Root fix: a record written before the `backend` field loads blank, but a
+    # live tmux_window means its fork runs under tmux. Normalizing on load (one
+    # place) means dispatch/reaper/rename/forget all read a correct backend.
+    import json
+
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "records": {
+                    "th:1": {
+                        "thread_key": "th:1",
+                        "handle": "h",
+                        "backend": "",
+                        "tmux_window": "agent:th-1",
+                    }
+                },
+                "fork_ids": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rec = TunnelStore(path).get("th:1")
+    assert rec is not None and rec.backend == "tmux"

@@ -62,7 +62,15 @@ class TunnelStore:
         known = {f.name for f in ThreadRecord.__dataclass_fields__.values()}
         for key, rec in data.get("records", {}).items():
             fields = {k: v for k, v in rec.items() if k in known}
-            self._records[key] = ThreadRecord(**fields)
+            record = ThreadRecord(**fields)
+            # Single normalization point: a legacy record written before the
+            # `backend` field existed loads blank, but a live `tmux_window`
+            # means its fork runs under tmux. Backfill it here so every
+            # consumer (dispatch, reaper, rename, forget) reads a correct
+            # backend without re-deriving it — and the fix persists on save.
+            if not record.backend and record.tmux_window:
+                record.backend = "tmux"
+            self._records[key] = record
         self._fork_ids = set(data.get("fork_ids", []))
 
     def _reload_locked(self) -> None:

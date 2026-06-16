@@ -91,6 +91,10 @@ def _publish(session_id, cwd, transcript_path, config_dir, access, label):
         try:
             records = _load(REGISTRY_PATH)
             existing = _find_by_session(records, session_id)
+            # Capture the prior record now: relabeling pops the old handle
+            # below, so the preserved fields (access/label/created_at) must be
+            # read from here, not from the new (absent) handle key.
+            prior = records.get(existing) if existing else None
             if label:
                 handle = label
                 taken = records.get(handle)
@@ -107,6 +111,10 @@ def _publish(session_id, cwd, transcript_path, config_dir, access, label):
                     and records[handle].get("session_id") != session_id
                 ):
                     handle += "x"
+            # No prior (fresh share, or re-share of a revoked handle) → fall
+            # back to whatever sits under the resolved handle.
+            if prior is None:
+                prior = records.get(handle, {})
             records[handle] = {
                 "handle": handle,
                 "session_id": session_id,
@@ -116,12 +124,10 @@ def _publish(session_id, cwd, transcript_path, config_dir, access, label):
                 # access — written by an old hook — can't persist on re-share.
                 "access": access
                 if access is not None
-                else (records.get(handle, {}).get("access") or "read"),
-                "label": label or records.get(handle, {}).get("label", ""),
+                else (prior.get("access") or "read"),
+                "label": label or prior.get("label", ""),
                 "transcript_path": transcript_path,
-                "created_at": records.get(handle, {}).get(
-                    "created_at", time.time()
-                ),
+                "created_at": prior.get("created_at", time.time()),
                 "revoked": False,
             }
             _atomic_write(REGISTRY_PATH, records)
