@@ -576,6 +576,27 @@ def make_backend(cfg: TunnelConfig, store: TunnelStore) -> Backend:
     return TmuxBackend(cfg, store)
 
 
+def backend_by_name(
+    cfg: TunnelConfig,
+    store: TunnelStore,
+    name: str,
+    cache: Optional[dict[str, Backend]] = None,
+) -> Backend:
+    """Build (and optionally cache) the backend for an explicit name.
+
+    Lets cleanup/reaping target a record by its *stored* backend even when the
+    daemon or CLI now defaults to a different one. Pass a shared ``cache`` to
+    reuse instances across many records.
+    """
+    if cache is None:
+        cache = {}
+    backend = cache.get(name)
+    if backend is None:
+        backend = make_backend(replace(cfg, backend=name), store)
+        cache[name] = backend
+    return backend
+
+
 def backend_for_record(
     cfg: TunnelConfig,
     store: TunnelStore,
@@ -584,19 +605,12 @@ def backend_for_record(
 ) -> Backend:
     """Backend matching a record's *own* backend, not the current config.
 
-    One-off management commands (``forget``, ``forks``/``--manage``) load the
-    config's default backend — now ``headless`` — yet a record's fork may run
-    under ``tmux``. Cleaning that up with the headless backend would drop the
-    JSON state while leaving the tmux window and its Claude process alive, so
-    dispatch by ``rec.backend`` (falling back to the config when a record has
-    no recorded backend). Pass a shared ``cache`` to reuse instances across
-    many records.
+    One-off management commands (``forget``, ``forks``/``--manage``) and the
+    daemon's close/reap paths load the config's default backend — now
+    ``headless`` — yet a record's fork may run under ``tmux``. Cleaning that up
+    with the headless backend would drop the JSON state while leaving the tmux
+    window and its Claude process alive, so dispatch by ``rec.backend``
+    (falling back to the config when a record has no recorded backend).
     """
     name = rec.backend if rec is not None and rec.backend else cfg.backend
-    if cache is None:
-        cache = {}
-    backend = cache.get(name)
-    if backend is None:
-        backend = make_backend(replace(cfg, backend=name), store)
-        cache[name] = backend
-    return backend
+    return backend_by_name(cfg, store, name, cache)

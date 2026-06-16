@@ -28,7 +28,13 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Optional
 
-from .backends import Answer, Backend, BackendError
+from .backends import (
+    Answer,
+    Backend,
+    BackendError,
+    backend_by_name,
+    backend_for_record,
+)
 from .config import TunnelConfig
 from .convert import CONVERTIBLE_EXTS, convert_attachment
 from .paths import attachment_preamble, uploads_dir_for
@@ -179,11 +185,26 @@ def run_bot(
             while True:
                 await asyncio.sleep(REAP_INTERVAL_S)
                 try:
-                    reaped = await asyncio.to_thread(backend.reap_idle)
+                    reaped = await asyncio.to_thread(self._reap_all)
                     if reaped:
                         logger.info("Reaped %d idle window(s)", reaped)
                 except Exception:
                     logger.exception("Reaper error")
+
+        def _reap_all(self) -> int:
+            """Reap idle windows across every backend present in the store.
+
+            The daemon now defaults to headless, but records from earlier tmux
+            runs still own live windows; reaping only the configured backend
+            would leak them. ``reap_idle`` filters by its own backend name, so
+            calling it once per distinct record backend covers them all.
+            """
+            cache: dict[str, Backend] = {}
+            total = 0
+            names = {r.backend or cfg.backend for r in store.all_records()}
+            for name in names:
+                total += backend_by_name(cfg, store, name, cache).reap_idle()
+            return total
 
         async def on_ready(self) -> None:
             logger.info(
@@ -329,7 +350,17 @@ def run_bot(
             handle = token.strip().lower()
             rec = registry.get(handle)
             if rec is not None:
-                store.remove(thread_key)
+                # Rebinding this DM starts a fresh thread; fully tear down any
+                # previous binding first so its uploads/outbox (and live tmux
+                # window) don't leak into the new handle's fork — the upload
+                # dir is keyed only by the DM channel and would otherwise be
+                # reused across handles.
+                existing = store.get(thread_key)
+                if existing is not None:
+                    await asyncio.to_thread(
+                        backend_for_record(cfg, store, existing).forget,
+                        thread_key,
+                    )
                 store.bind(
                     thread_key,
                     handle=rec.handle,
@@ -379,8 +410,11 @@ def run_bot(
 
         async def _close(self, dest: Any, thread_key: str) -> None:
             """Close a thread: tear down its fork and confirm."""
+            rec = store.get(thread_key)
             try:
-                await asyncio.to_thread(backend.forget, thread_key)
+                await asyncio.to_thread(
+                    backend_for_record(cfg, store, rec).forget, thread_key
+                )
             except Exception:
                 logger.exception("Error closing %s", thread_key)
             logger.info("Closed thread %s on request", thread_key)
