@@ -422,11 +422,14 @@ def run_bot(
 
         async def _close(self, dest: Any, thread_key: str) -> None:
             """Close a thread: tear down its fork and confirm."""
-            rec = store.get(thread_key)
             try:
-                await asyncio.to_thread(
-                    backend_for_record(cfg, store, rec).forget, thread_key
-                )
+                # Hold the thread lock so we don't delete a turn's upload/
+                # outbox dirs (or kill its window) while it is mid-answer.
+                async with locks[thread_key]:
+                    rec = store.get(thread_key)
+                    await asyncio.to_thread(
+                        backend_for_record(cfg, store, rec).forget, thread_key
+                    )
             except Exception:
                 logger.exception("Error closing %s", thread_key)
             logger.info("Closed thread %s on request", thread_key)
@@ -463,6 +466,22 @@ def run_bot(
                     "I'll take this one next."
                 )
             async with lock, sem:
+                # The thread may have been rebound to a different session (or
+                # closed) while this turn waited for the lock — e.g. a queued
+                # follow-up parked on the "still working" send above while a
+                # new-handle rebind jumped the lock queue. Don't answer it
+                # against the wrong binding.
+                current = store.get(thread_key)
+                if current is None or (
+                    rec is not None
+                    and current.expert_session_id != rec.expert_session_id
+                ):
+                    await dest.send(
+                        "↪️ This conversation was switched to a different "
+                        "session before I got to your message — please "
+                        "resend it."
+                    )
+                    return
                 start = time.time()
                 try:
                     async with dest.typing():
