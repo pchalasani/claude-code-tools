@@ -379,6 +379,13 @@ Both run on your logged-in `claude` (no API key needed). Do **not** put
 breaks subscription auth. Each **new** thread replays the published session's
 full context (~its token count per cold question), which is fine for Q&A.
 
+The daemon logs **one line per question** — `Q [thread] handle ← asker: "…"` on
+arrival and `A [thread] handle: … in Ns, N chars, fork …` on completion (plus
+errors) — so tailing the `serve` output is a live activity feed and a
+who-asked-what trail. That's the primary way to watch a **headless** daemon
+(which has no `agent-tunnel watch`); pair it with the `agent-tunnel forks`
+table.
+
 ## Security notes
 
 <Aside type="caution">
