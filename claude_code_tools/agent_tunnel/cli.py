@@ -13,7 +13,13 @@ from typing import Optional
 
 import click
 
-from .backends import Backend, BackendError, _window_name, make_backend
+from .backends import (
+    Backend,
+    BackendError,
+    _window_name,
+    backend_for_record,
+    make_backend,
+)
 from .config import (
     DEFAULT_CONFIG_PATH,
     TunnelConfig,
@@ -377,7 +383,9 @@ def _render_forks_table(rows: list[dict[str, str]]) -> None:
     Console().print(table)
 
 
-def _manage_forks(backend: Backend, rows: list[dict[str, str]]) -> None:
+def _manage_forks(
+    cfg: TunnelConfig, store: TunnelStore, rows: list[dict[str, str]]
+) -> None:
     """Interactively select forks and clear (forget) them."""
     import questionary
 
@@ -404,9 +412,11 @@ def _manage_forks(backend: Backend, rows: list[dict[str, str]]) -> None:
     ).ask():
         click.echo("Cancelled.")
         return
+    cache: dict[str, Backend] = {}
     for key in selected:
         try:
-            backend.forget(key)
+            rec = store.get(key)
+            backend_for_record(cfg, store, rec, cache).forget(key)
             click.echo(f"Cleared {key}")
         except Exception as exc:
             click.echo(f"Failed to clear {key}: {exc}", err=True)
@@ -438,8 +448,13 @@ def forks(
         where = f" for handle {handle!r}" if handle else ""
         click.echo("[]" if as_json else f"No fork sessions{where} yet.")
         return
-    backend = make_backend(cfg, store)
-    rows = [_fork_row(rec, _fork_status(backend, rec)) for rec in recs]
+    cache: dict[str, Backend] = {}
+    rows = [
+        _fork_row(
+            rec, _fork_status(backend_for_record(cfg, store, rec, cache), rec)
+        )
+        for rec in recs
+    ]
     if as_json:
         click.echo(json.dumps(rows, indent=2))
         return
@@ -448,7 +463,7 @@ def forks(
             raise click.ClickException(
                 "--manage needs an interactive terminal."
             )
-        _manage_forks(backend, rows)
+        _manage_forks(cfg, store, rows)
         return
     _render_forks_table(rows)
 
@@ -677,13 +692,14 @@ def forget(
         raise click.ClickException("Use exactly one of --thread or --all.")
     cfg = _build(config, backend)
     store = TunnelStore(cfg.state_path)
-    bk = make_backend(cfg, store)
     if forget_all:
         keys = [r.thread_key for r in store.all_records()]
     else:
         keys = [thread] if thread else []
+    cache: dict[str, Backend] = {}
     for key in keys:
-        bk.forget(key)
+        rec = store.get(key)
+        backend_for_record(cfg, store, rec, cache).forget(key)
         click.echo(f"Forgot {key}")
     if not keys:
         click.echo("Nothing to forget.")
