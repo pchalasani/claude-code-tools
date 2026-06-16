@@ -101,7 +101,6 @@ def serve(
     cfg = _build(config, backend, channels, token_env)
     store = TunnelStore(cfg.state_path)
     registry = Registry(cfg.registry_path)
-    bk = make_backend(cfg, store)
     try:
         from .discord_bot import run_bot
     except ImportError as exc:
@@ -113,7 +112,7 @@ def serve(
         f"registry={cfg.registry_path} channels={cfg.discord.channel_ids}"
     )
     try:
-        run_bot(cfg, bk, store, registry)
+        run_bot(cfg, store, registry)
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
 

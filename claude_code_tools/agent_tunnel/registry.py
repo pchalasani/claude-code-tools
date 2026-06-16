@@ -166,7 +166,10 @@ class Registry:
         with file_lock(self.path):
             records = self._read()
             rec = records.get(old)
-            if rec is None:
+            # A revoked record is hidden by get()/active(); renaming it would
+            # "succeed" yet leave the new handle revoked and invisible. Treat
+            # it as missing.
+            if rec is None or rec.revoked:
                 return (False, f"No handle {old!r} in the registry.")
             taken = records.get(new)
             if (

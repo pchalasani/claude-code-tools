@@ -145,7 +145,6 @@ def split_chunks(text: str, limit: int = DISCORD_MSG_LIMIT) -> list[str]:
 
 def run_bot(
     cfg: TunnelConfig,
-    backend: Backend,
     store: TunnelStore,
     registry: Registry,
 ) -> None:
@@ -469,7 +468,9 @@ def run_bot(
                             )
                             return
                         answer = await asyncio.to_thread(
-                            backend.ask, thread_key, question
+                            backend_for_record(cfg, store, rec).ask,
+                            thread_key,
+                            question,
                         )
                 except BackendError as exc:
                     logger.warning(

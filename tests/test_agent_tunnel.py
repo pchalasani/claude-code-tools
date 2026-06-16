@@ -880,6 +880,9 @@ def test_registry_rename(tmp_path: Path) -> None:
     ok, msg = reg.rename("new", "taken")
     assert not ok and "already used" in msg
     assert reg.get("new") is not None  # original left intact
+    # A revoked handle (after `>share off`) is treated as missing, not renamed.
+    reg.revoke("new")
+    assert reg.rename("new", "fresh")[0] is False
 
 
 def test_registry_coerces_null_access(tmp_path: Path) -> None:
