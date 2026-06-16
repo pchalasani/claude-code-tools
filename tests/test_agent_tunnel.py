@@ -562,6 +562,19 @@ convert = "off"
     assert cfg.discord.channel_ids == [222]
 
 
+def test_load_config_resolves_relative_state_path(tmp_path: Path) -> None:
+    # Relative [tunnel] paths must become absolute at load time, else inbound
+    # attachments saved relative to the daemon CWD are unreadable when the fork
+    # runs with cwd=project_dir (Codex P2).
+    cfg_file = tmp_path / "rel.toml"
+    cfg_file.write_text(
+        '[tunnel]\nstate_path = "rel/s.json"\nregistry_path = "rel/r.json"\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(path=cfg_file)
+    assert cfg.state_path.is_absolute() and cfg.registry_path.is_absolute()
+
+
 # --------------------------------------------------- attachment plumbing
 
 
