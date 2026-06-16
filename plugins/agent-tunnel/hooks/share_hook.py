@@ -170,7 +170,10 @@ def main():
         data = json.load(sys.stdin)
         session_id = data.get("session_id", "")
         prompt = data.get("prompt")
-        cwd = data.get("cwd") or os.getcwd()
+        # Absolute so the daemon (which launches the fork with cwd set to this
+        # project dir and exposes upload/outbox paths via --add-dir) never has
+        # to resolve a relative project path against the wrong directory.
+        cwd = os.path.abspath(data.get("cwd") or os.getcwd())
         transcript_path = data.get("transcript_path", "")
 
         if not isinstance(prompt, str) or not prompt.strip():
