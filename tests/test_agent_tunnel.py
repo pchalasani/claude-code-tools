@@ -572,7 +572,7 @@ def test_load_config_resolves_relative_state_path(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     cfg = load_config(path=cfg_file)
-    assert cfg.state_path.is_absolute() and cfg.registry_path.is_absolute()
+    assert cfg.state_path == (tmp_path / "rel" / "s.json").resolve()
 
 
 # --------------------------------------------------- attachment plumbing

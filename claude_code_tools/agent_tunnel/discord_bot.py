@@ -628,9 +628,14 @@ def run_bot(
             if skipped:
                 await dest.send("⚠️ Skipped: " + ", ".join(skipped))
             if unreadable:
+                why = (
+                    "Office conversion is turned off"
+                    if cfg.attachments.convert == "off"
+                    else "no converter is available"
+                )
                 await dest.send(
-                    "⚠️ Couldn't open " + ", ".join(unreadable) + " here (no "
-                    "converter available) — attach a PDF or paste the text."
+                    f"⚠️ Couldn't open {', '.join(unreadable)} here ({why}) "
+                    "— attach a PDF or paste the text."
                 )
             return attachment_preamble(saved, question)
 

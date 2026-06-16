@@ -227,18 +227,25 @@ def load_config(
     if token_env:
         cfg.discord.token_env = token_env
 
-    # Anchor configured paths to absolute at the daemon's launch CWD. A
-    # relative state_path otherwise breaks inbound attachments: the backend
-    # launches claude with cwd=rec.project_dir and exposes the uploads dir via
-    # --add-dir, so a relative `uploads/...` would resolve under the project
-    # (Read can't open it). It also keeps `serve` and CLI commands run from
-    # other directories pointed at the same state/registry files.
-    cfg.state_path = cfg.state_path.expanduser().resolve()
-    cfg.registry_path = cfg.registry_path.expanduser().resolve()
+    # Anchor configured paths to absolute. A relative path resolves against the
+    # CONFIG FILE's directory (not the caller's CWD), so `serve` and CLI
+    # commands launched from different directories with the same config agree
+    # on the state/registry files. Absolute paths also fix inbound attachments:
+    # the backend launches claude with cwd=rec.project_dir and exposes the
+    # uploads dir via --add-dir, so a relative `uploads/...` would otherwise
+    # resolve under the project (where Read can't open it).
+    base = cfg_path.parent
+
+    def _anchor(p: Path) -> Path:
+        p = p.expanduser()
+        return (p if p.is_absolute() else base / p).resolve()
+
+    cfg.state_path = _anchor(cfg.state_path)
+    cfg.registry_path = _anchor(cfg.registry_path)
     if cfg.claude_home is not None:
-        cfg.claude_home = cfg.claude_home.expanduser().resolve()
+        cfg.claude_home = _anchor(cfg.claude_home)
     if cfg.project_dir is not None:
-        cfg.project_dir = cfg.project_dir.expanduser().resolve()
+        cfg.project_dir = _anchor(cfg.project_dir)
 
     if cfg.backend not in ("tmux", "headless"):
         raise ValueError(f"Unknown backend: {cfg.backend!r}")

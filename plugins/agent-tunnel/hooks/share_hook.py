@@ -26,8 +26,14 @@ import sys
 import time
 
 TRIGGER = ">share"
-REGISTRY_PATH = os.environ.get("AGENT_TUNNEL_REGISTRY") or os.path.expanduser(
-    "~/.local/state/agent-tunnel/registry.json"
+# expanduser + abspath so a ~/... or relative AGENT_TUNNEL_REGISTRY resolves
+# to the same absolute file the daemon reads (the daemon normalizes its own
+# registry_path the same way); otherwise >share could write somewhere else.
+REGISTRY_PATH = os.path.abspath(
+    os.path.expanduser(
+        os.environ.get("AGENT_TUNNEL_REGISTRY")
+        or "~/.local/state/agent-tunnel/registry.json"
+    )
 )
 HANDLE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")
 
