@@ -26,9 +26,11 @@ import sys
 import time
 
 TRIGGER = ">share"
-# expanduser + abspath so a ~/... or relative AGENT_TUNNEL_REGISTRY resolves
-# to the same absolute file the daemon reads (the daemon normalizes its own
-# registry_path the same way); otherwise >share could write somewhere else.
+# expanduser + abspath so a ~/... AGENT_TUNNEL_REGISTRY resolves to the same
+# absolute file the daemon reads. NOTE: use an absolute path or ~/... — a
+# RELATIVE value is anchored to this hook's cwd here but to the config-file
+# dir in the daemon, so the two would diverge (relative registry paths are
+# effectively unsupported).
 REGISTRY_PATH = os.path.abspath(
     os.path.expanduser(
         os.environ.get("AGENT_TUNNEL_REGISTRY")

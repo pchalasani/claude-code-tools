@@ -78,7 +78,9 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
   here. `discord.token_file` reads the bot token from a file (no export);
   `claude.auto_trust` / `trust_config_path` control folder pre-trust;
   `AGENT_TUNNEL_REGISTRY` env overrides the registry path (hook + daemon
-  honor it).
+  honor it). Use an absolute path or `~/...`: a relative value is anchored
+  differently by the standalone hook (its own cwd) and the daemon (the
+  config-file dir), so the two would point at different files.
 - `store.py` — daemon state: `thread_key → ThreadRecord` (handle, expert
   session id, project dir, **config dir**, fork id, tmux window). `bind()`
   records a pending thread before the first answer; fork id filled on
