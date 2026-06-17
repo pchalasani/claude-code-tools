@@ -259,6 +259,29 @@ def test_current_access_falls_back_when_handle_revoked(tmp_path: Path) -> None:
     assert rec.access == "write"  # bound level retained despite revoke
 
 
+def test_access_sync_ignores_handle_collision_from_other_session(
+    tmp_path: Path,
+) -> None:
+    # Guard (Codex P2): sync access only from the registry record bound to THIS
+    # thread's session. The CLI direct path binds threads under the sentinel
+    # handle "cli"; an unrelated `>share --write cli` (a different session) must
+    # NOT escalate them — match on session_id, else keep the stored level.
+    cfg = TunnelConfig(
+        state_path=tmp_path / "s.json", registry_path=tmp_path / "reg.json"
+    )
+    store = TunnelStore(cfg.state_path)
+    store.bind("t", "cli", "session-A", "/p", "headless", access="read")
+    Registry(cfg.registry_path).upsert(
+        PublishRecord(
+            handle="cli", session_id="session-B", cwd="/other", access="write"
+        )
+    )
+    rec = HeadlessBackend(cfg, store)._require_binding("t")
+    assert rec.access == "read"  # not hijacked by a same-name other session
+    persisted = store.get("t")
+    assert persisted is not None and persisted.access == "read"
+
+
 def test_store_set_access_persists_and_noops_on_missing(
     tmp_path: Path,
 ) -> None:
