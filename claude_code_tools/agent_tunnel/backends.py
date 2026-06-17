@@ -41,6 +41,7 @@ from .paths import (
     snapshot_dir,
     uploads_dir_for,
 )
+from .registry import Registry
 from .session import (
     extract_answer,
     list_session_files,
@@ -167,6 +168,26 @@ class _BaseBackend:
         self.cfg = cfg
         self.store = store
 
+    def _current_access(self, rec: ThreadRecord) -> str:
+        """The handle's *current* access level from the registry.
+
+        Re-read each turn so a live ``>share --write|--read|...`` re-share
+        upgrades/downgrades an already-running thread, not only new threads.
+        ``Registry.get`` hides a revoked/absent handle, so we fall back to the
+        thread's bound level — a revoked thread keeps working at its last-known
+        access (revoke semantics are out of scope here).
+        """
+        reg = Registry(self.cfg.registry_path).get(rec.handle)
+        return reg.access if (reg is not None and reg.access) else rec.access
+
+    def _on_access_changed(self, rec: ThreadRecord, old: str, new: str) -> None:
+        """Hook fired when a turn syncs the thread to a new access level.
+
+        Base no-op: HeadlessBackend re-reads ``rec.access`` on its next
+        ``claude -p`` automatically. TmuxBackend overrides this to drop the
+        warm window so the next turn cold-relaunches the fork with new flags.
+        """
+
     def _require_binding(self, thread_key: str) -> ThreadRecord:
         rec = self.store.get(thread_key)
         if rec is None:
@@ -177,6 +198,16 @@ class _BaseBackend:
             raise BackendError(
                 f"Thread {thread_key} has an incomplete binding."
             )
+        # Live access upgrade/downgrade: re-read the handle's current registry
+        # access so a `>share --write|--read|...` re-share takes effect on this
+        # already-running thread (same fork, context kept). Persisting it means
+        # the change fires `_on_access_changed` once, not on every later turn.
+        cur = self._current_access(rec)
+        if cur != rec.access:
+            old = rec.access
+            rec.access = cur
+            self.store.set_access(thread_key, cur)
+            self._on_access_changed(rec, old, cur)
         if rec.access == "all" and not self.cfg.claude.allow_skip_permissions:
             raise BackendError(
                 "This handle was shared with full "
@@ -359,6 +390,17 @@ class TmuxBackend(_BaseBackend):
         """Bind to the dedicated tmux session named in the config."""
         super().__init__(cfg, store)
         self.tmux = TmuxSession(cfg.tmux_session)
+
+    def _on_access_changed(self, rec: ThreadRecord, old: str, new: str) -> None:
+        """Kill the warm window so the next turn cold-relaunches the fork.
+
+        ``ask`` resumes the SAME fork (``--resume <fork>``), but
+        ``build_claude_flags`` only applies the new access flags on a cold
+        launch — a warm window keeps what it launched with. Killing the window
+        forces the next turn down the relaunch path, so the fork comes back
+        with the new tools, same fork id, full context retained.
+        """
+        self.tmux.kill_window(_window_name(rec.handle, rec.thread_key))
 
     def _launch(
         self,
