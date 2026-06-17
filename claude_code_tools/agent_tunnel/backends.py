@@ -173,12 +173,24 @@ class _BaseBackend:
 
         Re-read each turn so a live ``>share --write|--read|...`` re-share
         upgrades/downgrades an already-running thread, not only new threads.
-        ``Registry.get`` hides a revoked/absent handle, so we fall back to the
-        thread's bound level — a revoked thread keeps working at its last-known
-        access (revoke semantics are out of scope here).
+
+        Honored only when the registry record is the SAME session this thread
+        was bound to (``session_id == expert_session_id``); otherwise we keep
+        the stored level. This stops a handle-name collision from hijacking
+        access: the CLI direct path binds threads under the sentinel handle
+        ``cli``, which is also a valid ``>share`` label, so an unrelated
+        ``>share --write cli`` (a different session) must NOT escalate them.
+        A revoked/absent handle is hidden by ``Registry.get`` and likewise
+        falls back to the bound level (a revoked thread keeps working).
         """
         reg = Registry(self.cfg.registry_path).get(rec.handle)
-        return reg.access if (reg is not None and reg.access) else rec.access
+        if (
+            reg is not None
+            and reg.access
+            and reg.session_id == rec.expert_session_id
+        ):
+            return reg.access
+        return rec.access
 
     def _on_access_changed(self, rec: ThreadRecord, old: str, new: str) -> None:
         """Hook fired when a turn syncs the thread to a new access level.
