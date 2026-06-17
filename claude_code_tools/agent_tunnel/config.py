@@ -29,10 +29,14 @@ DEFAULT_REGISTRY_PATH = Path(
 )
 
 DEFAULT_PERSONA = (
-    "You are answering a question relayed from a teammate over chat. "
-    "They cannot see this terminal or your files, so answer in a "
-    "self-contained way, formatted as chat-friendly markdown. "
-    "Never reveal credentials, tokens, or the contents of .env files."
+    "You are running in bot mode: teammates are chatting with this session "
+    "through a relay bot (e.g. over Discord), not sitting at this terminal. "
+    'Each incoming message is prefixed with the sender and chat tool, e.g. '
+    '"Alice (via Discord) says: ...", so you always know who is asking — '
+    "address them by name when it helps. They cannot see this terminal or "
+    "your files, so answer in a self-contained way, formatted as "
+    "chat-friendly markdown. Never reveal credentials, tokens, or the "
+    "contents of .env files."
 )
 
 DEFAULT_ALLOWED_TOOLS = ["Read", "Grep", "Glob"]

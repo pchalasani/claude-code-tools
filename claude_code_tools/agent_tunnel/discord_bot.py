@@ -47,6 +47,18 @@ logger = logging.getLogger("agent_tunnel")
 DISCORD_MSG_LIMIT = 2000
 REAP_INTERVAL_S = 300
 THREAD_NAME_MAX = 90
+PLATFORM = "Discord"
+
+
+def format_relayed_message(sender: str, question: str) -> str:
+    """Prefix a relayed chat message with its sender for the fork.
+
+    The daemon knows who sent each Discord message; the forked Claude does
+    not, so we prepend ``<name> (via Discord) says:``. The persona explains
+    this convention so Claude reads the prefix as the asker's identity.
+    """
+    who = sender.strip() or "A teammate"
+    return f"{who} (via {PLATFORM}) says:\n{question}"
 
 
 def resolve_token(cfg: TunnelConfig) -> str:
@@ -299,7 +311,11 @@ def run_bot(
             )
             if question or message.attachments:
                 await self._answer(
-                    thread, f"th:{thread.id}", question, message.attachments
+                    thread,
+                    f"th:{thread.id}",
+                    question,
+                    message.attachments,
+                    sender=message.author.display_name,
                 )
             else:
                 await thread.send(
@@ -334,7 +350,13 @@ def run_bot(
             if not self._cooldown_ok(message.author.id):
                 await message.add_reaction("⏳")
                 return
-            await self._answer(thread, thread_key, content, message.attachments)
+            await self._answer(
+                thread,
+                thread_key,
+                content,
+                message.attachments,
+                sender=message.author.display_name,
+            )
 
         async def _on_direct(
             self, message: discord.Message, content: str
@@ -400,7 +422,11 @@ def run_bot(
                 await message.add_reaction("⏳")
                 return
             await self._answer(
-                message.channel, thread_key, content, message.attachments
+                message.channel,
+                thread_key,
+                content,
+                message.attachments,
+                sender=message.author.display_name,
             )
 
         async def _list_handles(self, dest: Any) -> None:
@@ -444,12 +470,15 @@ def run_bot(
             thread_key: str,
             question: str,
             attachments: Any = None,
+            sender: str = "",
         ) -> None:
             # Per-question log line so an unattended (esp. headless) daemon
             # shows live activity + an audit trail of who-asked-what.
             rec = store.get(thread_key)
             handle = rec.handle if rec else "?"
-            asker = rec.asker if rec else "?"
+            # The per-message sender (this message's author) is more accurate
+            # than the bind-time asker for follow-ups by other people.
+            asker = sender or (rec.asker if rec else "?")
             n_att = len(attachments or [])
             logger.info(
                 "Q [%s] %s ← %s%s: %r",
@@ -503,6 +532,10 @@ def run_bot(
                                 handle,
                             )
                             return
+                        # Tell the fork who sent this (it can't see Discord);
+                        # the persona explains the "<name> (via Discord) says:"
+                        # convention.
+                        question = format_relayed_message(sender, question)
                         answer = await asyncio.to_thread(
                             backend_for_record(cfg, store, rec).ask,
                             thread_key,
