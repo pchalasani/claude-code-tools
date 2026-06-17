@@ -127,7 +127,9 @@ def build_claude_flags(
         flags += ["--model", claude.model]
     for directory in add_dirs:
         flags += ["--add-dir", directory]
-    system = claude.persona
+    # Fill the persona's {platform} placeholder from config (a custom persona
+    # without it is unaffected by str.replace).
+    system = claude.persona.replace("{platform}", cfg.platform)
     if extra_system:
         system = f"{system}\n\n{extra_system}" if system else extra_system
     if system:

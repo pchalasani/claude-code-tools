@@ -528,7 +528,7 @@ def test_build_claude_flags() -> None:
     assert "/tmp/up" in e and "/tmp/out" in e
     system_prompt = e[e.index("--append-system-prompt") + 1]
     assert "OUTBOX HERE" in system_prompt
-    assert cfg.claude.persona in system_prompt  # persona preserved
+    assert cfg.claude.persona.replace("{platform}", cfg.platform) in system_prompt
 
 
 # --------------------------------------------------------------- config

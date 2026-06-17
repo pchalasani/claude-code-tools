@@ -47,18 +47,21 @@ logger = logging.getLogger("agent_tunnel")
 DISCORD_MSG_LIMIT = 2000
 REAP_INTERVAL_S = 300
 THREAD_NAME_MAX = 90
-PLATFORM = "Discord"
 
 
-def format_relayed_message(sender: str, question: str) -> str:
+def format_relayed_message(
+    sender: str, question: str, platform: str = "Discord"
+) -> str:
     """Prefix a relayed chat message with its sender for the fork.
 
-    The daemon knows who sent each Discord message; the forked Claude does
-    not, so we prepend ``<name> (via Discord) says:``. The persona explains
-    this convention so Claude reads the prefix as the asker's identity.
+    The daemon knows who sent each message; the forked Claude does not, so we
+    prepend ``<name> (via <platform>) says:``. The persona explains this
+    convention so Claude reads the prefix as the asker's identity. ``platform``
+    comes from config (``TunnelConfig.platform``), so a future Slack bot just
+    passes ``"Slack"``.
     """
     who = sender.strip() or "A teammate"
-    return f"{who} (via {PLATFORM}) says:\n{question}"
+    return f"{who} (via {platform}) says:\n{question}"
 
 
 def resolve_token(cfg: TunnelConfig) -> str:
@@ -532,10 +535,11 @@ def run_bot(
                                 handle,
                             )
                             return
-                        # Tell the fork who sent this (it can't see Discord);
-                        # the persona explains the "<name> (via Discord) says:"
-                        # convention.
-                        question = format_relayed_message(sender, question)
+                        # Tell the fork who sent this (it can't see chat); the
+                        # persona explains the "<name> (via X) says:" convention.
+                        question = format_relayed_message(
+                            sender, question, cfg.platform
+                        )
                         answer = await asyncio.to_thread(
                             backend_for_record(cfg, store, rec).ask,
                             thread_key,

@@ -28,14 +28,16 @@ DEFAULT_REGISTRY_PATH = Path(
     or (Path.home() / ".local" / "state" / "agent-tunnel" / "registry.json")
 )
 
+# `{platform}` is substituted with TunnelConfig.platform when the system
+# prompt is built (a custom persona without it is unaffected).
 DEFAULT_PERSONA = (
     "You are running in bot mode: teammates are chatting with this session "
-    "through a relay bot (e.g. over Discord), not sitting at this terminal. "
-    'Each incoming message is prefixed with the sender and chat tool, e.g. '
-    '"Alice (via Discord) says: ...", so you always know who is asking — '
-    "address them by name when it helps. They cannot see this terminal or "
-    "your files, so answer in a self-contained way, formatted as "
-    "chat-friendly markdown. Never reveal credentials, tokens, or the "
+    "through a relay bot (e.g. over {platform}), not sitting at this "
+    'terminal. Each incoming message is prefixed with the sender and chat '
+    'tool, e.g. "Alice (via {platform}) says: ...", so you always know who '
+    "is asking; address them by name when it helps. They cannot see this "
+    "terminal or your files, so answer in a self-contained way, formatted "
+    "as chat-friendly markdown. Never reveal credentials, tokens, or the "
     "contents of .env files."
 )
 
@@ -159,6 +161,10 @@ class TunnelConfig:
 
     backend: str = "headless"
     tmux_session: str = "agent-tunnel"
+    # Human name of the chat platform, used in the fork's persona and the
+    # "<name> (via X) says:" message prefix. The Discord bot uses "Discord";
+    # a future Slack bot sets "Slack".
+    platform: str = "Discord"
     state_path: Path = DEFAULT_STATE_PATH
     registry_path: Path = DEFAULT_REGISTRY_PATH
     claude_home: Optional[Path] = None
@@ -212,7 +218,7 @@ def load_config(
 
     cfg = TunnelConfig()
     tunnel_tbl = data.get("tunnel", {})
-    for key in ("backend", "tmux_session"):
+    for key in ("backend", "tmux_session", "platform"):
         if key in tunnel_tbl:
             setattr(cfg, key, tunnel_tbl[key])
     for key in ("state_path", "registry_path", "claude_home", "project_dir"):
@@ -275,6 +281,9 @@ def sample_config() -> str:
 backend = "headless"
 # Name of the dedicated tmux session holding fork windows (tmux mode only).
 tmux_session = "agent-tunnel"
+# Chat-platform name shown in the persona and the "<name> (via X) says:"
+# message prefix. Defaults to "Discord".
+# platform = "Discord"
 
 [discord]
 # Env var that holds the bot token (never put the token itself here).

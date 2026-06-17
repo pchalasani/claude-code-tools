@@ -13,3 +13,9 @@ def test_format_relayed_message_prefixes_sender() -> None:
 def test_format_relayed_message_blank_sender_falls_back() -> None:
     out = format_relayed_message("   ", "hi")
     assert out.startswith("A teammate (via Discord) says:\n")
+
+
+def test_format_relayed_message_platform_configurable() -> None:
+    # A future Slack bot passes its own platform name.
+    out = format_relayed_message("Bo", "hi", platform="Slack")
+    assert out == "Bo (via Slack) says:\nhi"

@@ -114,3 +114,14 @@ def test_store_backfills_legacy_blank_backend(tmp_path: Path) -> None:
     )
     rec = TunnelStore(path).get("th:1")
     assert rec is not None and rec.backend == "tmux"
+
+
+def test_persona_platform_substituted_in_flags(tmp_path: Path) -> None:
+    # The {platform} placeholder in the persona is filled from cfg.platform, so
+    # the fork's system prompt names the actual chat tool (Discord/Slack/...).
+    from claude_code_tools.agent_tunnel.backends import build_claude_flags
+
+    cfg = TunnelConfig(state_path=tmp_path / "s.json", platform="Slack")
+    flags = build_claude_flags(cfg, "sid", fork=True)
+    system = flags[flags.index("--append-system-prompt") + 1]
+    assert "via Slack" in system and "{platform}" not in system
