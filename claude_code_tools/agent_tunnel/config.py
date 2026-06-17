@@ -105,6 +105,12 @@ class ClaudeConfig:
     # Override the config file holding trust state (default: ~/.claude.json,
     # honoring CLAUDE_CONFIG_DIR).
     trust_config_path: str = ""
+    # Opt-in gate for the "all" access level (>share
+    # --dangerously-skip-permissions): only when true do those forks launch
+    # with --dangerously-skip-permissions (any tool/MCP, no prompts). Off by
+    # default — handing a remote colleague's agent full machine access is a
+    # deliberate double opt-in (this flag AND the per-share flag).
+    allow_skip_permissions: bool = False
 
 
 def resolve_tools(
@@ -321,6 +327,12 @@ tmux_extra_args = []
 # Pre-trust a shared folder in ~/.claude.json before forking (tmux backend),
 # so the fork doesn't hit the "trust this folder?" dialog. false = don't touch.
 auto_trust = true
+# DANGEROUS: enable the "all" access level (>share
+# --dangerously-skip-permissions). Those forks run with
+# --dangerously-skip-permissions — a colleague's agent can then use ANY tool
+# or MCP server (web, your browser, shell, file edits) with no prompts. Off
+# unless you fully trust everyone who can reach that handle.
+# allow_skip_permissions = false
 
 [limits]
 max_concurrent = 2

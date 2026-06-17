@@ -214,15 +214,21 @@ def main():
             message = _status(session_id)
         else:
             tokens = arg.split()
+            skip = "--dangerously-skip-permissions" in tokens
             bash = "--dangerously-allow-bash" in tokens
             write = "--write" in tokens or "-w" in tokens
             read = "--read" in tokens or "-r" in tokens
-            # None preserves an existing record's access on re-share. bash is
-            # the strongest level (also runs shell commands), then write, read.
+            # None preserves an existing record's access on re-share. "all" is
+            # the strongest (skip-permissions: any tool/MCP, no prompts), then
+            # bash (shell), write, read.
             access = (
-                "bash"
-                if bash
-                else ("write" if write else ("read" if read else None))
+                "all"
+                if skip
+                else (
+                    "bash"
+                    if bash
+                    else ("write" if write else ("read" if read else None))
+                )
             )
             label_raw = next((t for t in tokens if not t.startswith("-")), "")
             label = _sanitize_label(label_raw) if label_raw else ""
@@ -242,7 +248,16 @@ def main():
                         f"another session. Pick a different name.{RESET}"
                     )
                 else:
-                    if access == "bash":
+                    if access == "all":
+                        note = (
+                            f"\n{YELLOW}🚨 FULL ACCESS "
+                            "(--dangerously-skip-permissions): the colleague's "
+                            "agent can use ANY tool or MCP with NO prompts — "
+                            "shell, the web, your browser, file edits. Requires "
+                            "[claude] allow_skip_permissions = true on the "
+                            f"daemon. Only for people you fully trust.{RESET}"
+                        )
+                    elif access == "bash":
                         note = (
                             f"\n{YELLOW}⚠️ BASH access: the colleague's agent "
                             f"can RUN SHELL COMMANDS and edit files in this "

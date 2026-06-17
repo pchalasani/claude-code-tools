@@ -45,6 +45,11 @@ session from inside Claude Code. Full setup is below.
   turns are **hard-restricted to read-only tools** (`Read`/`Grep`/`Glob`).
 - The Discord Gateway is an *outbound* websocket — **no tunnel, no open port,
   no cloud**. Everything runs on your Mac.
+- The fork knows it's in **bot mode**: its persona says it's answering
+  teammates relayed over chat, and each incoming message is prefixed with who
+  sent it and how — e.g. `Alice (via Discord) says: …` — so it can address
+  people by name. The platform label is the `[tunnel] platform` config value
+  (defaults to `Discord`), ready for other chat front-ends.
 
 ```text
    inside any session:  >share  ─►  hook writes registry  { handle → session }
@@ -129,16 +134,20 @@ is intercepted — it never reaches the model; you just see the handle):
 | `>share <label>` | Publish under a friendly handle, e.g. `>share payments` |
 | `>share --write <label>` | Publish with **write access** (file edits); read-only otherwise |
 | `>share --dangerously-allow-bash <label>` | Write **plus shell commands** (for real PDFs/docx) — trusted people only |
+| `>share --dangerously-skip-permissions <label>` | **Full access**: any tool/MCP (web, browser, shell) with no prompts — needs `[claude] allow_skip_permissions`; fully-trusted only |
 | `>share --read <label>` | Downgrade a handle back to read-only |
 | `>share status` | Show this session's handle, if any |
 | `>share off` | Stop sharing (revoke the handle) |
 
-Access is **per handle** and escalates **read ⊂ write ⊂ bash**: read-only by
-default, `--write` adds file edits (but still **never** `Bash`), and
-`--dangerously-allow-bash` additionally allows shell commands — which drops the
-sandbox, so reserve it for fully trusted colleagues. Re-sharing without a flag
-keeps the current level. `agent-tunnel published` tags writable handles with ✍️
-and bash handles with 💥.
+Access is **per handle** and escalates **read ⊂ write ⊂ bash ⊂ all**: read-only
+by default, `--write` adds file edits (but still **never** `Bash`),
+`--dangerously-allow-bash` additionally allows shell commands, and
+`--dangerously-skip-permissions` (the **all** level) drops every restriction so
+the fork can use any tool or MCP server (web, the browser, shell) with no
+prompts. The **all** level is gated: it does nothing unless the owner also sets
+`[claude] allow_skip_permissions = true` (double opt-in), or the daemon refuses
+the turn. Re-sharing without a flag keeps the current level. `agent-tunnel
+published` tags writable handles with ✍️, bash with 💥, and full with 🚨.
 
 A labeled handle also makes the Discord thread and the tmux window readable
 (`payments-…` instead of a cryptic id). Colleagues end a conversation with
