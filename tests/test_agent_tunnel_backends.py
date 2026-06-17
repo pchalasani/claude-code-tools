@@ -159,3 +159,13 @@ def test_all_access_refused_without_gate(tmp_path: Path) -> None:
         backend._require_binding("t")
     cfg.claude.allow_skip_permissions = True
     assert backend._require_binding("t").access == "all"
+
+
+def test_all_access_can_write_for_outbox(tmp_path: Path) -> None:
+    # "all" is above bash, so it must be in the write/outbox path — else its
+    # generated deliverables never get posted back (Codex P2).
+    cfg = TunnelConfig(state_path=tmp_path / "s.json")
+    backend = HeadlessBackend(cfg, TunnelStore(cfg.state_path))
+    assert backend._can_write(ThreadRecord(thread_key="t", access="all"))
+    assert backend._can_write(ThreadRecord(thread_key="t", access="bash"))
+    assert not backend._can_write(ThreadRecord(thread_key="t", access="read"))

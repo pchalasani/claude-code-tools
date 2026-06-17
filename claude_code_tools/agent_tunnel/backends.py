@@ -208,8 +208,12 @@ class _BaseBackend:
         return upload_dir
 
     def _can_write(self, rec: ThreadRecord) -> bool:
-        """True if this handle may produce deliverables (write or bash)."""
-        return rec.access in ("write", "bash")
+        """True if this handle may produce deliverables (write/bash/all).
+
+        "all" (skip-permissions) is above bash, so it must get the outbox
+        instruction too, or its generated files never get posted back.
+        """
+        return rec.access in ("write", "bash", "all")
 
     def _begin_turn(
         self, rec: ThreadRecord
