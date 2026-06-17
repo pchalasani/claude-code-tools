@@ -10,12 +10,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from claude_code_tools.agent_tunnel.backends import (
     Backend,
+    BackendError,
     HeadlessBackend,
     TmuxBackend,
     backend_by_name,
     backend_for_record,
+    build_claude_flags,
 )
 from claude_code_tools.agent_tunnel.config import TunnelConfig
 from claude_code_tools.agent_tunnel.paths import uploads_dir_for
@@ -125,3 +129,33 @@ def test_persona_platform_substituted_in_flags(tmp_path: Path) -> None:
     flags = build_claude_flags(cfg, "sid", fork=True)
     system = flags[flags.index("--append-system-prompt") + 1]
     assert "via Slack" in system and "{platform}" not in system
+
+
+def test_all_access_emits_skip_permissions_only_when_gated(
+    tmp_path: Path,
+) -> None:
+    # The "all" level grants --dangerously-skip-permissions, but ONLY when the
+    # owner has flipped the config gate. Ungated, it must never emit the flag.
+    cfg = TunnelConfig(state_path=tmp_path / "s.json")
+    cfg.claude.allow_skip_permissions = True
+    on = build_claude_flags(cfg, "sid", fork=True, access="all")
+    assert "--dangerously-skip-permissions" in on
+    assert "--allowedTools" not in on and "--permission-mode" not in on
+
+    cfg.claude.allow_skip_permissions = False
+    off = build_claude_flags(cfg, "sid", fork=True, access="all")
+    assert "--dangerously-skip-permissions" not in off
+    assert "--allowedTools" in off  # falls back to the restrictive read preset
+
+
+def test_all_access_refused_without_gate(tmp_path: Path) -> None:
+    # A handle shared as "all" can't run until the owner enables the gate;
+    # the backend refuses with a clear, actionable error.
+    cfg = TunnelConfig(state_path=tmp_path / "s.json")
+    store = TunnelStore(cfg.state_path)
+    store.bind("t", "h", "expsid", "/p", "headless", access="all")
+    backend = HeadlessBackend(cfg, store)
+    with pytest.raises(BackendError, match="allow_skip_permissions"):
+        backend._require_binding("t")
+    cfg.claude.allow_skip_permissions = True
+    assert backend._require_binding("t").access == "all"

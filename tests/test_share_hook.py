@@ -63,3 +63,12 @@ def test_share_hook_relabel_preserves_access(tmp_path: Path) -> None:
     new = Registry(reg).get("payments")
     assert new is not None and new.access == "write"  # preserved
     assert Registry(reg).get("paydocs") is None  # old handle relabeled away
+
+
+def test_share_hook_skip_permissions_sets_all(tmp_path: Path) -> None:
+    # `>share --dangerously-skip-permissions` records the top "all" level; the
+    # daemon still gates it behind [claude] allow_skip_permissions.
+    reg = tmp_path / "registry.json"
+    _run(reg, ">share --dangerously-skip-permissions full", "sess-x")
+    rec = Registry(reg).get("full")
+    assert rec is not None and rec.access == "all"

@@ -113,16 +113,25 @@ def build_claude_flags(
         Argument list (excluding the binary, -p, and the prompt).
     """
     claude = cfg.claude
-    allowed, disallowed = resolve_tools(claude, access)
     flags = ["--resume", resume_id]
     if fork:
         flags.append("--fork-session")
-    if allowed:
-        flags += ["--allowedTools", ",".join(allowed)]
-    if disallowed:
-        flags += ["--disallowedTools", ",".join(disallowed)]
-    if claude.permission_mode:
-        flags += ["--permission-mode", claude.permission_mode]
+    if access == "all" and claude.allow_skip_permissions:
+        # Full access: skip every permission prompt so the fork can use any
+        # tool or MCP server the session has (web, browser, shell, edits). No
+        # allow/deny lists — they would only restrict. The answer path refuses
+        # an "all" handle when the gate is off, so this is never reached
+        # ungated; and resolve_tools has no "all" preset, so an ungated "all"
+        # would fall back to the restrictive read tools, never to "no limits".
+        flags.append("--dangerously-skip-permissions")
+    else:
+        allowed, disallowed = resolve_tools(claude, access)
+        if allowed:
+            flags += ["--allowedTools", ",".join(allowed)]
+        if disallowed:
+            flags += ["--disallowedTools", ",".join(disallowed)]
+        if claude.permission_mode:
+            flags += ["--permission-mode", claude.permission_mode]
     if claude.model:
         flags += ["--model", claude.model]
     for directory in add_dirs:
@@ -167,6 +176,13 @@ class _BaseBackend:
         if not rec.expert_session_id or not rec.project_dir:
             raise BackendError(
                 f"Thread {thread_key} has an incomplete binding."
+            )
+        if rec.access == "all" and not self.cfg.claude.allow_skip_permissions:
+            raise BackendError(
+                "This handle was shared with full "
+                "(--dangerously-skip-permissions) access, but the owner has "
+                "not enabled it. Set [claude] allow_skip_permissions = true in "
+                "the agent-tunnel config and restart serve."
             )
         return rec
 

@@ -137,10 +137,17 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
   (write = read tools + Write/Edit/NotebookEdit, never Bash; read = read-only).
   Re-sharing without a flag preserves the current level. The access level rides
   on the registry record → ThreadRecord → `build_claude_flags(access=…)`.
-- `>share --dangerously-allow-bash <label>` — the strongest level: write tools
-  **plus `Bash`/command execution**, so a fork can build real PDFs/docx (e.g.
-  via pandoc) as deliverables. It removes the read-only sandbox — grant it only
-  to fully trusted colleagues. Access escalates linearly: read ⊂ write ⊂ bash.
+- `>share --dangerously-allow-bash <label>` — write tools **plus
+  `Bash`/command execution**, so a fork can build real PDFs/docx (e.g. via
+  pandoc) as deliverables. It removes the read-only sandbox — grant it only to
+  fully trusted colleagues.
+- `>share --dangerously-skip-permissions <label>` — the top level (`"all"`):
+  the fork launches with `--dangerously-skip-permissions`, so it can use **any
+  tool or MCP server** the session has (web search, the browser via
+  chrome-devtools, shell, file edits) with **no permission prompts**. It only
+  takes effect when the owner also sets `[claude] allow_skip_permissions =
+  true` (a deliberate double opt-in); otherwise the daemon refuses the turn
+  with a clear message. Access escalates linearly: read ⊂ write ⊂ bash ⊂ all.
 - `>share status` — show this session's handle, if any.
 - `>share off` — revoke (new threads can't open; existing forks keep working,
   since a fork holds its own copy of history).

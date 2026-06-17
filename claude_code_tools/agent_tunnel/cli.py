@@ -144,6 +144,12 @@ def serve(
     is_flag=True,
     help="Grant write + shell execution (with --session/auto).",
 )
+@click.option(
+    "--dangerously-skip-permissions",
+    "skip_perms",
+    is_flag=True,
+    help="Grant FULL access (skip-permissions; needs allow_skip_permissions).",
+)
 @click.argument("question")
 def ask(
     config: Optional[str],
@@ -154,6 +160,7 @@ def ask(
     thread: str,
     write: bool,
     allow_bash: bool,
+    skip_perms: bool,
     question: str,
 ) -> None:
     """Ask one question through the full pipeline (no Discord).
@@ -168,7 +175,7 @@ def ask(
 
     if store.get(thread_key) is None:
         expert_id, project_dir, hname, config_dir, access = _resolve_target(
-            cfg, store, handle, session, project, write, allow_bash
+            cfg, store, handle, session, project, write, allow_bash, skip_perms
         )
         store.bind(
             thread_key,
@@ -200,6 +207,7 @@ def _resolve_target(
     project: Optional[str],
     write: bool = False,
     allow_bash: bool = False,
+    skip_perms: bool = False,
 ) -> tuple[str, Path, str, str, str]:
     """Resolve (expert_session_id, project_dir, handle, config_dir, access)."""
     if handle:
@@ -209,7 +217,11 @@ def _resolve_target(
         return rec.session_id, Path(rec.cwd), rec.handle, rec.config_dir, (
             rec.access
         )
-    access = "bash" if allow_bash else ("write" if write else "read")
+    access = (
+        "all"
+        if skip_perms
+        else "bash" if allow_bash else "write" if write else "read"
+    )
     project_dir = Path(project or os.getcwd()).expanduser().resolve()
     env_dir = os.environ.get("CLAUDE_CONFIG_DIR", "")
     if session:
@@ -241,9 +253,11 @@ def published(config: Optional[str]) -> None:
             f" ({rec.label})" if rec.label and rec.label != rec.handle else ""
         )
         cfgdir = f"  [{Path(rec.config_dir).name}]" if rec.config_dir else ""
-        access = {"write": "  ✍️ write", "bash": "  💥 bash"}.get(
-            rec.access, ""
-        )
+        access = {
+            "write": "  ✍️ write",
+            "bash": "  💥 bash",
+            "all": "  🚨 all",
+        }.get(rec.access, "")
         click.echo(
             f"{rec.handle}{label}: {rec.session_id[:8]} @ {rec.cwd}{cfgdir}"
             f"{access}"
@@ -300,6 +314,7 @@ _ACCESS_DISPLAY = {
     "read": ("read", "dim"),
     "write": ("✍️ write", "yellow"),
     "bash": ("💥 bash", "red"),
+    "all": ("🚨 all", "bold red"),
 }
 
 
