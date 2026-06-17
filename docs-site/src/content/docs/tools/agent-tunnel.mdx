@@ -149,6 +149,14 @@ prompts. The **all** level is gated: it does nothing unless the owner also sets
 the turn. Re-sharing without a flag keeps the current level. `agent-tunnel
 published` tags writable handles with ✍️, bash with 💥, and full with 🚨.
 
+Re-sharing **with** a level flag changes a **live** thread's access on its next
+message (same fork, full context kept), not just new threads: the daemon
+re-reads the handle's access each turn. So `>share --write payments` upgrades an
+in-flight read-only conversation, and `>share --read payments` pulls it back,
+with no need to close the thread (`!done`) and reopen it. Upgrading to **all**
+still honors the gate: without `allow_skip_permissions` the next turn is refused
+rather than silently granted.
+
 A labeled handle also makes the Discord thread and the tmux window readable
 (`payments-…` instead of a cryptic id). Colleagues end a conversation with
 `!done` in their thread; that tears the fork down immediately.

@@ -197,6 +197,24 @@ class TunnelStore:
                 self._save_locked()
             return renamed
 
+    def set_access(self, thread_key: str, access: str) -> Optional[ThreadRecord]:
+        """Set a bound thread's access level and persist it.
+
+        Lets the daemon propagate a live ``>share --write|--read|...`` re-share
+        onto an already-running thread: the backend re-reads the handle's
+        current registry access each turn and calls this to sync the stored
+        record. Mirrors ``rename_handle``'s reload/mutate/save shape. Returns
+        the updated record (a live reference), or None if the thread is no
+        longer bound.
+        """
+        with self._lock, file_lock(self.path):
+            self._reload_locked()
+            rec = self._records.get(thread_key)
+            if rec is not None:
+                rec.access = access
+                self._save_locked()
+            return rec
+
     def all_records(self) -> list[ThreadRecord]:
         """Return a fresh snapshot of all records (re-read under the lock)."""
         with self._lock, file_lock(self.path):

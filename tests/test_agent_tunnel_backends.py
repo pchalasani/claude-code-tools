@@ -17,12 +17,14 @@ from claude_code_tools.agent_tunnel.backends import (
     BackendError,
     HeadlessBackend,
     TmuxBackend,
+    _BaseBackend,
     backend_by_name,
     backend_for_record,
     build_claude_flags,
 )
 from claude_code_tools.agent_tunnel.config import TunnelConfig
 from claude_code_tools.agent_tunnel.paths import uploads_dir_for
+from claude_code_tools.agent_tunnel.registry import PublishRecord, Registry
 from claude_code_tools.agent_tunnel.store import ThreadRecord, TunnelStore
 
 
@@ -169,3 +171,113 @@ def test_all_access_can_write_for_outbox(tmp_path: Path) -> None:
     assert backend._can_write(ThreadRecord(thread_key="t", access="all"))
     assert backend._can_write(ThreadRecord(thread_key="t", access="bash"))
     assert not backend._can_write(ThreadRecord(thread_key="t", access="read"))
+
+
+def test_require_binding_syncs_access_up_from_registry(tmp_path: Path) -> None:
+    # A live `>share --write <handle>` on an already-bound (read) thread must
+    # upgrade it on its next turn: _require_binding re-reads the handle's
+    # current registry access and persists it onto the stored record, so the
+    # turn's build_claude_flags(access=…) and follow-ups see the new level.
+    cfg = TunnelConfig(
+        state_path=tmp_path / "s.json", registry_path=tmp_path / "reg.json"
+    )
+    store = TunnelStore(cfg.state_path)
+    store.bind("t", "payments", "expsid", "/p", "headless", access="read")
+    Registry(cfg.registry_path).upsert(
+        PublishRecord(
+            handle="payments", session_id="expsid", cwd="/p", access="write"
+        )
+    )
+    rec = HeadlessBackend(cfg, store)._require_binding("t")
+    assert rec.access == "write"  # synced in-memory for this turn's flags
+    persisted = store.get("t")
+    assert persisted is not None and persisted.access == "write"
+
+
+def test_require_binding_syncs_access_down_from_registry(
+    tmp_path: Path,
+) -> None:
+    # A `>share --read <handle>` re-share downgrades a live write thread too,
+    # so an owner can pull back access mid-conversation.
+    cfg = TunnelConfig(
+        state_path=tmp_path / "s.json", registry_path=tmp_path / "reg.json"
+    )
+    store = TunnelStore(cfg.state_path)
+    store.bind("t", "payments", "expsid", "/p", "headless", access="write")
+    Registry(cfg.registry_path).upsert(
+        PublishRecord(
+            handle="payments", session_id="expsid", cwd="/p", access="read"
+        )
+    )
+    rec = HeadlessBackend(cfg, store)._require_binding("t")
+    assert rec.access == "read"
+    persisted = store.get("t")
+    assert persisted is not None and persisted.access == "read"
+
+
+def test_live_upgrade_to_all_respects_gate(tmp_path: Path) -> None:
+    # Upgrading a live thread to "all" (>share --dangerously-skip-permissions)
+    # still honors the gate: with allow_skip_permissions off the turn is
+    # refused (no silent grant) even though the level synced; once the owner
+    # enables the gate the same thread runs.
+    cfg = TunnelConfig(
+        state_path=tmp_path / "s.json", registry_path=tmp_path / "reg.json"
+    )
+    store = TunnelStore(cfg.state_path)
+    store.bind("t", "ops", "expsid", "/p", "headless", access="write")
+    Registry(cfg.registry_path).upsert(
+        PublishRecord(
+            handle="ops", session_id="expsid", cwd="/p", access="all"
+        )
+    )
+    backend = HeadlessBackend(cfg, store)
+    with pytest.raises(BackendError, match="allow_skip_permissions"):
+        backend._require_binding("t")
+    persisted = store.get("t")  # synced to "all" before the gate refusal
+    assert persisted is not None and persisted.access == "all"
+    cfg.claude.allow_skip_permissions = True
+    assert backend._require_binding("t").access == "all"  # now allowed
+
+
+def test_current_access_falls_back_when_handle_revoked(tmp_path: Path) -> None:
+    # Registry.get hides a revoked/absent handle, so a revoked thread keeps
+    # working at its bound level instead of breaking mid-conversation (revoke
+    # semantics are intentionally out of scope for the live-access sync).
+    cfg = TunnelConfig(
+        state_path=tmp_path / "s.json", registry_path=tmp_path / "reg.json"
+    )
+    store = TunnelStore(cfg.state_path)
+    store.bind("t", "gone", "expsid", "/p", "headless", access="write")
+    reg = Registry(cfg.registry_path)
+    reg.upsert(
+        PublishRecord(
+            handle="gone", session_id="expsid", cwd="/p", access="write"
+        )
+    )
+    reg.revoke("gone")
+    rec = HeadlessBackend(cfg, store)._require_binding("t")
+    assert rec.access == "write"  # bound level retained despite revoke
+
+
+def test_store_set_access_persists_and_noops_on_missing(
+    tmp_path: Path,
+) -> None:
+    # set_access is the persistence primitive behind the live upgrade: it
+    # writes through to disk for a bound thread and is a clean no-op (returns
+    # None) for an unknown thread key.
+    store = TunnelStore(tmp_path / "s.json")
+    store.bind("t", "h", "expsid", "/p", "headless", access="read")
+    updated = store.set_access("t", "bash")
+    assert updated is not None and updated.access == "bash"
+    persisted = store.get("t")  # persisted across a fresh read
+    assert persisted is not None and persisted.access == "bash"
+    assert store.set_access("missing", "write") is None  # unknown key: no-op
+
+
+def test_tmux_backend_overrides_access_changed_hook() -> None:
+    # The live-upgrade window-kill is the tmux backend's job; headless uses the
+    # base no-op (its next `claude -p` re-reads the access). Asserting the
+    # override is wired keeps the actual kill_window behavior — exercised in the
+    # live/manual tmux tier — from being silently dropped. No mock, no live tmux.
+    assert TmuxBackend._on_access_changed is not _BaseBackend._on_access_changed
+    assert HeadlessBackend._on_access_changed is _BaseBackend._on_access_changed

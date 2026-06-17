@@ -139,8 +139,12 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
 - `>share <label>` — publish with a chosen handle (validated, deduped).
 - `>share --write <label>` / `>share --read <label>` — set per-handle access
   (write = read tools + Write/Edit/NotebookEdit, never Bash; read = read-only).
-  Re-sharing without a flag preserves the current level. The access level rides
-  on the registry record → ThreadRecord → `build_claude_flags(access=…)`.
+  Re-sharing without a flag preserves the current level; re-sharing **with** a
+  level flag changes an already-running thread on its next message (same fork,
+  context kept), because the daemon re-reads the handle's current registry
+  access each turn in `_require_binding` and syncs it onto the ThreadRecord
+  (`TunnelStore.set_access`). The access level rides on the registry record →
+  ThreadRecord → `build_claude_flags(access=…)`.
 - `>share --dangerously-allow-bash <label>` — write tools **plus
   `Bash`/command execution**, so a fork can build real PDFs/docx (e.g. via
   pandoc) as deliverables. It removes the read-only sandbox — grant it only to
