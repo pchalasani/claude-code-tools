@@ -1,6 +1,6 @@
 {
   "name": "msg",
-  "version": "1.13.0",
+  "version": "1.14.0",
   "description": "Inter-agent communication for Claude Code and Codex CLI sessions via threads and messages",
   "author": {
     "name": "Prasad Chalasani"
