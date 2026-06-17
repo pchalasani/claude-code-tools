@@ -118,7 +118,11 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
   `!done`/`!close`/`!end` teardown, `<handle>: <question>` thread names,
   allowlists, cooldown, concurrency, 2000-char chunking, long answers as
   `answer.md`; `token_file` resolution. Downloads inbound attachments and posts
-  outbound deliverables (`discord.File`), within size/count caps.
+  outbound deliverables (`discord.File`), within size/count caps. Prefixes each
+  relayed message with its sender (`<name> (via {platform}) says: …`) so the
+  fork knows who is asking; the persona (`DEFAULT_PERSONA`, with a `{platform}`
+  placeholder filled from `[tunnel] platform`, default `Discord`) tells the
+  fork it is in bot mode relaying to teammates.
 - `cli.py` — `serve | ask | published | forks | resume | rename | status | watch |
   doctor | forget | init | help`. `forks` lists fork sessions (handle, asker,
   last active, turn count, fork id) from the store; `resume <handle>` execs

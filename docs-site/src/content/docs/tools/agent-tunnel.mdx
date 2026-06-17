@@ -45,6 +45,11 @@ session from inside Claude Code. Full setup is below.
   turns are **hard-restricted to read-only tools** (`Read`/`Grep`/`Glob`).
 - The Discord Gateway is an *outbound* websocket — **no tunnel, no open port,
   no cloud**. Everything runs on your Mac.
+- The fork knows it's in **bot mode**: its persona says it's answering
+  teammates relayed over chat, and each incoming message is prefixed with who
+  sent it and how — e.g. `Alice (via Discord) says: …` — so it can address
+  people by name. The platform label is the `[tunnel] platform` config value
+  (defaults to `Discord`), ready for other chat front-ends.
 
 ```text
    inside any session:  >share  ─►  hook writes registry  { handle → session }
