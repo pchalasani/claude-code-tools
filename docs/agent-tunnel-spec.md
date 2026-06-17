@@ -35,8 +35,9 @@ safe.
   list, and `--permission-mode dontAsk`.
 - **No tunnel.** The Discord Gateway is an outbound websocket; nothing on the
   machine is internet-reachable.
-- **Swappable backends:** `tmux` (interactive forks, subscription metering)
-  and `headless` (`claude -p`, Agent SDK credit metering after 2026-06-15).
+- **Swappable backends (default `headless`):** `headless` (`claude -p`, clean
+  JSON I/O, more reliable, no tmux) and `tmux` (interactive forks you can watch
+  live with `agent-tunnel watch`).
 
 ## Architecture
 
@@ -77,11 +78,19 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
   here. `discord.token_file` reads the bot token from a file (no export);
   `claude.auto_trust` / `trust_config_path` control folder pre-trust;
   `AGENT_TUNNEL_REGISTRY` env overrides the registry path (hook + daemon
-  honor it).
+  honor it). Use an absolute path or `~/...`: a relative value is anchored
+  differently by the standalone hook (its own cwd) and the daemon (the
+  config-file dir), so the two would point at different files.
 - `store.py` — daemon state: `thread_key → ThreadRecord` (handle, expert
   session id, project dir, **config dir**, fork id, tmux window). `bind()`
   records a pending thread before the first answer; fork id filled on
-  completion.
+  completion. Each mutation re-reads the file under a cross-process lock and
+  merges, so a CLI command (`forget`/`rename`) and the live daemon don't
+  clobber each other's writes.
+- `locking.py` — best-effort `fcntl` advisory file lock (`<path>.lock`) shared
+  by the store, the registry, and the standalone `>share` hook (same
+  `registry.json.lock`), serializing concurrent read-modify-write across
+  processes. No-ops where `fcntl` is unavailable.
 - `session.py` — transcript-dir resolution (per config dir) and
   fork-transcript parsing (locate the question, detect turn completion,
   extract the answer).
@@ -91,14 +100,26 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
   paste, Enter-with-verify, idle detection, liveness/reaping.
 - `trust.py` — pre-trust a folder in the right config's `.claude.json`
   (surgical, atomic) so the interactive fork doesn't hit the trust dialog.
+- `paths.py` — per-thread filesystem layout for the attachment round-trip:
+  inbound upload dir (under the state dir), outbox dir (`.agent-tunnel-out/`
+  inside the project, with a `*` `.gitignore` guard), and the pure
+  snapshot/diff + question-preamble helpers. Stdlib-only and unit-tested.
+- `convert.py` — best-effort conversion of attached Office files into a
+  `Read`-openable format, using whatever converter is on `PATH`
+  (LibreOffice→PDF / pandoc→md / textutil→txt) or an owner-set command. A clean
+  no-op when none is installed; never a hard dependency.
 - `backends.py` — `HeadlessBackend` / `TmuxBackend` behind one interface; both
   read the thread's binding to decide what to fork, and pin the fork to the
-  session's config dir via `CLAUDE_CONFIG_DIR`.
+  session's config dir via `CLAUDE_CONFIG_DIR`. Per turn they expose the
+  upload dir via `--add-dir`, append the outbox instruction to the persona for
+  write/bash handles, and diff the outbox to collect deliverables onto
+  `Answer.attachments`.
 - `discord_bot.py` — handle→thread routing, `!list`/`!handles` discovery,
   `!done`/`!close`/`!end` teardown, `<handle>: <question>` thread names,
   allowlists, cooldown, concurrency, 2000-char chunking, long answers as
-  `answer.md`; `token_file` resolution.
-- `cli.py` — `serve | ask | published | forks | resume | status | watch |
+  `answer.md`; `token_file` resolution. Downloads inbound attachments and posts
+  outbound deliverables (`discord.File`), within size/count caps.
+- `cli.py` — `serve | ask | published | forks | resume | rename | status | watch |
   doctor | forget | init | help`. `forks` lists fork sessions (handle, asker,
   last active, turn count, fork id) from the store; `resume <handle>` execs
   `claude --resume <fork-id>` in the fork's project + config dir (most recent
@@ -116,6 +137,10 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
   (write = read tools + Write/Edit/NotebookEdit, never Bash; read = read-only).
   Re-sharing without a flag preserves the current level. The access level rides
   on the registry record → ThreadRecord → `build_claude_flags(access=…)`.
+- `>share --dangerously-allow-bash <label>` — the strongest level: write tools
+  **plus `Bash`/command execution**, so a fork can build real PDFs/docx (e.g.
+  via pandoc) as deliverables. It removes the read-only sandbox — grant it only
+  to fully trusted colleagues. Access escalates linearly: read ⊂ write ⊂ bash.
 - `>share status` — show this session's handle, if any.
 - `>share off` — revoke (new threads can't open; existing forks keep working,
   since a fork holds its own copy of history).
@@ -128,11 +153,50 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
   (or post a ready notice).
 - `!list` / `!handles` (channel, thread, or DM): post the active handles +
   their project names.
-- Thread message: a follow-up routed to the bound fork.
+- Thread message: a follow-up routed to the bound fork — unless it opens with
+  a mention of someone other than the bot (`@teammate`, a role, or
+  `@everyone`/`@here`), which is read as human side-chat and silently ignored.
+  A leading `@bot` is fine (stripped, then answered).
 - `!done` / `!close` / `!end` in a thread (or DM): tear down that fork
   immediately (kill window, drop binding, confirm).
 - DMs (optional, off by default): `\<handle\> …` (re)binds the DM; bare text
   follows up.
+
+## File attachments (round-trip)
+
+A thread can carry files both ways, so a colleague can hand the expert a
+document and get a generated deliverable back.
+
+**Inbound (any handle).** When a colleague attaches files to a message
+(text optional), the bot downloads each into a per-thread dir *outside* any
+repo — `<state>/uploads/<thread>/` — and prepends the absolute paths to the
+question. The fork is launched with that dir on `--add-dir`, so the read-only
+`Read` tool (which handles PDF/image/markdown natively) can open them. The
+upload dir is always `--add-dir`'d (even empty) so files dropped into a *warm*
+follow-up window stay readable. Per-file size and count caps
+(`limits.max_attachment_mb`, `limits.max_attachments`) apply; oversized/excess
+files are skipped with a heads-up.
+
+`Read` can't open binary Office files (`.docx`/`.pptx`/`.xlsx`), so those are
+**best-effort converted** to a readable format using whatever converter is on
+the host's `PATH` — fidelity-ordered **LibreOffice→PDF** (preferred; `Read`
+renders PDF pages visually), else **pandoc→Markdown** (media extracted), else
+macOS **textutil→text**. No converter is a hard dependency: with none present
+the colleague is told to send a PDF, and PDF/images/text always work unaided.
+Controlled by `[attachments] convert = "auto" | "off"` (plus a `convert_command`
+escape hatch). See `convert.py`.
+
+**Outbound (write/bash handles only).** A write/bash fork is told — via a
+per-thread line appended to the persona — to save anything it wants to deliver
+into its outbox: `<project>/.agent-tunnel-out/<thread>/`. The bot snapshots
+that dir before the turn and diffs it after, posting whatever was created or
+modified as Discord attachments. Diffing the directory (rather than parsing the
+transcript for `Write` tool calls) means a **Bash-generated** PDF is delivered
+just like a `Write`-tool markdown file. A `.gitignore` holding `*` is dropped
+at `.agent-tunnel-out/` so deliverables never dirty the owner's `git status`.
+Read handles can't write, so they produce nothing outbound.
+
+Both per-thread dirs are removed on `!done`/`forget` (best-effort).
 
 ## Config-dir awareness (multiple `CLAUDE_CONFIG_DIR`s)
 
@@ -156,30 +220,40 @@ dir is propagated end to end:
   private server's own fd budget.
 - Owner: `agent-tunnel forget`, `tmux -L <socket> kill-server`, or stop serve.
 
-## Backends and billing
+## Backends (server modes)
 
-- `tmux` (default): one interactive `claude` per thread in a window of the
-  private tmux server. Submission is hybrid to dodge Claude's slow-to-accept
-  input right after a cold launch: a new fork (or a follow-up whose window
-  was reaped) is launched with the question as claude's positional prompt
-  (`claude "<q>" --resume <id> [--fork-session]`), so claude auto-submits it
-  once ready — no simulated keystrokes; a warm follow-up window is reused via
+- `headless` (default): `claude -p` per question with clean JSON in/out — no
+  terminal scraping, no submit-timing heuristics, no tmux. Answer is the JSON
+  `result`; "done" is the process exit (definitive), and errors surface via
+  `is_error` + exit code. Launch: `agent-tunnel serve`.
+- `tmux`: one interactive `claude` per thread in a window of the private tmux
+  server, watchable live (`agent-tunnel watch`). Launch: `agent-tunnel serve
+  --backend tmux`. Submission is hybrid to dodge Claude's slow-to-accept input
+  right after a cold launch: a new fork (or a follow-up whose window was
+  reaped) is launched with the question as claude's positional prompt
+  (`claude --resume <id> [--fork-session] … -- "<q>"`), so claude auto-submits
+  it once ready — no simulated keystrokes; a warm follow-up window is reused via
   bracketed paste + verified Enter. The answer is read from the fork's JSONL
-  transcript either way. Metered as interactive subscription usage.
-- `headless`: `claude -p` per question (JSON in/out). From 2026-06-15,
-  subscription `claude -p` draws from a separate Agent SDK credit pool, then
-  API rates. Do NOT auto-add `--bare` (it can break subscription auth).
-- Each *new* thread replays the expert session's full context (~its token
-  count per cold question). Fine for Q&A; for volume use headless + an
-  `ANTHROPIC_API_KEY`.
+  transcript (located by a per-turn `[ref:…]` marker) either way.
+- Both run on your logged-in `claude` (no API key needed); do NOT auto-add
+  `--bare` (it skips user config and breaks subscription auth). Each *new*
+  thread replays the expert session's full context (~its token count per cold
+  question) — fine for Q&A.
 
 ## Security model
 
-- Read-only tools, hard-enforced by the CLI permission layer.
+- Read-only tools by default, hard-enforced by the CLI permission layer.
+  `>share --write` adds file edits (still no Bash); `>share
+  --dangerously-allow-bash` additionally permits command execution and so
+  drops the sandbox — reserve it for fully trusted colleagues.
 - Access = Discord channel membership + optional user/role allowlists. Anyone
   who can ask can surface anything in the session context or readable project
   tree — publish accordingly; the persona discourages leaking secrets but is a
   soft layer only.
+- Inbound attachments land in a contained per-thread dir exposed via
+  `--add-dir`; uploaded filenames are sanitized to a basename (no path
+  traversal). Outbound delivery is limited to files the fork places in its
+  outbox, so unrelated project files are never auto-posted.
 - ToS: consumer plans prohibit making your *account* available to others; an
   owner-operated relay is a gray area. Headless + API key is the unambiguous
   path.
@@ -188,8 +262,10 @@ dir is propagated end to end:
 
 - Unit tested (real files, no mocks): registry roundtrip/revoke, the `>share`
   hook via subprocess (publish/idempotent/distinct-session/label/collision/
-  status/off), store bind+follow-up, session discovery & answer extraction,
-  chunking, flag building, config.
+  status/off, write + bash access), store bind+follow-up, session discovery &
+  answer extraction, chunking, flag building (incl. bash tools, `--add-dir`,
+  persona append), config, attachment layout/diff/preamble + the backend's
+  upload/outbox setup and cleanup, filename sanitization.
 - Live end-to-end (headless): `>share` → registry → `ask --handle` forked the
   exact published session, inherited context, and follow-ups continued the
   same fork.

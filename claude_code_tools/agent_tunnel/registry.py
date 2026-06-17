@@ -15,7 +15,7 @@ Schema (``registry.json``)::
           "session_id": "<claude session uuid>",
           "cwd": "<absolute project dir of that session>",
           "config_dir": "<claude config dir the session lives under>",
-          "access": "read" | "write",
+          "access": "read" | "write" | "bash",
           "label": "<optional friendly label>",
           "transcript_path": "<absolute .jsonl path, best-effort>",
           "created_at": <float epoch seconds>,
@@ -34,6 +34,8 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
+
+from .locking import file_lock
 
 HANDLE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")
 
@@ -63,7 +65,9 @@ class PublishRecord:
     session_id: str
     cwd: str
     config_dir: str = ""  # Claude config dir the session lives under
-    access: str = "read"  # "read" or "write" (set via >share --write)
+    # "read", "write" (>share --write), or "bash"
+    # (>share --dangerously-allow-bash; also enables command execution).
+    access: str = "read"
     label: str = ""
     transcript_path: str = ""
     created_at: float = field(default_factory=time.time)
@@ -96,6 +100,9 @@ class Registry:
                 record = PublishRecord(**fields)
             except TypeError:
                 continue
+            # Defensive: an old hook could write access=null; treat it as read
+            # so it never displays or behaves oddly (null != "write" anyway).
+            record.access = record.access or "read"
             # Backfill config_dir for records written before it was tracked:
             # the transcript path is <config-dir>/projects/...
             if not record.config_dir and "/projects/" in record.transcript_path:
@@ -125,16 +132,62 @@ class Registry:
 
     def upsert(self, record: PublishRecord) -> None:
         """Insert or replace a record (used by CLI/tests; hook writes its own)."""
-        records = self._read()
-        records[record.handle] = record
-        self._write(records)
+        with file_lock(self.path):
+            records = self._read()
+            records[record.handle] = record
+            self._write(records)
 
     def revoke(self, handle: str) -> bool:
         """Mark a handle revoked. Returns True if it existed."""
-        records = self._read()
-        rec = records.get(handle.strip().lower())
-        if rec is None:
-            return False
-        rec.revoked = True
-        self._write(records)
-        return True
+        with file_lock(self.path):
+            records = self._read()
+            rec = records.get(handle.strip().lower())
+            if rec is None:
+                return False
+            rec.revoked = True
+            self._write(records)
+            return True
+
+    def rename(self, old: str, new: str) -> tuple[bool, str]:
+        """Rename handle `old` to `new`.
+
+        Returns (ok, message). Fails if `new` is malformed, `old` is missing,
+        or `new` is an active handle of a different session.
+        """
+        old = old.strip().lower()
+        new = new.strip().lower()
+        if not HANDLE_RE.match(new):
+            return (
+                False,
+                f"Invalid handle {new!r}: letters, digits, dashes (2-32).",
+            )
+        if new == old:
+            return (False, "New handle is the same as the old one.")
+        with file_lock(self.path):
+            records = self._read()
+            rec = records.get(old)
+            # A revoked record is hidden by get()/active(); renaming it would
+            # "succeed" yet leave the new handle revoked and invisible. Treat
+            # it as missing.
+            if rec is None or rec.revoked:
+                return (False, f"No handle {old!r} in the registry.")
+            taken = records.get(new)
+            if (
+                taken is not None
+                and not taken.revoked
+                and taken.session_id != rec.session_id
+            ):
+                return (
+                    False,
+                    f"Handle {new!r} is already used by another session.",
+                )
+            records.pop(old, None)
+            rec.handle = new
+            # `>share <label>` stores label == handle; keep them in sync so
+            # `published`/`!list` and new threads show the new name, not the
+            # old one. A distinct (custom) label is left untouched.
+            if rec.label == old:
+                rec.label = new
+            records[new] = rec
+            self._write(records)
+        return (True, f"Renamed {old!r} to {new!r}.")

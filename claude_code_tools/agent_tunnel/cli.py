@@ -3,6 +3,7 @@ doctor, forget, init, help."""
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
@@ -12,7 +13,13 @@ from typing import Optional
 
 import click
 
-from .backends import BackendError, make_backend
+from .backends import (
+    Backend,
+    BackendError,
+    _window_name,
+    backend_for_record,
+    make_backend,
+)
 from .config import (
     DEFAULT_CONFIG_PATH,
     TunnelConfig,
@@ -56,7 +63,10 @@ def cli() -> None:
 @cli.command()
 @click.option("--config", type=click.Path(), help="Config TOML path.")
 @click.option(
-    "--backend", type=click.Choice(["tmux", "headless"]), default=None
+    "--backend",
+    type=click.Choice(["tmux", "headless"]),
+    default=None,
+    help="Server mode: headless (default) or tmux. Overrides config.",
 )
 @click.option(
     "--channel",
@@ -72,7 +82,18 @@ def serve(
     channels: tuple[int, ...],
     token_env: Optional[str],
 ) -> None:
-    """Run the Discord daemon (blocking)."""
+    """Run the Discord daemon (blocking).
+
+    Two server modes, set with --backend or [tunnel] backend (default
+    headless):
+
+    \b
+    - headless: a `claude -p` subprocess per question — clean JSON I/O, more
+      reliable, no tmux. Launch with `agent-tunnel serve`.
+    - tmux: an interactive `claude` per thread in a private tmux server you can
+      watch live (`agent-tunnel watch`). Launch:
+      `agent-tunnel serve --backend tmux`.
+    """
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -80,7 +101,6 @@ def serve(
     cfg = _build(config, backend, channels, token_env)
     store = TunnelStore(cfg.state_path)
     registry = Registry(cfg.registry_path)
-    bk = make_backend(cfg, store)
     try:
         from .discord_bot import run_bot
     except ImportError as exc:
@@ -92,7 +112,7 @@ def serve(
         f"registry={cfg.registry_path} channels={cfg.discord.channel_ids}"
     )
     try:
-        run_bot(cfg, bk, store, registry)
+        run_bot(cfg, store, registry)
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -118,6 +138,12 @@ def serve(
 @click.option(
     "--write", is_flag=True, help="Grant write access (with --session/auto)."
 )
+@click.option(
+    "--dangerously-allow-bash",
+    "allow_bash",
+    is_flag=True,
+    help="Grant write + shell execution (with --session/auto).",
+)
 @click.argument("question")
 def ask(
     config: Optional[str],
@@ -127,6 +153,7 @@ def ask(
     project: Optional[str],
     thread: str,
     write: bool,
+    allow_bash: bool,
     question: str,
 ) -> None:
     """Ask one question through the full pipeline (no Discord).
@@ -141,7 +168,7 @@ def ask(
 
     if store.get(thread_key) is None:
         expert_id, project_dir, hname, config_dir, access = _resolve_target(
-            cfg, store, handle, session, project, write
+            cfg, store, handle, session, project, write, allow_bash
         )
         store.bind(
             thread_key,
@@ -172,6 +199,7 @@ def _resolve_target(
     session: Optional[str],
     project: Optional[str],
     write: bool = False,
+    allow_bash: bool = False,
 ) -> tuple[str, Path, str, str, str]:
     """Resolve (expert_session_id, project_dir, handle, config_dir, access)."""
     if handle:
@@ -181,7 +209,7 @@ def _resolve_target(
         return rec.session_id, Path(rec.cwd), rec.handle, rec.config_dir, (
             rec.access
         )
-    access = "write" if write else "read"
+    access = "bash" if allow_bash else ("write" if write else "read")
     project_dir = Path(project or os.getcwd()).expanduser().resolve()
     env_dir = os.environ.get("CLAUDE_CONFIG_DIR", "")
     if session:
@@ -213,9 +241,12 @@ def published(config: Optional[str]) -> None:
             f" ({rec.label})" if rec.label and rec.label != rec.handle else ""
         )
         cfgdir = f"  [{Path(rec.config_dir).name}]" if rec.config_dir else ""
-        wr = "  ✍️ write" if rec.access == "write" else ""
+        access = {"write": "  ✍️ write", "bash": "  💥 bash"}.get(
+            rec.access, ""
+        )
         click.echo(
-            f"{rec.handle}{label}: {rec.session_id[:8]} @ {rec.cwd}{cfgdir}{wr}"
+            f"{rec.handle}{label}: {rec.session_id[:8]} @ {rec.cwd}{cfgdir}"
+            f"{access}"
         )
 
 
@@ -264,23 +295,176 @@ def _fork_line(rec: ThreadRecord, marker: str = "") -> str:
     )
 
 
+# Per-access-level (label, rich style) for the forks table / picker.
+_ACCESS_DISPLAY = {
+    "read": ("read", "dim"),
+    "write": ("✍️ write", "yellow"),
+    "bash": ("💥 bash", "red"),
+}
+
+
+def _fork_status(backend: Backend, rec: ThreadRecord) -> str:
+    """'live' if the fork's tmux window is up, 'idle' if reaped, '-' if n/a."""
+    tmux = getattr(backend, "tmux", None)
+    if tmux is None or rec.backend != "tmux":
+        return "-"
+    if not rec.tmux_window:
+        return "idle"
+    try:
+        if tmux.window_alive(rec.tmux_window) and not tmux.pane_dead(
+            rec.tmux_window
+        ):
+            return "live"
+    except Exception:
+        pass
+    return "idle"
+
+
+def _fork_row(rec: ThreadRecord, status: str) -> dict[str, str]:
+    """Display fields for one fork (shared by the table, JSON, and picker)."""
+    fp = _fork_path(rec)
+    turns = count_turns(fp) if fp else 0
+    cfgdir = Path(rec.config_dir).name if rec.config_dir else ""
+    proj = Path(rec.project_dir).name if rec.project_dir else "?"
+    return {
+        "thread_key": rec.thread_key,
+        "handle": rec.handle or "?",
+        "access": rec.access or "read",
+        "asker": rec.asker or "?",
+        "last_active": _relative_time(rec.last_used),
+        "turns": str(turns),
+        "status": status,
+        "project": f"{proj} [{cfgdir}]" if cfgdir else proj,
+        "fork": rec.fork_session_id[:8],
+    }
+
+
+def _status_cell(status: str) -> str:
+    if status == "live":
+        return "[green]● live[/]"
+    if status == "idle":
+        return "[dim]○ idle[/]"
+    return "[dim]—[/]"
+
+
+def _render_forks_table(rows: list[dict[str, str]]) -> None:
+    """Pretty-print fork rows as a rich table."""
+    from rich.console import Console
+    from rich.table import Table
+
+    table = Table(
+        title="agent-tunnel forks",
+        title_justify="left",
+        title_style="bold",
+        header_style="bold",
+    )
+    table.add_column("Handle", style="cyan", no_wrap=True)
+    table.add_column("Access", no_wrap=True)
+    table.add_column("Asker")
+    table.add_column("Last active", no_wrap=True)
+    table.add_column("Turns", justify="right")
+    table.add_column("Status", no_wrap=True)
+    table.add_column("Project", style="dim")
+    table.add_column("Fork", style="dim", no_wrap=True)
+    for r in rows:
+        label, style = _ACCESS_DISPLAY.get(r["access"], (r["access"], ""))
+        access = f"[{style}]{label}[/]" if style else label
+        table.add_row(
+            r["handle"],
+            access,
+            r["asker"],
+            r["last_active"],
+            r["turns"],
+            _status_cell(r["status"]),
+            r["project"],
+            r["fork"],
+        )
+    Console().print(table)
+
+
+def _manage_forks(
+    cfg: TunnelConfig, store: TunnelStore, rows: list[dict[str, str]]
+) -> None:
+    """Interactively select forks and clear (forget) them."""
+    import questionary
+
+    choices = []
+    for r in rows:
+        label = _ACCESS_DISPLAY.get(r["access"], (r["access"], ""))[0]
+        title = (
+            f"{r['handle']:<16} {label:<9} {r['asker']:<12} "
+            f"{r['last_active']:<10} {r['turns']:>3}t  {r['status']:<4} "
+            f"{r['fork']}"
+        )
+        choices.append(questionary.Choice(title=title, value=r["thread_key"]))
+    selected = questionary.checkbox(
+        "Select forks to clear (space toggles, enter confirms):",
+        choices=choices,
+    ).ask()
+    if not selected:
+        click.echo("Nothing selected.")
+        return
+    if not questionary.confirm(
+        f"Clear {len(selected)} fork(s)? This kills their windows and drops "
+        "the bindings (the transcripts stay on disk).",
+        default=False,
+    ).ask():
+        click.echo("Cancelled.")
+        return
+    cache: dict[str, Backend] = {}
+    for key in selected:
+        try:
+            rec = store.get(key)
+            backend_for_record(cfg, store, rec, cache).forget(key)
+            click.echo(f"Cleared {key}")
+        except Exception as exc:
+            click.echo(f"Failed to clear {key}: {exc}", err=True)
+
+
 @cli.command()
 @click.argument("handle", required=False)
 @click.option("--config", type=click.Path(), help="Config TOML path.")
-def forks(handle: Optional[str], config: Optional[str]) -> None:
-    """List fork sessions (one per Discord thread) and their context size.
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable JSON.")
+@click.option(
+    "--manage",
+    "-m",
+    is_flag=True,
+    help="Interactively select forks to clear (needs a TTY).",
+)
+def forks(
+    handle: Optional[str], config: Optional[str], as_json: bool, manage: bool
+) -> None:
+    """List fork sessions (one per Discord thread) as a table.
 
-    Optionally filter by HANDLE. Resume one with `agent-tunnel resume`.
+    Optionally filter by HANDLE. `--json` prints machine-readable rows;
+    `--manage` lets you select forks to clear. Resume one with
+    `agent-tunnel resume`.
     """
     cfg = _build(config)
     store = TunnelStore(cfg.state_path)
     recs = _forks(store, handle)
     if not recs:
         where = f" for handle {handle!r}" if handle else ""
-        click.echo(f"No fork sessions{where} yet.")
+        click.echo("[]" if as_json else f"No fork sessions{where} yet.")
         return
-    for rec in recs:
-        click.echo(_fork_line(rec))
+    cache: dict[str, Backend] = {}
+    rows = [
+        _fork_row(
+            rec, _fork_status(backend_for_record(cfg, store, rec, cache), rec)
+        )
+        for rec in recs
+    ]
+    if as_json:
+        click.echo(json.dumps(rows, indent=2))
+        return
+    if manage:
+        if not sys.stdin.isatty():
+            raise click.ClickException(
+                "--manage needs an interactive terminal."
+            )
+        _manage_forks(cfg, store, rows)
+        return
+    _render_forks_table(rows)
 
 
 @cli.command()
@@ -348,6 +532,47 @@ def resume(
 
 
 @cli.command()
+@click.argument("old")
+@click.argument("new")
+@click.option("--config", type=click.Path(), help="Config TOML path.")
+def rename(old: str, new: str, config: Optional[str]) -> None:
+    """Rename a shared handle OLD to NEW.
+
+    Updates the registry, the bound fork records, and any live tmux windows,
+    so colleagues address NEW and `published`/`forks`/`resume` all agree. Works
+    out-of-session (no need to be in the Claude session).
+    """
+    cfg = _build(config)
+    registry = Registry(cfg.registry_path)
+    ok, msg = registry.rename(old, new)
+    if not ok:
+        raise click.ClickException(msg)
+    old_h, new_h = old.strip().lower(), new.strip().lower()
+    store = TunnelStore(cfg.state_path)
+    renamed = store.rename_handle(old_h, new_h)
+    windows = 0
+    # Rename live tmux windows for records that actually run on the tmux
+    # backend — keyed on each record's own backend, not the current config
+    # (which defaults to headless even when `serve --backend tmux` is live).
+    tmux_recs = [r for r in renamed if r.backend == "tmux" and r.tmux_window]
+    if tmux_recs:
+        from .tmux import TmuxSession
+
+        tmux = TmuxSession(cfg.tmux_session)
+        for rec in tmux_recs:
+            new_win = _window_name(new_h, rec.thread_key)
+            if tmux.rename_window(rec.tmux_window, new_win):
+                rec.tmux_window = new_win
+                store.upsert(rec)
+                windows += 1
+    suffix = f", {windows} live window(s)" if windows else ""
+    click.echo(
+        f"Renamed '{old_h}' → '{new_h}' "
+        f"(registry, {len(renamed)} fork(s){suffix})."
+    )
+
+
+@cli.command()
 @click.option("--config", type=click.Path(), help="Config TOML path.")
 def watch(config: Optional[str]) -> None:
     """Attach to the private tmux server to watch live fork sessions.
@@ -388,6 +613,7 @@ def doctor(config: Optional[str]) -> None:
     """Check that agent-tunnel is configured and ready to serve."""
     import shutil
 
+    from .convert import detect_converter
     from .discord_bot import resolve_token
 
     cfg = _build(config)
@@ -415,6 +641,11 @@ def doctor(config: Optional[str]) -> None:
         ok_all = ok_all and ok
     n = len(Registry(cfg.registry_path).active())
     click.echo(f"  • {n} published session(s) live")
+    if cfg.attachments.convert == "off":
+        conv = "off (config)"
+    else:
+        conv = detect_converter() or "none — colleagues should attach PDFs"
+    click.echo(f"  • Office-attachment converter: {conv}")
     click.echo(f"\nbackend={cfg.backend}  registry={cfg.registry_path}")
     if not ok_all:
         raise click.ClickException("Some checks failed — see above.")
@@ -455,18 +686,28 @@ def forget(
     thread: Optional[str],
     forget_all: bool,
 ) -> None:
-    """Drop thread mappings (and kill their tmux windows)."""
+    """Drop thread mappings (and kill their tmux windows).
+
+    Known limitation: this runs in a separate process from the daemon, so it
+    does not coordinate with an in-flight turn. Running it while the daemon is
+    mid-answer for a thread can delete that thread's upload/outbox dirs or kill
+    its window before the turn finishes — the in-process per-thread lock that
+    guards the Discord ``!done`` path does not span processes. Prefer ``!done``
+    in-thread, or run ``forget`` when the thread is idle; fully closing this
+    would need a cross-process per-turn lock.
+    """
     if bool(thread) == forget_all:
         raise click.ClickException("Use exactly one of --thread or --all.")
     cfg = _build(config, backend)
     store = TunnelStore(cfg.state_path)
-    bk = make_backend(cfg, store)
     if forget_all:
         keys = [r.thread_key for r in store.all_records()]
     else:
         keys = [thread] if thread else []
+    cache: dict[str, Backend] = {}
     for key in keys:
-        bk.forget(key)
+        rec = store.get(key)
+        backend_for_record(cfg, store, rec, cache).forget(key)
         click.echo(f"Forgot {key}")
     if not keys:
         click.echo("Nothing to forget.")
@@ -502,7 +743,7 @@ Where to run each command:
              from the agent-tunnel plugin, not a subcommand)
   resume     a normal terminal where you want the Claude session — it execs
              `claude --resume` and drops you into the fork
-  ask / published / status / forks / doctor / forget / init
+  ask / published / status / forks / rename / doctor / forget / init
              plain CLI — run anywhere, tmux context does not matter
 """
 

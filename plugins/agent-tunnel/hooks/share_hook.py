@@ -4,6 +4,9 @@
 Triggers (typed as a prompt inside any Claude Code session):
 - '>share'            : publish this session, mint/show a handle
 - '>share <label>'    : publish with a chosen handle (e.g. >share payments)
+- '>share --write <label>' : also let colleagues edit files (no shell)
+- '>share --dangerously-allow-bash <label>' : also let them run shell
+  commands (so a fork can build real PDFs/docx) — trusted people only
 - '>share status'     : show this session's handle, if any
 - '>share off'        : revoke this session's handle
 
@@ -23,8 +26,16 @@ import sys
 import time
 
 TRIGGER = ">share"
-REGISTRY_PATH = os.environ.get("AGENT_TUNNEL_REGISTRY") or os.path.expanduser(
-    "~/.local/state/agent-tunnel/registry.json"
+# expanduser + abspath so a ~/... AGENT_TUNNEL_REGISTRY resolves to the same
+# absolute file the daemon reads. NOTE: use an absolute path or ~/... — a
+# RELATIVE value is anchored to this hook's cwd here but to the config-file
+# dir in the daemon, so the two would diverge (relative registry paths are
+# effectively unsupported).
+REGISTRY_PATH = os.path.abspath(
+    os.path.expanduser(
+        os.environ.get("AGENT_TUNNEL_REGISTRY")
+        or "~/.local/state/agent-tunnel/registry.json"
+    )
 )
 HANDLE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")
 
@@ -88,6 +99,10 @@ def _publish(session_id, cwd, transcript_path, config_dir, access, label):
         try:
             records = _load(REGISTRY_PATH)
             existing = _find_by_session(records, session_id)
+            # Capture the prior record now: relabeling pops the old handle
+            # below, so the preserved fields (access/label/created_at) must be
+            # read from here, not from the new (absent) handle key.
+            prior = records.get(existing) if existing else None
             if label:
                 handle = label
                 taken = records.get(handle)
@@ -104,19 +119,23 @@ def _publish(session_id, cwd, transcript_path, config_dir, access, label):
                     and records[handle].get("session_id") != session_id
                 ):
                     handle += "x"
+            # No prior (fresh share, or re-share of a revoked handle) → fall
+            # back to whatever sits under the resolved handle.
+            if prior is None:
+                prior = records.get(handle, {})
             records[handle] = {
                 "handle": handle,
                 "session_id": session_id,
                 "cwd": cwd,
                 "config_dir": config_dir,
+                # `or "read"` (not a .get default) so a pre-existing null
+                # access — written by an old hook — can't persist on re-share.
                 "access": access
                 if access is not None
-                else records.get(handle, {}).get("access", "read"),
-                "label": label or records.get(handle, {}).get("label", ""),
+                else (prior.get("access") or "read"),
+                "label": label or prior.get("label", ""),
                 "transcript_path": transcript_path,
-                "created_at": records.get(handle, {}).get(
-                    "created_at", time.time()
-                ),
+                "created_at": prior.get("created_at", time.time()),
                 "revoked": False,
             }
             _atomic_write(REGISTRY_PATH, records)
@@ -165,7 +184,10 @@ def main():
         data = json.load(sys.stdin)
         session_id = data.get("session_id", "")
         prompt = data.get("prompt")
-        cwd = data.get("cwd") or os.getcwd()
+        # Absolute so the daemon (which launches the fork with cwd set to this
+        # project dir and exposes upload/outbox paths via --add-dir) never has
+        # to resolve a relative project path against the wrong directory.
+        cwd = os.path.abspath(data.get("cwd") or os.getcwd())
         transcript_path = data.get("transcript_path", "")
 
         if not isinstance(prompt, str) or not prompt.strip():
@@ -192,10 +214,16 @@ def main():
             message = _status(session_id)
         else:
             tokens = arg.split()
+            bash = "--dangerously-allow-bash" in tokens
             write = "--write" in tokens or "-w" in tokens
             read = "--read" in tokens or "-r" in tokens
-            # None preserves an existing record's access on re-share.
-            access = "write" if write else ("read" if read else None)
+            # None preserves an existing record's access on re-share. bash is
+            # the strongest level (also runs shell commands), then write, read.
+            access = (
+                "bash"
+                if bash
+                else ("write" if write else ("read" if read else None))
+            )
             label_raw = next((t for t in tokens if not t.startswith("-")), "")
             label = _sanitize_label(label_raw) if label_raw else ""
             if label_raw and not label:
@@ -214,12 +242,19 @@ def main():
                         f"another session. Pick a different name.{RESET}"
                     )
                 else:
-                    note = (
-                        f"\n{YELLOW}WRITE access: colleagues can edit files in "
-                        f"this folder.{RESET}"
-                        if access == "write"
-                        else ""
-                    )
+                    if access == "bash":
+                        note = (
+                            f"\n{YELLOW}⚠️ BASH access: the colleague's agent "
+                            f"can RUN SHELL COMMANDS and edit files in this "
+                            f"folder. Only for fully trusted people.{RESET}"
+                        )
+                    elif access == "write":
+                        note = (
+                            f"\n{YELLOW}WRITE access: colleagues can edit "
+                            f"files in this folder.{RESET}"
+                        )
+                    else:
+                        note = ""
                     message = (
                         f"{GREEN}Sharing this session as: {handle}{RESET}{note}"
                         f"\n{BLUE}Give colleagues this handle; they post  "

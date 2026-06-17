@@ -128,6 +128,13 @@ class TmuxSession:
         if self.window_alive(window):
             self._run(["kill-window", "-t", self._target(window)])
 
+    def rename_window(self, old: str, new: str) -> bool:
+        """Rename a live window in place. False if `old` is absent/no-op."""
+        if old == new or not self.window_alive(old):
+            return False
+        _, code = self._run(["rename-window", "-t", self._target(old), new])
+        return code == 0
+
     def pane_dead(self, window: str) -> bool:
         """True if the window's pane process has exited (remain-on-exit)."""
         out, code = self._run(

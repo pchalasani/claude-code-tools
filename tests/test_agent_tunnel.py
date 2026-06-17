@@ -227,6 +227,26 @@ def test_share_hook_write_access(tmp_path: Path) -> None:
     assert rec is not None and rec.access == "read"
 
 
+def test_share_hook_bash_access(tmp_path: Path) -> None:
+    reg_path = tmp_path / "registry.json"
+    out = _run_hook(
+        ">share --dangerously-allow-bash btest", SID_A, "/p", reg_path
+    )
+    rec = Registry(reg_path).get("btest")
+    assert rec is not None and rec.access == "bash"
+    assert "BASH access" in out["reason"]
+
+    # re-share with no flag preserves the existing bash access.
+    _run_hook(">share btest", SID_A, "/p", reg_path)
+    rec = Registry(reg_path).get("btest")
+    assert rec is not None and rec.access == "bash"
+
+    # --read downgrades all the way back to read-only.
+    _run_hook(">share --read btest", SID_A, "/p", reg_path)
+    rec = Registry(reg_path).get("btest")
+    assert rec is not None and rec.access == "read"
+
+
 def test_share_hook_label_collision(tmp_path: Path) -> None:
     reg_path = tmp_path / "registry.json"
     _run_hook(">share shared", SID_A, "/p", reg_path)
@@ -489,6 +509,27 @@ def test_build_claude_flags() -> None:
     assert "Write" in allowed and "Edit" in allowed
     assert "Bash" in disallowed and "Write" not in disallowed
 
+    # bash access promotes Bash into allowed; network tools still blocked.
+    b = build_claude_flags(cfg, resume_id=SID_A, fork=False, access="bash")
+    b_allowed = b[b.index("--allowedTools") + 1]
+    b_disallowed = b[b.index("--disallowedTools") + 1]
+    assert "Bash" in b_allowed and "Write" in b_allowed
+    assert "Bash" not in b_disallowed and "WebFetch" in b_disallowed
+
+    # add_dirs emit one --add-dir each; extra_system appends to the persona.
+    e = build_claude_flags(
+        cfg,
+        resume_id=SID_A,
+        fork=False,
+        add_dirs=("/tmp/up", "/tmp/out"),
+        extra_system="OUTBOX HERE",
+    )
+    assert e.count("--add-dir") == 2
+    assert "/tmp/up" in e and "/tmp/out" in e
+    system_prompt = e[e.index("--append-system-prompt") + 1]
+    assert "OUTBOX HERE" in system_prompt
+    assert cfg.claude.persona.replace("{platform}", cfg.platform) in system_prompt
+
 
 # --------------------------------------------------------------- config
 
@@ -505,6 +546,9 @@ channel_ids = [111]
 
 [limits]
 max_concurrent = 5
+
+[attachments]
+convert = "off"
 """,
         encoding="utf-8",
     )
@@ -512,6 +556,444 @@ max_concurrent = 5
     assert cfg.backend == "headless"
     assert cfg.discord.channel_ids == [111]
     assert cfg.limits.max_concurrent == 5
+    assert cfg.attachments.convert == "off"
     cfg = load_config(path=cfg_file, backend="tmux", channel_ids=[222])
     assert cfg.backend == "tmux"
     assert cfg.discord.channel_ids == [222]
+
+
+def test_load_config_resolves_relative_state_path(tmp_path: Path) -> None:
+    # Relative [tunnel] paths must become absolute at load time, else inbound
+    # attachments saved relative to the daemon CWD are unreadable when the fork
+    # runs with cwd=project_dir (Codex P2).
+    cfg_file = tmp_path / "rel.toml"
+    cfg_file.write_text(
+        '[tunnel]\nstate_path = "rel/s.json"\nregistry_path = "rel/r.json"\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(path=cfg_file)
+    assert cfg.state_path == (tmp_path / "rel" / "s.json").resolve()
+
+
+# --------------------------------------------------- attachment plumbing
+
+
+def test_paths_layout(tmp_path: Path) -> None:
+    from claude_code_tools.agent_tunnel.paths import (
+        OUTBOX_DIRNAME,
+        ensure_outbox,
+        outbox_dir_for,
+        safe_key,
+        uploads_dir_for,
+    )
+
+    assert safe_key("th:123") == "th-123"
+    assert safe_key("dm:99/x") == "dm-99-x"
+    assert safe_key("") == "thread"
+
+    state = tmp_path / "state"
+    assert uploads_dir_for(state, "th:1") == state / "uploads" / "th-1"
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    assert outbox_dir_for(proj, "th:1") == proj / OUTBOX_DIRNAME / "th-1"
+
+    made = ensure_outbox(proj, "th:1")
+    assert made.is_dir()
+    # A git-ignore-everything guard keeps the outbox out of `git status`.
+    assert (proj / OUTBOX_DIRNAME / ".gitignore").read_text() == "*\n"
+
+
+def test_paths_snapshot_diff(tmp_path: Path) -> None:
+    from claude_code_tools.agent_tunnel.paths import (
+        changed_files,
+        snapshot_dir,
+    )
+
+    out = tmp_path / "out"
+    out.mkdir()
+    assert snapshot_dir(tmp_path / "missing") == {}
+
+    a = out / "a.md"
+    a.write_text("one", encoding="utf-8")
+    old = time.time() - 100
+    os.utime(a, (old, old))
+    snap = snapshot_dir(out)
+    assert set(snap) == {"a.md"}
+    assert changed_files(out, snap) == []  # untouched
+
+    # a new file in a subdir is detected.
+    b = out / "sub" / "b.csv"
+    b.parent.mkdir()
+    b.write_text("x,y", encoding="utf-8")
+    assert [p.name for p in changed_files(out, snap)] == ["b.csv"]
+
+    # A rewrite with PRESERVED mtime (cp -p / coarse FS) is still caught now.
+    a.write_text("changed", encoding="utf-8")  # different size, same mtime
+    os.utime(a, (old, old))
+    assert sorted(p.name for p in changed_files(out, snap)) == [
+        "a.md",
+        "b.csv",
+    ]
+
+
+def test_attachment_preamble() -> None:
+    from claude_code_tools.agent_tunnel.paths import attachment_preamble
+
+    assert attachment_preamble([], "hi") == "hi"
+
+    one = attachment_preamble([Path("/up/r.pdf")], "summarize this")
+    assert "/up/r.pdf" in one
+    assert "Read tool" in one
+    assert one.rstrip().endswith("summarize this")
+
+    # no question text -> a default review instruction stands in.
+    empty = attachment_preamble(
+        [Path("/up/a.csv"), Path("/up/b.csv")], ""
+    )
+    assert "/up/a.csv" in empty and "/up/b.csv" in empty
+    assert "review" in empty.lower()
+
+
+def test_backend_attachment_dirs(tmp_path: Path) -> None:
+    project, claude_home = _make_project(tmp_path)
+    cfg = TunnelConfig(
+        state_path=tmp_path / "state.json", claude_home=claude_home
+    )
+    store = TunnelStore(cfg.state_path)
+    backend = HeadlessBackend(cfg, store)
+
+    # read handle: no outbox, but the uploads dir is still created + exposed.
+    rec_r = store.bind(
+        "th:r", "h", SID_A, str(project), "headless", access="read"
+    )
+    add_dirs, extra, outbox, snap = backend._begin_turn(rec_r)
+    assert outbox is None and extra == ""
+    assert len(add_dirs) == 1 and Path(add_dirs[0]).is_dir()
+    assert add_dirs[0].endswith("th-r")
+    assert backend._end_turn(outbox, snap) == []
+
+    # write handle: outbox created + named in the system prompt, and the
+    # before/after diff surfaces exactly what the fork wrote this turn.
+    rec_w = store.bind(
+        "th:w", "h", SID_A, str(project), "headless", access="write"
+    )
+    add_dirs, extra, outbox, snap = backend._begin_turn(rec_w)
+    assert outbox is not None and str(outbox) in extra
+    assert (project / ".agent-tunnel-out" / ".gitignore").read_text() == "*\n"
+    assert backend._end_turn(outbox, snap) == []  # nothing yet
+    (outbox / "report.md").write_text("hello", encoding="utf-8")
+    delivered = backend._end_turn(outbox, snap)
+    assert [p.name for p in delivered] == ["report.md"]
+
+    # forget cleans up both per-thread dirs.
+    uploads_w = Path(add_dirs[0])
+    backend.forget("th:w")
+    assert not outbox.exists() and not uploads_w.exists()
+
+
+def test_safe_filename() -> None:
+    from claude_code_tools.agent_tunnel.discord_bot import _safe_filename
+
+    assert _safe_filename("report.pdf") == "report.pdf"
+    assert _safe_filename("../../etc/passwd") == "passwd"
+    assert _safe_filename("my file (1).csv") == "my_file_1_.csv"
+    assert _safe_filename("") == "file"
+    assert _safe_filename("   ") == "file"
+    # Over-long names keep their extension (downstream picks type from suffix).
+    out = _safe_filename("a" * 200 + ".docx")
+    assert out.endswith(".docx") and len(out) <= 120
+
+
+def test_unique_name() -> None:
+    from claude_code_tools.agent_tunnel.discord_bot import _unique_name
+
+    used: set[str] = set()
+    # repeats get a numeric suffix before the extension, not overwritten.
+    assert _unique_name("report.pdf", used) == "report.pdf"
+    assert _unique_name("report.pdf", used) == "report-2.pdf"
+    assert _unique_name("report.pdf", used) == "report-3.pdf"
+    assert _unique_name("data.csv", used) == "data.csv"  # distinct name is free
+    # extension-less and multi-dot names suffix correctly.
+    assert _unique_name("notes", used) == "notes"
+    assert _unique_name("notes", used) == "notes-2"
+    assert _unique_name("a.tar.gz", used) == "a.tar.gz"
+    assert _unique_name("a.tar.gz", used) == "a-2.tar.gz"
+
+
+def test_leading_mention_id() -> None:
+    from claude_code_tools.agent_tunnel.discord_bot import _leading_mention_id
+
+    assert _leading_mention_id("what is X?") is None  # no mention -> answer
+    assert _leading_mention_id("<@123> hey bot") == 123  # user mention
+    assert _leading_mention_id("<@!123> nick form") == 123  # nickname mention
+    assert _leading_mention_id("<@&456> role ping") == 456  # role mention
+    assert _leading_mention_id("  <@789> leading ws") == 789
+    assert _leading_mention_id("@everyone look") == -1  # broadcast
+    assert _leading_mention_id("@here look") == -1
+    assert _leading_mention_id("hey <@123> mid") is None  # not at the start
+
+
+# ------------------------------------------------- office-file conversion
+
+
+def test_convert_off_and_passthrough(tmp_path: Path) -> None:
+    from claude_code_tools.agent_tunnel.convert import (
+        CONVERTIBLE_EXTS,
+        convert_attachment,
+    )
+
+    work = tmp_path / "up"
+    work.mkdir()
+    docx = work / "a.docx"
+    docx.write_bytes(b"not really a docx")
+    assert ".docx" in CONVERTIBLE_EXTS
+
+    # "off" never converts, even for a convertible type.
+    assert convert_attachment(docx, work, mode="off").path is None
+    # A natively-readable type is a no-op (Read opens it directly).
+    txt = work / "a.txt"
+    txt.write_text("hi", encoding="utf-8")
+    assert convert_attachment(txt, work, mode="auto").path is None
+
+
+def test_convert_custom_command(tmp_path: Path) -> None:
+    # A portable custom command (cp) exercises the run + output-discovery path
+    # without depending on any Office converter being installed.
+    from claude_code_tools.agent_tunnel.convert import convert_attachment
+
+    work = tmp_path / "up"
+    work.mkdir()
+    src = work / "report.docx"
+    src.write_bytes(b"dummy docx bytes")
+    conv = convert_attachment(
+        src, work, mode="auto", custom_command="cp {input} {outdir}/out.txt"
+    )
+    assert conv.converter == "custom"
+    assert conv.path is not None and conv.path.name == "out.txt"
+    assert conv.path.read_bytes() == b"dummy docx bytes"
+
+
+def test_convert_same_stem_distinct_outputs(tmp_path: Path) -> None:
+    # Two convertible files sharing a stem but differing in extension must not
+    # share a conversion output path (else one overwrites the other).
+    from claude_code_tools.agent_tunnel.convert import convert_attachment
+
+    work = tmp_path / "up"
+    work.mkdir()
+    docx = work / "report.docx"
+    docx.write_bytes(b"AAA")
+    pptx = work / "report.pptx"
+    pptx.write_bytes(b"BBB")
+
+    cmd = "cp {input} {outdir}/out.txt"
+    a = convert_attachment(docx, work, mode="auto", custom_command=cmd)
+    b = convert_attachment(pptx, work, mode="auto", custom_command=cmd)
+    assert a.path is not None and b.path is not None
+    assert a.path != b.path
+    assert a.path.read_bytes() == b"AAA"  # not clobbered by the pptx conversion
+    assert b.path.read_bytes() == b"BBB"
+
+
+def test_convert_auto_docx(tmp_path: Path) -> None:
+    # Real auto path — guarded so it skips on hosts with no converter.
+    import shutil
+
+    import pytest
+
+    from claude_code_tools.agent_tunnel.convert import (
+        convert_attachment,
+        converters_available,
+    )
+
+    pandoc = shutil.which("pandoc")
+    if pandoc is None:
+        pytest.skip("pandoc not installed; cannot build a .docx fixture")
+    assert converters_available()
+
+    md = tmp_path / "src.md"
+    md.write_text(
+        "# Title\n\nA word doc with token AUTO-CONV-42.\n", encoding="utf-8"
+    )
+    work = tmp_path / "up"
+    work.mkdir()
+    src = work / "doc.docx"
+    subprocess.run([pandoc, str(md), "-o", str(src)], check=True)
+    assert src.exists()
+
+    conv = convert_attachment(src, work, mode="auto")
+    assert conv.path is not None and conv.path.exists()
+    assert conv.path.stat().st_size > 0
+    assert conv.converter in ("libreoffice→pdf", "pandoc→md", "textutil→txt")
+
+
+# ----------------------------------------------------------- forks table
+
+
+def test_fork_row_fields() -> None:
+    from claude_code_tools.agent_tunnel.cli import _fork_row
+    from claude_code_tools.agent_tunnel.store import ThreadRecord
+
+    rec = ThreadRecord(
+        thread_key="th:42",
+        handle="pay",
+        access="bash",
+        asker="bob",
+        fork_session_id="abcdef123456",
+        project_dir="/work/proj",
+        config_dir="/home/u/.claude-rja",
+        backend="tmux",
+    )
+    row = _fork_row(rec, status="idle")
+    assert row["thread_key"] == "th:42"
+    assert row["handle"] == "pay"
+    assert row["access"] == "bash"
+    assert row["asker"] == "bob"
+    assert row["status"] == "idle"
+    assert row["fork"] == "abcdef12"  # first 8 chars
+    assert row["turns"] == "0"  # no transcript on disk
+    assert row["project"] == "proj [.claude-rja]"
+
+
+# --------------------------------------------------------------- rename
+
+
+def test_registry_rename(tmp_path: Path) -> None:
+    reg = Registry(tmp_path / "registry.json")
+    reg.upsert(
+        PublishRecord(handle="old", session_id=SID_A, cwd="/p", access="write")
+    )
+
+    ok, _ = reg.rename("old", "new")
+    assert ok
+    assert reg.get("old") is None
+    got = reg.get("new")
+    assert got is not None
+    assert got.handle == "new" and got.session_id == SID_A
+    assert got.access == "write"  # access carried over
+
+    assert reg.rename("missing", "x")[0] is False  # no such old handle
+    assert reg.rename("new", "!!!")[0] is False  # malformed new handle
+
+    # Collision with a different session's active handle is refused.
+    reg.upsert(PublishRecord(handle="taken", session_id=SID_B, cwd="/q"))
+    ok, msg = reg.rename("new", "taken")
+    assert not ok and "already used" in msg
+    assert reg.get("new") is not None  # original left intact
+    # A revoked handle (after `>share off`) is treated as missing, not renamed.
+    reg.revoke("new")
+    assert reg.rename("new", "fresh")[0] is False
+
+
+def test_registry_coerces_null_access(tmp_path: Path) -> None:
+    # An old hook could write access=null; it must load as "read".
+    path = tmp_path / "registry.json"
+    path.write_text(
+        json.dumps(
+            {
+                "records": {
+                    "h": {
+                        "handle": "h",
+                        "session_id": SID_A,
+                        "cwd": "/p",
+                        "access": None,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    rec = Registry(path).get("h")
+    assert rec is not None and rec.access == "read"
+
+
+def test_store_rename_handle(tmp_path: Path) -> None:
+    store = TunnelStore(tmp_path / "state.json")
+    store.bind("th:1", "old", SID_A, "/p", "tmux")
+    store.bind("th:2", "old", SID_B, "/q", "tmux")
+    store.bind("th:3", "other", SID_A, "/p", "tmux")
+
+    renamed = store.rename_handle("old", "new")
+    assert len(renamed) == 2
+
+    reloaded = TunnelStore(tmp_path / "state.json")
+    r1, r2, r3 = (reloaded.get(k) for k in ("th:1", "th:2", "th:3"))
+    assert r1 is not None and r2 is not None and r3 is not None
+    assert r1.handle == "new"
+    assert r2.handle == "new"
+    assert r3.handle == "other"  # untouched
+
+
+def test_store_write_preserves_concurrent_changes(tmp_path: Path) -> None:
+    # Two TunnelStore instances simulate the daemon and a CLI process. The
+    # second writer must re-read under the lock so it doesn't clobber a change
+    # the first one made after the second loaded its (now stale) snapshot.
+    path = tmp_path / "state.json"
+    daemon = TunnelStore(path)
+    daemon.bind("th:1", "h", SID_A, "/p", "tmux")
+
+    cli = TunnelStore(path)  # loads now: knows only th:1
+    daemon.bind("th:2", "h", SID_B, "/q", "tmux")  # daemon adds th:2
+
+    cli.remove("th:1")  # stale snapshot would drop th:2; reload-merge keeps it
+
+    final = TunnelStore(path)
+    assert final.get("th:1") is None  # cli's removal applied
+    assert final.get("th:2") is not None  # daemon's concurrent add survived
+
+
+def test_store_get_reflects_external_rename(tmp_path: Path) -> None:
+    # The daemon's long-lived store must not serve a stale record after a CLI
+    # process renames it on disk — else the daemon's next upsert undoes it.
+    path = tmp_path / "state.json"
+    daemon = TunnelStore(path)
+    daemon.bind("th:1", "old", SID_A, "/p", "tmux")
+    daemon.get("th:1")  # cached in the daemon's memory
+
+    TunnelStore(path).rename_handle("old", "new")  # a separate CLI process
+
+    rec = daemon.get("th:1")
+    assert rec is not None and rec.handle == "new"  # get re-read disk
+    rec.fork_session_id = SID_FORK
+    daemon.upsert(rec)  # must preserve the rename, not clobber it
+
+    final = TunnelStore(path).get("th:1")
+    assert final is not None
+    assert final.handle == "new" and final.fork_session_id == SID_FORK
+
+
+def test_store_upsert_merges_into_external_rename(tmp_path: Path) -> None:
+    # The real race: a backend holds a record fetched BEFORE a CLI `rename`,
+    # runs a long turn, then upserts. The stale in-memory handle must NOT
+    # overwrite the rename that landed on disk meanwhile.
+    path = tmp_path / "state.json"
+    daemon = TunnelStore(path)
+    rec = daemon.bind("th:1", "old", SID_A, "/p", "tmux")  # handle="old"
+
+    TunnelStore(path).rename_handle("old", "new")  # CLI renames mid-turn
+
+    rec.fork_session_id = SID_FORK  # turn finished; record its fork id
+    daemon.upsert(rec)  # stale rec.handle == "old" must not clobber
+
+    final = TunnelStore(path).get("th:1")
+    assert final is not None
+    assert final.handle == "new"  # rename preserved, not undone
+    assert final.fork_session_id == SID_FORK  # caller's field merged in
+    assert SID_FORK in TunnelStore(path).known_fork_ids()
+
+
+def test_store_upsert_does_not_resurrect_forgotten(tmp_path: Path) -> None:
+    # A thread `forget`-ten while its turn runs must not be brought back by the
+    # trailing upsert — but its fork id stays excluded from future reuse.
+    path = tmp_path / "state.json"
+    daemon = TunnelStore(path)
+    rec = daemon.bind("th:1", "h", SID_A, "/p", "tmux")
+
+    TunnelStore(path).remove("th:1")  # a CLI `forget` mid-turn
+
+    rec.fork_session_id = SID_FORK
+    daemon.upsert(rec)  # must not resurrect th:1
+
+    other = TunnelStore(path)
+    assert other.get("th:1") is None  # stays gone
+    assert SID_FORK in other.known_fork_ids()  # fork id still excluded

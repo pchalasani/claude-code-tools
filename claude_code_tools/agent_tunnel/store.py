@@ -20,6 +20,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from .locking import file_lock
+
 
 @dataclass
 class ThreadRecord:
@@ -60,8 +62,27 @@ class TunnelStore:
         known = {f.name for f in ThreadRecord.__dataclass_fields__.values()}
         for key, rec in data.get("records", {}).items():
             fields = {k: v for k, v in rec.items() if k in known}
-            self._records[key] = ThreadRecord(**fields)
+            record = ThreadRecord(**fields)
+            # Single normalization point: a legacy record written before the
+            # `backend` field existed loads blank, but a live `tmux_window`
+            # means its fork runs under tmux. Backfill it here so every
+            # consumer (dispatch, reaper, rename, forget) reads a correct
+            # backend without re-deriving it — and the fix persists on save.
+            if not record.backend and record.tmux_window:
+                record.backend = "tmux"
+            self._records[key] = record
         self._fork_ids = set(data.get("fork_ids", []))
+
+    def _reload_locked(self) -> None:
+        """Re-read state from disk, replacing the in-memory snapshot.
+
+        Called inside the file lock before a mutation so a write merges into
+        the latest on-disk state instead of clobbering concurrent changes from
+        the daemon or another CLI process.
+        """
+        self._records = {}
+        self._fork_ids = set()
+        self._load()
 
     def _save_locked(self) -> None:
         payload = {
@@ -76,8 +97,14 @@ class TunnelStore:
         os.replace(tmp, self.path)
 
     def get(self, thread_key: str) -> Optional[ThreadRecord]:
-        """Return the record for a thread key, or None."""
-        with self._lock:
+        """Return the record for a thread key, or None.
+
+        Re-reads under the lock so the long-lived daemon never serves a stale
+        record — e.g. after a CLI `rename`/`forget` changed it on disk — which
+        would otherwise be `upsert`-ed back and undo the change.
+        """
+        with self._lock, file_lock(self.path):
+            self._reload_locked()
             return self._records.get(thread_key)
 
     def bind(
@@ -96,7 +123,8 @@ class TunnelStore:
         Returns the existing record if the thread is already bound, so
         re-binding (e.g. a duplicate open) is a no-op.
         """
-        with self._lock:
+        with self._lock, file_lock(self.path):
+            self._reload_locked()
             existing = self._records.get(thread_key)
             if existing is not None:
                 return existing
@@ -115,28 +143,68 @@ class TunnelStore:
             return rec
 
     def upsert(self, record: ThreadRecord) -> None:
-        """Insert or update a record; tracks its fork id permanently."""
-        with self._lock:
-            record.last_used = time.time()
-            self._records[record.thread_key] = record
+        """Merge caller-owned fields into the latest on-disk record.
+
+        Re-reads under the lock, then copies only the fields the caller owns
+        (fork id, tmux window, ``last_used``) onto the freshly reloaded
+        record. A concurrent CLI ``rename``/``forget`` during a long backend
+        call is therefore not clobbered by this now-stale ``record``: a
+        renamed handle survives and a removed thread is not resurrected. The
+        fork id is always kept in the exclusion set so it is never reused,
+        even for a thread forgotten mid-call.
+        """
+        with self._lock, file_lock(self.path):
+            self._reload_locked()
+            current = self._records.get(record.thread_key)
+            new_fork = bool(
+                record.fork_session_id
+                and record.fork_session_id not in self._fork_ids
+            )
             if record.fork_session_id:
                 self._fork_ids.add(record.fork_session_id)
+            if current is None:
+                # Thread was removed (e.g. `forget`) mid-call — don't
+                # resurrect it; just keep its fork id out of future reuse.
+                if new_fork:
+                    self._save_locked()
+                return
+            current.fork_session_id = record.fork_session_id
+            current.tmux_window = record.tmux_window
+            current.last_used = time.time()
             self._save_locked()
 
     def remove(self, thread_key: str) -> Optional[ThreadRecord]:
         """Drop a thread mapping (its fork id stays in the exclusion set)."""
-        with self._lock:
+        with self._lock, file_lock(self.path):
+            self._reload_locked()
             rec = self._records.pop(thread_key, None)
             if rec is not None:
                 self._save_locked()
             return rec
 
+    def rename_handle(self, old: str, new: str) -> list[ThreadRecord]:
+        """Point every bound thread on handle `old` at `new`.
+
+        Returns the updated records (live references) so the caller can also
+        fix their tmux windows.
+        """
+        with self._lock, file_lock(self.path):
+            self._reload_locked()
+            renamed = [r for r in self._records.values() if r.handle == old]
+            for rec in renamed:
+                rec.handle = new
+            if renamed:
+                self._save_locked()
+            return renamed
+
     def all_records(self) -> list[ThreadRecord]:
-        """Return a snapshot of all records."""
-        with self._lock:
+        """Return a fresh snapshot of all records (re-read under the lock)."""
+        with self._lock, file_lock(self.path):
+            self._reload_locked()
             return list(self._records.values())
 
     def known_fork_ids(self) -> set[str]:
-        """All fork session ids ever created by this tunnel."""
-        with self._lock:
+        """All fork session ids ever created (re-read under the lock)."""
+        with self._lock, file_lock(self.path):
+            self._reload_locked()
             return set(self._fork_ids)

@@ -21,13 +21,24 @@ import asyncio
 import io
 import logging
 import os
+import re
 import time
+import uuid
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
-from .backends import Backend, BackendError
+from .backends import (
+    Answer,
+    Backend,
+    BackendError,
+    backend_by_name,
+    backend_for_record,
+    effective_backend,
+)
 from .config import TunnelConfig
+from .convert import CONVERTIBLE_EXTS, convert_attachment
+from .paths import attachment_preamble, uploads_dir_for
 from .registry import HANDLE_RE, Registry
 from .store import TunnelStore
 
@@ -36,6 +47,21 @@ logger = logging.getLogger("agent_tunnel")
 DISCORD_MSG_LIMIT = 2000
 REAP_INTERVAL_S = 300
 THREAD_NAME_MAX = 90
+
+
+def format_relayed_message(
+    sender: str, question: str, platform: str = "Discord"
+) -> str:
+    """Prefix a relayed chat message with its sender for the fork.
+
+    The daemon knows who sent each message; the forked Claude does not, so we
+    prepend ``<name> (via <platform>) says:``. The persona explains this
+    convention so Claude reads the prefix as the asker's identity. ``platform``
+    comes from config (``TunnelConfig.platform``), so a future Slack bot just
+    passes ``"Slack"``.
+    """
+    who = sender.strip() or "A teammate"
+    return f"{who} (via {platform}) says:\n{question}"
 
 
 def resolve_token(cfg: TunnelConfig) -> str:
@@ -60,6 +86,53 @@ def is_close_command(text: str) -> bool:
 def is_list_command(text: str) -> bool:
     """True if a message asks for the list of shared handles (!list)."""
     return text.strip().lower() in LIST_COMMANDS
+
+
+def _safe_filename(name: str) -> str:
+    """Basename of an uploaded file, stripped to safe chars (no traversal).
+
+    Long names are shortened but keep their extension — downstream code decides
+    type/conversion from the suffix, so chopping `.docx` off the end would skip
+    conversion and hand the fork an unreadable path.
+    """
+    base = os.path.basename(name or "").strip() or "file"
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("._") or "file"
+    if len(cleaned) <= 120:
+        return cleaned
+    ext = Path(cleaned).suffix
+    if 1 < len(ext) <= 12:  # plausible extension — keep it, trim the stem
+        return cleaned[: -len(ext)][: 120 - len(ext)] + ext
+    return cleaned[:120]
+
+
+def _unique_name(name: str, used: set[str]) -> str:
+    """`name` unless already in `used`, else suffixed `-2`/`-3`/… before the
+    extension. Records the chosen name in `used`."""
+    if name not in used:
+        used.add(name)
+        return name
+    stem, dot, ext = name.partition(".")
+    i = 2
+    while f"{stem}-{i}{dot}{ext}" in used:
+        i += 1
+    chosen = f"{stem}-{i}{dot}{ext}"
+    used.add(chosen)
+    return chosen
+
+
+def _leading_mention_id(content: str) -> Optional[int]:
+    """The id of a *leading* Discord mention, or None if there isn't one.
+
+    Returns the user/role id of a leading ``<@id>`` (also ``<@!id>`` nickname
+    or ``<@&id>`` role) mention; ``-1`` for a leading ``@everyone``/``@here``
+    broadcast; ``None`` when the message doesn't start with a mention. Used in
+    threads to silently skip messages addressed to someone other than the bot.
+    """
+    text = content.lstrip()
+    if text.startswith("@everyone") or text.startswith("@here"):
+        return -1
+    match = re.match(r"<@[!&]?(\d+)>", text)
+    return int(match.group(1)) if match else None
 
 
 def split_chunks(text: str, limit: int = DISCORD_MSG_LIMIT) -> list[str]:
@@ -88,7 +161,6 @@ def split_chunks(text: str, limit: int = DISCORD_MSG_LIMIT) -> list[str]:
 
 def run_bot(
     cfg: TunnelConfig,
-    backend: Backend,
     store: TunnelStore,
     registry: Registry,
 ) -> None:
@@ -128,11 +200,29 @@ def run_bot(
             while True:
                 await asyncio.sleep(REAP_INTERVAL_S)
                 try:
-                    reaped = await asyncio.to_thread(backend.reap_idle)
+                    reaped = await asyncio.to_thread(self._reap_all)
                     if reaped:
                         logger.info("Reaped %d idle window(s)", reaped)
                 except Exception:
                     logger.exception("Reaper error")
+
+        def _reap_all(self) -> int:
+            """Reap idle windows across every backend present in the store.
+
+            The daemon now defaults to headless, but records from earlier tmux
+            runs still own live windows; reaping only the configured backend
+            would leak them. ``reap_idle`` filters by its own backend name, so
+            calling it once per distinct record backend covers them all.
+            """
+            cache: dict[str, Backend] = {}
+            total = 0
+            names = {
+                effective_backend(r, cfg.backend)
+                for r in store.all_records()
+            }
+            for name in names:
+                total += backend_by_name(cfg, store, name, cache).reap_idle()
+            return total
 
         async def on_ready(self) -> None:
             logger.info(
@@ -162,7 +252,9 @@ def run_bot(
             if message.author.bot:
                 return
             content = (message.content or "").strip()
-            if not content:
+            # An attachment-only message has empty content but still carries a
+            # file for the agent to read — don't drop it.
+            if not content and not message.attachments:
                 return
             channel = message.channel
 
@@ -220,8 +312,14 @@ def run_bot(
                 backend=cfg.backend,
                 asker=message.author.display_name,
             )
-            if question:
-                await self._answer(thread, f"th:{thread.id}", question)
+            if question or message.attachments:
+                await self._answer(
+                    thread,
+                    f"th:{thread.id}",
+                    question,
+                    message.attachments,
+                    sender=message.author.display_name,
+                )
             else:
                 await thread.send(
                     f"Connected to **{label}**. Ask your question here; "
@@ -237,6 +335,15 @@ def run_bot(
                 return
             if not self._allowed(message.author):
                 return
+            # A message that opens with @someone-else (or @everyone/@here/a
+            # role) is teammates talking among themselves — stay out silently.
+            # A leading @bot is fine: strip it and answer. No mention = answer
+            # (in a thread you never need to address the bot).
+            mention_id = _leading_mention_id(content)
+            if mention_id is not None:
+                if mention_id != getattr(self.user, "id", None):
+                    return
+                content = re.sub(r"^\s*<@[!&]?\d+>\s*", "", content)
             if is_list_command(content):
                 await self._list_handles(thread)
                 return
@@ -246,7 +353,13 @@ def run_bot(
             if not self._cooldown_ok(message.author.id):
                 await message.add_reaction("⏳")
                 return
-            await self._answer(thread, thread_key, content)
+            await self._answer(
+                thread,
+                thread_key,
+                content,
+                message.attachments,
+                sender=message.author.display_name,
+            )
 
         async def _on_direct(
             self, message: discord.Message, content: str
@@ -265,19 +378,38 @@ def run_bot(
             handle = token.strip().lower()
             rec = registry.get(handle)
             if rec is not None:
-                store.remove(thread_key)
-                store.bind(
-                    thread_key,
-                    handle=rec.handle,
-                    expert_session_id=rec.session_id,
-                    project_dir=rec.cwd,
-                    config_dir=rec.config_dir,
-                    access=rec.access,
-                    backend=cfg.backend,
-                    asker=message.author.display_name,
-                )
+                # Rebinding this DM starts a fresh thread; fully tear down any
+                # previous binding first so its uploads/outbox (and live tmux
+                # window) don't leak into the new handle's fork — the upload
+                # dir is keyed only by the DM channel and would otherwise be
+                # reused across handles.
+                #
+                # Hold the thread lock around forget+bind so the rebind can't
+                # race a still-running turn on the OLD binding: that turn holds
+                # this same lock, and its trailing upsert() (which merges fork/
+                # window into whatever record now owns thread_key) would
+                # otherwise attach the old fork to the new handle. The lock is
+                # released here before _answer re-acquires it below — it is not
+                # reentrant — so the new turn simply queues behind the old one.
+                async with locks[thread_key]:
+                    existing = store.get(thread_key)
+                    if existing is not None:
+                        await asyncio.to_thread(
+                            backend_for_record(cfg, store, existing).forget,
+                            thread_key,
+                        )
+                    store.bind(
+                        thread_key,
+                        handle=rec.handle,
+                        expert_session_id=rec.session_id,
+                        project_dir=rec.cwd,
+                        config_dir=rec.config_dir,
+                        access=rec.access,
+                        backend=cfg.backend,
+                        asker=message.author.display_name,
+                    )
                 content = remainder.strip()
-                if not content:
+                if not content and not message.attachments:
                     await message.channel.send(
                         f"Connected to **{rec.label or rec.handle}**."
                     )
@@ -292,7 +424,13 @@ def run_bot(
             if not self._cooldown_ok(message.author.id):
                 await message.add_reaction("⏳")
                 return
-            await self._answer(message.channel, thread_key, content)
+            await self._answer(
+                message.channel,
+                thread_key,
+                content,
+                message.attachments,
+                sender=message.author.display_name,
+            )
 
         async def _list_handles(self, dest: Any) -> None:
             """Post the list of currently shared handles."""
@@ -314,7 +452,13 @@ def run_bot(
         async def _close(self, dest: Any, thread_key: str) -> None:
             """Close a thread: tear down its fork and confirm."""
             try:
-                await asyncio.to_thread(backend.forget, thread_key)
+                # Hold the thread lock so we don't delete a turn's upload/
+                # outbox dirs (or kill its window) while it is mid-answer.
+                async with locks[thread_key]:
+                    rec = store.get(thread_key)
+                    await asyncio.to_thread(
+                        backend_for_record(cfg, store, rec).forget, thread_key
+                    )
             except Exception:
                 logger.exception("Error closing %s", thread_key)
             logger.info("Closed thread %s on request", thread_key)
@@ -324,8 +468,29 @@ def run_bot(
             )
 
         async def _answer(
-            self, dest: Any, thread_key: str, question: str
+            self,
+            dest: Any,
+            thread_key: str,
+            question: str,
+            attachments: Any = None,
+            sender: str = "",
         ) -> None:
+            # Per-question log line so an unattended (esp. headless) daemon
+            # shows live activity + an audit trail of who-asked-what.
+            rec = store.get(thread_key)
+            handle = rec.handle if rec else "?"
+            # The per-message sender (this message's author) is more accurate
+            # than the bind-time asker for follow-ups by other people.
+            asker = sender or (rec.asker if rec else "?")
+            n_att = len(attachments or [])
+            logger.info(
+                "Q [%s] %s ← %s%s: %r",
+                thread_key,
+                handle,
+                asker,
+                f" +{n_att} file(s)" if n_att else "",
+                (question or "").replace("\n", " ")[:120],
+            )
             lock = locks[thread_key]
             if lock.locked():
                 await dest.send(
@@ -333,22 +498,90 @@ def run_bot(
                     "I'll take this one next."
                 )
             async with lock, sem:
+                # The thread may have been rebound (even to the same session,
+                # which resets the fork) or closed while this turn waited for
+                # the lock — e.g. a queued follow-up parked on the "still
+                # working" send above while a rebind jumped the lock queue. A
+                # fresh bind stamps a new created_at, so compare the full
+                # binding identity (session + created_at) and don't answer a
+                # queued question against a binding it was not asked under.
+                current = store.get(thread_key)
+                if current is None or (
+                    rec is not None
+                    and (
+                        current.expert_session_id != rec.expert_session_id
+                        or current.created_at != rec.created_at
+                    )
+                ):
+                    await dest.send(
+                        "↪️ This conversation was restarted before I got to "
+                        "your message — please resend it."
+                    )
+                    return
+                start = time.time()
                 try:
                     async with dest.typing():
+                        question = await self._ingest_attachments(
+                            dest, thread_key, question, attachments or []
+                        )
+                        if not question.strip():
+                            await dest.send(
+                                "⚠️ Nothing to act on — add a question, or a "
+                                "(smaller/readable) file."
+                            )
+                            logger.info(
+                                "A [%s] %s: skipped (no usable content)",
+                                thread_key,
+                                handle,
+                            )
+                            return
+                        # Tell the fork who sent this (it can't see chat); the
+                        # persona explains the "<name> (via X) says:" convention.
+                        question = format_relayed_message(
+                            sender, question, cfg.platform
+                        )
                         answer = await asyncio.to_thread(
-                            backend.ask, thread_key, question
+                            backend_for_record(cfg, store, rec).ask,
+                            thread_key,
+                            question,
                         )
                 except BackendError as exc:
+                    logger.warning(
+                        "A [%s] %s: error after %.1fs — %s",
+                        thread_key,
+                        handle,
+                        time.time() - start,
+                        str(exc)[:200],
+                    )
                     await dest.send(f"⚠️ {str(exc)[:1500]}")
                     return
                 except Exception:
-                    logger.exception("Unexpected backend failure")
+                    logger.exception(
+                        "A [%s] %s: unexpected backend failure",
+                        thread_key,
+                        handle,
+                    )
                     await dest.send(
                         "⚠️ Unexpected error — the owner can check the "
                         "agent-tunnel logs."
                     )
                     return
 
+            deliverables = (
+                f", {len(answer.attachments)} deliverable(s)"
+                if answer.attachments
+                else ""
+            )
+            logger.info(
+                "A [%s] %s: %s in %.1fs, %d chars%s, fork %s",
+                thread_key,
+                handle,
+                "new" if answer.new_thread else "follow-up",
+                time.time() - start,
+                len(answer.text),
+                deliverables,
+                answer.fork_session_id[:8],
+            )
             text = answer.text
             if len(text) > cfg.limits.max_inline_chars:
                 preview = split_chunks(text)[0]
@@ -356,8 +589,129 @@ def run_bot(
                     io.BytesIO(text.encode("utf-8")), filename="answer.md"
                 )
                 await dest.send(preview, file=file)
+            else:
+                for chunk in split_chunks(text):
+                    await dest.send(chunk)
+            await self._post_deliverables(dest, answer)
+
+        async def _ingest_attachments(
+            self,
+            dest: Any,
+            thread_key: str,
+            question: str,
+            attachments: Any,
+        ) -> str:
+            """Download a colleague's attachments and point the fork at them.
+
+            Saves each (within size/count caps) into the thread's upload dir —
+            which the backend exposes to the fork via ``--add-dir`` — and
+            prepends the absolute paths to the question. Oversized or excess
+            files are skipped with a heads-up. Returns the (possibly
+            preamble-prefixed) question.
+            """
+            if not attachments:
+                return question
+            cap = int(cfg.limits.max_attachment_mb * 1024 * 1024)
+            limit = cfg.limits.max_attachments
+            # A unique per-turn subdir (plus per-turn dedup of basenames) keeps
+            # same-named files — two `report.pdf` in one message, or one reused
+            # across turns — from silently overwriting each other.
+            turn_dir = (
+                uploads_dir_for(cfg.state_path.parent, thread_key)
+                / uuid.uuid4().hex[:8]
+            )
+            turn_dir.mkdir(parents=True, exist_ok=True)
+            saved: list[Path] = []
+            skipped: list[str] = []
+            unreadable: list[str] = []
+            used: set[str] = set()
+            for att in list(attachments)[:limit]:
+                size = getattr(att, "size", 0) or 0
+                if size > cap:
+                    skipped.append(f"{att.filename} ({size / 1048576:.1f} MB)")
+                    continue
+                target = turn_dir / _unique_name(
+                    _safe_filename(att.filename), used
+                )
+                try:
+                    await att.save(str(target))
+                except Exception:
+                    logger.exception("Download failed: %s", att.filename)
+                    skipped.append(att.filename)
+                    continue
+                # Office files the Read tool can't open: best-effort convert to
+                # a readable format (PDF/Markdown/text). convert_attachment
+                # returns path=None when conversion is "off" or no converter
+                # handled it — then mark the file unreadable rather than point
+                # the fork at a binary original it can't Read.
+                ext = target.suffix.lower()
+                if ext in CONVERTIBLE_EXTS:
+                    conv = await asyncio.to_thread(
+                        convert_attachment,
+                        target,
+                        turn_dir,
+                        cfg.attachments.convert,
+                        cfg.attachments.convert_command,
+                    )
+                    if conv.path is not None:
+                        saved.append(conv.path)
+                    else:
+                        unreadable.append(att.filename)
+                else:
+                    saved.append(target)
+            if len(list(attachments)) > limit:
+                extra = len(list(attachments)) - limit
+                skipped.append(f"+{extra} more (max {limit} per message)")
+            if skipped:
+                await dest.send("⚠️ Skipped: " + ", ".join(skipped))
+            if unreadable:
+                why = (
+                    "Office conversion is turned off"
+                    if cfg.attachments.convert == "off"
+                    else "no converter is available"
+                )
+                await dest.send(
+                    f"⚠️ Couldn't open {', '.join(unreadable)} here ({why}) "
+                    "— attach a PDF or paste the text."
+                )
+            return attachment_preamble(saved, question)
+
+        async def _post_deliverables(self, dest: Any, answer: Answer) -> None:
+            """Post files the fork wrote to its outbox back to the thread."""
+            files = list(getattr(answer, "attachments", None) or [])
+            if not files:
                 return
-            for chunk in split_chunks(text):
-                await dest.send(chunk)
+            cap = int(cfg.limits.max_attachment_mb * 1024 * 1024)
+            sendable: list[Path] = []
+            skipped: list[str] = []
+            for path in files:
+                try:
+                    size = path.stat().st_size
+                except OSError:
+                    continue
+                if size > cap:
+                    skipped.append(f"{path.name} ({size / 1048576:.1f} MB)")
+                else:
+                    sendable.append(path)
+            # Discord caps a single message at 10 attachments.
+            for start in range(0, len(sendable), 10):
+                batch = sendable[start : start + 10]
+                dfiles = [
+                    discord.File(str(p), filename=p.name) for p in batch
+                ]
+                caption = (
+                    "📎 Deliverable(s) from the agent:"
+                    if start == 0
+                    else "📎 More deliverables:"
+                )
+                try:
+                    await dest.send(caption, files=dfiles)
+                except Exception:
+                    logger.exception("Failed to post deliverables batch")
+            if skipped:
+                await dest.send(
+                    "⚠️ Produced but too large to post (raise "
+                    "limits.max_attachment_mb): " + ", ".join(skipped)
+                )
 
     TunnelClient(intents=intents).run(token, log_handler=None)
