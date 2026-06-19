@@ -182,6 +182,21 @@ class TunnelConfig:
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     attachments: AttachmentsConfig = field(default_factory=AttachmentsConfig)
 
+    def principal_allowlists(self) -> tuple[set[str], set[str]]:
+        """(allowed user ids, allowed role ids) for the active front-end.
+
+        Front-end-neutral so ``ChatCore`` compares uniformly against
+        ``IncomingMessage.author_id`` / ``author_role_ids`` (both ``str``).
+        Discord ids are ints in config and are stringified here; empty sets mean
+        "anyone in a watched channel may ask". (Slack support is added with the
+        Slack front-end.)
+        """
+        d = self.discord
+        return (
+            {str(u) for u in d.allowed_user_ids},
+            {str(r) for r in d.allowed_role_ids},
+        )
+
 
 def _apply(dc: Any, data: dict[str, Any]) -> None:
     """Copy known keys from a TOML table onto a dataclass instance."""
