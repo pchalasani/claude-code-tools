@@ -681,6 +681,26 @@ def _slack_auth_ready(bot_token: str) -> tuple[bool, str]:
         return False, f"Slack auth.test failed ({exc})"
 
 
+def _reach_check(
+    channel_ids: list, respond_to_dms: bool
+) -> tuple[bool, str]:
+    """Readiness of the 'where can it answer' check (channels OR DMs).
+
+    DM-only (``respond_to_dms`` with no channels) is a valid serve config for
+    both front-ends -- it mirrors ``run_bot`` / ``run_slack_bot``'s startup
+    guard -- so doctor must not fail solely on an empty channel list (Codex P3).
+    """
+    where = (
+        str(list(channel_ids))
+        if channel_ids
+        else ("DMs only" if respond_to_dms else "none set")
+    )
+    return (
+        bool(channel_ids) or bool(respond_to_dms),
+        f"Watched channel(s) / DMs: {where}",
+    )
+
+
 def _doctor_chat_checks(cfg: TunnelConfig) -> list[tuple[bool, str]]:
     """Front-end-specific doctor checks (tokens + watched channels).
 
@@ -708,10 +728,7 @@ def _doctor_chat_checks(cfg: TunnelConfig) -> list[tuple[bool, str]]:
                 "app_token_file)",
             ),
             _slack_auth_ready(bot_token),
-            (
-                bool(cfg.slack.channel_ids),
-                f"Watched channel(s): {cfg.slack.channel_ids or 'none set'}",
-            ),
+            _reach_check(cfg.slack.channel_ids, cfg.slack.respond_to_dms),
         ]
     from .discord_bot import resolve_token
 
@@ -720,10 +737,7 @@ def _doctor_chat_checks(cfg: TunnelConfig) -> list[tuple[bool, str]]:
             bool(resolve_token(cfg)),
             f"Discord token ({cfg.discord.token_env} or token_file)",
         ),
-        (
-            bool(cfg.discord.channel_ids),
-            f"Watched channel(s): {cfg.discord.channel_ids or 'none set'}",
-        ),
+        _reach_check(cfg.discord.channel_ids, cfg.discord.respond_to_dms),
     ]
 
 
