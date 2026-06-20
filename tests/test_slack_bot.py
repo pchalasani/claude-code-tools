@@ -14,6 +14,8 @@ matching the no-mock style of ``tests/test_discord_bot.py``.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from claude_code_tools.agent_tunnel.chat_types import (
@@ -21,9 +23,11 @@ from claude_code_tools.agent_tunnel.chat_types import (
     Addressee,
     Surface,
 )
+from claude_code_tools.agent_tunnel.config import TunnelConfig
 from claude_code_tools.agent_tunnel.slack_bot import (
     _IGNORE_SUBTYPES,
     _SeenCache,
+    SlackTransport,
     discord_to_mrkdwn,
     slack_event_to_incoming,
     validate_download,
@@ -815,3 +819,55 @@ def test_seen_cache_dup_does_not_refresh_recency() -> None:
     assert seen.add("d") is False  # d resident
     # ...and only now confirm "a" itself WAS the one evicted (mutates state).
     assert seen.add("a") is True   # a was evicted -> seen as new again
+
+
+# -- SlackTransport usergroup resolution (Codex P2) ---------------------------
+# Fills IncomingMessage.author_role_ids from subteam membership so a
+# `slack.allowed_usergroup_ids` allowlist actually works. Uses a real fake
+# async client stub (no slack_bolt, no network, no mocks).
+
+
+class _FakeUGClient:
+    """Minimal async Slack client stub for usergroups.users.list."""
+
+    def __init__(self, members: dict) -> None:
+        self._members = members
+        self.calls: list[str] = []
+
+    async def usergroups_users_list(self, *, usergroup: str) -> dict:
+        self.calls.append(usergroup)
+        return {"users": self._members.get(usergroup, [])}
+
+
+class _FakeApp:
+    def __init__(self, client: _FakeUGClient) -> None:
+        self.client = client
+
+
+def _slack_cfg(tmp_path, usergroups=()) -> TunnelConfig:
+    cfg = TunnelConfig(
+        state_path=tmp_path / "s.json", registry_path=tmp_path / "r.json"
+    )
+    cfg.slack.allowed_usergroup_ids = list(usergroups)
+    return cfg
+
+
+def test_resolve_usergroups_matches_membership(tmp_path) -> None:
+    cfg = _slack_cfg(tmp_path, usergroups=["S1", "S2"])
+    client = _FakeUGClient({"S1": ["U1", "U2"], "S2": ["U9"]})
+    tx = SlackTransport(_FakeApp(client), "xoxb-test", cfg)
+    assert asyncio.run(tx.resolve_usergroups("U1")) == frozenset({"S1"})
+    assert asyncio.run(tx.resolve_usergroups("U9")) == frozenset({"S2"})
+    assert asyncio.run(tx.resolve_usergroups("U404")) == frozenset()
+    # membership is cached: later lookups re-list no already-seen subteam
+    seen = len(client.calls)
+    asyncio.run(tx.resolve_usergroups("U2"))
+    assert len(client.calls) == seen
+
+
+def test_resolve_usergroups_noop_when_unconfigured(tmp_path) -> None:
+    cfg = _slack_cfg(tmp_path)  # allowed_usergroup_ids empty
+    client = _FakeUGClient({"S1": ["U1"]})
+    tx = SlackTransport(_FakeApp(client), "xoxb-test", cfg)
+    assert asyncio.run(tx.resolve_usergroups("U1")) == frozenset()
+    assert client.calls == []  # zero API calls on the common path

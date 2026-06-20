@@ -329,6 +329,7 @@ class SlackTransport(ChatTransport):
         self._bot_token = bot_token
         self._cfg = cfg
         self._display: dict[str, str] = {}
+        self._ug_members: dict[str, frozenset[str]] = {}
         self._session: Any = None
 
     @property
@@ -558,25 +559,78 @@ class SlackTransport(ChatTransport):
         self._display[user_id] = name
         return name
 
+    async def resolve_usergroups(self, user_id: str) -> frozenset[str]:
+        """The configured allowed usergroups (subteams) ``user_id`` belongs to.
+
+        ``ChatCore._allowed`` intersects ``IncomingMessage.author_role_ids`` with
+        the owner's ``allowed_usergroup_ids``, but Slack messages carry no role
+        ids until this fills them. Only the OWNER-configured usergroups are
+        checked (bounded), each subteam's membership cached. Returns the empty set
+        -- with NO API call -- when no usergroup allowlist is configured; also
+        empty when the user is in none or ``usergroups:read`` is missing. Called
+        only from the background turn, never on the ack path (G-14).
+
+        Args:
+            user_id: The Slack user id (``U…``).
+
+        Returns:
+            The subset of ``allowed_usergroup_ids`` that contains ``user_id``.
+        """
+        allowed = self._cfg.slack.allowed_usergroup_ids
+        if not user_id or not allowed:
+            return frozenset()
+        matched: set[str] = set()
+        for sub in allowed:
+            if user_id in await self._usergroup_members(sub):
+                matched.add(sub)
+        return frozenset(matched)
+
+    async def _usergroup_members(self, usergroup_id: str) -> frozenset[str]:
+        """Members of a Slack subteam (cached ``usergroups.users.list``).
+
+        Cached for the process lifetime; a membership change is picked up on the
+        next restart (acceptable for an allowlist). Any API/scope failure yields
+        an empty set, so the user simply won't match that subteam.
+        """
+        if usergroup_id in self._ug_members:
+            return self._ug_members[usergroup_id]
+        members: frozenset[str] = frozenset()
+        try:
+            resp = await self._app.client.usergroups_users_list(
+                usergroup=usergroup_id
+            )
+            members = frozenset(resp.get("users", []) or [])
+        except Exception:  # network / scope / unknown subteam
+            logger.debug(
+                "usergroups.users.list failed for %s",
+                usergroup_id,
+                exc_info=True,
+            )
+        self._ug_members[usergroup_id] = members
+        return members
+
 
 async def _run_turn(
     core: ChatCore,
     transport: "SlackTransport",
     msg: IncomingMessage,
 ) -> None:
-    """Resolve the display name (background) then hand the turn to the core.
+    """Resolve the display name + usergroups (background) then run the turn.
 
-    Kept off the ack path: the listener spawns this so the awaited
-    ``users_info`` lookup never delays the 3-second Socket-Mode ack (G-14). The
-    transport already closes over the ``slack_bolt`` app, so it is not passed in.
+    Kept off the ack path: the listener spawns this so the awaited ``users_info``
+    / ``usergroups.users.list`` lookups never delay the 3-second Socket-Mode ack
+    (G-14). Both are cached; the usergroup lookup is skipped entirely (no API)
+    when no usergroup allowlist is configured. Filling ``author_role_ids`` is what
+    makes ``allowed_usergroup_ids`` usable -- the core's allowlist intersects it.
 
     Args:
         core: The shared routing/pipeline engine.
-        transport: The Slack transport (its cached display-name resolver).
-        msg: The pre-ack message (its ``author_display`` is the raw id so far).
+        transport: The Slack transport (its cached resolvers).
+        msg: The pre-ack message (raw id ``author_display``, empty roles so far).
     """
     name = await transport.resolve_display(msg.author_id)
-    msg = replace(msg, author_display=name)
+    roles = await transport.resolve_usergroups(msg.author_id)
+    msg = replace(msg, author_display=name, author_role_ids=roles)
     await core.handle_message(msg)
 
 
