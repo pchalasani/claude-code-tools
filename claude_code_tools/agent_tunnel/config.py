@@ -285,16 +285,6 @@ def load_config(
     _apply(cfg.limits, data.get("limits", {}))
     _apply(cfg.attachments, data.get("attachments", {}))
 
-    # Channel-id type validation: snowflakes are ints, Slack ids are strings.
-    # Catch a mis-typed TOML table early with a clear message (`serve` maps the
-    # ValueError to a ClickException).
-    if any(not isinstance(c, int) for c in cfg.discord.channel_ids):
-        raise ValueError("[discord] channel_ids must be integers (snowflakes).")
-    if any(not isinstance(c, str) for c in cfg.slack.channel_ids):
-        raise ValueError(
-            '[slack] channel_ids must be strings (e.g. "C0123ABC").'
-        )
-
     if backend:
         cfg.backend = backend
     if channel_ids:
@@ -308,6 +298,18 @@ def load_config(
     # same auto path, and an explicit [tunnel] platform always wins).
     if cfg.chat == "slack" and "platform" not in tunnel_tbl:
         cfg.platform = "Slack"
+
+    # Channel-id type validation, AFTER the chat override and for the ACTIVE
+    # front-end ONLY: snowflakes are ints, Slack ids are strings. A stale/unused
+    # table for the inactive front-end must not block startup (Codex P2). `serve`
+    # maps the ValueError to a ClickException.
+    if cfg.chat == "slack":
+        if any(not isinstance(c, str) for c in cfg.slack.channel_ids):
+            raise ValueError(
+                '[slack] channel_ids must be strings (e.g. "C0123ABC").'
+            )
+    elif any(not isinstance(c, int) for c in cfg.discord.channel_ids):
+        raise ValueError("[discord] channel_ids must be integers (snowflakes).")
 
     # Anchor configured paths to absolute. A relative path resolves against the
     # CONFIG FILE's directory (not the caller's CWD), so `serve` and CLI

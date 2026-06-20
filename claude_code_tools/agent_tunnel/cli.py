@@ -152,6 +152,18 @@ def serve(
         run(cfg, store, registry)
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
+    except ImportError as exc:
+        # slack_bolt is imported lazily INSIDE run_slack_bot, so a missing
+        # `slack` extra surfaces here at call time (not at the import above) —
+        # convert it to the actionable install hint, not a raw traceback (P2).
+        if cfg.chat == "slack":
+            raise click.ClickException(
+                f"slack_bolt is required for `serve --chat slack`: {exc}\n"
+                "Install it with:  uv tool install 'claude-code-tools[slack]'"
+            ) from exc
+        raise click.ClickException(
+            f"A required dependency for serve is missing: {exc}"
+        ) from exc
 
 
 @cli.command()
