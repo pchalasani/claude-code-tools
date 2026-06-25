@@ -26,6 +26,10 @@ gdocs = [
     "google-auth-oauthlib>=1.0.0",
     "Pillow>=10.0.0",
 ]
+slack = [
+    "slack_bolt>=1.18.0",
+    "aiohttp>=3.9.0",
+]
 
 [project.scripts]
 # Unified session management interface

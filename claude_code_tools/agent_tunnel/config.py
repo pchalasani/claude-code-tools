@@ -85,6 +85,25 @@ class DiscordConfig:
 
 
 @dataclass
+class SlackConfig:
+    """Slack-facing settings (Socket Mode, two tokens).
+
+    Two token env/file pairs (xoxb- bot, xapp- app-level). Allowlists are
+    STRINGS (Slack ids are opaque). ``allowed_usergroup_ids`` (subteam ``S…``
+    ids) is the Slack analog of Discord's ``allowed_role_ids``.
+    """
+
+    bot_token_env: str = "AGENT_TUNNEL_SLACK_BOT_TOKEN"
+    bot_token_file: str = ""
+    app_token_env: str = "AGENT_TUNNEL_SLACK_APP_TOKEN"
+    app_token_file: str = ""
+    channel_ids: list[str] = field(default_factory=list)
+    allowed_user_ids: list[str] = field(default_factory=list)
+    allowed_usergroup_ids: list[str] = field(default_factory=list)
+    respond_to_dms: bool = False
+
+
+@dataclass
 class ClaudeConfig:
     """How forked Claude Code invocations are constructed."""
 
@@ -167,9 +186,12 @@ class TunnelConfig:
 
     backend: str = "headless"
     tmux_session: str = "agent-tunnel"
+    # Chat front-end `serve` runs: "discord" (default) or "slack". Selecting
+    # "slack" auto-sets `platform` to "Slack" unless [tunnel] platform is set.
+    chat: str = "discord"
     # Human name of the chat platform, used in the fork's persona and the
     # "<name> (via X) says:" message prefix. The Discord bot uses "Discord";
-    # a future Slack bot sets "Slack".
+    # the Slack bot sets "Slack".
     platform: str = "Discord"
     state_path: Path = DEFAULT_STATE_PATH
     registry_path: Path = DEFAULT_REGISTRY_PATH
@@ -178,19 +200,27 @@ class TunnelConfig:
     # given (auto = newest session in this dir); never needed by `serve`.
     project_dir: Optional[Path] = None
     discord: DiscordConfig = field(default_factory=DiscordConfig)
+    slack: SlackConfig = field(default_factory=SlackConfig)
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     attachments: AttachmentsConfig = field(default_factory=AttachmentsConfig)
 
     def principal_allowlists(self) -> tuple[set[str], set[str]]:
-        """(allowed user ids, allowed role ids) for the active front-end.
+        """(user_ids, role_or_usergroup_ids) for the active front-end, as
+        strings.
 
         Front-end-neutral so ``ChatCore`` compares uniformly against
         ``IncomingMessage.author_id`` / ``author_role_ids`` (both ``str``).
-        Discord ids are ints in config and are stringified here; empty sets mean
-        "anyone in a watched channel may ask". (Slack support is added with the
-        Slack front-end.)
+        Discord/Slack ids are stringified here; empty/empty means "anyone in a
+        watched channel may ask". Lets ``ChatCore._allowed`` honor Slack
+        usergroups where Discord uses roles, without the core knowing platform
+        names.
         """
+        if self.chat == "slack":
+            return (
+                {str(u) for u in self.slack.allowed_user_ids},
+                {str(g) for g in self.slack.allowed_usergroup_ids},
+            )
         d = self.discord
         return (
             {str(u) for u in d.allowed_user_ids},
@@ -210,6 +240,7 @@ def load_config(
     backend: Optional[str] = None,
     channel_ids: Optional[list[int]] = None,
     token_env: Optional[str] = None,
+    chat: Optional[str] = None,
 ) -> TunnelConfig:
     """Load config from TOML, then apply CLI overrides.
 
@@ -220,13 +251,15 @@ def load_config(
         backend: Override backend ("tmux" or "headless").
         channel_ids: Override watched Discord channel ids.
         token_env: Override env var name holding the Discord bot token.
+        chat: Override chat front-end ("discord" or "slack").
 
     Returns:
         A fully populated TunnelConfig.
 
     Raises:
         FileNotFoundError: Explicit config path does not exist.
-        ValueError: Unknown backend.
+        ValueError: Unknown backend, unknown chat front-end, or a channel id of
+            the wrong type for the active front-end.
     """
     explicit = path is not None
     cfg_path = path or DEFAULT_CONFIG_PATH
@@ -239,7 +272,7 @@ def load_config(
 
     cfg = TunnelConfig()
     tunnel_tbl = data.get("tunnel", {})
-    for key in ("backend", "tmux_session", "platform"):
+    for key in ("backend", "tmux_session", "platform", "chat"):
         if key in tunnel_tbl:
             setattr(cfg, key, tunnel_tbl[key])
     for key in ("state_path", "registry_path", "claude_home", "project_dir"):
@@ -247,6 +280,7 @@ def load_config(
             setattr(cfg, key, Path(tunnel_tbl[key]).expanduser())
 
     _apply(cfg.discord, data.get("discord", {}))
+    _apply(cfg.slack, data.get("slack", {}))
     _apply(cfg.claude, data.get("claude", {}))
     _apply(cfg.limits, data.get("limits", {}))
     _apply(cfg.attachments, data.get("attachments", {}))
@@ -257,6 +291,25 @@ def load_config(
         cfg.discord.channel_ids = list(channel_ids)
     if token_env:
         cfg.discord.token_env = token_env
+    if chat:
+        cfg.chat = chat
+    # Auto-name the platform from the front-end UNLESS set explicitly in TOML
+    # (the guard checks the TOML table only, so `serve --chat slack` takes the
+    # same auto path, and an explicit [tunnel] platform always wins).
+    if cfg.chat == "slack" and "platform" not in tunnel_tbl:
+        cfg.platform = "Slack"
+
+    # Channel-id type validation, AFTER the chat override and for the ACTIVE
+    # front-end ONLY: snowflakes are ints, Slack ids are strings. A stale/unused
+    # table for the inactive front-end must not block startup (Codex P2). `serve`
+    # maps the ValueError to a ClickException.
+    if cfg.chat == "slack":
+        if any(not isinstance(c, str) for c in cfg.slack.channel_ids):
+            raise ValueError(
+                '[slack] channel_ids must be strings (e.g. "C0123ABC").'
+            )
+    elif any(not isinstance(c, int) for c in cfg.discord.channel_ids):
+        raise ValueError("[discord] channel_ids must be integers (snowflakes).")
 
     # Anchor configured paths to absolute. A relative path resolves against the
     # CONFIG FILE's directory (not the caller's CWD), so `serve` and CLI
@@ -280,6 +333,8 @@ def load_config(
 
     if cfg.backend not in ("tmux", "headless"):
         raise ValueError(f"Unknown backend: {cfg.backend!r}")
+    if cfg.chat not in ("discord", "slack"):
+        raise ValueError(f"Unknown chat front-end: {cfg.chat!r}")
     return cfg
 
 
@@ -302,6 +357,10 @@ def sample_config() -> str:
 backend = "headless"
 # Name of the dedicated tmux session holding fork windows (tmux mode only).
 tmux_session = "agent-tunnel"
+# Chat front-end `serve` runs: "discord" (default) or "slack". Override per
+# run with `agent-tunnel serve --chat slack`. Selecting "slack" auto-sets the
+# platform label to "Slack" (unless you set [tunnel] platform yourself).
+# chat = "discord"
 # Chat-platform name shown in the persona and the "<name> (via X) says:"
 # message prefix. Defaults to "Discord".
 # platform = "Discord"

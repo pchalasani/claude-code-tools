@@ -34,18 +34,37 @@ from .store import ThreadRecord, TunnelStore
 def _build(
     config: Optional[str],
     backend: Optional[str] = None,
-    channel: tuple[int, ...] = (),
+    channel: tuple[str, ...] = (),
     token_env: Optional[str] = None,
+    chat: Optional[str] = None,
 ) -> TunnelConfig:
+    """Load config + apply CLI overrides, coercing --channel per front-end.
+
+    ``--channel`` is a string on the CLI; Slack ids stay strings while Discord
+    ids are cast to int (snowflakes) with a clear error. ``--token-env`` is
+    Discord-only (Slack uses two tokens, set in config).
+    """
     try:
-        return load_config(
+        cfg = load_config(
             path=Path(config) if config else None,
             backend=backend,
-            channel_ids=list(channel) or None,
-            token_env=token_env,
+            chat=chat,
         )
     except (FileNotFoundError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
+    if channel:
+        if cfg.chat == "slack":
+            cfg.slack.channel_ids = list(channel)
+        else:
+            try:
+                cfg.discord.channel_ids = [int(c) for c in channel]
+            except ValueError as exc:
+                raise click.ClickException(
+                    f"Discord --channel ids must be integers: {exc}"
+                ) from exc
+    if token_env:
+        cfg.discord.token_env = token_env  # Discord-only (Slack has two tokens)
+    return cfg
 
 
 @click.group()
@@ -69,23 +88,30 @@ def cli() -> None:
     help="Server mode: headless (default) or tmux. Overrides config.",
 )
 @click.option(
+    "--chat",
+    type=click.Choice(["discord", "slack"]),
+    default=None,
+    help="Chat front-end (default from config; falls back to discord).",
+)
+@click.option(
     "--channel",
     "channels",
     multiple=True,
-    type=int,
-    help="Discord channel id to watch (repeatable).",
+    type=str,
+    help="Channel id to watch (repeatable; int for discord, string for slack).",
 )
 @click.option("--token-env", help="Env var holding the Discord bot token.")
 def serve(
     config: Optional[str],
     backend: Optional[str],
-    channels: tuple[int, ...],
+    chat: Optional[str],
+    channels: tuple[str, ...],
     token_env: Optional[str],
 ) -> None:
-    """Run the Discord daemon (blocking).
+    """Run the chat daemon (blocking) for Discord or Slack.
 
-    Two server modes, set with --backend or [tunnel] backend (default
-    headless):
+    Pick the front-end with --chat or [tunnel] chat (default discord). Two
+    server modes, set with --backend or [tunnel] backend (default headless):
 
     \b
     - headless: a `claude -p` subprocess per question — clean JSON I/O, more
@@ -98,23 +124,46 @@ def serve(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    cfg = _build(config, backend, channels, token_env)
+    cfg = _build(config, backend, channels, token_env, chat)
     store = TunnelStore(cfg.state_path)
     registry = Registry(cfg.registry_path)
-    try:
-        from .discord_bot import run_bot
-    except ImportError as exc:
-        raise click.ClickException(
-            f"discord.py is required for serve: {exc}"
-        ) from exc
+    if cfg.chat == "slack":
+        try:
+            from .slack_bot import run_slack_bot as run
+        except ImportError as exc:
+            raise click.ClickException(
+                f"slack_bolt is required for `serve --chat slack`: {exc}\n"
+                "Install it with:  uv tool install 'claude-code-tools[slack]'"
+            ) from exc
+        watched = cfg.slack.channel_ids
+    else:
+        try:
+            from .discord_bot import run_bot as run
+        except ImportError as exc:
+            raise click.ClickException(
+                f"discord.py is required for serve: {exc}"
+            ) from exc
+        watched = cfg.discord.channel_ids
     click.echo(
-        f"agent-tunnel: backend={cfg.backend} "
-        f"registry={cfg.registry_path} channels={cfg.discord.channel_ids}"
+        f"agent-tunnel: chat={cfg.chat} backend={cfg.backend} "
+        f"registry={cfg.registry_path} channels={watched}"
     )
     try:
-        run_bot(cfg, store, registry)
+        run(cfg, store, registry)
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
+    except ImportError as exc:
+        # slack_bolt is imported lazily INSIDE run_slack_bot, so a missing
+        # `slack` extra surfaces here at call time (not at the import above) —
+        # convert it to the actionable install hint, not a raw traceback (P2).
+        if cfg.chat == "slack":
+            raise click.ClickException(
+                f"slack_bolt is required for `serve --chat slack`: {exc}\n"
+                "Install it with:  uv tool install 'claude-code-tools[slack]'"
+            ) from exc
+        raise click.ClickException(
+            f"A required dependency for serve is missing: {exc}"
+        ) from exc
 
 
 @cli.command()
@@ -622,6 +671,88 @@ def watch(config: Optional[str]) -> None:
     )
 
 
+def _slack_auth_ready(bot_token: str) -> tuple[bool, str]:
+    """Best-effort Slack auth.test readiness line (never raises).
+
+    Returns (ok, label). Reports the resolved bot_user_id on success, or a
+    short reason (missing token, slack_sdk absent, or the API error) otherwise.
+    """
+    if not bot_token:
+        return False, "Slack auth.test (no bot token to check)"
+    try:
+        # slack_sdk is the optional `slack` extra (not installed in the
+        # type-check env, so `# type: ignore`); the except handles its real
+        # absence at runtime.
+        from slack_sdk import WebClient  # type: ignore
+    except ImportError:
+        return False, "Slack auth.test (install claude-code-tools[slack])"
+    try:
+        resp = WebClient(token=bot_token).auth_test()
+        return True, f"Slack auth.test ok (bot user {resp['user_id']})"
+    except Exception as exc:  # network / invalid token / scope issues
+        return False, f"Slack auth.test failed ({exc})"
+
+
+def _reach_check(
+    channel_ids: list, respond_to_dms: bool
+) -> tuple[bool, str]:
+    """Readiness of the 'where can it answer' check (channels OR DMs).
+
+    DM-only (``respond_to_dms`` with no channels) is a valid serve config for
+    both front-ends -- it mirrors ``run_bot`` / ``run_slack_bot``'s startup
+    guard -- so doctor must not fail solely on an empty channel list (Codex P3).
+    """
+    where = (
+        str(list(channel_ids))
+        if channel_ids
+        else ("DMs only" if respond_to_dms else "none set")
+    )
+    return (
+        bool(channel_ids) or bool(respond_to_dms),
+        f"Watched channel(s) / DMs: {where}",
+    )
+
+
+def _doctor_chat_checks(cfg: TunnelConfig) -> list[tuple[bool, str]]:
+    """Front-end-specific doctor checks (tokens + watched channels).
+
+    Slack reports BOTH tokens (bot + app) as separate lines plus an auth.test
+    readiness line; Discord keeps its single-token + channels pair.
+    """
+    if cfg.chat == "slack":
+        from .chat_types import resolve_token
+
+        bot_token = resolve_token(
+            cfg.slack.bot_token_env, cfg.slack.bot_token_file
+        )
+        app_token = resolve_token(
+            cfg.slack.app_token_env, cfg.slack.app_token_file
+        )
+        return [
+            (
+                bool(bot_token),
+                f"Slack bot token ({cfg.slack.bot_token_env} or "
+                "bot_token_file)",
+            ),
+            (
+                bool(app_token),
+                f"Slack app-level token ({cfg.slack.app_token_env} or "
+                "app_token_file)",
+            ),
+            _slack_auth_ready(bot_token),
+            _reach_check(cfg.slack.channel_ids, cfg.slack.respond_to_dms),
+        ]
+    from .discord_bot import resolve_token
+
+    return [
+        (
+            bool(resolve_token(cfg)),
+            f"Discord token ({cfg.discord.token_env} or token_file)",
+        ),
+        _reach_check(cfg.discord.channel_ids, cfg.discord.respond_to_dms),
+    ]
+
+
 @cli.command()
 @click.option("--config", type=click.Path(), help="Config TOML path.")
 def doctor(config: Optional[str]) -> None:
@@ -629,23 +760,15 @@ def doctor(config: Optional[str]) -> None:
     import shutil
 
     from .convert import detect_converter
-    from .discord_bot import resolve_token
 
     cfg = _build(config)
-    checks: list[tuple[bool, str]] = [
-        (
-            bool(resolve_token(cfg)),
-            f"Discord token ({cfg.discord.token_env} or token_file)",
-        ),
-        (
-            bool(cfg.discord.channel_ids),
-            f"Watched channel(s): {cfg.discord.channel_ids or 'none set'}",
-        ),
+    checks: list[tuple[bool, str]] = _doctor_chat_checks(cfg)
+    checks.append(
         (
             shutil.which(cfg.claude.binary) is not None,
             f"claude binary on PATH ({cfg.claude.binary})",
-        ),
-    ]
+        )
+    )
     if cfg.backend == "tmux":
         checks.append(
             (shutil.which("tmux") is not None, "tmux on PATH (tmux backend)")
@@ -661,7 +784,10 @@ def doctor(config: Optional[str]) -> None:
     else:
         conv = detect_converter() or "none — colleagues should attach PDFs"
     click.echo(f"  • Office-attachment converter: {conv}")
-    click.echo(f"\nbackend={cfg.backend}  registry={cfg.registry_path}")
+    click.echo(
+        f"\nchat={cfg.chat}  backend={cfg.backend}  "
+        f"registry={cfg.registry_path}"
+    )
     if not ok_all:
         raise click.ClickException("Some checks failed — see above.")
 
