@@ -89,9 +89,15 @@ def discord_to_mrkdwn(text: str) -> str:
 
     The core emits Discord-style markup (``**bold**``, ``[text](url)`` links,
     ``~~strike~~``). Slack speaks ``mrkdwn`` instead, and treats ``& < >`` as
-    HTML-ish control characters. Order matters: escape ``& < >`` FIRST (so a
-    later-inserted ``<url|text>`` link is not mangled), then translate the
-    markup (G-03 / G-mrkdwn-escaping).
+    HTML-ish control characters. Two rules:
+
+    - ``& < >`` are escaped EVERYWHERE (Slack's only escapes; they render as the
+      literal chars, including inside code), and the link delimiter ``<url|text>``
+      is inserted AFTER escaping so it is not mangled.
+    - the markup translations (bold/link/strike) are applied ONLY OUTSIDE inline
+      code spans and fenced blocks, so a ``**x**`` or ``[t](u)`` that appears
+      *inside* a code snippet (common in Claude's answers) is preserved verbatim
+      rather than silently rewritten (G-03 / Codex P2).
 
     Args:
         text: A core-emitted chunk (already split to the message-length cap).
@@ -99,15 +105,22 @@ def discord_to_mrkdwn(text: str) -> str:
     Returns:
         The ``mrkdwn`` equivalent, safe to pass straight to ``chat_postMessage``.
     """
-    out = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    # **bold** -> *bold* (non-greedy, across newlines).
-    out = re.sub(r"\*\*(.+?)\*\*", r"*\1*", out, flags=re.DOTALL)
-    # [text](url) -> <url|text>. The url was just escaped (& -> &amp; etc.),
-    # which Slack unescapes on render, so links survive intact.
-    out = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"<\2|\1>", out)
-    # ~~strike~~ -> ~strike~.
-    out = re.sub(r"~~(.+?)~~", r"~\1~", out, flags=re.DOTALL)
-    return out
+    # Split into [non-code, code, non-code, code, ...]: the captured (odd-index)
+    # segments are fenced blocks / inline code spans -- escaped, never translated.
+    parts = re.split(r"(```.*?```|`[^`]*`)", text, flags=re.DOTALL)
+    out: list[str] = []
+    for i, part in enumerate(parts):
+        seg = (
+            part.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+        if i % 2 == 0:  # outside any code span/fence -> translate the markup
+            seg = re.sub(r"\*\*(.+?)\*\*", r"*\1*", seg, flags=re.DOTALL)
+            seg = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"<\2|\1>", seg)
+            seg = re.sub(r"~~(.+?)~~", r"~\1~", seg, flags=re.DOTALL)
+        out.append(seg)
+    return "".join(out)
 
 
 def validate_download(content_type: Optional[str], status: int) -> None:

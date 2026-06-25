@@ -755,6 +755,18 @@ def test_discord_to_mrkdwn_code_passthrough() -> None:
     assert discord_to_mrkdwn("`x`") == "`x`"
     fence = "```\ncode line\n```"
     assert discord_to_mrkdwn(fence) == fence
+    # markup INSIDE code is preserved verbatim, NOT rewritten (Codex P2): a code
+    # snippet containing bold/link/strike must reach Slack untouched.
+    assert discord_to_mrkdwn("`**x**`") == "`**x**`"
+    snippet = "```\nf(x) = [a](b) **y** ~~z~~\n```"
+    assert discord_to_mrkdwn(snippet) == snippet
+    # ...but `& < >` ARE still escaped inside code (Slack's only escapes)...
+    assert discord_to_mrkdwn("`a < b`") == "`a &lt; b`"
+    # ...and markup OUTSIDE the code span is still translated.
+    assert (
+        discord_to_mrkdwn("see **bold** then `[t](u)` end")
+        == "see *bold* then `[t](u)` end"
+    )
 
 
 def test_discord_to_mrkdwn_link_url_with_amp_escaped_then_linked() -> None:
