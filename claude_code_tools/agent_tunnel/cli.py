@@ -588,6 +588,24 @@ def rename(old: str, new: str, config: Optional[str]) -> None:
 
 
 @cli.command()
+@click.argument("handle")
+@click.option("--config", type=click.Path(), help="Config TOML path.")
+def revoke(handle: str, config: Optional[str]) -> None:
+    """Revoke (unpublish) a shared HANDLE from outside its session.
+
+    The in-session ``>share off`` only works from the owning Claude session;
+    this releases a handle whose session is gone, so the name can be reused.
+    Existing bound forks keep working (a fork holds its own copy of history);
+    new threads can't open on it until it is re-shared.
+    """
+    cfg = _build(config)
+    if Registry(cfg.registry_path).revoke(handle):
+        click.echo(f"Revoked handle '{handle.strip().lower()}'.")
+    else:
+        raise click.ClickException(f"No handle '{handle}' in the registry.")
+
+
+@cli.command()
 @click.option("--config", type=click.Path(), help="Config TOML path.")
 def watch(config: Optional[str]) -> None:
     """Attach to the private tmux server to watch live fork sessions.
@@ -693,15 +711,24 @@ def status(config: Optional[str]) -> None:
 @click.option(
     "--backend", type=click.Choice(["tmux", "headless"]), default=None
 )
-@click.option("--thread", help="Thread key to forget.")
+@click.option("--thread", help="Thread key to forget (one thread).")
+@click.option(
+    "--handle",
+    help="Forget ALL threads of this handle (every fork it spawned).",
+)
 @click.option("--all", "forget_all", is_flag=True, help="Forget everything.")
 def forget(
     config: Optional[str],
     backend: Optional[str],
     thread: Optional[str],
+    handle: Optional[str],
     forget_all: bool,
 ) -> None:
     """Drop thread mappings (and kill their tmux windows).
+
+    Pick exactly one target: ``--thread <key>`` (one thread), ``--handle
+    <name>`` (every thread/fork that handle spawned — a handle opened in several
+    Discord threads shows several rows in ``forks``), or ``--all``.
 
     Known limitation: this runs in a separate process from the daemon, so it
     does not coordinate with an in-flight turn. Running it while the daemon is
@@ -711,12 +738,17 @@ def forget(
     in-thread, or run ``forget`` when the thread is idle; fully closing this
     would need a cross-process per-turn lock.
     """
-    if bool(thread) == forget_all:
-        raise click.ClickException("Use exactly one of --thread or --all.")
+    if sum(bool(x) for x in (thread, handle, forget_all)) != 1:
+        raise click.ClickException(
+            "Use exactly one of --thread, --handle, or --all."
+        )
     cfg = _build(config, backend)
     store = TunnelStore(cfg.state_path)
     if forget_all:
         keys = [r.thread_key for r in store.all_records()]
+    elif handle:
+        h = handle.strip().lower()
+        keys = [r.thread_key for r in store.all_records() if r.handle == h]
     else:
         keys = [thread] if thread else []
     cache: dict[str, Backend] = {}
@@ -725,7 +757,9 @@ def forget(
         backend_for_record(cfg, store, rec, cache).forget(key)
         click.echo(f"Forgot {key}")
     if not keys:
-        click.echo("Nothing to forget.")
+        click.echo(
+            f"No threads for handle '{handle}'." if handle else "Nothing to forget."
+        )
 
 
 @cli.command()

@@ -72,3 +72,26 @@ def test_share_hook_skip_permissions_sets_all(tmp_path: Path) -> None:
     _run(reg, ">share --dangerously-skip-permissions full", "sess-x")
     rec = Registry(reg).get("full")
     assert rec is not None and rec.access == "all"
+
+
+def test_revoked_handle_reclaimable_by_other_session(tmp_path: Path) -> None:
+    # Bug A: a revoked handle must be reclaimable by a DIFFERENT session, and the
+    # reclaim is a FRESH publish — it must NOT inherit the old owner's access.
+    reg = tmp_path / "registry.json"
+    _run(reg, ">share --dangerously-skip-permissions bigbang", "sess-1")
+    rec1 = Registry(reg).get("bigbang")
+    assert rec1 is not None and rec1.access == "all"
+    assert Registry(reg).revoke("bigbang")  # owner released it
+    _run(reg, ">share bigbang", "sess-2")  # different session, no flag
+    rec2 = Registry(reg).get("bigbang")
+    assert rec2 is not None and rec2.session_id == "sess-2"  # reclaimed
+    assert rec2.access == "read"  # fresh default, NOT the old "all"
+
+
+def test_live_handle_still_collides_across_sessions(tmp_path: Path) -> None:
+    # A LIVE (non-revoked) handle owned by another session stays off-limits.
+    reg = tmp_path / "registry.json"
+    _run(reg, ">share payments", "sess-1")
+    _run(reg, ">share payments", "sess-2")  # collision -> hook leaves it alone
+    rec = Registry(reg).get("payments")
+    assert rec is not None and rec.session_id == "sess-1"  # unchanged
