@@ -19,13 +19,16 @@ secret scan, a large unreviewed change about to ship.
 ## Install
 
 ```bash
-# install the runtime
+# 1. install the runtime
 uv tool install sasy-guard
 sasy-guard install
 
-# add the plugin (per project)
+# 2a. enable it globally, for every Claude Code session:
 claude plugin marketplace add sasy-labs/sasy-demo
 claude plugin install sasy-guard
+
+# 2b. ...or enable it for one project only:
+cd your-project && sasy-guard enable
 ```
 
 :::note[Full docs and setup]
