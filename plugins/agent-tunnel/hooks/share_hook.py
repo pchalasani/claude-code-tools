@@ -106,7 +106,14 @@ def _publish(session_id, cwd, transcript_path, config_dir, access, label):
             if label:
                 handle = label
                 taken = records.get(handle)
-                if taken and taken.get("session_id") != session_id:
+                # A revoked handle is free for anyone to reclaim (matches
+                # Registry.rename); only a LIVE handle owned by a different
+                # session is a real collision.
+                if (
+                    taken
+                    and not taken.get("revoked")
+                    and taken.get("session_id") != session_id
+                ):
                     return None, handle  # collision
                 if existing and existing != handle:
                     records.pop(existing, None)
@@ -119,10 +126,14 @@ def _publish(session_id, cwd, transcript_path, config_dir, access, label):
                     and records[handle].get("session_id") != session_id
                 ):
                     handle += "x"
-            # No prior (fresh share, or re-share of a revoked handle) → fall
-            # back to whatever sits under the resolved handle.
+            # No prior captured from THIS session above. Inherit the preserved
+            # fields (access/label/created_at) only from a record this session
+            # already owns (a genuine re-share); a revoked handle reclaimed by a
+            # DIFFERENT session is a fresh publish and must NOT inherit the old
+            # owner's access/label/created_at.
             if prior is None:
-                prior = records.get(handle, {})
+                under = records.get(handle, {})
+                prior = under if under.get("session_id") == session_id else {}
             records[handle] = {
                 "handle": handle,
                 "session_id": session_id,
