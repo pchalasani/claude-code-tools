@@ -143,6 +143,11 @@ Click a card to jump to that feature, or
 <img src="assets/card-session-repair.svg" alt="session repair" width="200"/>
 </a>
 </td>
+<td align="center">
+<a href="https://pchalasani.github.io/claude-code-tools/tools/sasy-guard/">
+<img src="assets/card-sasy-guard.svg" alt="sasy-guard" width="200"/>
+</a>
+</td>
 </tr>
 </table>
 
