@@ -1,0 +1,37 @@
+---
+title: "sasy-guard — Policy-compiled security for Claude Code"
+description: >
+  A deterministic security guard for Claude Code, built on
+  policy-compiler ideas: compiled Datalog rules reasoning over a
+  dependency graph rebuilt from the session.
+---
+
+`sasy-guard` is a security guard for Claude Code, built on
+**policy-compiler** ideas. It compiles your policy into **Soufflé
+Datalog** rules and reasons over a **dependency graph rebuilt from the
+whole session**, so every tool call is judged by a fast, deterministic
+engine running outside the model.
+
+That catches multi-step attacks a single-command check misses: a secret
+that is read and later leaves the machine, a `git push` with no clean
+secret scan, a large unreviewed change about to ship.
+
+## Install
+
+```bash
+# install the runtime
+uv tool install sasy-guard
+sasy-guard install
+
+# add the plugin (per project)
+claude plugin marketplace add sasy-labs/sasy-demo
+claude plugin install sasy-guard
+```
+
+:::note[Full docs and setup]
+This page is the short version. For full setup, the rule-by-rule
+breakdown, and live demos, see the SASY docs:
+
+- **[Enforce policy on Claude Code (setup)](https://sasy-demo.pages.dev/claude-code/)**
+- **[Why sasy-guard, not your own hooks?](https://sasy-demo.pages.dev/why-sasy-guard/)**
+:::
