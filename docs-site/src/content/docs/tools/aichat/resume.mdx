@@ -72,6 +72,11 @@ deep dive on how it works.
     clipboard, and shows instructions to quit and run
     `aichat resume <paste>`.
 
+    The same hook also provides a
+    [`>trim` trigger](#trimming-in-place-with-trim)
+    that trims the current session file in place --
+    no need to quit and resume.
+
     Requires the `aichat`
     [plugin](../../../getting-started/plugins/).
   </TabItem>
@@ -97,6 +102,93 @@ deep dive on how it works.
     ```
   </TabItem>
 </Tabs>
+
+## Trimming in place with `>trim`
+
+The **Trim** strategy above spins up a *new* trimmed session.
+To slim down the session you are *already in* — keeping its
+same ID — type `>trim`.
+
+### The typical workflow
+
+Two safe steps in the session, then a resume:
+
+```text
+>trim              # preview savings — changes nothing
+>trim yes          # apply — rewrites this session's file in place
+```
+
+```text
+# then, to actually reclaim the space:
+quit (Ctrl+D twice)  →  claude -r <id>   (or  aichat resume)
+```
+
+That is the whole loop: **preview → apply → quit → resume.**
+
+:::caution[Trimming never shrinks the *live* context]
+Claude Code loads the transcript into context once, at session
+start, and never re-reads the file mid-session. So a trim only
+takes effect on the **next resume** — at **any** utilization
+level. Your only in-session levers are `/compact` (a lossy
+summary) or `/clear` (drops everything); `>trim` + resume is the
+lossless equivalent.
+:::
+
+So run `>trim` **before** you hit the wall. Once Claude Code
+shows `Context limit reached · /compact or /clear to continue`,
+the *live* context is what is full, so `>trim` typed there
+cannot rescue it — quit and resume (optionally
+`aichat trim-in-place <id>` from a shell first) to come back
+lean.
+
+### Options (in-session)
+
+Arguments are shape-based and order-free — mix them in any order:
+
+- `>trim help` — show usage; touches nothing
+- `-N` / `+N` — assistant messages: keep the last N / trim the
+  first N long ones
+- a bare number — character threshold (default 500)
+- comma-separated words — tool names to trim (default: all tools)
+
+```text
+>trim -20            # keep last 20 long assistant messages
+>trim 800            # only trim content longer than 800 chars
+>trim bash,read      # only Bash/Read tool results
+>trim -20 800 bash   # combine — any order works
+>trim yes | cancel   # apply / abandon a pending preview
+```
+
+A pending preview expires after ~10 minutes. Applying keeps the
+same session ID and writes a timestamped backup
+(`<id>.pre-trim-<ts>.jsonl.bak`) next to the file, which the
+truncation placeholders reference.
+
+### Same engine on the command line
+
+`>trim` shells out to `aichat trim-in-place`, which you can run
+directly on any Claude session (or from scripts):
+
+```bash
+aichat trim-in-place <id> --dry-run    # preview tokens saved
+aichat trim-in-place <id>              # trim, keep same ID
+aichat trim-in-place <id> -a -20       # keep last 20 asst msgs
+aichat trim-in-place <id> -a 10        # trim first 10 asst msgs
+aichat trim-in-place <id> -l 800       # char threshold 800
+aichat trim-in-place <id> -t bash,read # only Bash/Read results
+aichat trim-in-place <id> --json       # machine-readable result
+```
+
+Flags: `-l/--len` threshold (default 500), `-a/--trim-assistant`
+(positive N trims first N, negative N keeps last N),
+`-t/--tools` (comma-separated), `-n/--dry-run`, `--json`,
+`--claude-home`.
+
+Requires the `aichat` CLI on PATH with the `trim-in-place`
+subcommand — install or update it with
+`uv tool install --force claude-code-tools` (see
+[Plugins](../../../getting-started/plugins/)). Works on Claude
+sessions only (not Codex).
 
 ## CLI usage
 
@@ -141,6 +233,7 @@ lineage as needed.
 |---------|-------------|
 | `aichat lineage [session]` | Show the parent lineage chain |
 | `aichat trim [session]` | Trim session (interactive or direct) |
+| `aichat trim-in-place <session>` | Trim in place, keeping the same session ID |
 | `aichat rollover [session]` | Rollover to fresh session |
 | `aichat clone [session]` | Clone a session file |
 

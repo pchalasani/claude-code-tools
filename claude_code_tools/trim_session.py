@@ -310,6 +310,69 @@ def extract_session_info(input_file: Path, agent: str) -> dict:
     return {"cwd": None}
 
 
+def _agent_indicator(data: object) -> Optional[str]:
+    """Classify one parsed session line by positive format markers.
+
+    Args:
+        data: A JSON-decoded line of a session file (any shape).
+
+    Returns:
+        "codex" or "claude" if the line positively identifies the
+        agent format, else None.
+    """
+    # Hostile input: a line may parse to a non-dict shape.
+    if not isinstance(data, dict):
+        return None
+
+    # Codex indicators
+    if data.get("type") == "session_meta":
+        return "codex"
+    if data.get("type") == "response_item" and "payload" in data:
+        return "codex"
+
+    # Claude indicators
+    if "sessionId" in data:
+        return "claude"
+    if data.get("type") in ["user", "assistant"] and "message" in data:
+        return "claude"
+
+    return None
+
+
+def detect_agent_strict(input_file: Path) -> Optional[str]:
+    """Detect the agent type from POSITIVE indicators only.
+
+    Unlike ``detect_agent`` (which defaults to "claude" when the
+    first lines carry no indicator), this scans the whole file and
+    refuses to guess: empty files, random text, or JSONL without
+    Claude/Codex markers yield None instead of "claude". Callers
+    that mutate files (e.g. in-place trimming) must use this.
+
+    Args:
+        input_file: Path to session JSONL file.
+
+    Returns:
+        "claude" or "codex" on a positive indicator, else None.
+    """
+    import json
+
+    # Hostile input: a stray invalid-UTF-8 byte must not raise
+    # UnicodeDecodeError; an undecodable line simply carries no
+    # positive indicator.
+    with open(
+        input_file, "r", encoding="utf-8", errors="surrogateescape"
+    ) as f:
+        for line in f:
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            indicator = _agent_indicator(data)
+            if indicator is not None:
+                return indicator
+    return None
+
+
 def detect_agent(input_file: Path) -> str:
     """
     Auto-detect agent type from session file structure.
@@ -322,8 +385,11 @@ def detect_agent(input_file: Path) -> str:
     """
     import json
 
-    # Read first 20 lines to detect structure
-    with open(input_file, "r") as f:
+    # Read first 20 lines to detect structure (surrogateescape: an
+    # invalid byte must not crash detection of a hostile file).
+    with open(
+        input_file, "r", encoding="utf-8", errors="surrogateescape"
+    ) as f:
         for i, line in enumerate(f):
             if i >= 20:
                 break
@@ -331,18 +397,9 @@ def detect_agent(input_file: Path) -> str:
                 data = json.loads(line)
             except json.JSONDecodeError:
                 continue
-
-            # Codex indicators
-            if data.get("type") == "session_meta":
-                return "codex"
-            if data.get("type") == "response_item" and "payload" in data:
-                return "codex"
-
-            # Claude indicators
-            if "sessionId" in data:
-                return "claude"
-            if data.get("type") in ["user", "assistant"] and "message" in data:
-                return "claude"
+            indicator = _agent_indicator(data)
+            if indicator is not None:
+                return indicator
 
     # Default to claude if uncertain
     return "claude"

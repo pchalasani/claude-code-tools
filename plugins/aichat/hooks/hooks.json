@@ -1,5 +1,5 @@
 {
-  "description": "Session management hooks for aichat resume workflow",
+  "description": "Session management hooks for aichat resume/trim workflow",
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "bash -c 'if test -f \"${CLAUDE_PLUGIN_ROOT}/hooks/aichat_resume_hook.py\"; then python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/aichat_resume_hook.py\"; else echo \"{\\\"decision\\\":\\\"approve\\\"}\"; fi'",
-            "timeout": 10
+            "timeout": 30
           }
         ]
       }

@@ -10,6 +10,7 @@ from claude_code_tools.find_claude_session import is_sidechain_session
 from claude_code_tools.trim_session import (
     create_placeholder,
     detect_agent,
+    detect_agent_strict,
     extract_session_info,
     is_trimmed_session,
     process_session,
@@ -57,6 +58,41 @@ class TestDetectAgent:
         session_path = request.getfixturevalue(session_fixture)
         detected = detect_agent(session_path)
         assert detected == expected_agent
+
+
+class TestDetectAgentStrict:
+    """Strict detection never guesses: no positive marker means None."""
+
+    @pytest.mark.parametrize(
+        "session_fixture,expected_agent",
+        [
+            ("claude_session", "claude"),
+            ("codex_session", "codex"),
+        ],
+    )
+    def test_positive_indicators_detected(
+        self, session_fixture, expected_agent, request
+    ):
+        """Real fixtures are positively identified, as with detect_agent."""
+        session_path = request.getfixturevalue(session_fixture)
+        assert detect_agent_strict(session_path) == expected_agent
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "",
+            "random text\nnot json\n",
+            '{"foo": "bar"}\n{"type": "other"}\n[1, 2]\n',
+        ],
+        ids=["empty", "random-text", "jsonl-without-markers"],
+    )
+    def test_no_indicator_returns_none(self, temp_output_dir, content):
+        """Empty/random/marker-less files yield None (detect_agent
+        would default these to 'claude')."""
+        session_file = temp_output_dir / "mystery.jsonl"
+        session_file.write_text(content)
+        assert detect_agent_strict(session_file) is None
+        assert detect_agent(session_file) == "claude"  # lenient default
 
 
 class TestExtractSessionInfo:
@@ -223,6 +259,75 @@ class TestProcessSession:
                                         # Verify original content is preserved
                                         # (should start with actual content)
                                         assert len(result_content) > 0
+
+
+class TestInvalidUtf8Lines:
+    """Invalid UTF-8 bytes must round-trip byte-for-byte, even inside
+    a line that is otherwise valid, parseable Claude JSON (json.dumps
+    would rewrite the surrogateescape artifact as a \\udcXX escape)."""
+
+    def test_parseable_line_with_invalid_utf8_is_untouched(
+        self, temp_output_dir
+    ):
+        """The undecodable line passes through verbatim while normal
+        long tool results in the same session still get trimmed."""
+        src = temp_output_dir / "hostile.jsonl"
+        entries = [
+            {
+                "type": "assistant",
+                "sessionId": "s",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "tool1",
+                            "name": "Read",
+                            "input": {"file_path": "/x"},
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "user",
+                "sessionId": "s",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tool1",
+                            "content": "y" * 2000,
+                        }
+                    ],
+                },
+            },
+        ]
+        with open(src, "w") as f:
+            for entry in entries:
+                f.write(json.dumps(entry) + "\n")
+        hostile = (
+            b'{"type":"user","sessionId":"s",'
+            b'"message":{"content":"\xff"}}\n'
+        )
+        with open(src, "ab") as f:
+            f.write(hostile)
+        out = temp_output_dir / "trimmed.jsonl"
+
+        num_tools, _, chars_saved = process_session(
+            agent="claude",
+            input_file=src,
+            output_file=out,
+            target_tools=None,
+            threshold=500,
+            verbose=False,
+        )
+
+        assert num_tools == 1
+        assert chars_saved > 0
+        data = out.read_bytes()
+        assert hostile in data  # exact original bytes survive
+        assert b"\\udcff" not in data
 
 
 class TestTrimAndCreateSession:
