@@ -105,6 +105,12 @@ class ClaudeConfig:
     # Override the config file holding trust state (default: ~/.claude.json,
     # honoring CLAUDE_CONFIG_DIR).
     trust_config_path: str = ""
+    # Strip ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN from the fork's env so it
+    # authenticates with the session owner's claude.ai login (subscription),
+    # not an API key — otherwise a stray key set for the daemon makes forks
+    # use API billing (and can break: "connectors are disabled…"). Set false
+    # to let forks use whatever auth the daemon has.
+    unset_api_key: bool = True
     # Opt-in gate for the "all" access level (>share
     # --dangerously-skip-permissions): only when true do those forks launch
     # with --dangerously-skip-permissions (any tool/MCP, no prompts). Off by
@@ -327,6 +333,9 @@ tmux_extra_args = []
 # Pre-trust a shared folder in ~/.claude.json before forking (tmux backend),
 # so the fork doesn't hit the "trust this folder?" dialog. false = don't touch.
 auto_trust = true
+# Strip ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN from forks so they use your
+# claude.ai subscription login, not an API key. false = inherit the daemon's.
+unset_api_key = true
 # DANGEROUS: enable the "all" access level (>share
 # --dangerously-skip-permissions). Those forks run with
 # --dangerously-skip-permissions — a colleague's agent can then use ANY tool

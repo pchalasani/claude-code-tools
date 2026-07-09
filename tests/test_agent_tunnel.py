@@ -490,6 +490,26 @@ def test_resolve_token(tmp_path: Path, monkeypatch) -> None:
     assert resolve_token(cfg) == "env-token-999"  # env wins
 
 
+def test_env_strips_api_key(tmp_path: Path, monkeypatch) -> None:
+    from claude_code_tools.agent_tunnel.backends import HeadlessBackend
+    from claude_code_tools.agent_tunnel.store import ThreadRecord
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    cfg = TunnelConfig()
+    cfg.state_path = tmp_path / "state.json"
+    backend = HeadlessBackend(cfg, TunnelStore(cfg.state_path))
+    rec = ThreadRecord("t", config_dir=str(tmp_path))
+
+    # default: API key stripped so the fork uses the subscription login.
+    env = backend._env(rec)
+    assert "ANTHROPIC_API_KEY" not in env
+    assert env["CLAUDE_CONFIG_DIR"] == str(tmp_path)
+
+    # opt-out keeps it.
+    cfg.claude.unset_api_key = False
+    assert backend._env(rec)["ANTHROPIC_API_KEY"] == "sk-test"
+
+
 def test_build_claude_flags() -> None:
     cfg = TunnelConfig()
     flags = build_claude_flags(cfg, resume_id=SID_A, fork=True)
