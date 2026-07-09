@@ -56,6 +56,10 @@ from .trust import (
     trust_config_path_for,
 )
 
+# Auth env vars that override the claude.ai login; stripped from fork envs so
+# forks run under the session owner's subscription (see claude.unset_api_key).
+AUTH_OVERRIDE_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+
 
 class BackendError(RuntimeError):
     """Answering a question failed; message is user-presentable."""
@@ -234,10 +238,15 @@ class _BaseBackend:
         return Path(rec.config_dir) if rec.config_dir else self.cfg.claude_home
 
     def _env(self, rec: ThreadRecord) -> dict[str, str]:
-        """Subprocess env with CLAUDE_CONFIG_DIR pinned to the session's dir."""
+        """Subprocess env: CLAUDE_CONFIG_DIR pinned to the session's dir, and
+        (by default) API-key auth stripped so the fork uses the owner's
+        claude.ai login rather than an API key."""
         env = dict(os.environ)
         if rec.config_dir:
             env["CLAUDE_CONFIG_DIR"] = rec.config_dir
+        if self.cfg.claude.unset_api_key:
+            for var in AUTH_OVERRIDE_VARS:
+                env.pop(var, None)
         return env
 
     def _state_dir(self) -> Path:
@@ -456,8 +465,14 @@ class TmuxBackend(_BaseBackend):
             # flag (which would make claude die at launch with "invalid
             # option"). Verified: `claude … -- "- text"` submits "- text".
             argv += ["--", initial_prompt]
+        prefix: list[str] = []
+        if self.cfg.claude.unset_api_key:
+            for var in AUTH_OVERRIDE_VARS:
+                prefix += ["-u", var]
         if config_dir:
-            argv = ["env", f"CLAUDE_CONFIG_DIR={config_dir}", *argv]
+            prefix.append(f"CLAUDE_CONFIG_DIR={config_dir}")
+        if prefix:
+            argv = ["env", *prefix, *argv]
         if self.cfg.claude.auto_trust:
             self._pretrust(project_dir, config_dir)
         self.tmux.kill_window(window)
