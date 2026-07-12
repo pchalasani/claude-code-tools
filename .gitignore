@@ -176,6 +176,7 @@ hooks/settings.json
 node_modules/
 package-lock.json
 !docs-site/package-lock.json
+!plugins/dynamic-workflow/package-lock.json
 
 # Backup files
 *.backup*

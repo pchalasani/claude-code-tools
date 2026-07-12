@@ -1,0 +1,129 @@
+---
+title: "Claude → Codex"
+description: >-
+  Switch from Claude to Codex without giving up dynamic agent workflows.
+---
+
+import {
+  Aside,
+  Card,
+  CardGrid,
+  Steps,
+} from "@astrojs/starlight/components";
+
+Moving from Claude Code to Codex should not mean giving up the workflows you
+already rely on. This is the migration hub for translating those workflows to
+Codex-native tools, beginning with dynamic workflows.
+
+## Dynamic workflows
+
+A dynamic workflow is a small JavaScript program that coordinates agents at
+runtime. JavaScript owns predictable control flow—fan-out, fan-in, loops,
+branches, and aggregation—while agents own reasoning and tool use.
+
+Claude Code provides this pattern through its
+[dynamic workflows](https://code.claude.com/docs/en/workflows). The
+`dynamic-workflow` plugin in this repository provides equivalent orchestration
+for Codex through an installable skill and a durable JavaScript runtime.
+
+<CardGrid>
+  <Card title="What carries over">
+    You can still create and run dynamic workflows that coordinate multiple
+    agents and adapt as the work progresses.
+  </Card>
+  <Card title="What changes">
+    Claude Code's interactive `/workflows` command does not carry over to Codex.
+  </Card>
+</CardGrid>
+
+## Install in Codex
+
+<Aside type="note" title="No claude-code-tools or npm install needed">
+  Do **not** run `uv tool install claude-code-tools` for this feature. That
+  installs the repository's separate Python CLI and is not a prerequisite for
+  the Codex plugin. The plugin already contains the skill and a compiled
+  JavaScript runner, so there is no `npm install` step either. Node.js 20 or
+  newer must merely be available because it executes that bundled runner.
+</Aside>
+
+<Steps>
+
+1. **Add this repository as a Codex marketplace**
+
+   Codex accepts GitHub [`owner/repo` marketplace sources][codex-marketplace]:
+
+   ```bash
+   codex plugin marketplace add pchalasani/claude-code-tools
+   ```
+
+2. **Install the dynamic workflow plugin**
+
+   ```bash
+   codex plugin add dynamic-workflow@cctools-codex-plugins
+   ```
+
+   This is the complete installation. There is no separate Python package,
+   skill-installation step, MCP server, API key, or npm package to configure.
+
+3. **Start a new Codex thread**
+
+   A new thread ensures Codex discovers the newly installed skill.
+
+</Steps>
+
+## Run your first workflow
+
+Mention the skill explicitly when you want guaranteed activation:
+
+```text
+$dynamic-workflow Create a read-only workflow that discovers every API route,
+audits at most 30 routes with four workers, and synthesizes the findings.
+Show me the workflow and its agent cap before launching it.
+```
+
+Codex can also select the skill implicitly when you casually ask for a dynamic
+workflow, but the `$dynamic-workflow` mention removes any ambiguity.
+
+The skill will:
+
+- create a reviewable JavaScript workflow under `.codex/workflows/`
+- validate it before execution
+- explain its worker count, concurrency, permissions, and likely cost
+- ask before launching newly generated workflow code
+- preserve completed steps so a failed or paused run can resume
+- enforce reviewed agent, runtime, fan-out, prompt, and result limits
+- terminate runaway workflow JavaScript and worker process trees
+
+## Port an existing workflow
+
+Point the skill at the existing script and ask it to port and review it:
+
+```text
+$dynamic-workflow Port .claude/workflows/audit-routes.js to Codex. Preserve its
+fan-out and structured results, add explicit bounds, and do not launch it yet.
+```
+
+The script-body format is intentionally familiar, but this is not a universal
+drop-in compatibility layer. Imported modules and direct Node.js filesystem or
+shell access are unavailable inside workflow code; delegate that work to Codex
+agents instead.
+
+<Aside type="caution" title="Review before launch">
+  Generated workflow JavaScript is a capability boundary, not a hardened
+  hostile-code sandbox. Review the script, agent cap, deadline, context-heavy
+  fan-in, and requested write permissions before approving execution.
+</Aside>
+
+## Durable controls and reference
+
+Runs support status inspection, logs, pause, resume, and cancellation. The
+skill handles those commands for ordinary use, while the
+[Dynamic Workflow plugin reference](/claude-code-tools/plugins-detail/dynamic-workflow/)
+documents the JavaScript API, direct CLI, cache model, and safety boundaries.
+
+This migration hub will grow to cover project instructions, skills and command
+surfaces, and session-continuity strategies as more Codex equivalents are added
+to the repository.
+
+[codex-marketplace]:
+  https://developers.openai.com/codex/build-plugins#add-a-marketplace-from-the-cli

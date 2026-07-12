@@ -1,0 +1,20 @@
+{
+  "name": "cctools-codex-plugins",
+  "interface": {
+    "displayName": "CCTools Codex Plugins"
+  },
+  "plugins": [
+    {
+      "name": "dynamic-workflow",
+      "source": {
+        "source": "local",
+        "path": "./plugins/dynamic-workflow"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

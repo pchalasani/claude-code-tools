@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"
+     viewBox="0 0 200 100">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#211046"/>
+      <stop offset="52%" stop-color="#10294a"/>
+      <stop offset="100%" stop-color="#083d3a"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="200" height="100" rx="8" fill="url(#bg)"/>
+  <rect x="1" y="1" width="198" height="98" rx="7" fill="none"
+        stroke="#5eead4" stroke-opacity="0.32"/>
+  <text x="100" y="36" font-family="monospace" font-size="20"
+        font-weight="bold" fill="#f8fafc" text-anchor="middle"
+        filter="url(#glow)">Claude → Codex</text>
+  <text x="100" y="63" font-family="monospace" font-size="12"
+        fill="#cbd5e1" text-anchor="middle">switch from Claude</text>
+  <text x="100" y="80" font-family="monospace" font-size="12"
+        fill="#cbd5e1" text-anchor="middle">to Codex</text>
+</svg>

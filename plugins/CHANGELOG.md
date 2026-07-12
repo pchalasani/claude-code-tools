@@ -1,5 +1,26 @@
 # Plugin Changelog
 
+## 2026-07-12
+
+### dynamic-workflow
+
+- feat: add a Codex plugin for durable JavaScript agent workflows
+  - direct `codex exec --json` workers with no MCP dependency
+  - bounded fan-out, structured output, retries, and ordered results
+  - durable cache, pause, resume, cancel, status, logs, and detached runs
+  - restricted workflow context and read-only worker sandbox by default
+  - explicit persisted authorization gate for write-capable sandboxes
+  - supervisor deadlines and forced cancellation for runaway JavaScript
+  - process-group cleanup and in-flight worker draining before terminal state
+  - persisted engine ownership and split-brain-safe orphan recovery
+  - process-start identity checks before signaling persisted process IDs
+  - active worker cleanup after an unexpected engine crash
+  - durable worker registration before prompt delivery
+  - recoverable nonterminal state when cleanup cannot be confirmed
+  - process-group draining after normal, failed, or canceled worker exits
+  - conservative agent, retry, pipeline, prompt, and result limits
+  - non-retryable context diagnostics and executed-source snapshots
+
 ## 2026-02-15
 
 ### safety-hooks

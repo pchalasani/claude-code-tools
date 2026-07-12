@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dynamic Workflow"
+  short_description: "Run resumable multi-agent Codex workflows"
+  default_prompt: "Use $dynamic-workflow to create or run a durable Codex workflow for this task."

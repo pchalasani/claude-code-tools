@@ -1,0 +1,144 @@
+---
+title: "Dynamic Workflow Plugin"
+description: >-
+  Durable JavaScript orchestration for parallel headless Codex workers.
+---
+
+The `dynamic-workflow` Codex plugin turns a multi-agent plan into a small,
+reviewable JavaScript program. JavaScript owns deterministic control flow;
+headless Codex workers own reasoning and tool use.
+
+```text
+Codex skill -> workflow.js -> TypeScript runner -> codex exec workers
+                                 |
+                                 `-> durable state and cache
+```
+
+The runner calls `codex exec --json` directly. It does not require MCP, the
+Codex SDK, or separate API-key configuration.
+
+## Install
+
+The plugin can be installed independently of the repository's Python CLI. Do
+not run `uv tool install claude-code-tools`, and do not run `npm install`.
+The plugin ships both the skill and a compiled JavaScript runner. It requires
+only an authenticated Codex CLI and Node.js 20 or newer to execute that runner.
+
+```bash
+codex plugin marketplace add pchalasani/claude-code-tools
+codex plugin add dynamic-workflow@cctools-codex-plugins
+```
+
+Those two commands are the complete plugin installation.
+
+Restart Codex, then invoke `$dynamic-workflow` or ask for a durable multi-agent
+workflow.
+
+## Workflow shape
+
+Scripts use injected globals, top-level `await`, and top-level `return`:
+
+```javascript
+export const meta = {
+  name: "audit-routes",
+  description: "Audit routes in parallel",
+}
+
+const found = await agent("List route files.", {
+  id: "discover",
+  schema: {
+    type: "object",
+    required: ["files"],
+    properties: {
+      files: { type: "array", items: { type: "string" } },
+    },
+  },
+})
+
+const audits = await pipeline(
+  found.files,
+  file => agent(`Audit ${file}.`, {
+    id: "audit",
+    label: file,
+  }),
+  { concurrency: 4, key: file => file, maxItems: 50 },
+)
+
+const summary = await agent(
+  `Synthesize these audits:\n${JSON.stringify(audits)}`,
+  { id: "synthesize", cacheKey: audits },
+)
+
+return { audits, summary }
+```
+
+`agent()` returns the final worker message or parsed JSON when a schema is
+present. `pipeline()` fans out with bounded concurrency and preserves result
+order. `parallel()` handles heterogeneous callbacks. `args` contains parsed
+JSON supplied by the launcher.
+
+## Durable execution
+
+The runner records state under
+`~/.codex/workflows/runs/<run-id>/` by default. A completed step is reused when
+its stable ID and execution fingerprint still match.
+Use `maxItems` to cap dynamic fan-out. Include upstream results in a downstream
+prompt or `cacheKey` so changed dependencies invalidate that completed step.
+
+```bash
+node bin/workflow.mjs run workflow.js --detach --json
+node bin/workflow.mjs status <run-id> --json
+node bin/workflow.mjs logs <run-id>
+node bin/workflow.mjs pause <run-id>
+node bin/workflow.mjs resume <run-id>
+node bin/workflow.mjs cancel <run-id>
+node bin/workflow.mjs wait <run-id>
+```
+
+Pause is cooperative: active workers finish, while new workers wait. Resume
+replays the JavaScript and returns cached results for compatible completed
+steps. This works across Codex CLI sessions because state lives on disk.
+
+## Safety
+
+- Workflow JavaScript has no injected filesystem, shell, process, or imports.
+- The JavaScript VM is not a hardened sandbox for hostile code; review scripts.
+- Codex workers default to the `read-only` sandbox.
+- Headless approval policy is `never`, so unavailable permissions fail.
+- Write workers must declare `workspace-write` and the launcher must pass
+  `--allow-workspace-write` after review.
+- Danger-full-access also requires `--allow-danger-full-access` at launch.
+- Write authorization is bound to the reviewed workflow source hash.
+- Parallel write tasks should use non-overlapping files or worktrees.
+- Runs default to 100 agents and can be raised only as high as 1,000.
+- The default runner deadline is four hours; worker timeout is 30 minutes.
+- Pipelines without `maxItems` stop at 100 items; explicit caps stop at 1,000.
+- Prompts and results are capped at 1 MB; retries are limited to five.
+- A supervisor terminates runaway JavaScript and complete worker process groups.
+- Resume and cancel remove process groups orphaned by a supervisor crash.
+- An unexpected engine exit removes active worker groups before terminal state.
+- Workers receive prompts only after their process ownership is durable.
+- Every worker exit drains surviving descendants in its owned process group.
+- Persisted PIDs are signaled only when their process-start identity still
+  matches, protecting unrelated processes after PID reuse.
+- Unconfirmed cleanup remains recoverable and nonterminal for a later retry.
+- Unawaited agent, pipeline, and parallel calls fail instead of leaking work.
+
+Context-capacity failures are classified as non-retryable. Chunk the failing
+input or use tree reduction, then resume; completed compatible siblings remain
+cached. Every executed workflow source revision is retained in its run state
+directory for diagnosis.
+Failed context steps also retain any worker thread ID and token usage emitted
+before the failure.
+
+## Development
+
+The plugin commits a dependency-free JavaScript bundle for installation. Its
+TypeScript source and fake-worker integration tests live beside it.
+
+```bash
+cd plugins/dynamic-workflow
+npm ci
+npm run typecheck
+npm test
+```
