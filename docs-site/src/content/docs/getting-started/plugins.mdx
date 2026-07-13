@@ -1,8 +1,7 @@
 ---
 title: "Plugins"
 description: >-
-  Claude Code plugin installation and details
-  for hooks, skills, agents, and safety guards.
+  Plugin installation and details for Codex and Claude Code.
 ---
 
 import { Steps, Badge } from "@astrojs/starlight/components";
@@ -14,7 +13,7 @@ import { Steps, Badge } from "@astrojs/starlight/components";
   }
 `}</style>
 
-This repo provides plugins for the
+This repo provides plugins for Codex and for the
 [Claude Code marketplace](https://code.claude.com/docs/en/discover-plugins).
 
 ## Plugin Overview
@@ -28,8 +27,26 @@ This repo provides plugins for the
 | `langroid` | Design patterns for the [Langroid](https://github.com/langroid/langroid) framework |
 | `voice` | Spoken audio summaries |
 | `agent-tunnel` | `>share` a live session so teammates can ask it questions over Discord |
+| `dynamic-workflow` | Durable JavaScript orchestration for headless Codex agents |
 
-## Installation
+## Codex Plugin Installation
+
+Install the dynamic workflow plugin from the Codex marketplace in this repo:
+
+```bash
+codex plugin marketplace add pchalasani/claude-code-tools
+codex plugin add dynamic-workflow@cctools-codex-plugins
+```
+
+This Codex plugin does not require `uv tool install claude-code-tools` or an
+`npm install`. It includes the skill and compiled runner; Node.js 20 or newer
+only needs to be available to execute the runner.
+
+See the
+[Dynamic Workflow detail page](/claude-code-tools/plugins-detail/dynamic-workflow/)
+for its JavaScript API, state model, and safety boundaries.
+
+## Claude Code Plugin Installation
 
 <Steps>
 

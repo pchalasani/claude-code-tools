@@ -1,0 +1,24 @@
+{
+  "name": "@cctools/dynamic-workflow",
+  "version": "0.1.0",
+  "description": "Durable JavaScript workflows for headless Codex agents",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "codex-workflow": "./bin/workflow.mjs"
+  },
+  "scripts": {
+    "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --target=node20 --outfile=bin/workflow.mjs --banner:js='#!/usr/bin/env node'",
+    "test": "npm run build && vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "esbuild": "^0.25.5",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

@@ -102,6 +102,10 @@ export default defineConfig({
               slug: "plugins-detail/workflow",
             },
             {
+              label: "Dynamic Workflow",
+              slug: "plugins-detail/dynamic-workflow",
+            },
+            {
               label: "Langroid",
               slug: "plugins-detail/langroid",
             },
@@ -131,6 +135,10 @@ export default defineConfig({
         {
           label: "Guides",
           items: [
+            {
+              label: "Claude → Codex",
+              slug: "guides/claude-to-codex",
+            },
             {
               label: "Zsh Setup",
               slug: "guides/zsh-setup",

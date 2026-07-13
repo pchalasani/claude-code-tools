@@ -40,13 +40,30 @@ separate Rust binary:
   [Releases](https://github.com/pchalasani/claude-code-tools/releases)
   (look for `rust-v*`)
 
-Install the Claude Code
-[plugins](https://pchalasani.github.io/claude-code-tools/getting-started/plugins/)
-for hooks, skills, and agents:
+Install the Claude Code workflow plugin:
 
 ```bash
 claude plugin marketplace add pchalasani/claude-code-tools
+claude plugin install workflow@cctools-plugins
 ```
+
+Install the equivalent dynamic workflow plugin for Codex:
+
+```bash
+codex plugin marketplace add pchalasani/claude-code-tools
+codex plugin add dynamic-workflow@cctools-codex-plugins
+```
+
+The Codex plugin installs independently: it does not require the Python
+`claude-code-tools` package or an npm install. Node.js 20 or newer only needs to
+be available to execute the plugin's bundled workflow runner.
+
+See the
+[Claude → Codex migration guide][claude-to-codex-guide]
+for usage and workflow-porting instructions.
+
+[claude-to-codex-guide]:
+  https://pchalasani.github.io/claude-code-tools/guides/claude-to-codex/
 
 ---
 
@@ -148,6 +165,11 @@ Click a card to jump to that feature, or
 <td align="center">
 <a href="https://pchalasani.github.io/claude-code-tools/tools/sasy-guard/">
 <img src="assets/card-sasy-guard.svg" alt="sasy-guard" width="200"/>
+</a>
+</td>
+<td align="center">
+<a href="https://pchalasani.github.io/claude-code-tools/guides/claude-to-codex/">
+<img src="assets/card-claude-to-codex.svg" alt="Claude to Codex" width="200"/>
 </a>
 </td>
 </tr>
