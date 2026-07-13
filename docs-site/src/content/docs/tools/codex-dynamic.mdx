@@ -1,0 +1,159 @@
+---
+title: "codex-dynamic — Callback-ready Codex"
+description: >-
+  Launch Codex through its shared app server without managing another terminal.
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+`codex-dynamic` starts a normal Codex TUI that can receive dynamic-workflow
+completion callbacks while you keep chatting. It replaces the manual
+two-terminal app-server setup with one command.
+
+<Aside type="tip" title="The Claude Code-style experience">
+  Launch a dynamic workflow in the background, then continue ordinary turns in
+  the main Codex session. When the workflow finishes, that same session
+  proactively tells you: it starts a result turn while idle or steers the
+  result into and extends the turn already in progress. There is no polling and
+  no blocked main conversation.
+</Aside>
+
+```text
+main Codex session ──launch──> detached workflow
+       │                              │
+       ├─ keep chatting               └─ finishes
+       └<──── completion notification ─────┘
+```
+
+```bash
+codex-dynamic
+```
+
+The command quietly ensures that Codex's local app server is running, then
+replaces itself with `codex --remote unix://`. Because it uses process
+replacement, Codex keeps direct control of the terminal, keyboard, signals,
+window resizing, and exit status.
+
+## Install
+
+The launcher is part of the Python CLI package, not the Codex plugin:
+
+```bash
+uv tool install claude-code-tools
+```
+
+If the package is already installed, refresh it when this command is released:
+
+```bash
+uv tool install --force claude-code-tools
+```
+
+<Aside type="note" title="Optional helper">
+  The `dynamic-workflow` Codex plugin works without the Python package.
+  Install this helper only for the one-command completion-callback experience.
+</Aside>
+
+The helper currently uses Codex's local Unix-socket transport and therefore
+supports macOS and Linux. It requires an authenticated Codex CLI 0.136.0 or
+newer. Version 0.136.0 is the first compatible CLI release combining the
+WebSocket-over-Unix protocol with the echoed client message IDs used to confirm
+callback delivery. Codex still marks the app-server and remote TUI interfaces
+as experimental, so their CLI and protocol surfaces may evolve. The helper
+rejects an older or unparseable version before starting the server or TUI.
+Callback preflight also validates the connected App Server, including one that
+was started outside the helper.
+
+## Start or resume Codex
+
+<Steps>
+
+1. **Start a new callback-ready session**
+
+   ```bash
+   codex-dynamic
+   ```
+
+2. **Or resume an existing session**
+
+   ```bash
+   codex-dynamic resume --last
+   ```
+
+   Omit `--last` to use Codex's session picker. Interactive TUI arguments are
+   forwarded unchanged. Known non-TUI subcommands such as `completion`,
+   `doctor`, and `mcp` bypass the shared server and run as ordinary Codex
+   commands.
+
+3. **Request a background callback**
+
+   ```text
+   $dynamic-workflow Run this workflow in the background. Let me keep using
+   this thread, and notify me here when it finishes.
+   ```
+
+</Steps>
+
+Every workflow `run` or `resume` needs host execution for that exact reviewed
+supervisor command. This lets the supervisor write durable state and launch
+headless workers without inheriting the outer tool sandbox. For a callback, the
+same authorization lets its notifier reach the host Unix socket. The workflow
+remains in the runner's restricted VM, and headless Codex workers retain their
+declared sandboxes. A sandboxed launch fails before creating a run; approve
+only the exact command, never a generic `node` prefix. Worker
+`danger-full-access` is neither needed nor an acceptable workaround.
+
+The main session remains interactive throughout the run. The local app server
+also stays alive after the TUI exits, so a detached workflow does not depend on
+the TUI process that launched it. Passive supervision and the local server add
+no model calls. Completion reporting starts a new turn only while the thread is
+idle; otherwise it steers into and extends the active turn. Either reporting
+path invokes the model and consumes tokens.
+
+## Server controls
+
+Most users never need `codex-server start`; `codex-dynamic` starts the server
+automatically. These commands are useful for inspection and cleanup:
+
+| Command | Purpose |
+| --- | --- |
+| `codex-server status` | Show endpoint health and process ownership |
+| `codex-server logs` | Show the most recent app-server output |
+| `codex-server logs --follow` | Follow app-server output |
+| `codex-server restart` | Restart a helper-owned server |
+| `codex-server stop` | Gracefully stop a helper-owned server |
+
+Add `--json` to lifecycle commands for machine-readable output.
+
+The helper reuses a healthy app server that was started another way, but it
+records ownership and refuses to stop or restart an external server. It also
+checks the saved process start time before sending a signal, so a reused PID
+cannot target an unrelated process.
+
+State and logs live under `$CODEX_HOME/cctools-app-server/`. The default
+`CODEX_HOME` is `~/.codex`. Set `CCTOOLS_CODEX_BIN` when the desired Codex
+executable is not the first `codex` on `PATH`.
+
+## Manual alternative
+
+You can use Codex's commands directly instead of installing this helper. Keep
+the server running in one terminal and start the TUI in another:
+
+```bash
+# Terminal 1
+codex app-server --listen unix://
+
+# Terminal 2
+codex --remote unix://
+```
+
+To resume a conversation manually, use `codex resume --remote unix://` and
+select it in the picker or pass its session ID.
+
+<Aside type="caution" title="Experimental Codex interface">
+  Codex currently marks the app-server and remote TUI interfaces as
+  experimental. The helper uses their documented `unix://` transport, but
+  their CLI and protocol surfaces may evolve. See the
+  [official app-server documentation][codex-app-server].
+</Aside>
+
+[codex-app-server]: https://developers.openai.com/codex/app-server

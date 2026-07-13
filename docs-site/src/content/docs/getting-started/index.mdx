@@ -86,13 +86,15 @@ import { Steps } from "@astrojs/starlight/components";
 
 ## What You Get
 
-Six commands are installed by default:
+Core commands include:
 
 | Command | Description |
 |---------|-------------|
 | [`aichat`](/claude-code-tools/tools/aichat/) | Session continuation without compaction, full-text search (for humans and agents) |
 | [`tmux-cli`](/claude-code-tools/tools/tmux-cli/) | Terminal automation ("Playwright for terminals") |
 | [`agent-tunnel`](/claude-code-tools/tools/agent-tunnel/) | Share a live Claude Code session with teammates over Discord (`>share`) |
+| [`codex-dynamic`][codex-dynamic] | Launch Codex with workflow callbacks |
+| [`codex-server`][codex-server] | Manage the shared Codex app server |
 | [`fix-session`](/claude-code-tools/tools/fix-session/) | Repair broken conversation chains |
 | [`vault`](/claude-code-tools/tools/vault/) | Encrypted `.env` backup and sync |
 | [`env-safe`](/claude-code-tools/tools/env-safe/) | Safe `.env` inspection |
@@ -114,3 +116,6 @@ With the `[gdocs]` extra, you also get:
   -- learn about session search and resume.
 - **[Safety Hooks](/claude-code-tools/plugins-detail/safety-hooks/)**
   -- protect against destructive operations.
+
+[codex-dynamic]: /claude-code-tools/tools/codex-dynamic/
+[codex-server]: /claude-code-tools/tools/codex-dynamic/#server-controls

@@ -45,6 +45,8 @@ fix-session = "claude_code_tools.fix_session:main"
 msg = "claude_code_tools.msg.cli:main"
 msg-hook = "claude_code_tools.msg.hooks:main"
 agent-tunnel = "claude_code_tools.agent_tunnel.cli:main"
+codex-server = "claude_code_tools.codex_server_cli:server_main"
+codex-dynamic = "claude_code_tools.codex_server_cli:dynamic_main"
 
 [build-system]
 requires = ["hatchling"]

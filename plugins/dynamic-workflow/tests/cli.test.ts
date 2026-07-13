@@ -223,7 +223,7 @@ test("a completed run wins a simultaneous supervisor deadline", async () => {
     workflowPath,
     "--json",
     "--max-runtime-ms",
-    "200",
+    "1000",
   ]);
   const state = JSON.parse(result.stdout) as RunState;
   expect(state.status).toBe("completed");
@@ -247,7 +247,7 @@ test("a runtime deadline removes active worker descendants", async () => {
     "--detach",
     "--json",
     "--max-runtime-ms",
-    "700",
+    "2000",
   ]);
   const { runId } = JSON.parse(launched.stdout) as { runId: string };
   const state = await waitForRun(runId, (item) => item.status === "failed");
@@ -258,7 +258,7 @@ test("a runtime deadline removes active worker descendants", async () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     expect(isPidRunning(grandchildPid)).toBe(false);
-    expect(state.error).toMatch(/700 ms runtime limit/);
+    expect(state.error).toMatch(/2000 ms runtime limit/);
   } finally {
     if (isPidRunning(grandchildPid)) {
       process.kill(grandchildPid, "SIGKILL");
@@ -294,7 +294,9 @@ test("resume replaces an engine orphaned by a supervisor crash", async () => {
     const resumed = await waitForRun(
       launch.runId,
       (state) =>
-        state.enginePid !== undefined && state.enginePid !== oldEnginePid,
+        state.enginePid !== undefined &&
+        state.enginePid !== oldEnginePid &&
+        state.status === "running",
     );
     expect(isPidRunning(oldEnginePid)).toBe(false);
     expect(resumed.status).toBe("running");

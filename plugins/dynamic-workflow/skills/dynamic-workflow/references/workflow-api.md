@@ -134,6 +134,9 @@ because source text changed. Each completed step is evaluated independently.
 run <file> [--input JSON|@FILE] [--cwd DIR] [--concurrency N]
            [--max-agents N] [--max-runtime-ms N]
            [--agent-timeout-ms N]
+           [--notify-current-thread]
+           [--app-server-endpoint unix://PATH]
+           [--notify-timeout-ms N]
            [--detach] [--json] [--allow-workspace-write]
            [--allow-danger-full-access]
 validate <file>
@@ -141,6 +144,7 @@ status <run-id> [--json]
 list [--json]
 logs <run-id>
 wait <run-id> [--json]
+notify <run-id> [--force] [--json]
 pause <run-id>
 resume <run-id> [--foreground] [--json] [--allow-workspace-write]
                 [--allow-danger-full-access]
@@ -151,6 +155,46 @@ State defaults to `~/.codex/workflows/runs/<run-id>/`. Set
 `CODEX_WORKFLOW_HOME` to move the state root and
 `CODEX_WORKFLOW_CODEX_BIN` to select another Codex executable.
 
+Every `run` and `resume` command requires explicit host execution for that
+exact reviewed command. The supervisor writes durable state outside the normal
+workspace and launches headless Codex processes whose model connections cannot
+run under an inherited outer sandbox. Do not approve a generic `node` prefix.
+The workflow VM remains restricted, and workers still use their declared
+sandboxes with approval policy `never`. State-changing control and notification
+commands need the same narrow approval when the sandbox cannot write the state
+root; read-only inspection commands do not.
+
+`--notify-current-thread` requires `--detach` and the `CODEX_THREAD_ID` that
+Codex automatically supplies to tool shells. Before creating the run, the CLI
+connects to `--app-server-endpoint` (default `unix://`) and verifies that the
+thread is loaded there. The TUI must have been started with the same endpoint,
+preferably with the optional `codex-dynamic` launcher from the
+`claude-code-tools` Python package. The equivalent manual setup runs
+`codex app-server --listen unix://` with `codex --remote unix://`.
+
+Callbacks require Codex CLI 0.136.0 or newer. Version 0.136.0 is the first
+compatible CLI release for this callback protocol. Codex still marks the
+app-server and remote TUI interfaces as experimental, so their CLI and protocol
+surfaces may evolve. Callback preflight also validates the version reported by
+the connected App Server, so a stale external server fails before run creation.
+The approved host execution for `run` lets the trusted notifier reach the Unix
+socket; it never changes worker sandboxes.
+
+The notifier begins only after the workflow is terminal. It uses `turn/start`
+for an idle thread and `turn/steer` to extend an active one, then confirms the
+echoed client message ID. Passive supervision adds no model calls. Reporting
+invokes the model and consumes tokens whether it starts a new turn for an idle
+thread or extends the active turn. The retry deadline defaults to 24 hours and
+is capped at seven days, with no more than five delivery submissions. Callback
+status is independent of run status and appears under `completionNotification`
+in JSON status output.
+
+`notify <run-id>` manually retries a definite callback failure and requires the
+same command-scoped host approval as callback launch. An `unknown` status, or a
+`sending` status after submission began, indicates ambiguous
+delivery and requires `--force` after the target thread has been inspected for
+the original message.
+
 Each run directory contains:
 
 - `state.json`: atomic run and agent state
@@ -158,6 +202,9 @@ Each run directory contains:
 - `events.jsonl`: raw lifecycle and Codex JSONL events
 - `workflow.log`: concise human-readable progress
 - `runner.log`: stdout and stderr for a detached runner
+- `notification.log`: stdout and stderr for a callback sidecar
+- `completion-notification.json`: independent callback delivery state
+- `notification.lock/`: cross-process claim preventing duplicate notifiers
 - `runner.lock/`: cross-process claim preventing duplicate runners
 - `schemas/`: JSON Schemas supplied to structured workers
 - `workflow-snapshots/`: exact source revisions executed by the runner

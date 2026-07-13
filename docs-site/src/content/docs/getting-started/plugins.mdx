@@ -38,13 +38,20 @@ codex plugin marketplace add pchalasani/claude-code-tools
 codex plugin add dynamic-workflow@cctools-codex-plugins
 ```
 
-This Codex plugin does not require `uv tool install claude-code-tools` or an
+The plugin itself does not require `uv tool install claude-code-tools` or an
 `npm install`. It includes the skill and compiled runner; Node.js 20 or newer
-only needs to be available to execute the runner.
+only needs to be available to execute the runner. For completion callbacks,
+the optional [`codex-dynamic` helper][codex-dynamic] starts Codex through its
+shared app server with one command. The manual setup remains available, and
+neither path requires MCP. Codex still marks the underlying app-server and
+remote TUI interfaces as experimental, so their CLI and protocol surfaces may
+evolve.
 
 See the
 [Dynamic Workflow detail page](/claude-code-tools/plugins-detail/dynamic-workflow/)
 for its JavaScript API, state model, and safety boundaries.
+
+[codex-dynamic]: /claude-code-tools/tools/codex-dynamic/
 
 ## Claude Code Plugin Installation
 
