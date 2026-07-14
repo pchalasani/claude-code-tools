@@ -79,6 +79,12 @@ try:
 except ImportError:
     RICH_AVAILABLE = False
 
+
+def _string_or_empty(value: object) -> str:
+    """Return string metadata values, normalizing malformed values to empty."""
+    return value if isinstance(value, str) else ""
+
+
 def extract_session_id_from_filename(filename: str) -> Optional[str]:
     """
     Extract session ID from Codex session filename.
@@ -109,14 +115,22 @@ def extract_session_metadata(session_file: Path) -> Optional[dict]:
                     continue
                 try:
                     entry = json.loads(line)
+                    if not isinstance(entry, dict):
+                        continue
                     if entry.get("type") == "session_meta":
-                        payload = entry.get("payload", {})
+                        payload = entry.get("payload")
+                        if not isinstance(payload, dict):
+                            continue
                         git_info = payload.get("git", {})
+                        if not isinstance(git_info, dict):
+                            git_info = {}
                         return {
-                            "id": payload.get("id", ""),
-                            "cwd": payload.get("cwd", ""),
-                            "branch": git_info.get("branch", ""),
-                            "timestamp": payload.get("timestamp", ""),
+                            "id": _string_or_empty(payload.get("id")),
+                            "cwd": _string_or_empty(payload.get("cwd")),
+                            "branch": _string_or_empty(git_info.get("branch")),
+                            "timestamp": _string_or_empty(
+                                payload.get("timestamp")
+                            ),
                         }
                 except json.JSONDecodeError:
                     continue
@@ -166,18 +180,29 @@ def search_keywords_in_file(
                         continue
                     try:
                         entry = json.loads(line)
+                        if not isinstance(entry, dict):
+                            continue
                         # Only count and extract user/assistant messages
                         if entry.get("type") == "response_item":
-                            role = entry.get("payload", {}).get("role")
+                            payload = entry.get("payload")
+                            if not isinstance(payload, dict):
+                                continue
+                            role = _string_or_empty(payload.get("role"))
                             if role in ("user", "assistant"):
                                 msg_count += 1
-                                content = entry.get("payload", {}).get("content", [])
+                                content = payload.get("content")
                                 if isinstance(content, list) and len(content) > 0:
                                     first_item = content[0]
                                     if isinstance(first_item, dict):
-                                        text = first_item.get("text", "")
+                                        text = _string_or_empty(
+                                            first_item.get("text")
+                                        )
                                         if text and not is_system_message(text):
-                                            cleaned = text[:400].replace("\n", " ").strip()
+                                            cleaned = (
+                                                text[:400]
+                                                .replace("\n", " ")
+                                                .strip()
+                                            )
                                             type_prefix = f"[{role}]"
                                             if len(cleaned) > 20:
                                                 last_message = (type_prefix, cleaned)
@@ -187,7 +212,7 @@ def search_keywords_in_file(
                         continue
             preview = f"{last_message[0]} {last_message[1]}" if last_message else None
             return True, msg_count, preview
-        except (OSError, IOError):
+        except (OSError, IOError, UnicodeError):
             return False, 0, None
 
     keywords_lower = [k.lower() for k in keywords]
@@ -209,20 +234,31 @@ def search_keywords_in_file(
 
                 try:
                     entry = json.loads(line)
+                    if not isinstance(entry, dict):
+                        continue
 
                     # Only count and extract user/assistant messages
                     if entry.get("type") == "response_item":
-                        role = entry.get("payload", {}).get("role")
+                        payload = entry.get("payload")
+                        if not isinstance(payload, dict):
+                            continue
+                        role = _string_or_empty(payload.get("role"))
                         if role in ("user", "assistant"):
                             msg_count += 1
-                            content = entry.get("payload", {}).get("content", [])
+                            content = payload.get("content")
                             if isinstance(content, list) and len(content) > 0:
                                 first_item = content[0]
                                 if isinstance(first_item, dict):
-                                    text = first_item.get("text", "")
+                                    text = _string_or_empty(
+                                        first_item.get("text")
+                                    )
                                     if text and not is_system_message(text):
                                         # Keep updating with latest message
-                                        cleaned = text[:400].replace("\n", " ").strip()
+                                        cleaned = (
+                                            text[:400]
+                                            .replace("\n", " ")
+                                            .strip()
+                                        )
                                         type_prefix = f"[{role}]"
                                         # Only keep if it's substantial (>20 chars)
                                         if len(cleaned) > 20:
@@ -238,14 +274,14 @@ def search_keywords_in_file(
         preview = f"{last_message[0]} {last_message[1]}" if last_message else None
         return all_found, msg_count, preview
 
-    except (OSError, IOError):
+    except (OSError, IOError, UnicodeError):
         return False, 0, None
 
 
 def find_sessions(
     codex_home: Path,
     keywords: list[str],
-    num_matches: int = 10,
+    num_matches: Optional[int] = 10,
     global_search: bool = False,
     original_only: bool = False,
     no_sub: bool = False,
@@ -258,7 +294,8 @@ def find_sessions(
     Args:
         codex_home: Path to Codex home directory
         keywords: List of keywords to search for
-        num_matches: Maximum number of results to return
+        num_matches: Maximum number of results to return, or None for all
+            matching sessions.
         global_search: If False, filter to current directory only
         original_only: If True, show only original sessions (excludes trimmed and rollover)
         no_sub: If True, exclude sub-agent sessions (Note: Codex doesn't have sub-agents)
@@ -342,7 +379,11 @@ def find_sessions(
                             continue
 
                     # Get timestamps - prefer JSON metadata for create_time
-                    stat = session_file.stat()
+                    try:
+                        stat = session_file.stat()
+                    except OSError:
+                        # The rollout may disappear after it was opened above.
+                        continue
                     mod_time = stat.st_mtime
                     # Use session timestamp from metadata if available
                     if metadata.get("timestamp"):
@@ -352,7 +393,7 @@ def find_sessions(
                             if ts.endswith("Z"):
                                 ts = ts[:-1] + "+00:00"
                             create_time = datetime.fromisoformat(ts).timestamp()
-                        except (ValueError, TypeError):
+                        except (OSError, OverflowError, TypeError, ValueError):
                             create_time = getattr(stat, 'st_birthtime', stat.st_ctime)
                     else:
                         create_time = getattr(stat, 'st_birthtime', stat.st_ctime)
@@ -379,12 +420,15 @@ def find_sessions(
                     )
 
                     # Early exit if we have enough matches
-                    if len(matches) >= num_matches * 3:
+                    if (
+                        num_matches is not None
+                        and len(matches) >= num_matches * 3
+                    ):
                         break
 
     # Sort by modification time (newest first) and limit
     matches.sort(key=lambda x: x["mod_time"], reverse=True)
-    return matches[:num_matches]
+    return matches if num_matches is None else matches[:num_matches]
 
 
 def display_interactive_ui(

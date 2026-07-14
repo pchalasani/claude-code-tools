@@ -236,6 +236,8 @@ def extract_first_last_messages(
                     data = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(data, dict):
+                    continue
 
                 role: Optional[str] = None
                 text: Optional[str] = None
@@ -343,6 +345,8 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
                     data = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(data, dict):
+                    continue
 
                 # Extract cwd (first line that has it)
                 if metadata["cwd"] is None and data.get("cwd"):
@@ -410,7 +414,7 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
                 if (metadata["cwd"] and metadata["branch"]) or line_num >= 500:
                     break
 
-    except (OSError, IOError):
+    except (OSError, IOError, UnicodeError):
         pass
 
     # Note: customTitle extraction is done in search_index.py's _extract_session_content
@@ -454,7 +458,7 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
     try:
         with open(session_file, "r", encoding="utf-8") as f:
             metadata["lines"] = sum(1 for _ in f)
-    except (OSError, IOError):
+    except (OSError, IOError, UnicodeError):
         metadata["lines"] = 0
 
     # Derive project name from cwd

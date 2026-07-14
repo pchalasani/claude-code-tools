@@ -59,15 +59,17 @@ def get_session_start_timestamp(jsonl_file: Path) -> Optional[float]:
                     continue
                 try:
                     data = json.loads(line)
-                    if data.get("timestamp"):
-                        ts = data["timestamp"]
+                    if not isinstance(data, dict):
+                        continue
+                    ts = data.get("timestamp")
+                    if isinstance(ts, str) and ts:
                         # Parse ISO format (e.g., "2025-10-22T16:05:28.707Z")
                         if ts.endswith("Z"):
                             ts = ts[:-1] + "+00:00"
                         return datetime.fromisoformat(ts).timestamp()
                 except (json.JSONDecodeError, ValueError, TypeError):
                     continue
-    except (OSError, IOError):
+    except (OSError, IOError, UnicodeError):
         pass
     return None
 
@@ -216,6 +218,8 @@ def extract_project_name(original_path: str) -> str:
                 for line in f:
                     try:
                         data = json.loads(line.strip())
+                        if not isinstance(data, dict):
+                            continue
                         # Only count user/assistant messages
                         if data.get('type') in ('user', 'assistant'):
                             msg_count += 1
@@ -242,6 +246,8 @@ def extract_project_name(original_path: str) -> str:
 
                 try:
                     data = json.loads(line.strip())
+                    if not isinstance(data, dict):
+                        continue
                     # Only count user/assistant messages
                     if data.get('type') in ('user', 'assistant'):
                         msg_count += 1
@@ -299,11 +305,11 @@ def is_sidechain_session(filepath: Path) -> bool:
                     break
                 try:
                     data = json.loads(line.strip())
-                    if "isSidechain" in data:
+                    if isinstance(data, dict) and "isSidechain" in data:
                         return data["isSidechain"] is True
                 except (json.JSONDecodeError, KeyError):
                     continue
-    except (OSError, IOError):
+    except (OSError, IOError, UnicodeError):
         pass
 
     return False
@@ -332,6 +338,8 @@ def search_keywords_in_file(filepath: Path, keywords: List[str]) -> tuple[bool, 
                 for line in f:
                     try:
                         data = json.loads(line.strip())
+                        if not isinstance(data, dict):
+                            continue
                         # Only count user/assistant messages
                         if data.get('type') in ('user', 'assistant'):
                             msg_count += 1
@@ -358,6 +366,8 @@ def search_keywords_in_file(filepath: Path, keywords: List[str]) -> tuple[bool, 
 
                 try:
                     data = json.loads(line.strip())
+                    if not isinstance(data, dict):
+                        continue
                     # Only count user/assistant messages
                     if data.get('type') in ('user', 'assistant'):
                         msg_count += 1
@@ -389,6 +399,8 @@ def get_session_preview(filepath: Path) -> str:
             for line in f:
                 try:
                     data = json.loads(line.strip())
+                    if not isinstance(data, dict):
+                        continue
                     msg_type = data.get('type')
                     # Accept user or assistant messages
                     if msg_type in ('user', 'assistant'):
@@ -498,7 +510,10 @@ def find_sessions(
                                     continue
 
                             session_id = jsonl_file.stem
-                            stat = jsonl_file.stat()
+                            try:
+                                stat = jsonl_file.stat()
+                            except OSError:
+                                continue
                             mod_time = stat.st_mtime
                             # Get session start timestamp from JSON metadata, fall back to file stats
                             create_time = get_session_start_timestamp(jsonl_file)
@@ -506,7 +521,10 @@ def find_sessions(
                                 create_time = getattr(stat, 'st_birthtime', stat.st_ctime)
                             preview = get_session_preview(jsonl_file)
                             # Extract actual cwd from session file - MUST NOT use reconstructed path as fallback
-                            actual_cwd = extract_cwd_from_session(jsonl_file)
+                            actual_cwd = extract_cwd_from_session(
+                                jsonl_file,
+                                agent="claude",
+                            )
                             if not actual_cwd:
                                 # Skip sessions without cwd metadata (shouldn't happen for valid Claude sessions)
                                 continue
@@ -547,7 +565,10 @@ def find_sessions(
                                 continue
 
                         session_id = jsonl_file.stem
-                        stat = jsonl_file.stat()
+                        try:
+                            stat = jsonl_file.stat()
+                        except OSError:
+                            continue
                         mod_time = stat.st_mtime
                         # Get session start timestamp from JSON metadata, fall back to file stats
                         create_time = get_session_start_timestamp(jsonl_file)
@@ -555,7 +576,10 @@ def find_sessions(
                             create_time = getattr(stat, 'st_birthtime', stat.st_ctime)
                         preview = get_session_preview(jsonl_file)
                         # Extract actual cwd from session file - MUST NOT use reconstructed path as fallback
-                        actual_cwd = extract_cwd_from_session(jsonl_file)
+                        actual_cwd = extract_cwd_from_session(
+                            jsonl_file,
+                            agent="claude",
+                        )
                         if not actual_cwd:
                             # Skip sessions without cwd metadata (shouldn't happen for valid Claude sessions)
                             continue
@@ -599,7 +623,10 @@ def find_sessions(
                         continue
 
                 session_id = jsonl_file.stem
-                stat = jsonl_file.stat()
+                try:
+                    stat = jsonl_file.stat()
+                except OSError:
+                    continue
                 mod_time = stat.st_mtime
                 # Get session start timestamp from JSON metadata, fall back to file stats
                 create_time = get_session_start_timestamp(jsonl_file)
@@ -607,7 +634,10 @@ def find_sessions(
                     create_time = getattr(stat, 'st_birthtime', stat.st_ctime)
                 preview = get_session_preview(jsonl_file)
                 # Extract actual cwd from session file for consistency
-                actual_cwd = extract_cwd_from_session(jsonl_file) or os.getcwd()
+                actual_cwd = (
+                    extract_cwd_from_session(jsonl_file, agent="claude")
+                    or os.getcwd()
+                )
                 matching_sessions.append((session_id, mod_time, create_time, line_count, project_name, preview, actual_cwd, git_branch, derivation_type, is_sidechain))
     
     # Sort by modification time (newest first)
@@ -1059,6 +1089,54 @@ def get_session_file_path(
         )
 
 
+def get_custom_title(
+    session_id: str,
+    cwd: str,
+    claude_home: Optional[str] = None,
+    session_file: Optional[Path] = None,
+) -> str:
+    """Return the most recent user-assigned name for a Claude session.
+
+    Claude writes names from ``/rename`` as ``custom-title`` records. Older
+    versions may mirror the value in an ``agent-name`` record. Automatic
+    ``ai-title`` records are deliberately ignored.
+
+    Args:
+        session_id: Full Claude session identifier.
+        cwd: Session working directory.
+        claude_home: Optional Claude home directory override.
+        session_file: Optional already-discovered transcript path. This avoids
+            reconstructing a stale path from the transcript's current cwd.
+
+    Returns:
+        The latest custom session name, or an empty string if none is found.
+    """
+    try:
+        path = session_file or Path(
+            get_session_file_path(session_id, cwd, claude_home)
+        )
+        custom_title = ""
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                if data.get("type") == "custom-title":
+                    value = data.get("customTitle")
+                elif data.get("type") == "agent-name":
+                    value = data.get("agentName")
+                else:
+                    continue
+                if isinstance(value, str) and value:
+                    custom_title = value
+        return custom_title
+    except (OSError, UnicodeError, ValueError):
+        return ""
+
+
 def handle_export_session(session_file_path: str, dest_override: str | None = None, silent: bool = False) -> None:
     """Export session to text file."""
     from claude_code_tools.export_claude_session import export_session_to_markdown as do_export
@@ -1071,7 +1149,7 @@ def handle_export_session(session_file_path: str, dest_override: str | None = No
         today = datetime.now().strftime("%Y%m%d")
 
         # Infer project directory from session metadata
-        project_dir = extract_cwd_from_session(session_file)
+        project_dir = extract_cwd_from_session(session_file, agent="claude")
         if project_dir:
             output_dir = Path(project_dir) / "exported-sessions"
         else:
@@ -1591,19 +1669,6 @@ To persist directory changes when resuming sessions:
     rpc_path = str(Path(__file__).parent / "action_rpc.py")
 
     if not args.simple_ui:
-        from claude_code_tools.export_session import extract_session_metadata
-
-        def get_custom_title(session_id: str, cwd: str) -> str:
-            """Extract custom title from session file if present."""
-            try:
-                fp = get_session_file_path(session_id, cwd, args.claude_home)
-                if fp:
-                    meta = extract_session_metadata(Path(fp), "claude")
-                    return meta.get("customTitle", "")
-            except Exception:
-                pass
-            return ""
-
         limited = [
             {
                 "agent": "claude",
@@ -1621,7 +1686,9 @@ To persist directory changes when resuming sessions:
                 "is_trimmed": s[8] if len(s) > 8 else False,
                 "derivation_type": None,
                 "is_sidechain": s[9] if len(s) > 9 else False,
-                "custom_title": get_custom_title(s[0], s[6]),
+                "custom_title": get_custom_title(
+                    s[0], s[6], args.claude_home
+                ),
             }
             for s in matching_sessions[: args.num_matches]
         ]
