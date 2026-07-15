@@ -97,7 +97,10 @@ def _get_last_line_timestamp(file_path: Path) -> Optional[str]:
 
             # Parse JSON and extract timestamp
             data = json.loads(last_line)
-            return data.get("timestamp")
+            if not isinstance(data, dict):
+                return None
+            timestamp = data.get("timestamp")
+            return timestamp if isinstance(timestamp, str) and timestamp else None
 
     except (OSError, IOError, json.JSONDecodeError, UnicodeDecodeError):
         return None
@@ -114,6 +117,8 @@ def _extract_claude_message_text(data: dict) -> Optional[str]:
         Extracted text or None if not a text message
     """
     message = data.get("message", {})
+    if not isinstance(message, dict):
+        return None
     content = message.get("content")
 
     if not content:
@@ -129,8 +134,9 @@ def _extract_claude_message_text(data: dict) -> Optional[str]:
             if isinstance(block, str) and block.strip():
                 return block.strip()
             if isinstance(block, dict) and block.get("type") == "text":
-                text = block.get("text", "").strip()
-                if text:
+                text = block.get("text")
+                if isinstance(text, str) and text.strip():
+                    text = text.strip()
                     return text
 
     return None
@@ -147,6 +153,8 @@ def _extract_codex_message_text(data: dict) -> Optional[str]:
         Extracted text or None if not a text message
     """
     payload = data.get("payload", {})
+    if not isinstance(payload, dict):
+        return None
     if payload.get("type") != "message":
         return None
 
@@ -160,9 +168,9 @@ def _extract_codex_message_text(data: dict) -> Optional[str]:
         block_type = block.get("type")
         # Both input_text and output_text have text field
         if block_type in ("input_text", "output_text"):
-            text = block.get("text", "").strip()
-            if text:
-                return text
+            text = block.get("text")
+            if isinstance(text, str) and text.strip():
+                return text.strip()
 
     return None
 
@@ -251,10 +259,17 @@ def extract_first_last_messages(
                 elif agent == "codex":
                     if data.get("type") == "response_item":
                         payload = data.get("payload", {})
-                        if payload.get("type") == "message":
-                            role = payload.get("role")
+                        if (
+                            isinstance(payload, dict)
+                            and payload.get("type") == "message"
+                        ):
+                            payload_role = payload.get("role")
+                            if isinstance(payload_role, str):
+                                role = payload_role
                             text = _extract_codex_message_text(data)
-                            timestamp = data.get("timestamp")
+                            raw_timestamp = data.get("timestamp")
+                            if isinstance(raw_timestamp, str):
+                                timestamp = raw_timestamp
 
                 if role and text:
                     msg_dict = {
@@ -336,7 +351,7 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
 
     try:
         with open(session_file, "r", encoding="utf-8") as f:
-            for line_num, line in enumerate(f, 1):
+            for line in f:
                 line = line.strip()
                 if not line:
                     continue
@@ -348,39 +363,58 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
                 if not isinstance(data, dict):
                     continue
 
-                # Extract cwd (first line that has it)
-                if metadata["cwd"] is None and data.get("cwd"):
-                    metadata["cwd"] = data["cwd"]
+                # Extract cwd (first line with a non-empty string value)
+                cwd = data.get("cwd")
+                if (
+                    metadata["cwd"] is None
+                    and isinstance(cwd, str)
+                    and bool(cwd.strip())
+                ):
+                    metadata["cwd"] = cwd
 
                 # Extract git branch (first line that has it)
-                if metadata["branch"] is None and data.get("gitBranch"):
-                    metadata["branch"] = data["gitBranch"]
+                git_branch = data.get("gitBranch")
+                if (
+                    metadata["branch"] is None
+                    and isinstance(git_branch, str)
+                    and bool(git_branch.strip())
+                ):
+                    metadata["branch"] = git_branch
 
                 # Extract session ID from sessionId field if available
-                if data.get("sessionId"):
-                    metadata["session_id"] = data["sessionId"]
+                session_id = data.get("sessionId")
+                if isinstance(session_id, str) and session_id.strip():
+                    metadata["session_id"] = session_id
 
                 # Extract trim_metadata (for trimmed sessions)
-                if "trim_metadata" in data:
-                    tm = data["trim_metadata"]
+                tm = data.get("trim_metadata")
+                if isinstance(tm, dict):
                     metadata["derivation_type"] = "trimmed"
-                    metadata["parent_session_file"] = tm.get("parent_file")
-                    if tm.get("parent_file"):
-                        parent_path = Path(tm["parent_file"])
+                    parent_file = tm.get("parent_file")
+                    if isinstance(parent_file, str) and parent_file.strip():
+                        metadata["parent_session_file"] = parent_file
+                        parent_path = Path(parent_file)
                         metadata["parent_session_id"] = parent_path.stem
-                    if tm.get("stats"):
-                        metadata["trim_stats"] = tm["stats"]
+                    stats = tm.get("stats")
+                    if isinstance(stats, dict):
+                        metadata["trim_stats"] = stats
 
                 # Extract continue_metadata (for continued sessions)
-                if "continue_metadata" in data:
-                    cm = data["continue_metadata"]
+                cm = data.get("continue_metadata")
+                if isinstance(cm, dict):
                     metadata["derivation_type"] = "continued"
-                    metadata["parent_session_id"] = cm.get("parent_session_id")
-                    metadata["parent_session_file"] = cm.get("parent_session_file")
+                    parent_id = cm.get("parent_session_id")
+                    if isinstance(parent_id, str) and parent_id.strip():
+                        metadata["parent_session_id"] = parent_id
+                    parent_file = cm.get("parent_session_file")
+                    if isinstance(parent_file, str) and parent_file.strip():
+                        metadata["parent_session_file"] = parent_file
 
                 # Extract sessionType (e.g., "helper" for SDK/headless sessions)
                 if "sessionType" in data and metadata["session_type"] is None:
-                    metadata["session_type"] = data["sessionType"]
+                    session_type = data.get("sessionType")
+                    if isinstance(session_type, str) and session_type.strip():
+                        metadata["session_type"] = session_type
 
                 # Extract git branch for Claude from file-history-snapshot metadata
                 if (
@@ -388,30 +422,44 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
                     and metadata["branch"] is None
                     and data.get("type") == "file-history-snapshot"
                 ):
-                    git_info = data.get("metadata", {}).get("git", {})
-                    if git_info.get("branch"):
-                        metadata["branch"] = git_info["branch"]
+                    nested_metadata = data.get("metadata")
+                    if isinstance(nested_metadata, dict):
+                        git_info = nested_metadata.get("git")
+                        if isinstance(git_info, dict):
+                            branch = git_info.get("branch")
+                            if isinstance(branch, str) and branch.strip():
+                                metadata["branch"] = branch
 
                 # Extract git branch for Codex sessions from session_meta
                 if agent == "codex" and data.get("type") == "session_meta":
-                    payload = data.get("payload", {})
-                    git_info = payload.get("git", {})
-                    if git_info.get("branch"):
-                        metadata["branch"] = git_info["branch"]
-                    if payload.get("cwd"):
-                        metadata["cwd"] = payload["cwd"]
-                    if payload.get("id"):
-                        metadata["session_id"] = payload["id"]
-                    if session_start_timestamp is None and data.get("timestamp"):
-                        session_start_timestamp = data["timestamp"]
+                    payload = data.get("payload")
+                    if isinstance(payload, dict):
+                        git_info = payload.get("git")
+                        if isinstance(git_info, dict):
+                            branch = git_info.get("branch")
+                            if isinstance(branch, str) and branch.strip():
+                                metadata["branch"] = branch
+                        payload_cwd = payload.get("cwd")
+                        if (
+                            isinstance(payload_cwd, str)
+                            and payload_cwd.strip()
+                        ):
+                            metadata["cwd"] = payload_cwd
+                        payload_id = payload.get("id")
+                        if isinstance(payload_id, str) and payload_id.strip():
+                            metadata["session_id"] = payload_id
 
                 # Extract session start timestamp from first entry with timestamp
-                if session_start_timestamp is None and data.get("timestamp"):
-                    session_start_timestamp = data["timestamp"]
+                timestamp = data.get("timestamp")
+                if (
+                    session_start_timestamp is None
+                    and isinstance(timestamp, str)
+                    and timestamp.strip()
+                ):
+                    session_start_timestamp = timestamp
 
-                # Stop once we have the essential metadata (cwd and branch)
-                # or after 500 lines as a safety limit
-                if (metadata["cwd"] and metadata["branch"]) or line_num >= 500:
+                # Stop once we have the essential metadata (cwd and branch).
+                if metadata["cwd"] and metadata["branch"]:
                     break
 
     except (OSError, IOError, UnicodeError):

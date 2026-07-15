@@ -15,11 +15,13 @@ from rich import box
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from claude_code_tools.session_utils import (
     format_session_id_display,
     get_claude_home,
     get_codex_home,
+    is_valid_session,
 )
 
 Agent = Literal["claude", "codex"]
@@ -130,11 +132,11 @@ def _mtime(path: Path) -> tuple[str, float]:
     """Return a session file's local ISO mtime and numeric timestamp."""
     try:
         timestamp = path.stat().st_mtime
-    except OSError as error:
+        modified = datetime.fromtimestamp(timestamp).astimezone().isoformat()
+    except (OSError, OverflowError, ValueError) as error:
         raise ResolverError(
             "unreadable_session", f"Cannot stat session file {path}: {error}"
         ) from error
-    modified = datetime.fromtimestamp(timestamp).astimezone().isoformat()
     return modified, timestamp
 
 
@@ -158,9 +160,52 @@ def _normalize_archived(value: object) -> bool:
     return False
 
 
+def _decode_sqlite_text(value: bytes) -> str | bytes:
+    """Decode valid UTF-8 SQLite text and preserve invalid text as bytes."""
+    try:
+        return value.decode("utf-8")
+    except UnicodeDecodeError:
+        return value
+
+
 def _normalize_directory(value: object) -> str | None:
     """Return a usable session directory, or None for malformed metadata."""
     return value if isinstance(value, str) and value.strip() else None
+
+
+def _has_claude_session_record(session_file: Path) -> bool:
+    """Return whether a transcript contains a Claude conversation record.
+
+    Filename-based exact-ID resolution can tolerate missing or wrong-typed
+    record metadata, including ``sessionId``. It still requires at least one
+    parseable Claude conversation record so empty, unreadable, or wholly
+    truncated files are not presented as resumable sessions.
+    """
+    conversation_types = {
+        "assistant",
+        "system",
+        "tool_result",
+        "tool_use",
+        "user",
+    }
+    try:
+        with session_file.open("r", encoding="utf-8") as transcript:
+            for line in transcript:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                record_type = record.get("type")
+                if (
+                    isinstance(record_type, str)
+                    and record_type in conversation_types
+                ):
+                    return True
+    except (OSError, UnicodeError):
+        return False
+    return False
 
 
 def _claude_record(
@@ -241,12 +286,18 @@ def enumerate_claude_sessions(home: Path) -> list[SessionRecord]:
                     session_id, directory, str(home)
                 )
             )
-            eligible = not claude_sessions.is_sidechain_session(path)
-            eligible = eligible and not claude_sessions.is_malformed_session(
-                path
-            )
+            if not _has_claude_session_record(path):
+                continue
         except (OSError, UnicodeError, TypeError, ValueError):
             continue
+        try:
+            eligible = not claude_sessions.is_sidechain_session(path)
+            eligible = (
+                eligible
+                and not claude_sessions.is_malformed_session(path)
+            )
+        except (OSError, UnicodeError, TypeError, ValueError):
+            eligible = False
         absolute_path = _absolute(path)
         try:
             records_by_path[absolute_path] = _claude_record(
@@ -266,6 +317,8 @@ def enumerate_claude_sessions(home: Path) -> list[SessionRecord]:
             directory = _normalize_directory(
                 extract_cwd_from_session(session_file, agent="claude")
             )
+            if not _has_claude_session_record(session_file):
+                continue
             try:
                 eligible = not claude_sessions.is_sidechain_session(
                     session_file
@@ -311,12 +364,15 @@ def _codex_state_database(home: Path) -> Path | None:
 
 def _codex_path(raw_path: object, home: Path) -> Path | None:
     """Normalize a rollout path read from the Codex database."""
-    if not isinstance(raw_path, str) or not raw_path:
+    if not isinstance(raw_path, str) or not raw_path.strip():
         return None
-    path = Path(raw_path).expanduser()
-    if not path.is_absolute():
-        path = home / path
-    return _absolute(path)
+    try:
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute():
+            path = home / path
+        return _absolute(path)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return None
 
 
 def _deduplicate_records(
@@ -357,6 +413,10 @@ def _enumerate_codex_database(
             "unreadable_database", f"Cannot open {database}: {error}"
         ) from error
 
+    # SQLite's default text decoder aborts fetchall() when any selected TEXT
+    # value is invalid UTF-8. Preserve undecodable values as bytes so the
+    # hostile row can be rejected or normalized without losing valid rows.
+    connection.text_factory = _decode_sqlite_text
     connection.row_factory = sqlite3.Row
     try:
         table_info = connection.execute(
@@ -395,40 +455,49 @@ def _enumerate_codex_database(
 
     records: list[SessionRecord] = []
     for row in rows:
-        session_id = row["id"]
-        if not isinstance(session_id, str) or not session_id:
-            continue
-        session_file = _codex_path(row["rollout_path"], home)
-        if session_file is None or not session_file.is_file():
-            continue
         try:
-            modified, timestamp = _mtime(session_file)
-        except ResolverError as error:
-            if _is_unreadable_session(error):
+            session_id = row["id"]
+            if not isinstance(session_id, str) or not session_id.strip():
                 continue
-            raise
-        title = row["title"] if "title" in selected else None
-        directory = row["cwd"] if "cwd" in selected else None
-        records.append(
-            SessionRecord(
-                agent="codex",
-                session_id=session_id,
-                name=title if isinstance(title, str) and title else None,
-                directory=(
-                    directory
-                    if isinstance(directory, str) and directory
-                    else None
-                ),
-                home=str(home),
-                session_file=str(session_file),
-                matched_by=None,
-                modified=modified,
-                archived=_normalize_archived(row["archived"])
-                if "archived" in selected
-                else False,
-                _modified_timestamp=timestamp,
+            session_file = _codex_path(row["rollout_path"], home)
+            if session_file is None or not session_file.is_file():
+                continue
+            if not is_valid_session(session_file):
+                continue
+            modified, timestamp = _mtime(session_file)
+            title = row["title"] if "title" in selected else None
+            directory = row["cwd"] if "cwd" in selected else None
+            records.append(
+                SessionRecord(
+                    agent="codex",
+                    session_id=session_id,
+                    name=title if isinstance(title, str) and title else None,
+                    directory=(
+                        directory
+                        if isinstance(directory, str) and directory
+                        else None
+                    ),
+                    home=str(home),
+                    session_file=str(session_file),
+                    matched_by=None,
+                    modified=modified,
+                    archived=_normalize_archived(row["archived"])
+                    if "archived" in selected
+                    else False,
+                    _modified_timestamp=timestamp,
+                )
             )
-        )
+        except (
+            OSError,
+            ResolverError,
+            RuntimeError,
+            TypeError,
+            UnicodeError,
+            ValueError,
+        ):
+            # Database fields are hostile input. Skip only this row when its
+            # rollout path cannot be normalized, checked, or read.
+            continue
     return _deduplicate_records(records)
 
 
@@ -463,6 +532,8 @@ def _enumerate_codex_fallback(home: Path) -> list[SessionRecord]:
             )
             if not isinstance(session_id, str) or not session_id:
                 continue
+            if not is_valid_session(session_file):
+                continue
 
             try:
                 modified, timestamp = _mtime(session_file)
@@ -495,23 +566,15 @@ def _enumerate_codex_fallback(home: Path) -> list[SessionRecord]:
 
 
 def enumerate_codex_sessions(home: Path) -> list[SessionRecord]:
-    """Enumerate Codex sessions from SQLite or the rollout fallback."""
+    """Enumerate Codex sessions from SQLite or recursive rollout fallback."""
     _validate_home(home)
     database = _codex_state_database(home)
-    if database is not None:
-        try:
-            return _enumerate_codex_database(home, database)
-        except ResolverError as database_error:
-            if database_error.code not in {
-                "invalid_database",
-                "unreadable_database",
-            }:
-                raise
-            fallback_records = _enumerate_codex_fallback(home)
-            if fallback_records:
-                return fallback_records
-            raise database_error
-    return _enumerate_codex_fallback(home)
+    if database is None:
+        return _enumerate_codex_fallback(home)
+
+    # The highest-numbered state database is authoritative whenever present.
+    # Rollout discovery is only a fallback for homes with no state database.
+    return _enumerate_codex_database(home, database)
 
 
 def _resolved_home(agent: Agent, home: str | Path | None) -> Path:
@@ -670,7 +733,7 @@ def _success_table(record: SessionRecord) -> Table:
         ("Archived", "yes" if record.archived else "no"),
     )
     for label, value in values:
-        table.add_row(label, value)
+        table.add_row(label, Text(value))
     return table
 
 
@@ -684,10 +747,10 @@ def _candidate_table(records: tuple[SessionRecord, ...]) -> Table:
     table.add_column("Archived", no_wrap=True)
     for record in records:
         table.add_row(
-            format_session_id_display(record.session_id),
-            record.name or "—",
-            record.directory or "—",
-            record.modified,
+            Text(format_session_id_display(record.session_id)),
+            Text(record.name or "—"),
+            Text(record.directory or "—"),
+            Text(record.modified),
             "yes" if record.archived else "no",
         )
     return table
@@ -699,22 +762,27 @@ def render_pretty(result: ResolveResult) -> None:
     if result.kind == "single":
         console.print(Panel(_success_table(result.records[0]), title="Session"))
     elif result.kind == "ambiguous":
-        console.print(
-            f"[yellow]{result.match_count} sessions match "
-            f"'{result.query}' — disambiguate:[/yellow]"
-        )
+        message = Text(style="yellow")
+        message.append(f"{result.match_count} sessions match '")
+        message.append(result.query)
+        message.append("' — disambiguate:")
+        console.print(message)
         console.print(_candidate_table(result.records))
     else:
-        console.print(
-            f"[yellow]No session found for '{result.query}' "
-            f"in {result.home}[/yellow]"
-        )
+        message = Text(style="yellow")
+        message.append("No session found for '")
+        message.append(result.query)
+        message.append(f"' in {result.home}")
+        console.print(message)
 
 
 def _render_error(code: str, detail: str, pretty: bool) -> None:
     """Render an expected operational error."""
     if pretty:
-        Console().print(f"[red]Error:[/red] {detail}")
+        message = Text()
+        message.append("Error:", style="red")
+        message.append(f" {detail}")
+        Console().print(message)
     else:
         print(json.dumps({"error": code, "detail": detail}))
 

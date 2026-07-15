@@ -592,16 +592,17 @@ def is_valid_session(filepath: Path) -> bool:
 
     Supports both Claude Code and Codex session formats:
     - Claude: user, assistant, tool_result, tool_use (with sessionId)
-    - Codex: event_msg, response_item, turn_context (with session_meta)
+    - Codex: a well-formed session_meta record
 
-    Sessions containing ONLY metadata types (file-history-snapshot, queue-operation,
-    session_meta alone) are invalid.
+    Claude sessions containing ONLY metadata types (file-history-snapshot,
+    queue-operation) are invalid. A Codex session_meta record is itself sufficient
+    because metadata-only rollouts are valid Codex sessions.
 
     Args:
         filepath: Path to session JSONL file.
 
     Returns:
-        True if session contains at least one resumable message, False otherwise.
+        True if the file contains a valid session record, False otherwise.
     """
     if not filepath.exists():
         return False
@@ -609,49 +610,69 @@ def is_valid_session(filepath: Path) -> bool:
     # Whitelist of resumable message types
     # Claude Code types (require sessionId)
     claude_valid_types = {"user", "assistant", "tool_result", "tool_use", "system"}
-    # Codex types (conversation content types)
-    codex_valid_types = {"event_msg", "response_item", "turn_context"}
-
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
-            has_any_content = False
-            has_valid_record = False
+            has_valid_claude_content = False
+            has_valid_codex_metadata = False
 
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
 
-                has_any_content = True
-
                 try:
                     data = json.loads(line)
-                    entry_type = (
+                    raw_entry_type = (
                         data.get("type", "")
                         if isinstance(data, dict)
                         else ""
                     )
+                    entry_type = (
+                        raw_entry_type
+                        if isinstance(raw_entry_type, str)
+                        else ""
+                    )
 
-                    # Claude Code: valid type with non-null sessionId
+                    # Claude Code: valid type with a non-empty string sessionId
                     session_id = (
                         data.get("sessionId")
                         if isinstance(data, dict)
                         else None
                     )
-                    if entry_type in claude_valid_types and session_id is not None:
-                        has_valid_record = True
+                    if (
+                        entry_type in claude_valid_types
+                        and isinstance(session_id, str)
+                        and bool(session_id.strip())
+                    ):
+                        has_valid_claude_content = True
 
-                    # Codex: valid conversation content type
-                    if entry_type in codex_valid_types:
-                        has_valid_record = True
+                    # Codex: session_meta is the identifying record for a
+                    # rollout. It is sufficient even when no conversation
+                    # records have been written yet.
+                    payload = (
+                        data.get("payload")
+                        if isinstance(data, dict)
+                        else None
+                    )
+                    if (
+                        entry_type == "session_meta"
+                        and isinstance(payload, dict)
+                        and any(
+                            isinstance(value, str) and bool(value.strip())
+                            for value in (
+                                payload.get("id"),
+                                payload.get("cwd"),
+                                payload.get("timestamp"),
+                            )
+                        )
+                    ):
+                        has_valid_codex_metadata = True
 
                 except json.JSONDecodeError:
                     # Skip malformed JSON lines, continue checking other lines
                     continue
 
-            # If we scanned entire file and found no valid message types
-            # (only metadata or empty), session is invalid
-            return has_any_content and has_valid_record
+            return has_valid_claude_content or has_valid_codex_metadata
 
     except (OSError, IOError, UnicodeError):
         return False  # File read errors indicate invalid file

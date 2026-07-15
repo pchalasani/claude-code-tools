@@ -163,7 +163,7 @@ def main(ctx, claude_home, codex_home):
 )
 @click.option(
     "--home",
-    type=click.Path(),
+    type=click.Path(readable=False),
     help="Claude or Codex home directory to search.",
 )
 @click.option("--json", "json_output", is_flag=True, help="Force JSON output.")
@@ -173,7 +173,9 @@ def main(ctx, claude_home, codex_home):
     is_flag=True,
     help="Force human-readable output.",
 )
+@click.pass_context
 def resolve_session_cmd(
+    ctx: click.Context,
     query: str,
     agent: str,
     home: str | None,
@@ -191,6 +193,9 @@ def resolve_session_cmd(
             '"detail":"Choose only one of --json or --pretty."}'
         )
         sys.exit(1)
+    if home is None:
+        home_key = "codex_home" if agent.casefold() == "codex" else "claude_home"
+        home = ctx.ensure_object(dict).get(home_key)
     fmt = "json" if json_output else "pretty" if pretty_output else "auto"
     sys.exit(run(query, agent.lower(), home, fmt))
 

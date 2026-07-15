@@ -294,20 +294,23 @@ def is_sidechain_session(filepath: Path) -> bool:
     Returns:
         True if session is a sidechain, False otherwise.
     """
+    if filepath.name.startswith("agent-"):
+        return True
+
     if not filepath.exists():
         return False
 
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
-            # Check first few lines for isSidechain field
-            for i, line in enumerate(f):
-                if i >= 10:  # Only check first 10 lines
-                    break
+            for line in f:
                 try:
                     data = json.loads(line.strip())
-                    if isinstance(data, dict) and "isSidechain" in data:
-                        return data["isSidechain"] is True
-                except (json.JSONDecodeError, KeyError):
+                    if (
+                        isinstance(data, dict)
+                        and data.get("isSidechain") is True
+                    ):
+                        return True
+                except (json.JSONDecodeError, TypeError):
                     continue
     except (OSError, IOError, UnicodeError):
         pass
@@ -403,8 +406,13 @@ def get_session_preview(filepath: Path) -> str:
                         continue
                     msg_type = data.get('type')
                     # Accept user or assistant messages
-                    if msg_type in ('user', 'assistant'):
-                        message = data.get('message', {})
+                    if isinstance(msg_type, str) and msg_type in (
+                        'user',
+                        'assistant',
+                    ):
+                        message = data.get('message')
+                        if not isinstance(message, dict):
+                            continue
                         content = message.get('content', '')
                         text = None
 
@@ -413,8 +421,13 @@ def get_session_preview(filepath: Path) -> str:
                         elif isinstance(content, list):
                             # Handle structured content
                             for item in content:
-                                if isinstance(item, dict) and item.get('type') == 'text':
-                                    text = item.get('text', '').strip()
+                                if not isinstance(item, dict):
+                                    continue
+                                if item.get('type') != 'text':
+                                    continue
+                                item_text = item.get('text')
+                                if isinstance(item_text, str):
+                                    text = item_text.strip()
                                     break
 
                         # Filter out system messages and keep updating to get LAST

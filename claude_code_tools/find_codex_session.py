@@ -314,117 +314,123 @@ def find_sessions(
 
     matches = []
 
-    # Walk through YYYY/MM/DD directory structure
-    for year_dir in sorted(sessions_dir.iterdir(), reverse=True):
-        if not year_dir.is_dir():
-            continue
+    # Rollouts normally use YYYY/MM/DD, but the on-disk contract permits any
+    # directory depth beneath sessions.
+    session_files: list[Path] = []
+    try:
+        session_files.extend(
+            sessions_dir.rglob("rollout-*.jsonl")
+        )
+    except OSError:
+        # Preserve paths yielded before an inaccessible directory interrupted
+        # traversal. Per-file guards below isolate failures in those paths.
+        pass
+    session_files.sort(reverse=True)
 
-        for month_dir in sorted(year_dir.iterdir(), reverse=True):
-            if not month_dir.is_dir():
+    for session_file in session_files:
+        try:
+            # Search for keywords
+            found, line_count, preview = search_keywords_in_file(
+                session_file, keywords
+            )
+
+            if not found:
                 continue
 
-            for day_dir in sorted(month_dir.iterdir(), reverse=True):
-                if not day_dir.is_dir():
+            # Extract metadata
+            metadata = extract_session_metadata(session_file)
+            if not metadata:
+                # Fallback: extract session ID from filename
+                session_id = extract_session_id_from_filename(
+                    session_file.name
+                )
+                if not session_id:
+                    continue
+                metadata = {
+                    "id": session_id,
+                    "cwd": "",
+                    "branch": "",
+                    "timestamp": "",
+                }
+
+            # Filter by current directory if not global search
+            if current_cwd and metadata["cwd"] != current_cwd:
+                continue
+
+            # Check if session is trimmed/continued
+            is_trimmed = is_trimmed_session(session_file)
+            derivation_type = (
+                get_session_derivation_type(session_file)
+                if is_trimmed
+                else None
+            )
+
+            # Apply filters (original_only overrides individual filters)
+            # Note: Codex doesn't have sub-agent sessions, so no_sub has no
+            # effect.
+            if original_only:
+                if is_trimmed:
+                    continue
+            else:
+                if no_trim and derivation_type == "trimmed":
+                    continue
+                if no_cont and derivation_type == "continued":
                     continue
 
-                # Process all JSONL files in this day
-                session_files = sorted(
-                    day_dir.glob("rollout-*.jsonl"), reverse=True
-                )
-
-                for session_file in session_files:
-                    # Search for keywords
-                    found, line_count, preview = search_keywords_in_file(
-                        session_file, keywords
+            # Get timestamps - prefer JSON metadata for create_time
+            stat = session_file.stat()
+            mod_time = stat.st_mtime
+            if metadata.get("timestamp"):
+                try:
+                    ts = metadata["timestamp"]
+                    # Parse ISO format (e.g., "2025-10-22T16:05:28.707Z")
+                    if ts.endswith("Z"):
+                        ts = ts[:-1] + "+00:00"
+                    create_time = datetime.fromisoformat(ts).timestamp()
+                except (OSError, OverflowError, TypeError, ValueError):
+                    create_time = getattr(
+                        stat, "st_birthtime", stat.st_ctime
                     )
+            else:
+                create_time = getattr(stat, "st_birthtime", stat.st_ctime)
 
-                    if not found:
-                        continue
+            # Format dates: "10/04 - 10/09 13:45"
+            create_date = datetime.fromtimestamp(create_time).strftime("%m/%d")
+            mod_date = datetime.fromtimestamp(mod_time).strftime("%m/%d %H:%M")
+            date_str = f"{create_date} - {mod_date}"
 
-                    # Extract metadata
-                    metadata = extract_session_metadata(session_file)
-                    if not metadata:
-                        # Fallback: extract session ID from filename
-                        session_id = extract_session_id_from_filename(
-                            session_file.name
-                        )
-                        if not session_id:
-                            continue
-                        metadata = {
-                            "id": session_id,
-                            "cwd": "",
-                            "branch": "",
-                            "timestamp": "",
-                        }
+            matches.append(
+                {
+                    "session_id": metadata["id"],
+                    "project": get_project_name(metadata["cwd"]),
+                    "branch": metadata["branch"] or "",
+                    "date": date_str,
+                    "mod_time": mod_time,  # For sorting
+                    "create_time": create_time,  # For date range display
+                    "lines": line_count,
+                    "preview": preview or "No preview",
+                    "cwd": metadata["cwd"],
+                    "file_path": str(session_file),
+                    "is_trimmed": is_trimmed,
+                }
+            )
+        except (
+            AttributeError,
+            KeyError,
+            OSError,
+            OverflowError,
+            RuntimeError,
+            TypeError,
+            UnicodeError,
+            ValueError,
+        ):
+            # One disappearing, inaccessible, or malformed rollout must not
+            # prevent discovery of other sessions.
+            continue
 
-                    # Filter by current directory if not global search
-                    if current_cwd and metadata["cwd"] != current_cwd:
-                        continue
-
-                    # Check if session is trimmed/continued
-                    is_trimmed = is_trimmed_session(session_file)
-                    derivation_type = get_session_derivation_type(session_file) if is_trimmed else None
-
-                    # Apply filters (original_only overrides individual filters)
-                    # Note: Codex doesn't have sub-agent sessions, so no_sub has no effect
-                    if original_only:
-                        # Original only: exclude trimmed and continued
-                        if is_trimmed:
-                            continue
-                    else:
-                        # Individual filters
-                        if no_trim and derivation_type == "trimmed":
-                            continue
-                        if no_cont and derivation_type == "continued":
-                            continue
-
-                    # Get timestamps - prefer JSON metadata for create_time
-                    try:
-                        stat = session_file.stat()
-                    except OSError:
-                        # The rollout may disappear after it was opened above.
-                        continue
-                    mod_time = stat.st_mtime
-                    # Use session timestamp from metadata if available
-                    if metadata.get("timestamp"):
-                        try:
-                            ts = metadata["timestamp"]
-                            # Parse ISO format (e.g., "2025-10-22T16:05:28.707Z")
-                            if ts.endswith("Z"):
-                                ts = ts[:-1] + "+00:00"
-                            create_time = datetime.fromisoformat(ts).timestamp()
-                        except (OSError, OverflowError, TypeError, ValueError):
-                            create_time = getattr(stat, 'st_birthtime', stat.st_ctime)
-                    else:
-                        create_time = getattr(stat, 'st_birthtime', stat.st_ctime)
-
-                    # Format dates: "10/04 - 10/09 13:45"
-                    create_date = datetime.fromtimestamp(create_time).strftime("%m/%d")
-                    mod_date = datetime.fromtimestamp(mod_time).strftime("%m/%d %H:%M")
-                    date_str = f"{create_date} - {mod_date}"
-
-                    matches.append(
-                        {
-                            "session_id": metadata["id"],
-                            "project": get_project_name(metadata["cwd"]),
-                            "branch": metadata["branch"] or "",
-                            "date": date_str,
-                            "mod_time": mod_time,  # For sorting
-                            "create_time": create_time,  # For date range display
-                            "lines": line_count,
-                            "preview": preview or "No preview",
-                            "cwd": metadata["cwd"],
-                            "file_path": str(session_file),
-                            "is_trimmed": is_trimmed,
-                        }
-                    )
-
-                    # Early exit if we have enough matches
-                    if (
-                        num_matches is not None
-                        and len(matches) >= num_matches * 3
-                    ):
-                        break
+        # Early exit if we have enough matches
+        if num_matches is not None and len(matches) >= num_matches * 3:
+            break
 
     # Sort by modification time (newest first) and limit
     matches.sort(key=lambda x: x["mod_time"], reverse=True)
