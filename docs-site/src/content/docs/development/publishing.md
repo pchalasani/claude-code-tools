@@ -7,8 +7,7 @@ description: >
 
 ## Python Package (PyPI)
 
-Use the `all-*` Make commands to prepare a release,
-then publish:
+Use the `all-*` Make commands to prepare a release, then publish:
 
 ```bash
 make all-patch   # or all-minor, all-major
@@ -19,19 +18,20 @@ uv publish
 
 Each `all-*` command automatically:
 
-1. Runs `make prep-node` to ensure
-   `node_ui/node_modules/` is up-to-date
-2. Bumps the version (patch, minor, or major)
-3. Pushes to GitHub and pushes tags
-4. Creates a GitHub release
-5. Cleans old builds and builds the package
+1. Bumps the version (patch, minor, or major)
+2. Pushes to GitHub and pushes tags
+3. Creates a GitHub release
+4. Cleans old builds and builds the package
 
-The built package includes `node_modules/` so end
-users do **not** need `npm install` -- they only
-need Node.js 16+ installed.
+The wheel build runs `npm ci` against `node_ui/package-lock.json` in a
+temporary directory. It includes only locked production dependencies and does
+not use or change the source tree's `node_modules/` directory. A missing or
+inconsistent lock file stops the build.
 
-After the build completes, run `uv publish` to
-upload to PyPI.
+The built package includes its Node dependencies, so users do not need to run
+`npm install`. They need Node.js 18 or newer.
+
+After the build completes, run `uv publish` to upload to PyPI.
 
 ## Rust Binaries (crates.io)
 

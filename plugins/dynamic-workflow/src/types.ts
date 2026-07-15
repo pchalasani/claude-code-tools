@@ -11,6 +11,7 @@ export type SandboxMode =
   | "danger-full-access";
 
 export type ReasoningEffort =
+  | "none"
   | "minimal"
   | "low"
   | "medium"
@@ -123,11 +124,13 @@ export interface RunState {
   pid?: number;
   pidStartedAt?: string;
   result?: JsonValue;
+  runnerHash?: string;
   runnerStartedAt?: string;
   runId: string;
   startedAt?: string;
   status: RunStatus;
   steps: Record<string, AgentStep>;
+  terminalFingerprint?: string;
   updatedAt: string;
   version: 1;
   workflowHash: string;

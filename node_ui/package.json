@@ -7,6 +7,9 @@
   },
   "private": true,
   "description": "Ink-based Node TUI for session menus",
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "chalk": "5.3.0",
     "figures": "5.0.0",

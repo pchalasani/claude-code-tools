@@ -21,12 +21,17 @@ import {
   type ThreadResumeResult,
   valueContainsClientId,
 } from "./app-server-client.js";
-import { StateStore } from "./state-store.js";
+import {
+  StateStore,
+  terminalStateFingerprint,
+} from "./state-store.js";
 import type { RunState, RunStatus } from "./types.js";
 import {
   atomicWriteJson,
+  boundedJsonValueMatches,
   errorMessage,
   fileExists,
+  JsonStructureLimitError,
   nowIso,
   processIdentityMatches,
   processStartIdentity,
@@ -40,7 +45,11 @@ export const MAX_NOTIFY_TIMEOUT_MS = 604_800_000;
 
 const DELIVERY_CONFIRMATION_TIMEOUT_MS = 10_000;
 const MAX_DELIVERY_SUBMISSIONS = 5;
-const MAX_NOTIFICATION_TEXT_BYTES = 32 * 1024;
+const MAX_CALLBACK_DIAGNOSTIC_BYTES = 4 * 1024;
+const MAX_NOTIFICATION_ERROR_BYTES = 768;
+const MAX_NOTIFICATION_PATH_BYTES = 384;
+const MAX_NOTIFICATION_RESULT_BYTES = 1_536;
+const MAX_NOTIFICATION_TEXT_BYTES = 4 * 1024;
 const RETRY_DELAY_MAX_MS = 30_000;
 const RETRY_DELAY_MIN_MS = 250;
 const RETRY_JITTER_RATIO = 0.2;
@@ -68,6 +77,7 @@ export interface CompletionNotification {
   runId: string;
   status: CompletionNotificationStatus;
   terminalCompletedAt?: string;
+  terminalFingerprint?: string;
   terminalStatus?: RunStatus;
   threadId: string;
   timeoutMs: number;
@@ -83,11 +93,72 @@ export interface CompletionNotifierProcess {
 }
 
 interface NotifierProcessDetails {
-  argv: string[] | string;
+  argv: string[];
   executable: string;
   kernelStartedAt?: string;
   pgid: number;
 }
+
+const DARWIN_PROCARGS_BYTES = 1024 * 1024;
+const DARWIN_NOTIFIER_PROCESS_SCRIPT = String.raw`
+function decode(value) {
+  return $.NSData.alloc.initWithBase64EncodedStringOptions(value, 0);
+}
+
+function encode(value) {
+  return ObjC.unwrap(value.base64EncodedStringWithOptions(0));
+}
+
+function run(argv) {
+  ObjC.import("Foundation");
+  ObjC.bindFunction("proc_pidinfo", [
+    "int",
+    ["int", "int", "uint64", "void *", "int"],
+  ]);
+  ObjC.bindFunction("proc_pidpath", [
+    "int",
+    ["int", "void *", "uint32"],
+  ]);
+  ObjC.bindFunction("sysctl", [
+    "int",
+    ["void *", "uint32", "void *", "void *", "void *", "uint64"],
+  ]);
+  const pid = Number(argv[0]);
+  const bsd = $.NSMutableData.dataWithLength(136);
+  if ($.proc_pidinfo(pid, 3, 0, bsd.mutableBytes, 136) !== 136) {
+    throw new Error("proc_pidinfo failed");
+  }
+  const executable = $.NSMutableData.dataWithLength(4096);
+  const executableBytes = $.proc_pidpath(
+    pid,
+    executable.mutableBytes,
+    4096,
+  );
+  if (executableBytes <= 0) {
+    throw new Error("proc_pidpath failed");
+  }
+  executable.length = executableBytes;
+  const mib = decode(argv[1]);
+  const size = $.NSMutableData.dataWithData(decode(argv[2]));
+  const processArgs = $.NSMutableData.dataWithLength(${DARWIN_PROCARGS_BYTES});
+  if ($.sysctl(
+    mib.bytes,
+    3,
+    processArgs.mutableBytes,
+    size.mutableBytes,
+    null,
+    0,
+  ) !== 0) {
+    throw new Error("KERN_PROCARGS2 failed");
+  }
+  return JSON.stringify({
+    bsd: encode(bsd),
+    executable: encode(executable),
+    processArgs: encode(processArgs),
+    size: encode(size),
+  });
+}
+`;
 
 export async function createCompletionNotification(
   runId: string,
@@ -95,6 +166,15 @@ export async function createCompletionNotification(
   endpoint: string,
   timeoutMs: number,
 ): Promise<CompletionNotification> {
+  if (
+    !Number.isInteger(timeoutMs) ||
+    timeoutMs < 1 ||
+    timeoutMs > MAX_NOTIFY_TIMEOUT_MS
+  ) {
+    throw new Error(
+      `callback timeoutMs must be an integer from 1 to ${MAX_NOTIFY_TIMEOUT_MS}`,
+    );
+  }
   const timestamp = nowIso();
   const notification: CompletionNotification = {
     attempts: 0,
@@ -182,6 +262,13 @@ export async function deliverCompletionNotification(
             deadline,
           );
         }
+        if (notification.attempts >= MAX_DELIVERY_SUBMISSIONS) {
+          return await markSubmissionLimitReached(
+            runId,
+            submissionWasAmbiguous,
+            lastError,
+          );
+        }
         const request = deliveryRequest(
           thread,
           notification.threadId,
@@ -214,15 +301,26 @@ export async function deliverCompletionNotification(
         submissionWasAmbiguous = true;
         lastError = "App Server accepted the request but did not confirm the user message";
       } catch (error) {
-        const shouldWaitForIdle =
-          client !== undefined &&
-          error instanceof AppServerRpcError &&
-          isActiveTurnNotSteerableRpcError(error);
+        let deliveryError = error;
+        let shouldWaitForIdle = false;
+        if (client !== undefined && error instanceof AppServerRpcError) {
+          try {
+            shouldWaitForIdle = isActiveTurnNotSteerableRpcError(error);
+          } catch (inspectionError) {
+            deliveryError = inspectionError;
+          }
+        }
         if (error instanceof AppServerRpcError && !submissionAccepted) {
           submissionAttempted = false;
         }
         submissionWasAmbiguous ||= submissionAttempted;
-        lastError = errorMessage(error);
+        lastError = callbackDiagnostic(deliveryError);
+        if (deliveryError instanceof JsonStructureLimitError) {
+          return await updateNotification(runId, (current) => {
+            current.error = lastError;
+            current.status = submissionWasAmbiguous ? "unknown" : "failed";
+          });
+        }
         await updateNotification(runId, (current) => {
           current.error = lastError;
         });
@@ -234,7 +332,7 @@ export async function deliverCompletionNotification(
               deadline,
             );
           } catch (waitError) {
-            lastError = errorMessage(waitError);
+            lastError = callbackDiagnostic(waitError);
             await updateNotification(runId, (current) => {
               current.error = lastError;
             });
@@ -253,12 +351,11 @@ export async function deliverCompletionNotification(
         client?.close();
       }
       if (notification.attempts >= MAX_DELIVERY_SUBMISSIONS) {
-        return await updateNotification(runId, (current) => {
-          current.status = submissionWasAmbiguous ? "unknown" : "failed";
-          current.error =
-            `Callback submission limit of ${MAX_DELIVERY_SUBMISSIONS} ` +
-            `reached: ${lastError}`;
-        });
+        return await markSubmissionLimitReached(
+          runId,
+          submissionWasAmbiguous,
+          lastError,
+        );
       }
       const delay = completionRetryDelayMs(retryCount);
       retryCount += 1;
@@ -267,12 +364,14 @@ export async function deliverCompletionNotification(
 
     return await updateNotification(runId, (current) => {
       current.status = submissionWasAmbiguous ? "unknown" : "failed";
-      current.error = `${lastError}; notification deadline expired`;
+      current.error = callbackDiagnostic(
+        `${lastError}; notification deadline expired`,
+      );
     });
   } catch (error) {
     return await updateNotification(runId, (current) => {
       current.status = current.attempts > 0 ? "unknown" : "failed";
-      current.error = errorMessage(error);
+      current.error = callbackDiagnostic(error);
     });
   } finally {
     await updateNotification(runId, (current) => {
@@ -284,10 +383,14 @@ export async function deliverCompletionNotification(
       () => undefined,
     );
     if (notification && store) {
+      const diagnostic =
+        notification.error === undefined
+          ? undefined
+          : callbackDiagnostic(notification.error);
       await store
         .appendEvent("notification.finished", {
           attempts: notification.attempts,
-          error: notification.error,
+          error: diagnostic,
           status: notification.status,
           threadId: notification.threadId,
           turnId: notification.turnId,
@@ -295,7 +398,7 @@ export async function deliverCompletionNotification(
         .catch(() => {});
       await store.appendLog(
         `Completion notification ${notification.status}` +
-          (notification.error ? `: ${notification.error}` : ""),
+          (diagnostic ? `: ${diagnostic}` : ""),
       ).catch(() => {});
     }
   }
@@ -392,8 +495,13 @@ export async function prepareNotificationForTerminal(
     throw new Error(`Run ${state.runId} is not terminal`);
   }
   const completedAt = state.completedAt;
+  const terminalFingerprint = completionFingerprint(state);
   return await updateNotification(state.runId, (current) => {
-    if (current.terminalCompletedAt === completedAt) {
+    if (
+      current.terminalCompletedAt === completedAt &&
+      current.terminalStatus === state.status &&
+      current.terminalFingerprint === terminalFingerprint
+    ) {
       current.deadlineAt ??= new Date(
         Date.now() + current.timeoutMs,
       ).toISOString();
@@ -402,11 +510,12 @@ export async function prepareNotificationForTerminal(
     current.attempts = 0;
     current.clientUserMessageId = completionClientId(
       state.runId,
-      completedAt,
+      terminalFingerprint,
     );
     current.status = "armed";
     current.deadlineAt = new Date(Date.now() + current.timeoutMs).toISOString();
     current.terminalCompletedAt = completedAt;
+    current.terminalFingerprint = terminalFingerprint;
     current.terminalStatus = state.status;
     delete current.deliveredAt;
     delete current.error;
@@ -506,8 +615,15 @@ export async function completionNotificationExists(
   return await fileExists(notificationPath(runId));
 }
 
-function completionClientId(runId: string, completedAt: string): string {
-  return `dynamic-workflow:${runId}:${sha256(completedAt).slice(0, 12)}`;
+function completionFingerprint(state: RunState): string {
+  return state.terminalFingerprint ?? terminalStateFingerprint(state);
+}
+
+function completionClientId(
+  runId: string,
+  terminalFingerprint: string,
+): string {
+  return `dynamic-workflow:${runId}:${terminalFingerprint.slice(0, 12)}`;
 }
 
 function completionMessage(state: RunState): string {
@@ -517,18 +633,21 @@ function completionMessage(state: RunState): string {
       ? undefined
       : truncateUtf8(
           escapeEnvelopeText(JSON.stringify(state.result)),
-          24 * 1024,
+          MAX_NOTIFICATION_RESULT_BYTES,
         );
   const workflowPath = truncateUtf8(
     escapeEnvelopeText(JSON.stringify(state.workflowPath)),
-    1_024,
+    MAX_NOTIFICATION_PATH_BYTES,
   );
   const durableState = truncateUtf8(
     escapeEnvelopeText(JSON.stringify(StateStore.statePath(state.runId))),
-    1_024,
+    MAX_NOTIFICATION_PATH_BYTES,
   );
   const error = state.error
-    ? truncateUtf8(escapeEnvelopeText(JSON.stringify(state.error)), 2_048)
+    ? truncateUtf8(
+        escapeEnvelopeText(JSON.stringify(state.error)),
+        MAX_NOTIFICATION_ERROR_BYTES,
+      )
     : undefined;
   const sections = [
     "<dynamic_workflow_completion>",
@@ -546,7 +665,22 @@ function completionMessage(state: RunState): string {
     "</untrusted_workflow_details>",
     "</dynamic_workflow_completion>",
   ].filter((section): section is string => section !== undefined);
-  return truncateUtf8(sections.join("\n"), MAX_NOTIFICATION_TEXT_BYTES);
+  const message = sections.join("\n");
+  if (Buffer.byteLength(message, "utf8") <= MAX_NOTIFICATION_TEXT_BYTES) {
+    return message;
+  }
+  const boundedSections = sections.filter(
+    (section) => !section.startsWith("Error: ") &&
+      !section.startsWith("Result: "),
+  );
+  const detailsEnd = boundedSections.indexOf("</untrusted_workflow_details>");
+  boundedSections.splice(
+    detailsEnd,
+    0,
+    "Details omitted because the completion preview exceeded its 4 KiB " +
+      "budget; read the durable state file for the full result.",
+  );
+  return boundedSections.join("\n");
 }
 
 function escapeEnvelopeText(value: string): string {
@@ -655,16 +789,29 @@ function requireClientId(notification: CompletionNotification): string {
   return notification.clientUserMessageId;
 }
 
-function truncateUtf8(value: string, maximumBytes: number): string {
+function callbackDiagnostic(error: unknown): string {
+  return truncateUtf8(
+    errorMessage(error),
+    MAX_CALLBACK_DIAGNOSTIC_BYTES,
+    "\n[truncated callback diagnostic]",
+  );
+}
+
+function truncateUtf8(
+  value: string,
+  maximumBytes: number,
+  suffix = "\n[truncated; full details are in durable state]",
+): string {
   const encoded = Buffer.from(value, "utf8");
   if (encoded.length <= maximumBytes) {
     return value;
   }
-  let end = maximumBytes;
+  const suffixBytes = Buffer.byteLength(suffix, "utf8");
+  let end = Math.max(0, maximumBytes - suffixBytes);
   while (end > 0 && ((encoded[end] as number) & 0xc0) === 0x80) {
     end -= 1;
   }
-  return `${encoded.subarray(0, end).toString("utf8")}\n[truncated]`;
+  return `${encoded.subarray(0, end).toString("utf8")}${suffix}`;
 }
 
 async function waitForDeliverableThread(
@@ -850,17 +997,11 @@ function nextReconciliationInterval(current: number): number {
 }
 
 function hasActiveTurnNotSteerable(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    return value.some((item) => hasActiveTurnNotSteerable(item));
-  }
-  if (!isRecord(value)) {
-    return false;
-  }
-  if ("activeTurnNotSteerable" in value) {
-    return true;
-  }
-  return Object.values(value).some((item) =>
-    hasActiveTurnNotSteerable(item),
+  return boundedJsonValueMatches(
+    value,
+    (item) => isRecord(item) && "activeTurnNotSteerable" in item,
+    128,
+    250_000,
   );
 }
 
@@ -876,7 +1017,37 @@ function notificationDeadline(notification: CompletionNotification): number {
   if (!Number.isFinite(deadline)) {
     throw new Error("Completion notification has an invalid absolute deadline");
   }
+  if (
+    !Number.isInteger(notification.timeoutMs) ||
+    notification.timeoutMs < 1 ||
+    notification.timeoutMs > MAX_NOTIFY_TIMEOUT_MS
+  ) {
+    throw new Error("Completion notification has an invalid timeout");
+  }
+  const updatedAt = Date.parse(notification.updatedAt);
+  if (!Number.isFinite(updatedAt)) {
+    throw new Error("Completion notification has an invalid update time");
+  }
+  if (deadline - updatedAt > notification.timeoutMs) {
+    throw new Error(
+      "Completion notification deadline exceeds its configured timeout",
+    );
+  }
   return deadline;
+}
+
+async function markSubmissionLimitReached(
+  runId: string,
+  submissionWasAmbiguous: boolean,
+  lastError: string,
+): Promise<CompletionNotification> {
+  return await updateNotification(runId, (current) => {
+    current.status = submissionWasAmbiguous ? "unknown" : "failed";
+    current.error = callbackDiagnostic(
+      `Callback submission limit of ${MAX_DELIVERY_SUBMISSIONS} ` +
+        `reached: ${lastError}`,
+    );
+  });
 }
 
 function remainingTimeout(deadline: number): number {
@@ -889,6 +1060,9 @@ async function updateNotification(
 ): Promise<CompletionNotification> {
   const notification = await readCompletionNotification(runId);
   mutator(notification);
+  if (notification.error !== undefined) {
+    notification.error = callbackDiagnostic(notification.error);
+  }
   notification.updatedAt = nowIso();
   await atomicWriteJson(notificationPath(runId), notification);
   return notification;
@@ -1143,7 +1317,7 @@ async function verifyRunningNotifierProcess(
     details =
       process.platform === "linux"
         ? await inspectLinuxNotifierProcess(owner.pid)
-        : await inspectPsNotifierProcess(owner.pid);
+        : await inspectDarwinNotifierProcess(owner.pid);
   } catch (error) {
     throw notifierAuthorityError(
       runId,
@@ -1217,50 +1391,106 @@ async function inspectLinuxNotifierProcess(
   }
 }
 
-async function inspectPsNotifierProcess(
+async function inspectDarwinNotifierProcess(
   pid: number,
 ): Promise<NotifierProcessDetails> {
-  const processDetails = spawnSync(
-    "ps",
-    ["-ww", "-p", String(pid), "-o", "pgid=", "-o", "args="],
-    { encoding: "utf8", timeout: 2_000 },
+  if (process.platform !== "darwin") {
+    throw new Error(
+      `Darwin process verification is unsupported on ${process.platform}`,
+    );
+  }
+  const mib = Buffer.alloc(12);
+  mib.writeInt32LE(1, 0);
+  mib.writeInt32LE(49, 4);
+  mib.writeInt32LE(pid, 8);
+  const size = Buffer.alloc(8);
+  size.writeBigUInt64LE(BigInt(DARWIN_PROCARGS_BYTES));
+  const result = spawnSync(
+    "/usr/bin/osascript",
+    [
+      "-l",
+      "JavaScript",
+      "-e",
+      DARWIN_NOTIFIER_PROCESS_SCRIPT,
+      String(pid),
+      mib.toString("base64"),
+      size.toString("base64"),
+    ],
+    {
+      encoding: "utf8",
+      maxBuffer: 2 * 1024 * 1024,
+      timeout: 2_000,
+      windowsHide: true,
+    },
   );
-  if (processDetails.status !== 0 || processDetails.error) {
-    throw new Error(`Could not inspect notifier PID ${pid} with ps`);
+  if (result.status !== 0 || result.error) {
+    throw new Error(`Could not inspect notifier PID ${pid} with libproc`);
   }
-  const match = /^\s*(\d+)\s+(.+?)\s*$/.exec(processDetails.stdout);
-  if (!match?.[1] || !match[2]) {
-    throw new Error(`Could not parse notifier PID ${pid} from ps`);
+  const encoded = JSON.parse(result.stdout) as {
+    bsd?: unknown;
+    executable?: unknown;
+    processArgs?: unknown;
+    size?: unknown;
+  };
+  if (
+    typeof encoded.bsd !== "string" ||
+    typeof encoded.executable !== "string" ||
+    typeof encoded.processArgs !== "string" ||
+    typeof encoded.size !== "string"
+  ) {
+    throw new Error(`Could not parse notifier PID ${pid} inspection`);
   }
-  const executable = await darwinExecutablePath(pid);
+  const bsd = Buffer.from(encoded.bsd, "base64");
+  const executable = Buffer.from(encoded.executable, "base64");
+  const processArgs = Buffer.from(encoded.processArgs, "base64");
+  const returnedSize = Buffer.from(encoded.size, "base64");
+  if (
+    bsd.length !== 136 ||
+    returnedSize.length !== 8 ||
+    bsd.readUInt32LE(4) === 5 ||
+    bsd.readUInt32LE(12) !== pid
+  ) {
+    throw new Error(`Could not validate notifier PID ${pid} inspection`);
+  }
+  const processArgsBytes = Number(returnedSize.readBigUInt64LE());
+  if (
+    !Number.isSafeInteger(processArgsBytes) ||
+    processArgsBytes < 4 ||
+    processArgsBytes > processArgs.length
+  ) {
+    throw new Error(`Could not validate notifier PID ${pid} arguments`);
+  }
   return {
-    argv: match[2],
-    executable,
-    pgid: Number(match[1]),
+    argv: parseDarwinProcessArgs(processArgs.subarray(0, processArgsBytes)),
+    executable: await realpath(
+      executable.toString("utf8").replace(/\0+$/, ""),
+    ),
+    pgid: bsd.readUInt32LE(100),
   };
 }
 
-async function darwinExecutablePath(pid: number): Promise<string> {
-  if (process.platform !== "darwin") {
-    throw new Error(
-      `Executable verification is unsupported on ${process.platform}`,
-    );
+function parseDarwinProcessArgs(value: Buffer): string[] {
+  const argumentCount = value.readInt32LE(0);
+  if (argumentCount < 1 || argumentCount > 1_024) {
+    throw new Error("Malformed Darwin process argument count");
   }
-  const result = spawnSync(
-    "/usr/sbin/lsof",
-    ["-a", "-p", String(pid), "-d", "txt", "-Fn"],
-    { encoding: "utf8", timeout: 2_000 },
-  );
-  if (result.status !== 0 || result.error) {
-    throw new Error(`Could not inspect notifier PID ${pid} with lsof`);
+  let offset = value.indexOf(0, 4);
+  if (offset < 0) {
+    throw new Error("Malformed Darwin process executable path");
   }
-  const lines = result.stdout.split("\n");
-  const textIndex = lines.indexOf("ftxt");
-  const executable = lines[textIndex + 1];
-  if (textIndex < 0 || !executable?.startsWith("n/")) {
-    throw new Error(`Could not identify notifier PID ${pid} executable`);
+  while (offset < value.length && value[offset] === 0) {
+    offset += 1;
   }
-  return await realpath(executable.slice(1));
+  const argv: string[] = [];
+  for (let index = 0; index < argumentCount; index += 1) {
+    const end = value.indexOf(0, offset);
+    if (end < 0) {
+      throw new Error("Malformed Darwin process arguments");
+    }
+    argv.push(value.subarray(offset, end).toString("utf8"));
+    offset = end + 1;
+  }
+  return argv;
 }
 
 function parseLinuxProcessStat(value: string): {
@@ -1295,10 +1525,7 @@ async function linuxKernelStartIdentity(
   }
 }
 
-function sameArgv(actual: string[] | string, expected: string[]): boolean {
-  if (typeof actual === "string") {
-    return actual === expected.join(" ");
-  }
+function sameArgv(actual: string[], expected: string[]): boolean {
   return (
     actual.length === expected.length &&
     actual.every((value, index) => value === expected[index])

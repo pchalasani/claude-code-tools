@@ -18,6 +18,15 @@ two-terminal app-server setup with one command.
   no blocked main conversation.
 </Aside>
 
+<Aside type="note" title="No persistent running indicator yet">
+  Codex does not currently show a background-workflow card, spinner, or status
+  message after launch. A successful launch reports the run ID and an
+  `armed` callback, then the chat looks ordinary while you continue working.
+  That is expected: the skill must not start a polling or wait loop for an
+  armed callback. Ask for status explicitly if you want an intermediate check;
+  otherwise the completion arrives here automatically.
+</Aside>
+
 ```text
 main Codex session ──launch──> detached workflow
        │                              │
@@ -109,6 +118,127 @@ no model calls. Completion reporting starts a new turn only while the thread is
 idle; otherwise it steers into and extends the active turn. Either reporting
 path invokes the model and consumes tokens.
 
+`codex-dynamic` marks its tool environment as callback-ready. It supplies the
+marker both to the TUI process and through Codex's shell-environment policy, so
+the default survives restrictive settings such as `inherit = "core"`. The
+workflow runner therefore arms a callback for detached runs even if the agent
+forgets to add `--notify-current-thread`. Pass `--no-notify-current-thread`
+only when you intentionally want to disable this default.
+
+The skill still puts the explicit `--notify-current-thread` flag on every
+callback-required launch. That turns callback preflight into a hard condition:
+the runner refuses to create the run when the current thread is not loaded on
+the selected app server. It never silently substitutes a polling loop.
+
+The runner response remains authoritative: no monitoring is needed only when
+it contains an `armed` notification. An ordinary detached workflow without an
+armed callback still needs bounded status polling or a wait command if you want
+Codex to track it to completion.
+
+## Observe workflow runs
+
+The Python package also installs `codex-workflows`, a strictly observational
+dashboard for durable runs. Its default view is a static table; `watch`
+refreshes a live dashboard about once per second, and `show` expands one run's
+callback, error, and agent-step details.
+
+```bash
+codex-workflows
+codex-workflows watch --status running --limit 20
+codex-workflows show RUN_ID
+```
+
+Filter the static view by repeating `--status`, or use JSON for scripts:
+
+```bash
+codex-workflows --status failed --status stale --limit 50
+codex-workflows --json
+codex-workflows show RUN_ID --json
+```
+
+List-mode JSON is a versioned envelope with `complete`, `limit`,
+`observationComplete`, `observationSkipped`, `runs`, and `truncated` fields.
+The `runs` array contains at most `limit` records. `truncated` is `true` only
+when the row limit omitted matching records. `observationComplete` is `false`
+when the shared process-probe deadline prevented classification of one or more
+runs. `observationSkipped` counts unique process-identity observations skipped
+by that deadline; one cached observation can affect multiple runs. `complete`
+is `true` only when neither condition made the result incomplete. Pass a larger
+`--limit`, up to 1,000, when truncation is the only issue. Human-readable output
+prints an incompleteness warning when process-derived filtering may have omitted
+a match. `show RUN_ID --json` returns the selected run directly.
+
+The command reads version-1 JSON under
+`$CODEX_WORKFLOW_HOME/runs/*/state.json` and its optional
+`completion-notification.json` files. `CODEX_WORKFLOW_HOME` defaults to
+`~/.codex/workflows`. It does not invoke a model, connect to or require the app
+server, write workflow state, send signals, or maintain another database.
+Consequently, listing and watching use zero tokens.
+
+For a nonterminal run, the dashboard compares the recorded supervisor PID and
+process-start identity with the live process. A missing supervisor is shown as
+`orphaned`, and a reused PID is shown as `stale`; the durable status remains
+unchanged. Malformed or partial files and corrupt callback metadata remain
+visible as diagnostics instead of hiding otherwise readable runs. Set
+`NO_COLOR=1` or pass `--no-color` before the subcommand for plain output.
+
+<Aside type="note" title="Observation and control remain separate">
+  Use the Node workflow runner for `pause`, `resume`, `cancel`, `wait`, or
+  callback retry. `codex-workflows` deliberately has no control operations.
+</Aside>
+
+## Reload after a plugin change
+
+The shared app server loads the plugin catalog for every TUI connected to it.
+Starting another `codex-dynamic` TUI does not reload that catalog when the same
+server remains alive. Codex currently has no in-session plugin-reload command.
+
+`codex-dynamic` records the plugin and marketplace configuration used when it
+starts the server. If that configuration later changes, the launcher refuses
+to connect another TUI to the stale server and prints the safe recovery steps.
+
+<Steps>
+
+1. **Install or upgrade the plugin**
+
+   Complete the marketplace or plugin update normally.
+
+2. **Exit every callback-ready Codex TUI**
+
+   Finish or interrupt active turns, then exit each session normally. Merely
+   opening a new terminal is not enough because all `codex-dynamic` TUIs share
+   one app-server process.
+
+3. **Restart the now-unused server**
+
+   Run this from an ordinary terminal, not from inside a Codex tool call:
+
+   ```bash
+   codex-server restart --force
+   ```
+
+   `--force` acknowledges that any TUI still connected to the server will be
+   disconnected and will exit.
+
+4. **Start or resume Codex**
+
+   ```bash
+   codex-dynamic
+   # Or restore a saved conversation:
+   codex-dynamic resume --last
+   ```
+
+</Steps>
+
+<Aside type="caution" title="Restarting disconnects every attached TUI">
+  Codex does not currently reconnect a remote TUI when its app server exits,
+  and the server does not send a WebSocket closing handshake during shutdown.
+  A connected TUI exits with a transport error such as `Connection reset
+  without closing handshake`. Its transcript remains resumable, but any active
+  turn is interrupted. Never run `restart --force` or `stop --force` from
+  inside a connected Codex session.
+</Aside>
+
 ## Server controls
 
 Most users never need `codex-server start`; `codex-dynamic` starts the server
@@ -119,15 +249,20 @@ automatically. These commands are useful for inspection and cleanup:
 | `codex-server status` | Show endpoint health and process ownership |
 | `codex-server logs` | Show the most recent app-server output |
 | `codex-server logs --follow` | Follow app-server output |
-| `codex-server restart` | Restart a helper-owned server |
-| `codex-server stop` | Gracefully stop a helper-owned server |
+| `codex-server restart --force` | Restart after acknowledging TUI exits |
+| `codex-server stop --force` | Stop after acknowledging TUI exits |
 
 Add `--json` to lifecycle commands for machine-readable output.
 
-The helper reuses a healthy app server that was started another way, but it
-records ownership and refuses to stop or restart an external server. It also
-checks the saved process start time before sending a signal, so a reused PID
-cannot target an unrelated process.
+Without `--force`, `stop` and `restart` refuse to terminate a running shared
+server. The guard is deliberately conservative because a server can have more
+than one TUI attached and Codex exposes no graceful reconnect protocol.
+
+The helper reuses only a healthy app server that it previously started and can
+certify against its recorded ownership and plugin state. It rejects an app
+server started another way because it cannot verify which plugin snapshot that
+server loaded. Lifecycle commands also verify the recorded process identity
+before sending a signal.
 
 State and logs live under `$CODEX_HOME/cctools-app-server/`. The default
 `CODEX_HOME` is `~/.codex`. Set `CCTOOLS_CODEX_BIN` when the desired Codex
@@ -154,6 +289,119 @@ select it in the picker or pass its session ID.
   experimental. The helper uses their documented `unix://` transport, but
   their CLI and protocol surfaces may evolve. See the
   [official app-server documentation][codex-app-server].
+</Aside>
+
+## How it works
+
+`codex-dynamic` combines two independent pieces: a small Python lifecycle
+helper for Codex's local app server, and the plugin's durable JavaScript
+workflow runner. They meet at the app server's local Unix socket. There is no
+MCP layer, extra API key, or hosted coordination service.
+
+```text
+codex-dynamic
+  |-- ensure/reuse --> [app-server supervisor] --> [local app server]
+  `-- exec ---------> [Codex TUI]
+                            |
+                            `-- local Unix socket --> [local app server]
+
+[Codex TUI] -- reviewed launch --> [workflow supervisor]
+                                           |
+                                 [restricted JS engine]
+                                           |
+                                  [codex exec workers]
+                                           | terminal result
+                                           v
+                                   [bounded notifier]
+                                           | callback RPC
+                                           v
+                                   [local app server]
+                                           | start or steer turn
+                                           v
+                                   [originating thread]
+```
+
+### From command to callback
+
+<Steps>
+
+1. **Establish a callback-capable session**
+
+   `codex-dynamic` resolves the exact Codex executable, checks its version, and
+   takes a lifecycle lock. It reuses a compatible app server when one already
+   exists or starts a supervised `codex app-server --listen unix://`.
+
+   The launcher then replaces itself with `codex --remote unix://`. It is not a
+   proxy in front of the TUI, so Codex still owns the terminal, signals, and
+   exit status directly. It also injects the local callback endpoint through
+   Codex's shell-environment policy, making callbacks the default for detached
+   workflow launches even under a restrictive inheritance policy.
+
+2. **Verify the callback before creating the run**
+
+   The workflow command receives `CODEX_THREAD_ID` from Codex's tool shell and
+   asks the app server whether that exact thread is loaded. Only after this
+   preflight succeeds does it create durable run state and record the callback
+   as `armed`. A mismatched server or ordinary non-remote TUI therefore fails
+   before any workflow starts.
+
+3. **Run independently of the conversation**
+
+   Before detaching, the launcher stores an immutable copy of its bundled
+   runner inside the run directory. The supervisor, restricted JavaScript
+   engine, and eventual notifier all launch from that copy, so replacing a
+   plugin-cache version cannot strand an in-flight run.
+
+   The detached supervisor executes the reviewed JavaScript in a restricted VM
+   and launches each reasoning step as a separate headless `codex exec` worker.
+   Durable checkpoints, concurrency limits, launch caps, deadlines, worker
+   timeouts, and process-tree cleanup remain active even while the main TUI
+   handles other turns.
+
+4. **Deliver into the originating thread**
+
+   When the run becomes terminal, a separate bounded notifier connects to the
+   same Unix socket and resumes the original thread. It sends `turn/start` when
+   the thread is idle or `turn/steer` when a turn is already active. The latter
+   is what lets a completion join the conversation without discarding the
+   user's current request.
+
+   A stable client message ID and thread-history reconciliation confirm
+   delivery without blindly duplicating a message after an ambiguous network
+   failure. Retry limits belong to the notification, and callback failure never
+   changes a successful workflow result into a failed run.
+
+   The callback envelope has a hard 4 KiB budget. Large results or errors are
+   represented by short, UTF-8-safe previews, while the notification links to
+   the durable state file containing the complete value. Large reviewer reports
+   therefore do not consume the main conversation's context.
+
+</Steps>
+
+### Process ownership and failure isolation
+
+There are two supervisors with different lifetimes:
+
+- The **app-server supervisor** keeps the local callback endpoint alive beyond
+  the TUI process. During startup, it publishes both supervisor and worker
+  identities before releasing the worker to become the app server. Lifecycle
+  commands verify recorded process start identities before sending signals and
+  never stop a compatible server they do not own.
+- The **workflow supervisor** owns one durable run and its worker process
+  groups. It contains runaway workflow JavaScript, terminates orphaned worker
+  trees, and preserves nonterminal cleanup state when shutdown cannot be
+  confirmed safely.
+
+This separation means the TUI, workflow, callback notifier, and app server can
+fail independently. The durable run result remains inspectable even if callback
+delivery is temporarily unavailable. Active runs also remain independent of
+plugin installation state because each one owns a verified runner snapshot.
+
+<Aside type="note" title="What consumes model tokens">
+  The app server, lifecycle supervision, and passive waiting make no model
+  calls. Headless workflow workers consume tokens normally. Delivering the
+  completion starts or extends a Codex turn, so that final reporting turn also
+  consumes tokens.
 </Aside>
 
 [codex-app-server]: https://developers.openai.com/codex/app-server

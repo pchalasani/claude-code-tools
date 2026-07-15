@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import datetime as dt
+import ctypes
 import os
+import selectors
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -21,11 +24,82 @@ from claude_code_tools.codex_server_models import (
     OwnedServer,
     ServerPaths,
     log_tail,
+    log_tail_stream,
     open_log_append,
     read_state,
     remove_state,
+    write_bounded_log,
     write_state,
 )
+
+
+DIAGNOSTIC_OUTPUT_MAX_BYTES = 64 * 1024
+_LINUX_BOOT_ID = "/proc/sys/kernel/random/boot_id"
+_PROC_PIDTBSDINFO = 3
+
+
+def codex_executable_identity(codex_path: str) -> str:
+    """Return a stable identity for the selected executable file."""
+    flags = os.O_RDONLY | os.O_NONBLOCK
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise CodexServerError(
+            "safe Codex executable certification requires O_NOFOLLOW support"
+        )
+    try:
+        fd = os.open(codex_path, flags | no_follow)
+    except OSError as exc:
+        raise CodexServerError(
+            f"cannot certify Codex executable {codex_path}: {exc}"
+        ) from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise CodexServerError(
+                f"Codex executable is not a regular file: {codex_path}"
+            )
+    finally:
+        os.close(fd)
+    return ":".join(
+        str(value)
+        for value in (
+            info.st_dev,
+            info.st_ino,
+            info.st_mode,
+            info.st_size,
+            info.st_mtime_ns,
+            info.st_ctime_ns,
+        )
+    )
+
+
+class _ProcBsdInfo(ctypes.Structure):
+    """Darwin process metadata through its native start timeval."""
+
+    _fields_ = [
+        ("pbi_flags", ctypes.c_uint32),
+        ("pbi_status", ctypes.c_uint32),
+        ("pbi_xstatus", ctypes.c_uint32),
+        ("pbi_pid", ctypes.c_uint32),
+        ("pbi_ppid", ctypes.c_uint32),
+        ("pbi_uid", ctypes.c_uint32),
+        ("pbi_gid", ctypes.c_uint32),
+        ("pbi_ruid", ctypes.c_uint32),
+        ("pbi_rgid", ctypes.c_uint32),
+        ("pbi_svuid", ctypes.c_uint32),
+        ("pbi_svgid", ctypes.c_uint32),
+        ("rfu_1", ctypes.c_uint32),
+        ("pbi_comm", ctypes.c_char * 16),
+        ("pbi_name", ctypes.c_char * 32),
+        ("pbi_nfiles", ctypes.c_uint32),
+        ("pbi_pgid", ctypes.c_uint32),
+        ("pbi_pjobc", ctypes.c_uint32),
+        ("e_tdev", ctypes.c_uint32),
+        ("e_tpgid", ctypes.c_uint32),
+        ("pbi_nice", ctypes.c_int32),
+        ("pbi_start_tvsec", ctypes.c_uint64),
+        ("pbi_start_tvusec", ctypes.c_uint64),
+    ]
 
 
 def run_diagnostic(
@@ -50,43 +124,158 @@ def run_diagnostic(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=dict(env),
-            text=True,
             start_new_session=True,
             close_fds=True,
         )
     except OSError:
         return None
     try:
-        stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
+        output = _bounded_diagnostic_output(process, timeout)
+        if output is None:
+            _kill_fresh_process_group(process)
+            return None
+        stdout_bytes, stderr_bytes = output
+    except TimeoutError:
         _kill_fresh_process_group(process)
         return None
     except BaseException:
         _kill_fresh_process_group(process)
         raise
+    _kill_fresh_process_group(process)
     return subprocess.CompletedProcess(
         args=list(command),
         returncode=process.returncode,
-        stdout=stdout,
-        stderr=stderr,
+        stdout=stdout_bytes.decode("utf-8", errors="replace"),
+        stderr=stderr_bytes.decode("utf-8", errors="replace"),
     )
+
+
+def _bounded_diagnostic_output(
+    process: subprocess.Popen[bytes],
+    timeout: float,
+) -> tuple[bytes, bytes] | None:
+    """Drain both diagnostic pipes while retaining fixed-size suffixes."""
+    assert process.stdout is not None
+    assert process.stderr is not None
+    streams = (process.stdout, process.stderr)
+    stdout_fd = process.stdout.fileno()
+    stderr_fd = process.stderr.fileno()
+    by_fd = {stream.fileno(): stream for stream in streams}
+    buffers = {fd: bytearray() for fd in by_fd}
+    selector = selectors.DefaultSelector()
+    deadline = time.monotonic() + timeout
+    try:
+        for stream in streams:
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream.fileno(), selectors.EVENT_READ)
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            events = selector.select(min(remaining, 0.1))
+            for key, _mask in events:
+                fd = key.fd
+                stream = by_fd[fd]
+                try:
+                    chunk = os.read(fd, 65_536)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    selector.unregister(fd)
+                    stream.close()
+                    continue
+                target = buffers[fd]
+                target.extend(chunk)
+                overflow = len(target) - DIAGNOSTIC_OUTPUT_MAX_BYTES
+                if overflow > 0:
+                    del target[:overflow]
+        if not _wait_process_exit_without_reaping(process, deadline):
+            return None
+    finally:
+        selector.close()
+        for stream in streams:
+            stream.close()
+    return bytes(buffers[stdout_fd]), bytes(buffers[stderr_fd])
+
+
+def _wait_process_exit_without_reaping(
+    process: subprocess.Popen[bytes],
+    deadline: float,
+) -> bool:
+    """Observe child exit while preserving its PID through group cleanup."""
+    wait_flags = os.WEXITED | os.WNOHANG | os.WNOWAIT
+    while True:
+        try:
+            result = os.waitid(os.P_PID, process.pid, wait_flags)
+        except ChildProcessError:
+            process.poll()
+            return False
+        except InterruptedError:
+            continue
+        if result is not None:
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(POLL_SECONDS, remaining))
 
 
 def process_identity(pid: int) -> str | None:
-    """Return a PID-reuse-resistant process start identity."""
-    result = run_diagnostic(
-        ["ps", "-o", "lstart=", "-o", "stat=", "-p", str(pid)],
-        os.environ,
-    )
-    if result is None or result.returncode != 0:
+    """Return a boot-scoped native process start identity."""
+    if sys.platform == "linux":
+        return _linux_process_identity(pid)
+    if sys.platform == "darwin":
+        return _darwin_process_identity(pid)
+    return None
+
+
+def _linux_process_identity(pid: int) -> str | None:
+    """Read Linux boot ID and kernel process start ticks."""
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as stream:
+            value = stream.read()
+        with open(_LINUX_BOOT_ID, encoding="ascii") as stream:
+            boot_id = stream.read().strip().lower()
+    except (OSError, UnicodeError):
         return None
-    output = result.stdout.strip()
-    if not output:
+    closing_parenthesis = value.rfind(")")
+    fields = value[closing_parenthesis + 2 :].split()
+    if closing_parenthesis < 0 or len(fields) <= 19 or not boot_id:
         return None
-    parts = output.rsplit(maxsplit=1)
-    if len(parts) != 2 or parts[1].startswith("Z"):
+    if fields[0] in {"X", "x", "Z"}:
         return None
-    return parts[0].strip() or None
+    return f"linux:{boot_id}:{fields[19]}"
+
+
+def _darwin_process_identity(pid: int) -> str | None:
+    """Read Darwin's microsecond-resolution native process start timeval."""
+    if pid <= 0:
+        return None
+    try:
+        library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        proc_pidinfo = library.proc_pidinfo
+        proc_pidinfo.argtypes = [
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_uint64,
+            ctypes.c_void_p,
+            ctypes.c_int,
+        ]
+        proc_pidinfo.restype = ctypes.c_int
+        info = _ProcBsdInfo()
+        size = ctypes.sizeof(info)
+        result = proc_pidinfo(
+            pid,
+            _PROC_PIDTBSDINFO,
+            0,
+            ctypes.byref(info),
+            size,
+        )
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+    if result != size or info.pbi_pid != pid or info.pbi_status == 5:
+        return None
+    return f"darwin:{info.pbi_start_tvsec}:{info.pbi_start_tvusec}"
 
 
 def state_controller_matches(state: OwnedServer) -> bool:
@@ -123,8 +312,16 @@ def process_matches(pid: int, pgid: int, expected_identity: str) -> bool:
         return False
 
 
-def process_group_exists(pgid: int) -> bool:
+def process_group_exists(
+    pgid: int,
+    *,
+    deadline: float | None = None,
+) -> bool:
     """Return whether a process group still has at least one member."""
+    if sys.platform == "linux":
+        observed = _linux_process_group_exists(pgid, deadline=deadline)
+        if observed is not None:
+            return observed
     try:
         os.killpg(pgid, 0)
     except ProcessLookupError:
@@ -134,6 +331,46 @@ def process_group_exists(pgid: int) -> bool:
     return True
 
 
+def _linux_process_group_exists(
+    pgid: int,
+    *,
+    deadline: float | None = None,
+) -> bool | None:
+    """Return whether procfs contains a non-dead member of a process group."""
+    try:
+        entries = os.scandir("/proc")
+    except OSError:
+        return None
+    complete = True
+    try:
+        for entry in entries:
+            if deadline is not None and time.monotonic() >= deadline:
+                return None
+            if not entry.name.isdecimal():
+                continue
+            try:
+                with open(f"/proc/{entry.name}/stat", encoding="utf-8") as stream:
+                    value = stream.read()
+            except (OSError, UnicodeError):
+                complete = False
+                continue
+            closing_parenthesis = value.rfind(")")
+            fields = value[closing_parenthesis + 2 :].split()
+            if closing_parenthesis < 0 or len(fields) < 3:
+                complete = False
+                continue
+            try:
+                member_pgid = int(fields[2])
+            except ValueError:
+                complete = False
+                continue
+            if member_pgid == pgid and fields[0] not in {"X", "x", "Z"}:
+                return True
+    finally:
+        entries.close()
+    return False if complete else None
+
+
 def wait_for_process_group_exit(
     pgid: int,
     timeout: float,
@@ -141,13 +378,14 @@ def wait_for_process_group_exit(
 ) -> bool:
     """Wait until a process group is empty, reaping its leader when possible."""
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    while True:
         _reap_process(reap_pid)
-        if not process_group_exists(pgid):
+        if not process_group_exists(pgid, deadline=deadline):
             return True
-        time.sleep(POLL_SECONDS)
-    _reap_process(reap_pid)
-    return not process_group_exists(pgid)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(POLL_SECONDS, remaining))
 
 
 def terminate_owned(
@@ -267,6 +505,9 @@ def spawn_supervisor(
     codex_version: str,
     child_env: Mapping[str, str],
     paths: ServerPaths,
+    plugin_fingerprint: str | None = None,
+    codex_executable_identity: str | None = None,
+    codex_options: Sequence[str] = (),
 ) -> OwnedServer:
     """Spawn a durable supervisor after publishing recoverable ownership.
 
@@ -275,6 +516,9 @@ def spawn_supervisor(
         codex_version: Version reported by that executable.
         child_env: Environment shared by supervisor and app server.
         paths: Helper runtime paths.
+        plugin_fingerprint: Snapshot of plugin and marketplace configuration.
+        codex_executable_identity: Stable identity of the selected executable.
+        codex_options: Certified global options forwarded to the worker.
 
     Returns:
         Ownership state including the supervised worker identity.
@@ -294,7 +538,9 @@ def spawn_supervisor(
     )
     try:
         with open_log_append(paths.log_path) as log_stream, deferred:
-            log_stream.write(header.encode("utf-8"))
+            write_bounded_log(log_stream, header.encode("utf-8"))
+            log_info = os.fstat(log_stream.fileno())
+            log_identity = (log_info.st_dev, log_info.st_ino)
             supervisor = subprocess.Popen(
                 [
                     sys.executable,
@@ -307,8 +553,8 @@ def spawn_supervisor(
                     codex_path,
                 ],
                 stdin=subprocess.DEVNULL,
-                stdout=log_stream,
-                stderr=subprocess.STDOUT,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 env=dict(child_env),
                 start_new_session=True,
                 close_fds=True,
@@ -318,7 +564,7 @@ def spawn_supervisor(
             read_fd = -1
             identity = wait_for_process_identity(supervisor)
             if identity is None:
-                detail = log_tail(paths.log_path)
+                detail = log_tail_stream(log_stream, 20).text
                 suffix = f"\n\n{detail}" if detail else ""
                 raise CodexServerError(
                     f"app-server supervisor exited during startup{suffix}"
@@ -337,6 +583,11 @@ def spawn_supervisor(
                 launched_at=dt.datetime.now(dt.timezone.utc).isoformat(),
                 phase="starting",
                 launch_token=token,
+                plugin_fingerprint=plugin_fingerprint,
+                codex_executable_identity=codex_executable_identity,
+                codex_options=tuple(codex_options),
+                log_device=log_identity[0],
+                log_inode=log_identity[1],
             )
             write_state(paths, state)
             os.write(write_fd, f"{token}\n".encode())
@@ -494,7 +745,10 @@ def _wait_for_worker_state(
         ):
             return current
         time.sleep(POLL_SECONDS)
-    detail = log_tail(paths.log_path)
+    detail = log_tail(
+        paths.log_path,
+        expected_identity=initial.log_identity,
+    )
     suffix = f"\n\nApp-server log:\n{detail}" if detail else ""
     raise CodexServerError(
         f"app-server supervisor did not publish worker ownership{suffix}"
@@ -635,6 +889,10 @@ def _kill_fresh_process_group(
     process: subprocess.Popen[bytes] | subprocess.Popen[str],
 ) -> None:
     """Fully clean a just-spawned diagnostic or pre-handoff supervisor."""
+    if process.returncode is not None:
+        raise CodexServerError(
+            f"refusing to signal process group {process.pid}: leader was already reaped"
+        )
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -648,7 +906,7 @@ def _kill_fresh_process_group(
         process.wait(timeout=2.0)
     except (OSError, subprocess.TimeoutExpired):
         pass
-    if process_group_exists(process.pid):
+    if not wait_for_process_group_exit(process.pid, 2.0):
         raise CodexServerError(
             f"new process group {process.pid} could not be cleaned up"
         )

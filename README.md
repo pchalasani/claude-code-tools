@@ -72,8 +72,10 @@ codex-dynamic resume --last
 ```
 
 `codex-dynamic` starts or reuses the local app server and then hands the
-terminal directly to Codex. Use `codex-server status`, `logs`, or `stop` for
-lower-level lifecycle control.
+terminal directly to Codex. Use `codex-server status` or `logs` for
+nondisruptive inspection. A forced stop or restart disconnects every attached
+TUI, so exit those sessions before running `codex-server stop --force` or
+`codex-server restart --force` from an ordinary terminal.
 
 Server management and passive supervision add no model calls. Completion
 reporting starts a new turn only while the thread is idle; otherwise it steers

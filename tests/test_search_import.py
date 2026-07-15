@@ -3,6 +3,8 @@
 import subprocess
 import sys
 
+SUBPROCESS_TIMEOUT_SECONDS = 10
+
 
 def test_export_session_import_error_handling():
     """
@@ -11,7 +13,7 @@ def test_export_session_import_error_handling():
     try:
         from claude_code_tools import export_session
 
-        if not hasattr(export_session, 'YAML_AVAILABLE'):
+        if not hasattr(export_session, "YAML_AVAILABLE"):
             assert False, (
                 "export_session should define YAML_AVAILABLE to handle "
                 "missing pyyaml gracefully"
@@ -32,12 +34,17 @@ def test_search_command_without_deps_gives_helpful_error():
     # Run aichat search in a subprocess to simulate the user's environment
     # We use --help since it should work even without deps if imports are lazy
     result = subprocess.run(
-        [sys.executable, "-c",
-         "from claude_code_tools.aichat import main; main()",
-         "search", "--help"],
+        [
+            sys.executable,
+            "-c",
+            "from claude_code_tools.aichat import main; main()",
+            "search",
+            "--help",
+        ],
         capture_output=True,
         text=True,
         env={"PATH": ""},  # Minimal env
+        timeout=SUBPROCESS_TIMEOUT_SECONDS,
     )
 
     # Should not crash with ImportError at module load time
@@ -59,9 +66,8 @@ def test_search_index_import_error_handling():
         from claude_code_tools import search_index
 
         # Check that lazy import flags are defined
-        required_flags = ['TANTIVY_AVAILABLE', 'YAML_AVAILABLE']
-        missing_flags = [f for f in required_flags
-                         if not hasattr(search_index, f)]
+        required_flags = ["TANTIVY_AVAILABLE", "YAML_AVAILABLE"]
+        missing_flags = [f for f in required_flags if not hasattr(search_index, f)]
 
         if missing_flags:
             assert False, (

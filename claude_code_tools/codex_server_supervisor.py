@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import argparse
 import os
+import select
 import signal
 import subprocess
 import sys
 import time
 from dataclasses import dataclass, replace
 from types import FrameType
-from typing import Mapping, Sequence
+from typing import BinaryIO, Mapping, Sequence
 
 from claude_code_tools.codex_server_models import (
     FORCED_STOP_SECONDS,
@@ -19,8 +20,10 @@ from claude_code_tools.codex_server_models import (
     CodexServerError,
     OwnedServer,
     ServerPaths,
+    open_log_append,
     paths_from_env,
     read_state,
+    write_bounded_log,
     write_state,
 )
 from claude_code_tools.codex_server_process import (
@@ -70,29 +73,38 @@ def supervise(
     worker, release_fd = _spawn_worker(codex_path, token, env)
     worker_identity: str | None = None
     try:
-        worker_identity = _wait_for_identity(worker)
-        if worker_identity is None:
-            raise CodexServerError("Codex app-server worker exited during startup")
-        worker_pgid = os.getpgid(worker.pid)
-        if worker_pgid != worker.pid:
-            raise CodexServerError(
-                "Codex app-server worker did not get a private process group"
+        with open_log_append(paths.log_path, initial.log_identity) as log_stream:
+            log_info = os.fstat(log_stream.fileno())
+            worker_identity = _wait_for_identity(worker)
+            if worker_identity is None:
+                raise CodexServerError("Codex app-server worker exited during startup")
+            worker_pgid = os.getpgid(worker.pid)
+            if worker_pgid != worker.pid:
+                raise CodexServerError(
+                    "Codex app-server worker did not get a private process group"
+                )
+            current = _require_handoff_state(paths, token, codex_path)
+            if current.pid != initial.pid:
+                raise CodexServerError("app-server ownership changed during handoff")
+            if current.log_identity is not None and current.log_identity != (
+                log_info.st_dev,
+                log_info.st_ino,
+            ):
+                raise CodexServerError("app-server log changed during handoff")
+            write_state(
+                paths,
+                replace(
+                    current,
+                    log_device=log_info.st_dev,
+                    log_inode=log_info.st_ino,
+                    worker_pid=worker.pid,
+                    worker_pgid=worker_pgid,
+                    worker_started_at=worker_identity,
+                ),
             )
-        current = _require_handoff_state(paths, token, codex_path)
-        if current.pid != initial.pid:
-            raise CodexServerError("app-server ownership changed during handoff")
-        write_state(
-            paths,
-            replace(
-                current,
-                worker_pid=worker.pid,
-                worker_pgid=worker_pgid,
-                worker_started_at=worker_identity,
-            ),
-        )
-        _release_worker(release_fd, token)
-        release_fd = -1
-        return _monitor(worker, worker_pgid, requested)
+            _release_worker(release_fd, token)
+            release_fd = -1
+            return _monitor(worker, worker_pgid, requested, log_stream)
     except BaseException:
         if release_fd >= 0:
             _close_fd(release_fd)
@@ -102,6 +114,8 @@ def supervise(
     finally:
         if release_fd >= 0:
             _close_fd(release_fd)
+        if worker.stdout is not None:
+            worker.stdout.close()
 
 
 def _install_handlers(requested: SignalRequest) -> None:
@@ -173,6 +187,8 @@ def _spawn_worker(
                 codex_path,
             ],
             stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             env=dict(env),
             start_new_session=True,
             close_fds=True,
@@ -226,15 +242,20 @@ def _monitor(
     worker: subprocess.Popen[bytes],
     worker_pgid: int,
     requested: SignalRequest,
+    log_stream: BinaryIO,
 ) -> int:
     """Wait for the worker, cleaning its group on exit or a signal."""
+    assert worker.stdout is not None
+    os.set_blocking(worker.stdout.fileno(), False)
     forwarded = 0
     first_forwarded_at: float | None = None
     while True:
+        drained_output = _drain_worker_output(worker, log_stream)
         returncode = worker.poll()
         if returncode is not None:
             if process_group_exists(worker_pgid):
-                _stop_direct_group(worker, worker_pgid)
+                _stop_direct_group(worker, worker_pgid, log_stream)
+            _drain_worker_output(worker, log_stream)
             if requested.first is not None:
                 return 0
             return _shell_status(returncode)
@@ -252,7 +273,29 @@ def _monitor(
                 forwarded = 2
             if elapsed >= GRACEFUL_STOP_SECONDS + FORCED_STOP_SECONDS:
                 _signal_direct_group(worker_pgid, signal.SIGKILL)
-        time.sleep(POLL_SECONDS)
+        if not drained_output:
+            select.select([worker.stdout.fileno()], [], [], POLL_SECONDS)
+
+
+def _drain_worker_output(
+    worker: subprocess.Popen[bytes],
+    log_stream: BinaryIO,
+    max_chunks: int = 64,
+) -> bool:
+    """Drain bounded chunks without letting a noisy worker starve signals."""
+    assert worker.stdout is not None
+    fd = worker.stdout.fileno()
+    drained = False
+    for _index in range(max_chunks):
+        try:
+            chunk = os.read(fd, 65_536)
+        except BlockingIOError:
+            return drained
+        if not chunk:
+            return drained
+        drained = True
+        write_bounded_log(log_stream, chunk)
+    return drained
 
 
 def _contain_worker(
@@ -276,16 +319,17 @@ def _contain_worker(
 def _stop_direct_group(
     worker: subprocess.Popen[bytes],
     pgid: int,
+    log_stream: BinaryIO | None = None,
 ) -> None:
     """Stop a group that this supervisor directly spawned and continuously owns."""
     _signal_direct_group(pgid, signal.SIGTERM)
-    if _wait_group(worker, pgid, 2.0):
+    if _wait_group(worker, pgid, 2.0, log_stream):
         return
     _signal_direct_group(pgid, signal.SIGTERM)
-    if _wait_group(worker, pgid, 1.0):
+    if _wait_group(worker, pgid, 1.0, log_stream):
         return
     _signal_direct_group(pgid, signal.SIGKILL)
-    if not _wait_group(worker, pgid, 2.0):
+    if not _wait_group(worker, pgid, 2.0, log_stream):
         raise CodexServerError(
             f"Codex app-server worker group {pgid} could not be contained"
         )
@@ -295,15 +339,20 @@ def _wait_group(
     worker: subprocess.Popen[bytes],
     pgid: int,
     timeout: float,
+    log_stream: BinaryIO | None = None,
 ) -> bool:
     """Wait for a direct child and its complete process group to exit."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if log_stream is not None:
+            _drain_worker_output(worker, log_stream)
         worker.poll()
         if not process_group_exists(pgid):
             return True
         time.sleep(POLL_SECONDS)
     worker.poll()
+    if log_stream is not None:
+        _drain_worker_output(worker, log_stream)
     return not process_group_exists(pgid)
 
 
@@ -335,8 +384,24 @@ def main(arguments: Sequence[str] | None = None) -> int:
     try:
         return supervise(options.codex, options.handoff_fd, os.environ)
     except CodexServerError as exc:
-        print(f"codex-server supervisor: {exc}", file=sys.stderr, flush=True)
+        _record_supervisor_error(exc, os.environ)
         return 1
+
+
+def _record_supervisor_error(
+    error: CodexServerError,
+    env: Mapping[str, str],
+) -> None:
+    """Persist a bounded startup diagnostic when the log path remains safe."""
+    message = f"codex-server supervisor: {error}\n".encode("utf-8")
+    try:
+        paths = paths_from_env(env)
+        state = read_state(paths)
+        expected_identity = state.log_identity if state is not None else None
+        with open_log_append(paths.log_path, expected_identity) as log_stream:
+            write_bounded_log(log_stream, message)
+    except (CodexServerError, OSError):
+        print(message.decode(), file=sys.stderr, end="", flush=True)
 
 
 if __name__ == "__main__":

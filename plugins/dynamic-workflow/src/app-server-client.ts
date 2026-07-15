@@ -4,10 +4,15 @@ import { homedir } from "node:os";
 import path from "node:path";
 import type { Duplex } from "node:stream";
 
-import { errorMessage } from "./utils.js";
+import { boundedJsonValueMatches, errorMessage } from "./utils.js";
 
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const MAX_MESSAGE_BYTES = 128 * 1024 * 1024;
+const MAX_QUEUED_NOTIFICATION_BYTES = 8 * 1024 * 1024;
+const MAX_QUEUED_NOTIFICATIONS = 1_000;
+const MAX_RESPONSE_DEPTH = 128;
+const MAX_RESPONSE_NODES = 250_000;
+const MAX_RPC_ERROR_MESSAGE_BYTES = 4 * 1024;
 const REQUEST_TIMEOUT_MS = 30_000;
 const MINIMUM_APP_SERVER_VERSION = [0, 136, 0] as const;
 const MINIMUM_APP_SERVER_VERSION_TEXT = MINIMUM_APP_SERVER_VERSION.join(".");
@@ -36,12 +41,17 @@ interface NotificationWaiter {
   timer: NodeJS.Timeout;
 }
 
+interface QueuedNotification {
+  bytes: number;
+  notification: JsonRpcNotification;
+}
+
 export class AppServerRpcError extends Error {
   readonly code: number;
   readonly data?: unknown;
 
   constructor(error: { code: number; data?: unknown; message: string }) {
-    super(error.message);
+    super(truncateRpcDiagnostic(error.message));
     this.name = "AppServerRpcError";
     this.code = error.code;
     this.data = error.data;
@@ -72,10 +82,11 @@ export interface ThreadResumeResult {
 
 export class AppServerClient {
   private readonly connection: UnixWebSocketConnection;
-  private readonly notifications: JsonRpcNotification[] = [];
+  private readonly notifications: QueuedNotification[] = [];
   private readonly pending = new Map<number, PendingRequest>();
   private readonly waiters = new Set<NotificationWaiter>();
   private nextRequestId = 1;
+  private notificationBytes = 0;
   private closedError?: Error;
 
   private constructor(connection: UnixWebSocketConnection) {
@@ -180,9 +191,16 @@ export class AppServerClient {
     timeoutMs: number,
   ): Promise<JsonRpcNotification> {
     this.assertOpen();
-    const existingIndex = this.notifications.findIndex(predicate);
+    const existingIndex = this.notifications.findIndex(({ notification }) =>
+      predicate(notification),
+    );
     if (existingIndex !== -1) {
-      return this.notifications.splice(existingIndex, 1)[0] as JsonRpcNotification;
+      const queued = this.notifications.splice(existingIndex, 1)[0];
+      if (queued === undefined) {
+        throw new Error("Queued App Server notification disappeared");
+      }
+      this.notificationBytes -= queued.bytes;
+      return queued.notification;
     }
     return await new Promise<JsonRpcNotification>((resolve, reject) => {
       const waiter: NotificationWaiter = {
@@ -270,9 +288,19 @@ export class AppServerClient {
       waiter.resolve(notification);
     }
     if (!consumed) {
-      this.notifications.push(notification);
-      if (this.notifications.length > 1_000) {
-        this.notifications.shift();
+      const bytes = Buffer.byteLength(text, "utf8");
+      this.notifications.push({ bytes, notification });
+      this.notificationBytes += bytes;
+      while (
+        this.notifications.length > MAX_QUEUED_NOTIFICATIONS ||
+        this.notificationBytes > MAX_QUEUED_NOTIFICATION_BYTES
+      ) {
+        const discarded = this.notifications.shift();
+        if (discarded === undefined) {
+          this.notificationBytes = 0;
+          break;
+        }
+        this.notificationBytes -= discarded.bytes;
       }
     }
   }
@@ -303,18 +331,29 @@ export function notificationHasClientId(
 }
 
 export function valueContainsClientId(value: unknown, clientId: string): boolean {
-  if (Array.isArray(value)) {
-    return value.some((item) => valueContainsClientId(item, clientId));
-  }
-  if (!isRecord(value)) {
-    return false;
-  }
-  if (value.type === "userMessage" && value.clientId === clientId) {
-    return true;
-  }
-  return Object.values(value).some((item) =>
-    valueContainsClientId(item, clientId),
+  return boundedJsonValueMatches(
+    value,
+    (item) =>
+      isRecord(item) &&
+      item.type === "userMessage" &&
+      item.clientId === clientId,
+    MAX_RESPONSE_DEPTH,
+    MAX_RESPONSE_NODES,
   );
+}
+
+function truncateRpcDiagnostic(value: string): string {
+  const encoded = Buffer.from(value, "utf8");
+  if (encoded.length <= MAX_RPC_ERROR_MESSAGE_BYTES) {
+    return value;
+  }
+  const suffix = "\n[truncated App Server RPC diagnostic]";
+  const suffixBytes = Buffer.byteLength(suffix, "utf8");
+  let end = MAX_RPC_ERROR_MESSAGE_BYTES - suffixBytes;
+  while (end > 0 && ((encoded[end] as number) & 0xc0) === 0x80) {
+    end -= 1;
+  }
+  return `${encoded.subarray(0, end).toString("utf8")}${suffix}`;
 }
 
 function socketPathFromEndpoint(endpoint: string): string {

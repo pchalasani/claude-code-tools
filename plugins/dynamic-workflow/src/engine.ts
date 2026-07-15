@@ -138,6 +138,7 @@ export class WorkflowEngine {
         state.startedAt ??= nowIso();
         delete state.completedAt;
         delete state.error;
+        delete state.result;
       });
       await this.log(`run ${this.store.runId} started`);
       const script = compileWorkflow(
@@ -191,6 +192,7 @@ export class WorkflowEngine {
           state.completedAt = nowIso();
           delete state.cleanupPending;
         }
+        delete state.result;
       });
       await this.log(
         cleanupPending
@@ -461,6 +463,7 @@ export class WorkflowEngine {
           const abortReason = this.abortController.signal.reason;
           const canceled = abortReason instanceof CanceledError;
           step.status = canceled ? "canceled" : "failed";
+          delete step.result;
           step.error = canceled
             ? "Workflow canceled"
             : errorMessage(

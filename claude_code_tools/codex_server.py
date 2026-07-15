@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import json
 import os
@@ -9,17 +10,29 @@ import re
 import shutil
 import socket
 import stat
+import struct
 import subprocess
+import sys
 import time
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Iterator, Mapping
+from typing import Iterator, Mapping, Sequence
+
+from claude_code_tools.codex_server_fingerprint import (
+    PluginSnapshot as _PluginSnapshot,
+    hash_plugin_tree as _hash_plugin_tree,  # noqa: F401
+    plugin_configuration_fingerprint as _plugin_configuration_fingerprint,  # noqa: F401
+    plugin_configuration_snapshot as _plugin_configuration_snapshot,
+    read_plugin_configuration as _read_plugin_configuration,  # noqa: F401
+)
 
 from claude_code_tools.codex_server_models import (
+    CODEX_SERVER_OPTIONS_ENV,
     ENDPOINT,
     FORCED_STOP_SECONDS,
     GRACEFUL_STOP_SECONDS,
+    LOG_TRUNCATION_MARKER_MAX_BYTES,
     MINIMUM_CODEX_VERSION,
     MINIMUM_CODEX_VERSION_TEXT,
     POLL_SECONDS,
@@ -31,6 +44,7 @@ from claude_code_tools.codex_server_models import (
     ServerStatus,
     StateFileError,
     log_tail,
+    log_tail_stream,
     open_log_append,
     open_log_reader,
     paths_from_env,
@@ -43,6 +57,7 @@ from claude_code_tools.codex_server_models import (
 from claude_code_tools.codex_server_process import (
     process_group_exists,
     process_identity,
+    codex_executable_identity as _codex_executable_identity,
     remove_stale_ownership,
     run_diagnostic,
     spawn_supervisor,
@@ -78,6 +93,8 @@ _process_identity = process_identity
 _process_group_exists = process_group_exists
 _remove_stale_ownership = remove_stale_ownership
 _log_tail = log_tail
+_log_tail_stream = log_tail_stream
+_log_generation_anchor_bytes = LOG_TRUNCATION_MARKER_MAX_BYTES
 _open_log_append = open_log_append
 _open_log_reader = open_log_reader
 _run_command = run_diagnostic
@@ -157,7 +174,10 @@ def _codex_version(codex_path: str, env: Mapping[str, str]) -> str | None:
     result = _run_command([codex_path, "--version"], env)
     if result is None or result.returncode != 0:
         return None
-    return result.stdout.strip() or None
+    matches = list(VERSION_PATTERN.finditer(result.stdout))
+    if not matches:
+        return None
+    return f"codex-cli {matches[-1].group(0)}"
 
 
 def _version_key(version: str | None) -> tuple[int, int, int] | None:
@@ -224,6 +244,84 @@ def _socket_accepts(path: Path) -> bool:
     return True
 
 
+def _socket_identity(path: Path) -> tuple[int, int] | None:
+    """Return the identity of a socket path without following links."""
+    try:
+        info = path.lstat()
+    except OSError:
+        return None
+    if not stat.S_ISSOCK(info.st_mode):
+        return None
+    return info.st_dev, info.st_ino
+
+
+def _socket_peer_pid(path: Path, attempts: int = 3) -> int | None:
+    """Return the kernel-authenticated PID serving a stable Unix socket."""
+    expected_identity = _socket_identity(path)
+    if expected_identity is None:
+        return None
+    for attempt in range(max(1, attempts)):
+        if _socket_identity(path) != expected_identity:
+            return None
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(0.25)
+        try:
+            client.connect(str(path))
+            if sys.platform == "darwin":
+                try:
+                    credentials = client.getsockopt(0, 0x002, 4)
+                except OSError as exc:
+                    if exc.errno == errno.ENOTCONN and attempt + 1 < attempts:
+                        continue
+                    return None
+                peer_pid = struct.unpack("i", credentials)[0]
+            else:
+                peer_option = getattr(socket, "SO_PEERCRED", None)
+                if peer_option is None:
+                    return None
+                credentials = client.getsockopt(
+                    socket.SOL_SOCKET,
+                    peer_option,
+                    12,
+                )
+                peer_pid = struct.unpack("3i", credentials)[0]
+            if _socket_identity(path) != expected_identity:
+                return None
+            return peer_pid
+        except (OSError, struct.error):
+            return None
+        finally:
+            client.close()
+    return None
+
+
+def _listener_matches_worker(state: OwnedServer, paths: ServerPaths) -> bool:
+    """Verify that the socket peer remains in the recorded worker group."""
+    if not state_worker_matches(state) or state.worker_pgid is None:
+        return False
+    peer_pid = _socket_peer_pid(paths.socket_path)
+    if peer_pid is None:
+        return False
+    try:
+        return os.getpgid(peer_pid) == state.worker_pgid
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def _wait_for_listener_ownership(
+    state: OwnedServer,
+    paths: ServerPaths,
+    attempts: int = 3,
+) -> bool:
+    """Retry transient kernel peer lookup failures during fresh startup."""
+    for attempt in range(max(1, attempts)):
+        if _listener_matches_worker(state, paths):
+            return True
+        if attempt + 1 < attempts:
+            time.sleep(POLL_SECONDS)
+    return False
+
+
 def _server_version_from_output(output: str) -> str | None:
     """Extract an app-server version from daemon-version JSON output."""
     lines = [line.strip() for line in output.splitlines() if line.strip()]
@@ -257,14 +355,20 @@ def _probe_server(
                 running=True,
                 server_version=_server_version_from_output(result.stdout),
                 method="protocol",
+                accepting=True,
             )
         diagnostic = ""
         if result is not None:
             diagnostic = f"{result.stdout}\n{result.stderr}".lower()
         if not any(marker in diagnostic for marker in UNKNOWN_SUBCOMMAND_MARKERS):
-            return ServerProbe(running=False)
+            accepting = _socket_accepts(paths.socket_path)
+            return ServerProbe(
+                running=False,
+                method="socket" if accepting else None,
+                accepting=accepting,
+            )
     if _socket_accepts(paths.socket_path):
-        return ServerProbe(running=True, method="socket")
+        return ServerProbe(running=True, method="socket", accepting=True)
     return ServerProbe(running=False)
 
 
@@ -301,7 +405,7 @@ def _retry_helper_probe(
 
 
 def _check_socket_path(paths: ServerPaths) -> None:
-    """Refuse to start over a non-socket filesystem entry."""
+    """Refuse to start over a non-socket or accepting filesystem entry."""
     try:
         info = paths.socket_path.lstat()
     except FileNotFoundError:
@@ -314,6 +418,11 @@ def _check_socket_path(paths: ServerPaths) -> None:
         raise CodexServerError(
             "refusing to start: the app-server socket path contains a "
             f"non-socket entry: {paths.socket_path}"
+        )
+    if _socket_accepts(paths.socket_path):
+        raise CodexServerError(
+            "refusing to start over an accepting app-server socket whose "
+            "protocol and ownership could not be certified"
         )
 
 
@@ -332,14 +441,19 @@ def _status_from(
 ) -> ServerStatus:
     """Combine process ownership and endpoint health into public status."""
     owned = state if _state_is_owned(state) else None
-    if probe.running:
+    endpoint_active = probe.running or probe.accepting
+    listener_owned = (
+        owned is not None and endpoint_active and _listener_matches_worker(owned, paths)
+    )
+    if endpoint_active:
+        helper = owned if listener_owned else None
         return ServerStatus(
-            status="running",
-            ownership="helper" if owned is not None else "external",
+            status="running" if probe.running else "degraded",
+            ownership="helper" if helper is not None else "external",
             paths=paths,
-            pid=owned.pid if owned is not None else None,
-            codex_path=owned.codex_path if owned is not None else None,
-            codex_version=owned.codex_version if owned is not None else None,
+            pid=helper.pid if helper is not None else None,
+            codex_path=helper.codex_path if helper is not None else None,
+            codex_version=helper.codex_version if helper is not None else None,
             server_version=probe.server_version,
             probe_method=probe.method,
             detail=state_error,
@@ -355,7 +469,8 @@ def _status_from(
             detail=(
                 "process is alive but its app-server endpoint is unavailable; "
                 "ownership was preserved to protect active sessions; run "
-                "codex-server restart for explicit recovery"
+                "codex-server restart --force after exiting connected sessions "
+                "for explicit recovery"
             ),
         )
     return ServerStatus(
@@ -388,28 +503,54 @@ def get_status(env: Mapping[str, str] | None = None) -> ServerStatus:
 def _helper_restart_reason(
     state: OwnedServer,
     codex_path: str,
+    codex_executable_identity: str,
     codex_version: str,
     probe: ServerProbe,
+    plugin_fingerprint: str,
+    paths: ServerPaths,
 ) -> str | None:
     """Explain why a helper listener cannot be safely reused."""
     if not state_controller_matches(state):
         return "its durable supervisor exited"
     if state.codex_path != codex_path:
         return "the active Codex executable path changed"
+    if state.codex_executable_identity is None:
+        return "its Codex executable identity predates replacement detection"
+    if state.codex_executable_identity != codex_executable_identity:
+        return "the active Codex executable was replaced"
     if _version_key(state.codex_version) != _version_key(codex_version):
         return "the active Codex CLI version changed"
     if probe.server_version is not None and _version_key(
         probe.server_version
     ) != _version_key(codex_version):
         return "the running app-server version differs from the Codex CLI"
+    if (probe.running or probe.accepting) and not _listener_matches_worker(
+        state,
+        paths,
+    ):
+        return "its socket listener is not owned by the supervised worker"
+    if state.plugin_fingerprint is None:
+        return "its plugin snapshot predates plugin-change detection"
+    if state.plugin_fingerprint != plugin_fingerprint:
+        return "the Codex plugin or marketplace configuration changed"
     return None
+
+
+def _disconnect_refusal(action: str) -> CodexServerError:
+    """Explain why a shared-server lifecycle action needs acknowledgement."""
+    return CodexServerError(
+        f"refusing to {action} the shared app server without --force: this "
+        "disconnects every codex-dynamic TUI, and Codex exits those sessions. "
+        "Exit connected sessions first, then retry with --force; their "
+        "transcripts remain resumable"
+    )
 
 
 def _require_external_compatible(
     codex_version: str,
     probe: ServerProbe,
 ) -> None:
-    """Reject an external listener that cannot match the selected CLI."""
+    """Reject external listeners, whose plugin snapshot is uncertifiable."""
     server_key = _version_key(probe.server_version)
     cli_key = _version_key(codex_version)
     if server_key is None:
@@ -423,6 +564,123 @@ def _require_external_compatible(
             f"match the selected Codex CLI {codex_version!r}; stop or restart "
             "the external server"
         )
+    raise CodexServerError(
+        "an external app server is running, but codex-server cannot verify "
+        "which plugin snapshot it loaded; stop it before using "
+        "codex-dynamic workflow callbacks"
+    )
+
+
+def _require_unchanged_plugin_snapshot(
+    paths: ServerPaths,
+    expected: _PluginSnapshot,
+    operation: str,
+    codex_options: Sequence[str] = (),
+) -> None:
+    """Reject a lifecycle decision made across a plugin input change."""
+    if _plugin_configuration_snapshot(paths, codex_options) != expected:
+        raise CodexServerError(
+            "the Codex plugin or marketplace snapshot changed during "
+            f"{operation}; retry after plugin updates finish"
+        )
+
+
+def _same_server_launch(expected: OwnedServer, current: OwnedServer) -> bool:
+    """Return whether two states name the same exact supervised launch."""
+    return (
+        current.pid,
+        current.pgid,
+        current.process_started_at,
+        current.launch_token,
+        current.worker_pid,
+        current.worker_pgid,
+        current.worker_started_at,
+    ) == (
+        expected.pid,
+        expected.pgid,
+        expected.process_started_at,
+        expected.launch_token,
+        expected.worker_pid,
+        expected.worker_pgid,
+        expected.worker_started_at,
+    )
+
+
+def _certify_helper_boundary(
+    expected: OwnedServer,
+    active_env: Mapping[str, str],
+    child_env: Mapping[str, str],
+    paths: ServerPaths,
+    plugin_snapshot: _PluginSnapshot,
+    codex_options: Sequence[str],
+    operation: str,
+) -> tuple[OwnedServer, ServerProbe]:
+    """Fail closed unless the helper is fully certified at return time."""
+    _require_unchanged_plugin_snapshot(
+        paths,
+        plugin_snapshot,
+        operation,
+        codex_options,
+    )
+    current = _read_state(paths)
+    if current is None or not _same_server_launch(expected, current):
+        raise CodexServerError(f"app-server ownership changed during {operation}")
+    if not state_controller_matches(current) or not state_worker_matches(current):
+        raise CodexServerError(f"app-server worker vanished during {operation}")
+    codex_path = _resolve_codex(active_env)
+    if codex_path != current.codex_path:
+        raise CodexServerError(
+            f"the selected Codex executable changed during {operation}"
+        )
+    executable_identity = _codex_executable_identity(codex_path)
+    if (
+        current.codex_executable_identity is None
+        or executable_identity != current.codex_executable_identity
+    ):
+        raise CodexServerError(
+            f"the selected Codex executable was replaced during {operation}"
+        )
+    codex_version = _require_compatible_codex(codex_path, child_env)
+    if _version_key(codex_version) != _version_key(current.codex_version):
+        raise CodexServerError(f"the selected Codex version changed during {operation}")
+    probe = _probe_server(codex_path, child_env, paths)
+    if not probe.running:
+        raise CodexServerError(f"the app-server listener vanished during {operation}")
+    if _version_key(probe.server_version) != _version_key(codex_version):
+        raise CodexServerError(
+            f"the app-server version changed or was uncertified during {operation}"
+        )
+    if not _listener_matches_worker(current, paths):
+        raise CodexServerError(
+            f"the app-server listener changed during {operation}; "
+            "it may have been replaced"
+        )
+    if not state_controller_matches(current) or not state_worker_matches(current):
+        raise CodexServerError(f"app-server worker vanished during {operation}")
+    if not _listener_matches_worker(current, paths):
+        raise CodexServerError(
+            f"the app-server listener changed during {operation}; "
+            "it may have been replaced"
+        )
+    return current, probe
+
+
+def _certified_helper_status(
+    paths: ServerPaths,
+    state: OwnedServer,
+    probe: ServerProbe,
+) -> ServerStatus:
+    """Build a helper result only from final certified evidence."""
+    return ServerStatus(
+        status="running",
+        ownership="helper",
+        paths=paths,
+        pid=state.pid,
+        codex_path=state.codex_path,
+        codex_version=state.codex_version,
+        server_version=probe.server_version,
+        probe_method=probe.method,
+    )
 
 
 def _wait_until_ready(
@@ -438,10 +696,19 @@ def _wait_until_ready(
         probe = _probe_server(codex_path, child_env, paths)
         if probe.running:
             return probe
-        if not state_controller_matches(state) or not state_worker_matches(state):
+        controller_matches = state_controller_matches(state)
+        worker_matches = state_worker_matches(state)
+        if not controller_matches or not worker_matches:
+            flush_deadline = min(deadline, time.monotonic() + 0.5)
+            while controller_matches and time.monotonic() < flush_deadline:
+                time.sleep(POLL_SECONDS)
+                controller_matches = state_controller_matches(state)
             break
         time.sleep(POLL_SECONDS)
-    detail = _log_tail(paths.log_path)
+    detail = _log_tail(
+        paths.log_path,
+        expected_identity=state.log_identity,
+    )
     suffix = f"\n\nApp-server log:\n{detail}" if detail else ""
     raise CodexServerError(
         f"app server did not become ready within {timeout:g} seconds{suffix}"
@@ -473,15 +740,25 @@ def _wait_for_process_group_exit(
     )
 
 
-def ensure_server(env: Mapping[str, str] | None = None) -> ServerStatus:
+def ensure_server(
+    env: Mapping[str, str] | None = None,
+    *,
+    codex_options: Sequence[str] = (),
+) -> ServerStatus:
     """Reuse a compatible listener or start a supervised app server."""
     active_env = dict(os.environ if env is None else env)
     paths = _paths(active_env)
     codex_path = _resolve_codex(active_env)
+    codex_executable_identity = _codex_executable_identity(codex_path)
     child_env = _command_env(active_env, paths)
+    child_env[CODEX_SERVER_OPTIONS_ENV] = json.dumps(
+        list(codex_options),
+        separators=(",", ":"),
+    )
     codex_version = _require_compatible_codex(codex_path, child_env)
-
     with _lifecycle_lock(paths):
+        plugin_snapshot = _plugin_configuration_snapshot(paths, codex_options)
+        plugin_fingerprint = plugin_snapshot.fingerprint
         try:
             state = _read_state(paths)
             state_error: str | None = None
@@ -491,15 +768,23 @@ def ensure_server(env: Mapping[str, str] | None = None) -> ServerStatus:
 
         probe = _probe_server(codex_path, child_env, paths)
         status = _status_from(paths, state, probe, state_error)
-        if status.status == "running" and status.ownership == "external":
+        if status.ownership == "external" and (probe.running or probe.accepting):
+            if state is not None and _state_is_owned(state):
+                raise CodexServerError(
+                    "shared app server cannot be reused because its socket "
+                    "listener is not owned by the supervised worker"
+                )
             _require_external_compatible(codex_version, probe)
             return status
         if state is not None and _state_is_owned(state):
             restart_reason = _helper_restart_reason(
                 state,
                 codex_path,
+                codex_executable_identity,
                 codex_version,
                 probe,
+                plugin_fingerprint,
+                paths,
             )
             if restart_reason is None and not probe.running:
                 probe = _retry_helper_probe(
@@ -512,14 +797,34 @@ def ensure_server(env: Mapping[str, str] | None = None) -> ServerStatus:
                 restart_reason = _helper_restart_reason(
                     state,
                     codex_path,
+                    codex_executable_identity,
                     codex_version,
                     probe,
+                    plugin_fingerprint,
+                    paths,
                 )
             if restart_reason is None:
-                return status
-            _terminate_owned(state, graceful_seconds=2.0, forced_seconds=1.0)
-            _remove_state(paths)
-            state = None
+                certified_state, certified_probe = _certify_helper_boundary(
+                    state,
+                    active_env,
+                    child_env,
+                    paths,
+                    plugin_snapshot,
+                    codex_options,
+                    "app-server reuse checks",
+                )
+                return _certified_helper_status(
+                    paths,
+                    certified_state,
+                    certified_probe,
+                )
+            raise CodexServerError(
+                "shared app server cannot be reused because "
+                f"{restart_reason}. Refusing to restart it automatically "
+                "because that would disconnect every codex-dynamic TUI. Exit "
+                "connected sessions, run `codex-server restart --force`, then "
+                "start or resume Codex"
+            )
 
         if state_error:
             _quarantine_invalid_state(paths)
@@ -538,8 +843,11 @@ def ensure_server(env: Mapping[str, str] | None = None) -> ServerStatus:
                 codex_version,
                 child_env,
                 paths,
+                plugin_fingerprint,
+                codex_executable_identity,
+                codex_options,
             )
-            ready = _wait_until_ready(
+            _wait_until_ready(
                 codex_path,
                 child_env,
                 paths,
@@ -554,9 +862,37 @@ def ensure_server(env: Mapping[str, str] | None = None) -> ServerStatus:
                 raise CodexServerError(
                     "app-server ownership changed before startup completed"
                 )
+            if not _listener_matches_worker(current, paths):
+                raise CodexServerError(
+                    "app-server socket is not owned by its supervised worker"
+                )
+            _require_unchanged_plugin_snapshot(
+                paths,
+                plugin_snapshot,
+                "app-server startup",
+                codex_options,
+            )
+            if not _wait_for_listener_ownership(current, paths):
+                raise CodexServerError(
+                    "the app-server listener changed during startup checks; "
+                    "refusing to certify helper ownership"
+                )
             running = replace(current, phase="running")
             _write_state(paths, running)
-            return _status_from(paths, running, ready)
+            certified_state, certified_probe = _certify_helper_boundary(
+                running,
+                active_env,
+                child_env,
+                paths,
+                plugin_snapshot,
+                codex_options,
+                "app-server startup checks",
+            )
+            return _certified_helper_status(
+                paths,
+                certified_state,
+                certified_probe,
+            )
         except BaseException as exc:
             if starting is not None:
                 try:
@@ -574,8 +910,12 @@ def ensure_server(env: Mapping[str, str] | None = None) -> ServerStatus:
             raise
 
 
-def stop_server(env: Mapping[str, str] | None = None) -> ServerStatus:
-    """Stop a helper-owned server and refuse external listeners."""
+def stop_server(
+    env: Mapping[str, str] | None = None,
+    *,
+    allow_disconnect: bool = False,
+) -> ServerStatus:
+    """Stop a helper-owned server after explicit disconnect acknowledgement."""
     active_env = dict(os.environ if env is None else env)
     paths = _paths(active_env)
     try:
@@ -589,7 +929,7 @@ def stop_server(env: Mapping[str, str] | None = None) -> ServerStatus:
             state = _read_state(paths)
         except StateFileError as exc:
             probe = _probe_server(codex_path, child_env, paths)
-            if probe.running:
+            if probe.running or probe.accepting:
                 raise CodexServerError(
                     "app server is running, but ownership state is invalid; "
                     "refusing to stop it"
@@ -598,13 +938,15 @@ def stop_server(env: Mapping[str, str] | None = None) -> ServerStatus:
             state = None
 
         if state is not None and _state_is_owned(state):
+            if not allow_disconnect:
+                raise _disconnect_refusal("stop")
             _terminate_owned(state)
             _remove_state(paths)
         elif state is not None:
             _remove_stale_ownership(paths, state)
 
         probe = _probe_server(codex_path, child_env, paths)
-        if probe.running:
+        if probe.running or probe.accepting:
             raise CodexServerError(
                 "app server is running, but it was not started by "
                 "codex-server; refusing to stop it"
@@ -612,14 +954,26 @@ def stop_server(env: Mapping[str, str] | None = None) -> ServerStatus:
         return ServerStatus(status="stopped", ownership=None, paths=paths)
 
 
-def restart_server(env: Mapping[str, str] | None = None) -> ServerStatus:
-    """Restart a helper-owned server, refusing an external listener."""
+def restart_server(
+    env: Mapping[str, str] | None = None,
+    *,
+    allow_disconnect: bool = False,
+) -> ServerStatus:
+    """Restart after explicit acknowledgement that attached TUIs will exit."""
     active_env = dict(os.environ if env is None else env)
     status = get_status(active_env)
     if status.status == "running" and status.ownership == "external":
         raise CodexServerError("app server is externally owned; refusing to restart it")
-    stop_server(active_env)
-    return ensure_server(active_env)
+    if status.ownership == "helper" and not allow_disconnect:
+        raise _disconnect_refusal("restart")
+    codex_options: tuple[str, ...] = ()
+    if status.ownership == "helper":
+        state = _read_state(_paths(active_env))
+        if state is None or state.pid != status.pid:
+            raise CodexServerError("app-server ownership changed before restart")
+        codex_options = state.codex_options
+    stop_server(active_env, allow_disconnect=allow_disconnect)
+    return ensure_server(active_env, codex_options=codex_options)
 
 
 __all__ = [

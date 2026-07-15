@@ -82,12 +82,6 @@ Default bump type is `patch`.
 | `make lmsh-install` | Build and install to `~/.cargo/bin` |
 | `make lmsh-publish` | Bump version and publish to crates.io |
 
-## Node.js
-
-| Command | Description |
-|---------|-------------|
-| `make prep-node` | Install `node_modules` (auto-runs before publish) |
-
 ## Documentation
 
 | Command | Description |

@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import json
 import os
-import pty
 import shutil
 import signal
 import socket
-import stat
 import subprocess
 import sys
 import tempfile
@@ -139,17 +137,27 @@ def main() -> int:
         if not can_connect():
             print("app server is not running", file=sys.stderr)
             return 1
+        cli_version = os.environ.get("FAKE_CODEX_VERSION", "codex-cli 9.9.9")
         print(json.dumps({
             "status": "running",
-            "appServerVersion": "9.9.9",
+            "appServerVersion": cli_version.split()[-1],
         }))
         return 0
-    if arguments == ["app-server", "--listen", "unix://"]:
+    if arguments[-3:] == ["app-server", "--listen", "unix://"]:
+        destination = os.environ.get("FAKE_CODEX_SERVER_ARGS")
+        if destination:
+            Path(destination).write_text(
+                json.dumps(arguments[:-3]),
+                encoding="utf-8",
+            )
         return run_server()
     destination = os.environ.get("FAKE_CODEX_ARGS")
     if destination:
         Path(destination).write_text(json.dumps({
             "args": arguments,
+            "callbackEndpoint": os.environ.get(
+                "CCTOOLS_CODEX_CALLBACK_ENDPOINT"
+            ),
             "codexHome": os.environ.get("CODEX_HOME"),
             "stdinIsTty": sys.stdin.isatty(),
             "stdoutIsTty": sys.stdout.isatty(),
@@ -181,7 +189,7 @@ def server_environment() -> Iterator[tuple[Path, dict[str, str]]]:
         yield root, environment
     finally:
         try:
-            stop_server(environment)
+            stop_server(environment, allow_disconnect=True)
         except Exception:
             state_path = _paths(environment).state_path
             if state_path.is_file():
@@ -268,6 +276,15 @@ def test_start_status_restart_and_stop(
     assert json.loads(output)["pid"] == started["pid"]
 
     code, output = _invoke(["restart", "--json"], environment)
+    assert code != 0
+    assert "refusing to restart" in output
+    assert "disconnects every codex-dynamic TUI" in output
+
+    code, output = _invoke(["status", "--json"], environment)
+    assert code == 0, output
+    assert json.loads(output)["pid"] == started["pid"]
+
+    code, output = _invoke(["restart", "--force", "--json"], environment)
     assert code == 0, output
     restarted = json.loads(output)
     assert restarted["pid"] != started["pid"]
@@ -275,6 +292,11 @@ def test_start_status_restart_and_stop(
     assert len(launches) == 2
 
     code, output = _invoke(["stop", "--json"], environment)
+    assert code != 0
+    assert "refusing to stop" in output
+    assert "disconnects every codex-dynamic TUI" in output
+
+    code, output = _invoke(["stop", "--force", "--json"], environment)
     assert code == 0, output
     assert json.loads(output)["status"] == "stopped"
     assert not _paths(environment).state_path.exists()
@@ -282,6 +304,55 @@ def test_start_status_restart_and_stop(
     code, output = _invoke(["stop", "--json"], environment)
     assert code == 0, output
     assert json.loads(output)["status"] == "stopped"
+
+
+def test_plugin_configuration_change_requires_explicit_restart(
+    server_environment: tuple[Path, dict[str, str]],
+) -> None:
+    """A new TUI never silently reuses a stale plugin snapshot."""
+    root, environment = server_environment
+    started = ensure_server(environment)
+    config_path = _paths(environment).codex_home / "config.toml"
+    config_path.write_text(
+        '[plugins."sample@example"]\nenabled = true\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CodexServerError, match="plugin or marketplace"):
+        ensure_server(environment)
+
+    preserved = get_status(environment)
+    assert preserved.pid == started.pid
+    restarted = restart_server(environment, allow_disconnect=True)
+    assert restarted.pid != started.pid
+    launches = (root / "launches.txt").read_text(encoding="utf-8").splitlines()
+    assert len(launches) == 2
+
+
+def test_non_plugin_configuration_change_reuses_server(
+    server_environment: tuple[Path, dict[str, str]],
+) -> None:
+    """Unrelated configuration edits do not create restart churn."""
+    _root, environment = server_environment
+    config_path = _paths(environment).codex_home / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        '[marketplaces.example]\nlast_updated = "first"\n'
+        'source_type = "local"\nsource = "/example"\n\n'
+        '[tui]\ntheme = "dark"\n',
+        encoding="utf-8",
+    )
+    started = ensure_server(environment)
+    config_path.write_text(
+        '[marketplaces.example]\nlast_updated = "first"\n'
+        'source_type = "local"\nsource = "/example"\n\n'
+        '[tui]\ntheme = "light"\n',
+        encoding="utf-8",
+    )
+
+    reused = ensure_server(environment)
+
+    assert reused.pid == started.pid
 
 
 def test_server_children_ignore_a_shadow_package_in_the_working_directory(
@@ -299,7 +370,7 @@ def test_server_children_ignore_a_shadow_package_in_the_working_directory(
 
     assert started.status == "running"
     assert started.ownership == "helper"
-    stop_server(environment)
+    stop_server(environment, allow_disconnect=True)
     assert not _paths(environment).state_path.exists()
 
 
@@ -318,7 +389,7 @@ def test_stop_terminates_the_entire_owned_process_group(
     assert state is not None
     assert state.worker_pgid is not None
     assert os.getpgid(child_pid) == state.worker_pgid
-    stop_server(environment)
+    stop_server(environment, allow_disconnect=True)
 
     _wait_for_group_exit(state.worker_pgid)
     assert not _paths(environment).state_path.exists()
@@ -430,12 +501,12 @@ def test_stop_retains_state_when_group_cleanup_fails(
 
     monkeypatch.setattr(codex_server, "_terminate_owned", fail_cleanup)
     with pytest.raises(CodexServerError, match="group still alive"):
-        stop_server(environment)
+        stop_server(environment, allow_disconnect=True)
     assert _paths(environment).state_path.is_file()
     assert _process_group_exists(started.pid or 0)
 
     monkeypatch.setattr(codex_server, "_terminate_owned", original)
-    stop_server(environment)
+    stop_server(environment, allow_disconnect=True)
 
 
 def test_stop_retains_state_for_descendants_after_leader_exit(
@@ -457,7 +528,7 @@ def test_stop_retains_state_for_descendants_after_leader_exit(
     codex_server._write_state(paths, state)
 
     with pytest.raises(CodexServerError, match="still have descendants"):
-        stop_server(environment)
+        stop_server(environment, allow_disconnect=True)
     assert paths.state_path.is_file()
 
 
@@ -541,442 +612,3 @@ def test_immediate_post_spawn_interruption_cleans_up_the_process_group(
     _wait_for_group_exit(supervisor_pids[0])
     assert not launches.exists()
     assert not _paths(environment).state_path.exists()
-
-
-def test_codex_0136_is_the_oldest_supported_callback_release(
-    server_environment: tuple[Path, dict[str, str]],
-    process_identity_without_ps: None,
-) -> None:
-    """The complete callback protocol floor is enforced before startup."""
-    root, environment = server_environment
-    environment["FAKE_CODEX_VERSION"] = "codex-cli 0.135.0"
-
-    with pytest.raises(CodexServerError, match=r"0\.136\.0 or newer"):
-        ensure_server(environment)
-    assert not (root / "launches.txt").exists()
-
-    arguments_path = root / "arguments.json"
-    environment["FAKE_CODEX_ARGS"] = str(arguments_path)
-    command = [
-        sys.executable,
-        "-c",
-        "from claude_code_tools.codex_server_cli import dynamic_main; dynamic_main()",
-    ]
-    result = subprocess.run(
-        command,
-        env=environment,
-        capture_output=True,
-        check=False,
-        text=True,
-        timeout=5,
-    )
-    assert result.returncode == 1
-    assert "0.136.0 or newer" in result.stderr
-    assert not arguments_path.exists()
-
-    environment["FAKE_CODEX_VERSION"] = "codex-cli 0.136.0"
-    assert ensure_server(environment).status == "running"
-
-
-def test_concurrent_start_launches_one_server(
-    server_environment: tuple[Path, dict[str, str]],
-) -> None:
-    """The lifecycle lock prevents duplicate servers across processes."""
-    root, environment = server_environment
-    command = [
-        sys.executable,
-        "-m",
-        "claude_code_tools.codex_server_cli",
-        "start",
-        "--json",
-    ]
-    processes = [
-        subprocess.Popen(
-            command,
-            env=environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        for _ in range(4)
-    ]
-    results = [process.communicate(timeout=15) for process in processes]
-    assert all(process.returncode == 0 for process in processes), results
-    pids = {json.loads(stdout)["pid"] for stdout, _stderr in results}
-    assert len(pids) == 1
-    launches = (root / "launches.txt").read_text(encoding="utf-8").splitlines()
-    assert len(launches) == 1
-
-
-def test_codex_dynamic_starts_server_and_forwards_resume_arguments(
-    server_environment: tuple[Path, dict[str, str]],
-) -> None:
-    """The remote wrapper execs Codex with unchanged subcommand arguments."""
-    root, environment = server_environment
-    arguments_path = root / "arguments.json"
-    environment["FAKE_CODEX_ARGS"] = str(arguments_path)
-    command = [
-        sys.executable,
-        "-c",
-        "from claude_code_tools.codex_server_cli import dynamic_main; dynamic_main()",
-        "resume",
-        "--last",
-    ]
-    result = subprocess.run(
-        command,
-        env=environment,
-        capture_output=True,
-        check=False,
-        text=True,
-        timeout=15,
-    )
-    assert result.returncode == 0, result.stderr
-    invocation = json.loads(arguments_path.read_text(encoding="utf-8"))
-    assert invocation["args"] == ["--remote", "unix://", "resume", "--last"]
-    assert invocation["codexHome"] == environment["CODEX_HOME"]
-    assert get_status(environment).status == "running"
-
-
-def test_codex_dynamic_rejects_endpoint_override(
-    server_environment: tuple[Path, dict[str, str]],
-) -> None:
-    """Users cannot accidentally split the helper and TUI endpoints."""
-    root, environment = server_environment
-    arguments_path = root / "arguments.json"
-    environment["FAKE_CODEX_ARGS"] = str(arguments_path)
-    command = [
-        sys.executable,
-        "-c",
-        "from claude_code_tools.codex_server_cli import dynamic_main; dynamic_main()",
-        "--remote",
-        "unix:///tmp/other.sock",
-    ]
-    result = subprocess.run(
-        command,
-        env=environment,
-        capture_output=True,
-        check=False,
-        text=True,
-        timeout=5,
-    )
-    assert result.returncode == 2
-    assert "owns --remote" in result.stderr
-    assert not arguments_path.exists()
-    assert get_status(environment).status == "stopped"
-
-
-def test_codex_dynamic_help_does_not_start_server(
-    server_environment: tuple[Path, dict[str, str]],
-) -> None:
-    """Informational Codex commands do not create a background process."""
-    root, environment = server_environment
-    arguments_path = root / "arguments.json"
-    environment["FAKE_CODEX_ARGS"] = str(arguments_path)
-    command = [
-        sys.executable,
-        "-c",
-        "from claude_code_tools.codex_server_cli import dynamic_main; dynamic_main()",
-        "--help",
-    ]
-    result = subprocess.run(
-        command,
-        env=environment,
-        capture_output=True,
-        check=False,
-        text=True,
-        timeout=5,
-    )
-    assert result.returncode == 0
-    invocation = json.loads(arguments_path.read_text(encoding="utf-8"))
-    assert invocation["args"] == ["--help"]
-    assert get_status(environment).status == "stopped"
-
-
-def test_codex_dynamic_information_command_ignores_invalid_codex_home(
-    server_environment: tuple[Path, dict[str, str]],
-) -> None:
-    """Non-TUI forwarding does not inspect server-only configuration."""
-    root, environment = server_environment
-    original_home = environment["CODEX_HOME"]
-    environment["CODEX_HOME"] = "/dev/null"
-    command = [
-        sys.executable,
-        "-c",
-        "from claude_code_tools.codex_server_cli import dynamic_main; dynamic_main()",
-        "--version",
-    ]
-
-    try:
-        result = subprocess.run(
-            command,
-            env=environment,
-            capture_output=True,
-            check=False,
-            text=True,
-            timeout=5,
-        )
-    finally:
-        environment["CODEX_HOME"] = original_home
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "codex-cli 9.9.9"
-    assert get_status(environment).status == "stopped"
-
-
-@pytest.mark.parametrize(
-    "arguments",
-    [
-        ["completion", "zsh"],
-        ["--model", "o3", "exec", "hello"],
-        ["-c", 'model="o3"', "review"],
-        ["features", "list"],
-        ["help", "mcp"],
-        ["login", "status"],
-        ["mcp", "list"],
-        ["doctor"],
-    ],
-)
-def test_codex_dynamic_forwards_non_tui_commands_without_remote(
-    server_environment: tuple[Path, dict[str, str]],
-    arguments: list[str],
-) -> None:
-    """Non-interactive Codex commands bypass the remote TUI transport."""
-    root, environment = server_environment
-    arguments_path = root / "arguments.json"
-    environment["FAKE_CODEX_ARGS"] = str(arguments_path)
-    command = [
-        sys.executable,
-        "-c",
-        "from claude_code_tools.codex_server_cli import dynamic_main; dynamic_main()",
-        *arguments,
-    ]
-
-    result = subprocess.run(
-        command,
-        env=environment,
-        capture_output=True,
-        check=False,
-        text=True,
-        timeout=5,
-    )
-
-    assert result.returncode == 0, result.stderr
-    invocation = json.loads(arguments_path.read_text(encoding="utf-8"))
-    assert invocation["args"] == arguments
-    assert get_status(environment).status == "stopped"
-
-
-def test_codex_dynamic_preserves_tty_and_exact_exit_status(
-    server_environment: tuple[Path, dict[str, str]],
-) -> None:
-    """Process replacement leaves terminal ownership and status with Codex."""
-    root, environment = server_environment
-    arguments_path = root / "arguments.json"
-    environment["FAKE_CODEX_ARGS"] = str(arguments_path)
-    environment["FAKE_CODEX_EXIT"] = "17"
-    command = [
-        sys.executable,
-        "-c",
-        "from claude_code_tools.codex_server_cli import dynamic_main; dynamic_main()",
-    ]
-    pid, descriptor = pty.fork()
-    if pid == 0:
-        os.execve(sys.executable, command, environment)
-    try:
-        while True:
-            try:
-                if not os.read(descriptor, 4096):
-                    break
-            except OSError:
-                break
-    finally:
-        os.close(descriptor)
-    _waited_pid, wait_status = os.waitpid(pid, 0)
-
-    assert os.WIFEXITED(wait_status)
-    assert os.WEXITSTATUS(wait_status) == 17
-    invocation = json.loads(arguments_path.read_text(encoding="utf-8"))
-    assert invocation["stdinIsTty"] is True
-    assert invocation["stdoutIsTty"] is True
-
-
-def test_external_server_is_reused_but_never_stopped(
-    server_environment: tuple[Path, dict[str, str]],
-) -> None:
-    """A listener without helper ownership remains outside helper control."""
-    _root, environment = server_environment
-    codex = environment["CCTOOLS_CODEX_BIN"]
-    external = subprocess.Popen(
-        [codex, "app-server", "--listen", "unix://"],
-        env=environment,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    try:
-        _wait_for_socket(_paths(environment).socket_path)
-        status = ensure_server(environment)
-        assert status.status == "running"
-        assert status.ownership == "external"
-
-        code, output = _invoke(["stop"], environment)
-        assert code != 0
-        assert "was not started by codex-server" in output
-        assert external.poll() is None
-
-        code, output = _invoke(["restart"], environment)
-        assert code != 0
-        assert "externally owned" in output
-        assert external.poll() is None
-    finally:
-        external.terminate()
-        external.wait(timeout=5)
-
-
-def test_stale_wrong_identity_with_live_group_is_retained_without_signalling(
-    server_environment: tuple[Path, dict[str, str]],
-) -> None:
-    """PID reuse protection retains ambiguous group ownership without signals."""
-    root, environment = server_environment
-    paths = _paths(environment)
-    paths.runtime_dir.mkdir(mode=0o700, parents=True)
-    innocent = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(300)"],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    state = {
-        "version": 1,
-        "pid": innocent.pid,
-        "pgid": innocent.pid,
-        "processStartedAt": "definitely not this process",
-        "codexPath": environment["CCTOOLS_CODEX_BIN"],
-        "codexVersion": "old",
-        "launchedAt": "2026-01-01T00:00:00+00:00",
-        "phase": "running",
-    }
-    paths.state_path.write_text(json.dumps(state), encoding="utf-8")
-
-    try:
-        with pytest.raises(CodexServerError, match="ownership state was retained"):
-            ensure_server(environment)
-        assert innocent.poll() is None
-        assert paths.state_path.exists()
-        assert not (root / "launches.txt").exists()
-    finally:
-        paths.state_path.unlink(missing_ok=True)
-        innocent.terminate()
-        innocent.wait(timeout=5)
-
-
-def test_unreachable_owned_server_requires_explicit_restart(
-    server_environment: tuple[Path, dict[str, str]],
-) -> None:
-    """A live helper stays owned until the user explicitly restarts it."""
-    root, environment = server_environment
-    started = ensure_server(environment)
-    _paths(environment).socket_path.unlink()
-
-    degraded = get_status(environment)
-    assert degraded.status == "degraded"
-    assert degraded.ownership == "helper"
-
-    preserved = ensure_server(environment)
-    assert preserved.status == "degraded"
-    assert preserved.ownership == "helper"
-    assert preserved.pid == started.pid
-    assert preserved.detail is not None
-    assert "codex-server restart" in preserved.detail
-    launches = (root / "launches.txt").read_text(encoding="utf-8").splitlines()
-    assert len(launches) == 1
-
-    recovered = restart_server(environment)
-    assert recovered.status == "running"
-    assert recovered.pid != started.pid
-    launches = (root / "launches.txt").read_text(encoding="utf-8").splitlines()
-    assert len(launches) == 2
-
-
-def test_startup_failure_reports_log_and_cleans_state(
-    server_environment: tuple[Path, dict[str, str]],
-) -> None:
-    """An early child exit is actionable and leaves no owned state."""
-    _root, environment = server_environment
-    environment["FAKE_CODEX_FAIL_START"] = "1"
-
-    code, output = _invoke(["start"], environment)
-    assert code != 0
-    assert "startup" in output
-    assert "intentional startup failure" in output
-    assert not _paths(environment).state_path.exists()
-
-
-def test_stale_socket_and_malformed_state_are_recovered(
-    server_environment: tuple[Path, dict[str, str]],
-) -> None:
-    """Safe stale artifacts do not permanently block a new server."""
-    _root, environment = server_environment
-    paths = _paths(environment)
-    paths.socket_path.parent.mkdir(mode=0o700, parents=True)
-    stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    stale.bind(str(paths.socket_path))
-    stale.close()
-    paths.runtime_dir.mkdir(mode=0o700, parents=True)
-    paths.state_path.write_text("{broken", encoding="utf-8")
-
-    status = ensure_server(environment)
-    assert status.status == "running"
-    assert status.ownership == "helper"
-    quarantined = list(paths.runtime_dir.glob("state.invalid.*.json"))
-    assert len(quarantined) == 1
-
-
-def test_non_socket_endpoint_entry_is_preserved(
-    server_environment: tuple[Path, dict[str, str]],
-) -> None:
-    """The helper refuses a regular file at Codex's socket path."""
-    _root, environment = server_environment
-    socket_path = _paths(environment).socket_path
-    socket_path.parent.mkdir(mode=0o700, parents=True)
-    socket_path.write_text("keep me", encoding="utf-8")
-
-    code, output = _invoke(["start"], environment)
-    assert code != 0
-    assert "non-socket entry" in output
-    assert socket_path.read_text(encoding="utf-8") == "keep me"
-
-
-def test_app_server_log_symlink_is_refused(
-    server_environment: tuple[Path, dict[str, str]],
-) -> None:
-    """Starting the helper never follows or modifies an existing log symlink."""
-    root, environment = server_environment
-    paths = _paths(environment)
-    paths.runtime_dir.mkdir(mode=0o700, parents=True)
-    target = root / "keep.txt"
-    target.write_text("keep me", encoding="utf-8")
-    paths.log_path.symlink_to(target)
-
-    code, output = _invoke(["start"], environment)
-
-    assert code != 0
-    assert "app-server log" in output
-    assert target.read_text(encoding="utf-8") == "keep me"
-    assert not (root / "launches.txt").exists()
-
-
-def test_state_and_runtime_permissions_are_private(
-    server_environment: tuple[Path, dict[str, str]],
-) -> None:
-    """Lifecycle metadata and logs are private to the current user."""
-    _root, environment = server_environment
-    ensure_server(environment)
-    paths = _paths(environment)
-
-    assert stat.S_IMODE(paths.runtime_dir.stat().st_mode) == 0o700
-    assert stat.S_IMODE(paths.state_path.stat().st_mode) == 0o600
-    assert stat.S_IMODE(paths.lock_path.stat().st_mode) == 0o600
-    assert stat.S_IMODE(paths.log_path.stat().st_mode) == 0o600

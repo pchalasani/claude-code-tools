@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from typing import Mapping, NoReturn, Sequence
 
-from claude_code_tools.codex_server_models import ENDPOINT, CodexServerError
+from claude_code_tools.codex_server_models import (
+    CODEX_SERVER_OPTIONS_ENV,
+    ENDPOINT,
+    CodexServerError,
+)
 
 
 def run_worker_gate(
@@ -31,12 +36,29 @@ def run_worker_gate(
     release = _read_release(gate_fd)
     if release != launch_token:
         raise CodexServerError("app-server worker release token did not match")
+    options = _server_options(env)
     os.execve(
         codex_path,
-        [codex_path, "app-server", "--listen", ENDPOINT],
+        [codex_path, *options, "app-server", "--listen", ENDPOINT],
         dict(env),
     )
     raise AssertionError("os.execve returned unexpectedly")
+
+
+def _server_options(env: Mapping[str, str]) -> list[str]:
+    """Decode launcher-certified global options for the app server."""
+    raw = env.get(CODEX_SERVER_OPTIONS_ENV, "[]")
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, RecursionError) as exc:
+        raise CodexServerError("app-server options were invalid") from exc
+    if (
+        not isinstance(value, list)
+        or len(value) > 128
+        or any(not isinstance(item, str) or len(item) > 16_384 for item in value)
+    ):
+        raise CodexServerError("app-server options were invalid")
+    return value
 
 
 def _read_release(fd: int) -> str:

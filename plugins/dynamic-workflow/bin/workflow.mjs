@@ -15,12 +15,11 @@ import vm from "node:vm";
 import { spawn } from "node:child_process";
 import { mkdir as mkdir2, writeFile as writeFile2 } from "node:fs/promises";
 import path2 from "node:path";
-import readline from "node:readline";
 
 // src/utils.ts
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { constants } from "node:fs";
+import { constants, readdirSync, readFileSync } from "node:fs";
 import {
   access,
   mkdir,
@@ -30,6 +29,51 @@ import {
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+var MAX_DURABLE_JSON_DEPTH = 128;
+var MAX_DURABLE_JSON_NODES = 25e4;
+var MAX_DURABLE_VALUE_BYTES = 1e6;
+var JsonStructureLimitError = class extends RangeError {
+  constructor(message) {
+    super(message);
+    this.name = "JsonStructureLimitError";
+  }
+};
+var DARWIN_PROCESS_START_SCRIPT = String.raw`
+function run(argv) {
+  ObjC.import("Foundation");
+  ObjC.bindFunction("proc_pidinfo", [
+    "int",
+    ["int", "int", "uint64", "void *", "int"],
+  ]);
+  const data = $.NSMutableData.dataWithLength(136);
+  const size = $.proc_pidinfo(Number(argv[0]), 3, 0, data.mutableBytes, 136);
+  if (size !== 136) {
+    return "";
+  }
+  return ObjC.unwrap(data.base64EncodedStringWithOptions(0));
+}
+`;
+var DARWIN_PROCESS_GROUP_SCRIPT = String.raw`
+function run(argv) {
+  ObjC.import("Foundation");
+  ObjC.bindFunction("proc_listpids", [
+    "int",
+    ["uint32", "uint32", "void *", "int"],
+  ]);
+  const data = $.NSMutableData.dataWithLength(1024 * 1024);
+  const size = $.proc_listpids(
+    2,
+    Number(argv[0]),
+    data.mutableBytes,
+    1024 * 1024,
+  );
+  if (size < 0) {
+    return "";
+  }
+  data.length = size;
+  return ObjC.unwrap(data.base64EncodedStringWithOptions(0));
+}
+`;
 function nowIso() {
   return (/* @__PURE__ */ new Date()).toISOString();
 }
@@ -67,7 +111,12 @@ function toJsonValue(value) {
   if (value === void 0) {
     return null;
   }
-  return JSON.parse(JSON.stringify(value));
+  const serialized = boundedJsonStringify(
+    value,
+    MAX_DURABLE_VALUE_BYTES,
+    MAX_DURABLE_JSON_DEPTH
+  );
+  return JSON.parse(serialized);
 }
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
@@ -89,12 +138,111 @@ async function sleep(milliseconds, signal) {
     signal?.addEventListener("abort", abort, { once: true });
   });
 }
-async function atomicWriteJson(filePath, value) {
+async function atomicWriteJson(filePath, value, maximumBytes = Number.MAX_SAFE_INTEGER) {
   await mkdir(path.dirname(filePath), { recursive: true });
   const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(value, null, 2)}
+  const serialized = boundedJsonStringify(
+    value,
+    maximumBytes - 1,
+    MAX_DURABLE_JSON_DEPTH
+  );
+  await writeFile(temporary, `${serialized}
 `, "utf8");
   await rename(temporary, filePath);
+}
+function boundedJsonStringify(value, maximumBytes, maximumDepth = MAX_DURABLE_JSON_DEPTH, maximumNodes = MAX_DURABLE_JSON_NODES) {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 0) {
+    throw new RangeError("Maximum JSON byte length must be a safe integer");
+  }
+  if (!Number.isSafeInteger(maximumDepth) || maximumDepth < 0) {
+    throw new RangeError("Maximum JSON depth must be a safe integer");
+  }
+  if (!Number.isSafeInteger(maximumNodes) || maximumNodes < 1) {
+    throw new RangeError("Maximum JSON node count must be a positive integer");
+  }
+  const depths = /* @__PURE__ */ new WeakMap();
+  let nodes = 0;
+  const serialized = JSON.stringify(value, function(key, item) {
+    nodes += 1;
+    if (nodes > maximumNodes) {
+      throw new JsonStructureLimitError(
+        `JSON value exceeds the maximum node count of ${maximumNodes}`
+      );
+    }
+    const parentDepth = key === "" ? -1 : depths.get(this) ?? -1;
+    const depth = parentDepth + 1;
+    if (item !== null && typeof item === "object") {
+      if (depth >= maximumDepth) {
+        throw new JsonStructureLimitError(
+          `JSON value exceeds the maximum depth of ${maximumDepth}`
+        );
+      }
+      depths.set(item, depth);
+    }
+    return item;
+  });
+  if (serialized === void 0) {
+    throw new TypeError("Value is not JSON serializable");
+  }
+  if (Buffer.byteLength(serialized, "utf8") > maximumBytes) {
+    throw new RangeError(
+      `JSON value exceeds the ${maximumBytes}-byte durable limit`
+    );
+  }
+  return serialized;
+}
+function assertBoundedJsonStructure(root, maximumDepth, maximumNodes) {
+  boundedJsonValueMatches(
+    root,
+    () => false,
+    maximumDepth,
+    maximumNodes
+  );
+}
+function boundedJsonValueMatches(root, predicate, maximumDepth, maximumNodes) {
+  if (!Number.isSafeInteger(maximumDepth) || maximumDepth < 0) {
+    throw new RangeError("Maximum JSON depth must be a safe integer");
+  }
+  if (!Number.isSafeInteger(maximumNodes) || maximumNodes < 1) {
+    throw new RangeError("Maximum JSON node count must be a positive integer");
+  }
+  const stack = [
+    { depth: 0, value: root }
+  ];
+  let found = false;
+  let nodes = 0;
+  while (stack.length > 0) {
+    const frame = stack.pop();
+    nodes += 1;
+    if (nodes > maximumNodes) {
+      throw new JsonStructureLimitError(
+        `JSON value exceeds the maximum node count of ${maximumNodes}`
+      );
+    }
+    const item = frame.value;
+    found ||= predicate(item);
+    if (item === null || typeof item !== "object") {
+      continue;
+    }
+    if (frame.depth >= maximumDepth) {
+      throw new JsonStructureLimitError(
+        `JSON value exceeds the maximum depth of ${maximumDepth}`
+      );
+    }
+    const children = Array.isArray(item) ? item : Object.values(item);
+    if (children.length > maximumNodes - nodes - stack.length) {
+      throw new JsonStructureLimitError(
+        `JSON value exceeds the maximum node count of ${maximumNodes}`
+      );
+    }
+    for (let index = children.length - 1; index >= 0; index -= 1) {
+      stack.push({
+        depth: frame.depth + 1,
+        value: children[index]
+      });
+    }
+  }
+  return found;
 }
 async function readJson(filePath) {
   return JSON.parse(await readFile(filePath, "utf8"));
@@ -111,18 +259,94 @@ function workflowHome() {
   const configured = process.env.CODEX_WORKFLOW_HOME;
   return path.resolve(configured ?? path.join(homedir(), ".codex", "workflows"));
 }
+function isDeadPosixProcessState(state) {
+  return /^[ZXx]/.test(state);
+}
+function processGroupIsRunning(pid) {
+  try {
+    process.kill(process.platform === "win32" ? pid : -pid, 0);
+  } catch {
+    return false;
+  }
+  if (process.platform === "win32") {
+    return true;
+  }
+  if (process.platform === "darwin") {
+    const members = spawnSync(
+      "/usr/bin/osascript",
+      [
+        "-l",
+        "JavaScript",
+        "-e",
+        DARWIN_PROCESS_GROUP_SCRIPT,
+        String(pid)
+      ],
+      { encoding: "utf8", windowsHide: true }
+    );
+    if (members.status !== 0 || members.stdout.trim() === "") {
+      return true;
+    }
+    const pids = Buffer.from(members.stdout.trim(), "base64");
+    for (let offset = 0; offset + 4 <= pids.length; offset += 4) {
+      const memberPid = pids.readInt32LE(offset);
+      if (memberPid > 0 && processStartIdentity(memberPid) !== void 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+  if (process.platform !== "linux") {
+    const processes = spawnSync("ps", ["-axo", "pgid=,stat="], {
+      encoding: "utf8"
+    });
+    if (processes.status !== 0) {
+      return true;
+    }
+    return processes.stdout.split("\n").some((line) => {
+      const match = line.match(/^\s*(\d+)\s+(\S+)/);
+      return match !== null && Number(match[1]) === pid && !isDeadPosixProcessState(match[2] ?? "");
+    });
+  }
+  try {
+    for (const entry of readdirSync("/proc")) {
+      if (!/^\d+$/.test(entry)) {
+        continue;
+      }
+      let stat3;
+      try {
+        stat3 = readFileSync(`/proc/${entry}/stat`, "utf8");
+      } catch {
+        continue;
+      }
+      const commandEnd = stat3.lastIndexOf(")");
+      if (commandEnd < 0) {
+        continue;
+      }
+      const fields = stat3.slice(commandEnd + 1).trim().split(/\s+/);
+      if (Number(fields[2]) === pid && !isDeadPosixProcessState(fields[0] ?? "")) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
 function isPidRunning(pid) {
   if (pid === void 0) {
     return false;
   }
   try {
     process.kill(pid, 0);
+    if (process.platform === "darwin" || process.platform === "linux") {
+      return processStartIdentity(pid) !== void 0;
+    }
     if (process.platform !== "win32") {
       const state = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], {
         encoding: "utf8"
       });
       const processState = state.stdout.trim();
-      if (state.status !== 0 || processState === "" || processState.startsWith("Z")) {
+      if (state.status !== 0 || processState === "" || isDeadPosixProcessState(processState)) {
         return false;
       }
     }
@@ -132,10 +356,40 @@ function isPidRunning(pid) {
   }
 }
 function processStartIdentity(pid) {
-  if (!isPidRunning(pid)) {
+  if (pid <= 0) {
     return void 0;
   }
-  const result = process.platform === "win32" ? spawnSync(
+  if (process.platform === "linux") {
+    try {
+      const stat3 = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const bootId = readFileSync(
+        "/proc/sys/kernel/random/boot_id",
+        "utf8"
+      ).trim();
+      const commandEnd = stat3.lastIndexOf(")");
+      if (commandEnd < 0) {
+        return void 0;
+      }
+      const fields = stat3.slice(commandEnd + 1).trim().split(/\s+/);
+      const state = fields[0];
+      const kernelStartedAt = fields[19];
+      if (!bootId || !kernelStartedAt || isDeadPosixProcessState(state ?? "")) {
+        return void 0;
+      }
+      return `linux:${bootId}:${kernelStartedAt}`;
+    } catch {
+      return void 0;
+    }
+  }
+  const darwin = process.platform === "darwin";
+  if (!darwin && !isPidRunning(pid)) {
+    return void 0;
+  }
+  const result = darwin ? spawnSync(
+    "/usr/bin/osascript",
+    ["-l", "JavaScript", "-e", DARWIN_PROCESS_START_SCRIPT, String(pid)],
+    { encoding: "utf8", windowsHide: true }
+  ) : process.platform === "win32" ? spawnSync(
     "powershell.exe",
     [
       "-NoProfile",
@@ -151,7 +405,19 @@ function processStartIdentity(pid) {
     return void 0;
   }
   const identity = result.stdout.trim();
-  return identity === "" ? void 0 : identity;
+  if (identity === "") {
+    return void 0;
+  }
+  if (!darwin) {
+    return identity;
+  }
+  const processInfo = Buffer.from(identity, "base64");
+  if (processInfo.length !== 136 || processInfo.readUInt32LE(4) === 5) {
+    return void 0;
+  }
+  const startSeconds = processInfo.readBigUInt64LE(120);
+  const startMicroseconds = processInfo.readBigUInt64LE(128);
+  return `darwin:${startSeconds}:${startMicroseconds}`;
 }
 function processIdentityMatches(pid, expectedStartedAt) {
   return pid !== void 0 && expectedStartedAt !== void 0 && processStartIdentity(pid) === expectedStartedAt;
@@ -164,6 +430,14 @@ function safeIdentifier(value) {
 // src/codex-runner.ts
 var MAX_PROMPT_BYTES = 1e6;
 var MAX_RESULT_BYTES = 1e6;
+var MAX_EVENT_ERROR_BYTES = 32e3;
+var MAX_NDJSON_RECORD_BYTES = 8 * 1024 * 1024;
+var MAX_WORKER_EVENT_BYTES = 16 * 1024 * 1024;
+var MAX_WORKER_EVENT_DEPTH = 128;
+var MAX_WORKER_EVENT_NODES = 25e4;
+var MAX_PERSISTED_EVENT_BYTES = 16 * 1024 * 1024;
+var MAX_STANDARD_ERROR_BYTES = 32e3;
+var PERSISTENCE_SETTLEMENT_MS = 1e3;
 var TERMINATION_GRACE_MS = 2e3;
 var CodexProcessError = class extends Error {
   retryable;
@@ -197,6 +471,9 @@ var CodexRunner = class {
     this.onSpawn = onSpawn;
   }
   async run(request) {
+    if (request.signal.aborted) {
+      throw request.signal.reason;
+    }
     const promptBytes = Buffer.byteLength(request.prompt, "utf8");
     if (promptBytes > MAX_PROMPT_BYTES) {
       throw new CodexProcessError(
@@ -206,6 +483,9 @@ var CodexRunner = class {
     }
     const command = process.env.CODEX_WORKFLOW_CODEX_BIN ?? "codex";
     const args = await this.buildArgs(request);
+    if (request.signal.aborted) {
+      throw request.signal.reason;
+    }
     const cwd = path2.resolve(
       request.workflowCwd,
       request.options.cwd ?? "."
@@ -221,19 +501,26 @@ var CodexRunner = class {
       let workerStartedAt;
       let threadId;
       let usage;
-      let standardError = "";
+      let standardError = Buffer.alloc(0);
       let eventError = "";
+      let workerEventBytes = 0;
+      let persistedEventBytes = 0;
+      let recordBytes = 0;
+      let recordChunks = [];
       let timedOut = false;
       let settled = false;
+      let finalizationStarted = false;
       let terminationStarted = false;
       let terminationDeadline = 0;
       let killTimer;
       let persistenceError;
+      let outputError;
       let persistenceQueue = Promise.resolve();
       const persist = (operation) => {
         persistenceQueue = persistenceQueue.then(operation).catch((error) => {
           persistenceError ??= error;
           terminate();
+          void finalize(null, null);
         });
       };
       const terminate = () => {
@@ -253,9 +540,18 @@ var CodexRunner = class {
       const timeoutTimer = setTimeout(() => {
         timedOut = true;
         terminate();
+        void finalize(null, null);
       }, timeout);
       timeoutTimer.unref();
-      if (child.pid !== void 0 && this.onSpawn) {
+      const abort = () => {
+        terminate();
+        void finalize(null, null);
+      };
+      request.signal.addEventListener("abort", abort, { once: true });
+      if (request.signal.aborted) {
+        abort();
+      }
+      if (!terminationStarted && child.pid !== void 0 && this.onSpawn) {
         const spawnedWorkerPid = child.pid;
         const spawnedWorkerStartedAt = processStartIdentity(spawnedWorkerPid);
         workerStartedAt = spawnedWorkerStartedAt;
@@ -264,6 +560,7 @@ var CodexRunner = class {
             `Could not identify Codex worker PID ${spawnedWorkerPid}`
           );
           terminate();
+          void finalize(null, null);
         } else {
           persist(
             async () => await this.onSpawn?.(
@@ -274,48 +571,161 @@ var CodexRunner = class {
           );
         }
       }
-      const abort = () => terminate();
-      request.signal.addEventListener("abort", abort, { once: true });
-      const lines = readline.createInterface({ input: child.stdout });
-      lines.on("line", (line) => {
-        const trimmed = line.trim();
+      const failOutput = (message) => {
+        if (outputError !== void 0) {
+          return;
+        }
+        outputError = new CodexProcessError(message, false, {
+          threadId,
+          usage
+        });
+        recordChunks = [];
+        recordBytes = 0;
+        child.stdout.destroy();
+        terminate();
+      };
+      const processRecord = (record, delimiterBytes) => {
+        if (outputError !== void 0) {
+          return;
+        }
+        const nextWorkerEventBytes = workerEventBytes + record.length + delimiterBytes;
+        if (nextWorkerEventBytes > MAX_WORKER_EVENT_BYTES) {
+          failOutput(
+            `Codex worker emitted more than ${MAX_WORKER_EVENT_BYTES} bytes of NDJSON events`
+          );
+          return;
+        }
+        workerEventBytes = nextWorkerEventBytes;
+        const trimmed = record.toString("utf8").trim();
         if (trimmed === "") {
           return;
         }
+        let event;
         try {
-          const event = JSON.parse(trimmed);
+          event = JSON.parse(trimmed);
+        } catch {
+          const delimiter = delimiterBytes === 0 ? Buffer.alloc(0) : Buffer.from("\n");
+          standardError = appendBoundedBytes(
+            standardError,
+            Buffer.concat([record, delimiter]),
+            MAX_STANDARD_ERROR_BYTES
+          );
+          return;
+        }
+        try {
+          assertBoundedJsonStructure(
+            event,
+            MAX_WORKER_EVENT_DEPTH,
+            MAX_WORKER_EVENT_NODES
+          );
+        } catch (error) {
+          if (error instanceof JsonStructureLimitError) {
+            failOutput(`Codex worker NDJSON event ${error.message}`);
+            return;
+          }
+          throw error;
+        }
+        try {
+          if (event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string") {
+            const resultBytes = Buffer.byteLength(event.item.text, "utf8");
+            if (resultBytes > MAX_RESULT_BYTES) {
+              failOutput(
+                `Codex worker result is ${resultBytes} bytes; maximum is ${MAX_RESULT_BYTES}. Return compact structured output.`
+              );
+              return;
+            }
+            finalText = event.item.text;
+          } else if (event.type === "turn.failed" || event.type === "error") {
+            const extractedError = typeof event.error?.message === "string" ? event.error.message : typeof event.message === "string" ? event.message : trimmed;
+            const errorBytes = Buffer.byteLength(extractedError, "utf8");
+            if (errorBytes > MAX_EVENT_ERROR_BYTES) {
+              failOutput(
+                `Codex worker event error is ${errorBytes} bytes; maximum is ${MAX_EVENT_ERROR_BYTES}.`
+              );
+              return;
+            }
+            eventError = extractedError;
+          }
           if (this.onEvent) {
+            const eventBytes = Buffer.byteLength(
+              JSON.stringify({ event, stepId: request.stepId }),
+              "utf8"
+            ) + 128;
+            if (eventBytes > MAX_PERSISTED_EVENT_BYTES - persistedEventBytes) {
+              failOutput(
+                `Codex worker events exceed the ${MAX_PERSISTED_EVENT_BYTES}-byte persistence limit`
+              );
+              return;
+            }
+            persistedEventBytes += eventBytes;
             persist(async () => await this.onEvent?.(request.stepId, event));
           }
           if (event.type === "thread.started") {
             threadId = event.thread_id;
-          } else if (event.type === "item.completed" && event.item?.type === "agent_message" && event.item.text) {
-            finalText = event.item.text;
           } else if (event.type === "turn.completed" && event.usage) {
             usage = {
               ...event.usage.cached_input_tokens === void 0 ? {} : { cachedInputTokens: event.usage.cached_input_tokens },
               ...event.usage.input_tokens === void 0 ? {} : { inputTokens: event.usage.input_tokens },
               ...event.usage.output_tokens === void 0 ? {} : { outputTokens: event.usage.output_tokens }
             };
-          } else if (event.type === "turn.failed" || event.type === "error") {
-            eventError = event.error?.message ?? event.message ?? trimmed;
           }
-        } catch {
-          standardError += `${trimmed}
-`;
-          standardError = standardError.slice(-32e3);
+        } catch (error) {
+          failOutput(
+            `Could not process Codex worker event: ${errorMessage(error)}`
+          );
         }
-      });
-      child.stderr.on("data", (chunk) => {
-        standardError += chunk.toString("utf8");
-        if (standardError.length > 32e3) {
-          standardError = standardError.slice(-32e3);
-        }
-      });
-      child.on("error", (error) => {
-        if (settled) {
+      };
+      child.stdout.on("data", (chunk) => {
+        if (outputError !== void 0) {
           return;
         }
+        let offset = 0;
+        while (offset < chunk.length && outputError === void 0) {
+          const newline = chunk.indexOf(10, offset);
+          const end = newline === -1 ? chunk.length : newline;
+          const segment = chunk.subarray(offset, end);
+          const nextRecordBytes = recordBytes + segment.length;
+          if (nextRecordBytes > MAX_NDJSON_RECORD_BYTES) {
+            failOutput(
+              `Codex worker NDJSON record exceeds the ${MAX_NDJSON_RECORD_BYTES}-byte limit`
+            );
+            return;
+          }
+          if (segment.length > 0) {
+            recordChunks.push(segment);
+            recordBytes = nextRecordBytes;
+          }
+          if (newline === -1) {
+            return;
+          }
+          const record = recordChunks.length === 0 ? Buffer.alloc(0) : recordChunks.length === 1 ? recordChunks[0] : Buffer.concat(recordChunks, recordBytes);
+          recordChunks = [];
+          recordBytes = 0;
+          processRecord(record, 1);
+          offset = newline + 1;
+        }
+      });
+      child.stdout.on("end", () => {
+        if (outputError !== void 0 || recordBytes === 0) {
+          return;
+        }
+        const record = recordChunks.length === 1 ? recordChunks[0] : Buffer.concat(recordChunks, recordBytes);
+        recordChunks = [];
+        recordBytes = 0;
+        processRecord(record, 0);
+      });
+      child.stderr.on("data", (chunk) => {
+        standardError = appendBoundedBytes(
+          standardError,
+          chunk,
+          MAX_STANDARD_ERROR_BYTES
+        );
+      });
+      child.on("error", (error) => {
+        if (settled || finalizationStarted) {
+          return;
+        }
+        finalizationStarted = true;
         settled = true;
         clearTimeout(timeoutTimer);
         clearTimeout(killTimer);
@@ -328,16 +738,16 @@ var CodexRunner = class {
         );
       });
       child.on("close", (code, signal) => {
-        if (settled) {
+        void finalize(code, signal);
+      });
+      async function finalize(code, signal) {
+        if (settled || finalizationStarted) {
           return;
         }
-        settled = true;
+        finalizationStarted = true;
         clearTimeout(timeoutTimer);
-        if (!terminationStarted) {
-          clearTimeout(killTimer);
-        }
         request.signal.removeEventListener("abort", abort);
-        void (async () => {
+        try {
           if (child.pid !== void 0 && !await finishProcessGroupTermination(
             child.pid,
             terminationStarted ? terminationDeadline : Date.now()
@@ -353,7 +763,19 @@ var CodexRunner = class {
             return;
           }
           clearTimeout(killTimer);
-          await persistenceQueue;
+          if (!await promiseSettledWithin(
+            persistenceQueue,
+            PERSISTENCE_SETTLEMENT_MS
+          )) {
+            reject(
+              new CodexProcessError(
+                `Codex worker persistence did not settle within ${PERSISTENCE_SETTLEMENT_MS} ms`,
+                false,
+                { threadId, usage }
+              )
+            );
+            return;
+          }
           if (persistenceError) {
             reject(
               new CodexProcessError(
@@ -361,6 +783,10 @@ var CodexRunner = class {
                 false
               )
             );
+            return;
+          }
+          if (outputError) {
+            reject(outputError);
             return;
           }
           if (request.signal.aborted) {
@@ -377,7 +803,7 @@ var CodexRunner = class {
             );
             return;
           }
-          const details = eventError || standardError.trim();
+          const details = eventError || standardError.toString("utf8").trim();
           if (code !== 0) {
             reject(
               processFailure(
@@ -396,16 +822,6 @@ var CodexRunner = class {
             reject(
               new CodexProcessError(
                 "Codex worker completed without an agent message"
-              )
-            );
-            return;
-          }
-          const resultBytes = Buffer.byteLength(finalText, "utf8");
-          if (resultBytes > MAX_RESULT_BYTES) {
-            reject(
-              new CodexProcessError(
-                `Codex worker result is ${resultBytes} bytes; maximum is ${MAX_RESULT_BYTES}. Return compact structured output.`,
-                false
               )
             );
             return;
@@ -430,8 +846,11 @@ var CodexRunner = class {
             ...threadId === void 0 ? {} : { threadId },
             ...usage === void 0 ? {} : { usage }
           });
-        })();
-      });
+        } finally {
+          settled = true;
+          clearTimeout(killTimer);
+        }
+      }
       child.stdin.on("error", () => {
       });
       const workerRegistration = persistenceQueue;
@@ -534,18 +953,37 @@ async function finishProcessGroupTermination(pid, deadline) {
   }
   return !processGroupIsRunning(pid);
 }
-function processGroupIsRunning(pid) {
-  try {
-    process.kill(process.platform === "win32" ? pid : -pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 function signalProcessGroupByPid(pid, signal) {
   try {
     process.kill(process.platform === "win32" ? pid : -pid, signal);
   } catch {
+  }
+}
+function appendBoundedBytes(current, incoming, maximumBytes) {
+  if (incoming.length >= maximumBytes) {
+    return Buffer.from(incoming.subarray(incoming.length - maximumBytes));
+  }
+  const retainedBytes = Math.min(
+    current.length,
+    maximumBytes - incoming.length
+  );
+  return Buffer.concat(
+    [current.subarray(current.length - retainedBytes), incoming],
+    retainedBytes + incoming.length
+  );
+}
+async function promiseSettledWithin(promise, timeoutMs) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise.then(() => true),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(false), timeoutMs);
+        timer.unref();
+      })
+    ]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -649,6 +1087,7 @@ var WorkflowEngine = class {
         state.startedAt ??= nowIso();
         delete state.completedAt;
         delete state.error;
+        delete state.result;
       });
       await this.log(`run ${this.store.runId} started`);
       const script = compileWorkflow(
@@ -692,6 +1131,7 @@ var WorkflowEngine = class {
           state.completedAt = nowIso();
           delete state.cleanupPending;
         }
+        delete state.result;
       });
       await this.log(
         cleanupPending ? `run ${this.store.runId} awaiting process cleanup: ` + (cleanupError?.message ?? errorMessage(error)) : canceled ? `run ${this.store.runId} canceled` : `run ${this.store.runId} failed: ${errorMessage(error)}`
@@ -924,6 +1364,7 @@ var WorkflowEngine = class {
           const abortReason = this.abortController.signal.reason;
           const canceled = abortReason instanceof CanceledError;
           step.status = canceled ? "canceled" : "failed";
+          delete step.result;
           step.error = canceled ? "Workflow canceled" : errorMessage(
             this.abortController.signal.aborted ? abortReason : error
           );
@@ -1183,7 +1624,7 @@ import {
   realpath,
   rename as rename3,
   rm as rm2,
-  stat
+  stat as stat2
 } from "node:fs/promises";
 import path5 from "node:path";
 
@@ -1194,6 +1635,11 @@ import { homedir as homedir2 } from "node:os";
 import path3 from "node:path";
 var WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 var MAX_MESSAGE_BYTES = 128 * 1024 * 1024;
+var MAX_QUEUED_NOTIFICATION_BYTES = 8 * 1024 * 1024;
+var MAX_QUEUED_NOTIFICATIONS = 1e3;
+var MAX_RESPONSE_DEPTH = 128;
+var MAX_RESPONSE_NODES = 25e4;
+var MAX_RPC_ERROR_MESSAGE_BYTES = 4 * 1024;
 var REQUEST_TIMEOUT_MS = 3e4;
 var MINIMUM_APP_SERVER_VERSION = [0, 136, 0];
 var MINIMUM_APP_SERVER_VERSION_TEXT = MINIMUM_APP_SERVER_VERSION.join(".");
@@ -1201,7 +1647,7 @@ var AppServerRpcError = class extends Error {
   code;
   data;
   constructor(error) {
-    super(error.message);
+    super(truncateRpcDiagnostic(error.message));
     this.name = "AppServerRpcError";
     this.code = error.code;
     this.data = error.data;
@@ -1213,6 +1659,7 @@ var AppServerClient = class _AppServerClient {
   pending = /* @__PURE__ */ new Map();
   waiters = /* @__PURE__ */ new Set();
   nextRequestId = 1;
+  notificationBytes = 0;
   closedError;
   constructor(connection) {
     this.connection = connection;
@@ -1301,9 +1748,16 @@ var AppServerClient = class _AppServerClient {
   }
   async waitForNotification(predicate, timeoutMs) {
     this.assertOpen();
-    const existingIndex = this.notifications.findIndex(predicate);
+    const existingIndex = this.notifications.findIndex(
+      ({ notification }) => predicate(notification)
+    );
     if (existingIndex !== -1) {
-      return this.notifications.splice(existingIndex, 1)[0];
+      const queued = this.notifications.splice(existingIndex, 1)[0];
+      if (queued === void 0) {
+        throw new Error("Queued App Server notification disappeared");
+      }
+      this.notificationBytes -= queued.bytes;
+      return queued.notification;
     }
     return await new Promise((resolve, reject) => {
       const waiter = {
@@ -1386,9 +1840,16 @@ var AppServerClient = class _AppServerClient {
       waiter.resolve(notification);
     }
     if (!consumed) {
-      this.notifications.push(notification);
-      if (this.notifications.length > 1e3) {
-        this.notifications.shift();
+      const bytes = Buffer.byteLength(text, "utf8");
+      this.notifications.push({ bytes, notification });
+      this.notificationBytes += bytes;
+      while (this.notifications.length > MAX_QUEUED_NOTIFICATIONS || this.notificationBytes > MAX_QUEUED_NOTIFICATION_BYTES) {
+        const discarded = this.notifications.shift();
+        if (discarded === void 0) {
+          this.notificationBytes = 0;
+          break;
+        }
+        this.notificationBytes -= discarded.bytes;
       }
     }
   }
@@ -1407,18 +1868,25 @@ function notificationHasClientId(notification, clientId) {
   return notification.params.item.type === "userMessage" && notification.params.item.clientId === clientId;
 }
 function valueContainsClientId(value, clientId) {
-  if (Array.isArray(value)) {
-    return value.some((item) => valueContainsClientId(item, clientId));
-  }
-  if (!isRecord(value)) {
-    return false;
-  }
-  if (value.type === "userMessage" && value.clientId === clientId) {
-    return true;
-  }
-  return Object.values(value).some(
-    (item) => valueContainsClientId(item, clientId)
+  return boundedJsonValueMatches(
+    value,
+    (item) => isRecord(item) && item.type === "userMessage" && item.clientId === clientId,
+    MAX_RESPONSE_DEPTH,
+    MAX_RESPONSE_NODES
   );
+}
+function truncateRpcDiagnostic(value) {
+  const encoded = Buffer.from(value, "utf8");
+  if (encoded.length <= MAX_RPC_ERROR_MESSAGE_BYTES) {
+    return value;
+  }
+  const suffix = "\n[truncated App Server RPC diagnostic]";
+  const suffixBytes = Buffer.byteLength(suffix, "utf8");
+  let end = MAX_RPC_ERROR_MESSAGE_BYTES - suffixBytes;
+  while (end > 0 && (encoded[end] & 192) === 128) {
+    end -= 1;
+  }
+  return `${encoded.subarray(0, end).toString("utf8")}${suffix}`;
 }
 function socketPathFromEndpoint(endpoint) {
   if (!endpoint.startsWith("unix://")) {
@@ -1745,15 +2213,20 @@ import {
   readFile as readFile2,
   rename as rename2,
   rm,
+  stat,
   writeFile as writeFile3
 } from "node:fs/promises";
 import path4 from "node:path";
+var MAX_EVENT_HISTORY_BYTES = 16 * 1024 * 1024;
+var MAX_STATE_BYTES = 16 * 1024 * 1024;
 var StateStore = class _StateStore {
   directory;
   eventsPath;
   logPath;
   runId;
   state;
+  eventQueue = Promise.resolve();
+  eventsSaturated = false;
   queue = Promise.resolve();
   constructor(state) {
     this.state = state;
@@ -1782,10 +2255,30 @@ var StateStore = class _StateStore {
   static runnerLockDirectory(runId) {
     return path4.join(_StateStore.runDirectory(runId), "runner.lock");
   }
-  static async create(state) {
+  static runnerSnapshotPath(runId) {
+    return path4.join(
+      _StateStore.runDirectory(runId),
+      "runtime",
+      "workflow.mjs"
+    );
+  }
+  static async create(state, runnerSource) {
+    synchronizeTerminalFingerprint(state);
     const store = new _StateStore(state);
-    await mkdir3(store.directory, { recursive: true });
-    await atomicWriteJson(_StateStore.statePath(state.runId), state);
+    await mkdir3(store.directory, { mode: 448, recursive: true });
+    if (runnerSource !== void 0) {
+      const runnerHash = sha256(runnerSource);
+      if (state.runnerHash !== void 0 && state.runnerHash !== runnerHash) {
+        throw new Error("Runner source does not match its durable hash");
+      }
+      state.runnerHash = runnerHash;
+      await store.writeRunnerSnapshot(runnerSource, runnerHash);
+    }
+    await atomicWriteJson(
+      _StateStore.statePath(state.runId),
+      state,
+      MAX_STATE_BYTES
+    );
     await store.writeControl("run", state.authorization);
     return store;
   }
@@ -1818,10 +2311,17 @@ var StateStore = class _StateStore {
   async update(mutator) {
     let result = this.snapshot();
     const operation = this.queue.then(async () => {
-      mutator(this.state);
-      this.state.updatedAt = nowIso();
-      await atomicWriteJson(_StateStore.statePath(this.runId), this.state);
-      result = this.snapshot();
+      const nextState = structuredClone(this.state);
+      mutator(nextState);
+      synchronizeTerminalFingerprint(nextState, this.state);
+      nextState.updatedAt = nowIso();
+      await atomicWriteJson(
+        _StateStore.statePath(this.runId),
+        nextState,
+        MAX_STATE_BYTES
+      );
+      this.state = nextState;
+      result = structuredClone(nextState);
     });
     this.queue = operation.catch(() => {
     });
@@ -1955,12 +2455,46 @@ var StateStore = class _StateStore {
     }
   }
   async appendEvent(type, data = {}) {
-    await appendFile(
-      this.eventsPath,
-      `${JSON.stringify({ at: nowIso(), type, data })}
-`,
-      "utf8"
-    );
+    const operation = this.eventQueue.then(async () => {
+      if (this.eventsSaturated) {
+        return;
+      }
+      const event = boundedJsonStringify(
+        { at: nowIso(), type, data },
+        MAX_EVENT_HISTORY_BYTES - 1
+      );
+      const record = `${event}
+`;
+      const recordBytes = Buffer.byteLength(record, "utf8");
+      const currentBytes = await this.eventFileBytes();
+      if (recordBytes <= MAX_EVENT_HISTORY_BYTES - currentBytes) {
+        await appendFile(this.eventsPath, record, "utf8");
+        return;
+      }
+      const marker = `${boundedJsonStringify({
+        at: nowIso(),
+        type: "events.truncated",
+        data: { maximumBytes: MAX_EVENT_HISTORY_BYTES }
+      }, MAX_EVENT_HISTORY_BYTES - 1)}
+`;
+      if (Buffer.byteLength(marker, "utf8") <= MAX_EVENT_HISTORY_BYTES - currentBytes) {
+        await appendFile(this.eventsPath, marker, "utf8");
+      }
+      this.eventsSaturated = true;
+    });
+    this.eventQueue = operation.catch(() => {
+    });
+    await operation;
+  }
+  async eventFileBytes() {
+    try {
+      return (await stat(this.eventsPath)).size;
+    } catch (error) {
+      if (errorCode(error) === "ENOENT") {
+        return 0;
+      }
+      throw error;
+    }
   }
   async appendLog(message) {
     await appendFile(this.logPath, `[${nowIso()}] ${message}
@@ -1971,6 +2505,64 @@ var StateStore = class _StateStore {
       return await readFile2(this.logPath, "utf8");
     } catch {
       return "";
+    }
+  }
+  async ensureRunnerSnapshot(currentEntryPath) {
+    const snapshotPath = _StateStore.runnerSnapshotPath(this.runId);
+    try {
+      const source2 = await readFile2(snapshotPath, "utf8");
+      const hash2 = sha256(source2);
+      if (this.state.runnerHash !== void 0 && this.state.runnerHash !== hash2) {
+        throw new Error(
+          `Runner snapshot for ${this.runId} failed its integrity check`
+        );
+      }
+      if (this.state.runnerHash === void 0) {
+        await this.update((state) => {
+          state.runnerHash = hash2;
+        });
+      }
+      return snapshotPath;
+    } catch (error) {
+      if (errorCode(error) !== "ENOENT") {
+        throw error;
+      }
+    }
+    const source = await readFile2(currentEntryPath, "utf8");
+    const hash = sha256(source);
+    if (this.state.runnerHash !== void 0 && this.state.runnerHash !== hash) {
+      throw new Error(
+        `Runner snapshot for ${this.runId} is missing and the installed runner no longer matches it`
+      );
+    }
+    await this.writeRunnerSnapshot(source, hash);
+    if (this.state.runnerHash === void 0) {
+      await this.update((state) => {
+        state.runnerHash = hash;
+      });
+    }
+    return snapshotPath;
+  }
+  async writeRunnerSnapshot(source, expectedHash) {
+    const directory = path4.join(this.directory, "runtime");
+    const snapshotPath = _StateStore.runnerSnapshotPath(this.runId);
+    await mkdir3(directory, { mode: 448, recursive: true });
+    try {
+      await writeFile3(snapshotPath, source, {
+        encoding: "utf8",
+        flag: "wx",
+        mode: 384
+      });
+    } catch (error) {
+      if (errorCode(error) !== "EEXIST") {
+        throw error;
+      }
+    }
+    const persisted = await readFile2(snapshotPath, "utf8");
+    if (sha256(persisted) !== expectedHash) {
+      throw new Error(
+        `Runner snapshot for ${this.runId} does not match its source`
+      );
     }
   }
   async snapshotWorkflow(source, hash) {
@@ -2011,6 +2603,23 @@ var StateStore = class _StateStore {
     throw new Error(`Runner handoff for ${this.runId} timed out`);
   }
 };
+function terminalStateFingerprint(state) {
+  const terminalPayload = JSON.stringify([
+    state.status,
+    state.completedAt,
+    state.error ?? null,
+    state.result ?? null
+  ]);
+  return sha256(terminalPayload);
+}
+function synchronizeTerminalFingerprint(state, previous) {
+  if ((state.status === "canceled" || state.status === "completed" || state.status === "failed") && state.completedAt !== void 0) {
+    const previousWasTerminal = previous !== void 0 && (previous.status === "canceled" || previous.status === "completed" || previous.status === "failed") && previous.completedAt !== void 0;
+    state.terminalFingerprint = previousWasTerminal && previous.terminalFingerprint !== void 0 ? previous.terminalFingerprint : sha256(randomUUID2());
+    return;
+  }
+  delete state.terminalFingerprint;
+}
 function errorCode(error) {
   if (error instanceof Error && "code" in error) {
     return error.code;
@@ -2029,13 +2638,82 @@ var DEFAULT_NOTIFY_TIMEOUT_MS = 864e5;
 var MAX_NOTIFY_TIMEOUT_MS = 6048e5;
 var DELIVERY_CONFIRMATION_TIMEOUT_MS = 1e4;
 var MAX_DELIVERY_SUBMISSIONS = 5;
-var MAX_NOTIFICATION_TEXT_BYTES = 32 * 1024;
+var MAX_CALLBACK_DIAGNOSTIC_BYTES = 4 * 1024;
+var MAX_NOTIFICATION_ERROR_BYTES = 768;
+var MAX_NOTIFICATION_PATH_BYTES = 384;
+var MAX_NOTIFICATION_RESULT_BYTES = 1536;
+var MAX_NOTIFICATION_TEXT_BYTES = 4 * 1024;
 var RETRY_DELAY_MAX_MS = 3e4;
 var RETRY_DELAY_MIN_MS = 250;
 var RETRY_JITTER_RATIO = 0.2;
 var THREAD_RECONCILIATION_POLL_MIN_MS = 1e4;
 var THREAD_RECONCILIATION_POLL_MAX_MS = 3e5;
+var DARWIN_PROCARGS_BYTES = 1024 * 1024;
+var DARWIN_NOTIFIER_PROCESS_SCRIPT = String.raw`
+function decode(value) {
+  return $.NSData.alloc.initWithBase64EncodedStringOptions(value, 0);
+}
+
+function encode(value) {
+  return ObjC.unwrap(value.base64EncodedStringWithOptions(0));
+}
+
+function run(argv) {
+  ObjC.import("Foundation");
+  ObjC.bindFunction("proc_pidinfo", [
+    "int",
+    ["int", "int", "uint64", "void *", "int"],
+  ]);
+  ObjC.bindFunction("proc_pidpath", [
+    "int",
+    ["int", "void *", "uint32"],
+  ]);
+  ObjC.bindFunction("sysctl", [
+    "int",
+    ["void *", "uint32", "void *", "void *", "void *", "uint64"],
+  ]);
+  const pid = Number(argv[0]);
+  const bsd = $.NSMutableData.dataWithLength(136);
+  if ($.proc_pidinfo(pid, 3, 0, bsd.mutableBytes, 136) !== 136) {
+    throw new Error("proc_pidinfo failed");
+  }
+  const executable = $.NSMutableData.dataWithLength(4096);
+  const executableBytes = $.proc_pidpath(
+    pid,
+    executable.mutableBytes,
+    4096,
+  );
+  if (executableBytes <= 0) {
+    throw new Error("proc_pidpath failed");
+  }
+  executable.length = executableBytes;
+  const mib = decode(argv[1]);
+  const size = $.NSMutableData.dataWithData(decode(argv[2]));
+  const processArgs = $.NSMutableData.dataWithLength(${DARWIN_PROCARGS_BYTES});
+  if ($.sysctl(
+    mib.bytes,
+    3,
+    processArgs.mutableBytes,
+    size.mutableBytes,
+    null,
+    0,
+  ) !== 0) {
+    throw new Error("KERN_PROCARGS2 failed");
+  }
+  return JSON.stringify({
+    bsd: encode(bsd),
+    executable: encode(executable),
+    processArgs: encode(processArgs),
+    size: encode(size),
+  });
+}
+`;
 async function createCompletionNotification(runId, threadId, endpoint, timeoutMs) {
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_NOTIFY_TIMEOUT_MS) {
+    throw new Error(
+      `callback timeoutMs must be an integer from 1 to ${MAX_NOTIFY_TIMEOUT_MS}`
+    );
+  }
   const timestamp = nowIso();
   const notification = {
     attempts: 0,
@@ -2118,6 +2796,13 @@ async function deliverCompletionNotification(runId, requestedToken) {
             deadline
           );
         }
+        if (notification.attempts >= MAX_DELIVERY_SUBMISSIONS) {
+          return await markSubmissionLimitReached(
+            runId,
+            submissionWasAmbiguous,
+            lastError
+          );
+        }
         const request = deliveryRequest(
           thread,
           notification.threadId,
@@ -2150,12 +2835,26 @@ async function deliverCompletionNotification(runId, requestedToken) {
         submissionWasAmbiguous = true;
         lastError = "App Server accepted the request but did not confirm the user message";
       } catch (error) {
-        const shouldWaitForIdle = client !== void 0 && error instanceof AppServerRpcError && isActiveTurnNotSteerableRpcError(error);
+        let deliveryError = error;
+        let shouldWaitForIdle = false;
+        if (client !== void 0 && error instanceof AppServerRpcError) {
+          try {
+            shouldWaitForIdle = isActiveTurnNotSteerableRpcError(error);
+          } catch (inspectionError) {
+            deliveryError = inspectionError;
+          }
+        }
         if (error instanceof AppServerRpcError && !submissionAccepted) {
           submissionAttempted = false;
         }
         submissionWasAmbiguous ||= submissionAttempted;
-        lastError = errorMessage(error);
+        lastError = callbackDiagnostic(deliveryError);
+        if (deliveryError instanceof JsonStructureLimitError) {
+          return await updateNotification(runId, (current) => {
+            current.error = lastError;
+            current.status = submissionWasAmbiguous ? "unknown" : "failed";
+          });
+        }
         await updateNotification(runId, (current) => {
           current.error = lastError;
         });
@@ -2167,7 +2866,7 @@ async function deliverCompletionNotification(runId, requestedToken) {
               deadline
             );
           } catch (waitError) {
-            lastError = errorMessage(waitError);
+            lastError = callbackDiagnostic(waitError);
             await updateNotification(runId, (current) => {
               current.error = lastError;
             });
@@ -2183,10 +2882,11 @@ async function deliverCompletionNotification(runId, requestedToken) {
         client?.close();
       }
       if (notification.attempts >= MAX_DELIVERY_SUBMISSIONS) {
-        return await updateNotification(runId, (current) => {
-          current.status = submissionWasAmbiguous ? "unknown" : "failed";
-          current.error = `Callback submission limit of ${MAX_DELIVERY_SUBMISSIONS} reached: ${lastError}`;
-        });
+        return await markSubmissionLimitReached(
+          runId,
+          submissionWasAmbiguous,
+          lastError
+        );
       }
       const delay = completionRetryDelayMs(retryCount);
       retryCount += 1;
@@ -2194,12 +2894,14 @@ async function deliverCompletionNotification(runId, requestedToken) {
     }
     return await updateNotification(runId, (current) => {
       current.status = submissionWasAmbiguous ? "unknown" : "failed";
-      current.error = `${lastError}; notification deadline expired`;
+      current.error = callbackDiagnostic(
+        `${lastError}; notification deadline expired`
+      );
     });
   } catch (error) {
     return await updateNotification(runId, (current) => {
       current.status = current.attempts > 0 ? "unknown" : "failed";
-      current.error = errorMessage(error);
+      current.error = callbackDiagnostic(error);
     });
   } finally {
     await updateNotification(runId, (current) => {
@@ -2212,16 +2914,17 @@ async function deliverCompletionNotification(runId, requestedToken) {
       () => void 0
     );
     if (notification && store) {
+      const diagnostic = notification.error === void 0 ? void 0 : callbackDiagnostic(notification.error);
       await store.appendEvent("notification.finished", {
         attempts: notification.attempts,
-        error: notification.error,
+        error: diagnostic,
         status: notification.status,
         threadId: notification.threadId,
         turnId: notification.turnId
       }).catch(() => {
       });
       await store.appendLog(
-        `Completion notification ${notification.status}` + (notification.error ? `: ${notification.error}` : "")
+        `Completion notification ${notification.status}` + (diagnostic ? `: ${diagnostic}` : "")
       ).catch(() => {
       });
     }
@@ -2297,8 +3000,9 @@ async function prepareNotificationForTerminal(state) {
     throw new Error(`Run ${state.runId} is not terminal`);
   }
   const completedAt = state.completedAt;
+  const terminalFingerprint = completionFingerprint(state);
   return await updateNotification(state.runId, (current) => {
-    if (current.terminalCompletedAt === completedAt) {
+    if (current.terminalCompletedAt === completedAt && current.terminalStatus === state.status && current.terminalFingerprint === terminalFingerprint) {
       current.deadlineAt ??= new Date(
         Date.now() + current.timeoutMs
       ).toISOString();
@@ -2307,11 +3011,12 @@ async function prepareNotificationForTerminal(state) {
     current.attempts = 0;
     current.clientUserMessageId = completionClientId(
       state.runId,
-      completedAt
+      terminalFingerprint
     );
     current.status = "armed";
     current.deadlineAt = new Date(Date.now() + current.timeoutMs).toISOString();
     current.terminalCompletedAt = completedAt;
+    current.terminalFingerprint = terminalFingerprint;
     current.terminalStatus = state.status;
     delete current.deliveredAt;
     delete current.error;
@@ -2388,24 +3093,30 @@ function threadNotLoadedError() {
 async function completionNotificationExists(runId) {
   return await fileExists(notificationPath(runId));
 }
-function completionClientId(runId, completedAt) {
-  return `dynamic-workflow:${runId}:${sha256(completedAt).slice(0, 12)}`;
+function completionFingerprint(state) {
+  return state.terminalFingerprint ?? terminalStateFingerprint(state);
+}
+function completionClientId(runId, terminalFingerprint) {
+  return `dynamic-workflow:${runId}:${terminalFingerprint.slice(0, 12)}`;
 }
 function completionMessage(state) {
   const terminal = state.status === "completed" ? "completed successfully" : state.status;
   const result = state.result === void 0 ? void 0 : truncateUtf8(
     escapeEnvelopeText(JSON.stringify(state.result)),
-    24 * 1024
+    MAX_NOTIFICATION_RESULT_BYTES
   );
   const workflowPath = truncateUtf8(
     escapeEnvelopeText(JSON.stringify(state.workflowPath)),
-    1024
+    MAX_NOTIFICATION_PATH_BYTES
   );
   const durableState = truncateUtf8(
     escapeEnvelopeText(JSON.stringify(StateStore.statePath(state.runId))),
-    1024
+    MAX_NOTIFICATION_PATH_BYTES
   );
-  const error = state.error ? truncateUtf8(escapeEnvelopeText(JSON.stringify(state.error)), 2048) : void 0;
+  const error = state.error ? truncateUtf8(
+    escapeEnvelopeText(JSON.stringify(state.error)),
+    MAX_NOTIFICATION_ERROR_BYTES
+  ) : void 0;
   const sections = [
     "<dynamic_workflow_completion>",
     `Run ${state.runId} ${terminal}.`,
@@ -2418,7 +3129,20 @@ function completionMessage(state) {
     "</untrusted_workflow_details>",
     "</dynamic_workflow_completion>"
   ].filter((section) => section !== void 0);
-  return truncateUtf8(sections.join("\n"), MAX_NOTIFICATION_TEXT_BYTES);
+  const message = sections.join("\n");
+  if (Buffer.byteLength(message, "utf8") <= MAX_NOTIFICATION_TEXT_BYTES) {
+    return message;
+  }
+  const boundedSections = sections.filter(
+    (section) => !section.startsWith("Error: ") && !section.startsWith("Result: ")
+  );
+  const detailsEnd = boundedSections.indexOf("</untrusted_workflow_details>");
+  boundedSections.splice(
+    detailsEnd,
+    0,
+    "Details omitted because the completion preview exceeded its 4 KiB budget; read the durable state file for the full result."
+  );
+  return boundedSections.join("\n");
 }
 function escapeEnvelopeText(value) {
   return value.replaceAll("&", "\\u0026").replaceAll("<", "\\u003c").replaceAll(">", "\\u003e");
@@ -2494,17 +3218,24 @@ function requireClientId(notification) {
   }
   return notification.clientUserMessageId;
 }
-function truncateUtf8(value, maximumBytes) {
+function callbackDiagnostic(error) {
+  return truncateUtf8(
+    errorMessage(error),
+    MAX_CALLBACK_DIAGNOSTIC_BYTES,
+    "\n[truncated callback diagnostic]"
+  );
+}
+function truncateUtf8(value, maximumBytes, suffix = "\n[truncated; full details are in durable state]") {
   const encoded = Buffer.from(value, "utf8");
   if (encoded.length <= maximumBytes) {
     return value;
   }
-  let end = maximumBytes;
+  const suffixBytes = Buffer.byteLength(suffix, "utf8");
+  let end = Math.max(0, maximumBytes - suffixBytes);
   while (end > 0 && (encoded[end] & 192) === 128) {
     end -= 1;
   }
-  return `${encoded.subarray(0, end).toString("utf8")}
-[truncated]`;
+  return `${encoded.subarray(0, end).toString("utf8")}${suffix}`;
 }
 async function waitForDeliverableThread(client, initial, threadId, deadline) {
   let thread = initial;
@@ -2626,17 +3357,11 @@ function nextReconciliationInterval(current) {
   return Math.min(THREAD_RECONCILIATION_POLL_MAX_MS, current * 2);
 }
 function hasActiveTurnNotSteerable(value) {
-  if (Array.isArray(value)) {
-    return value.some((item) => hasActiveTurnNotSteerable(item));
-  }
-  if (!isRecord2(value)) {
-    return false;
-  }
-  if ("activeTurnNotSteerable" in value) {
-    return true;
-  }
-  return Object.values(value).some(
-    (item) => hasActiveTurnNotSteerable(item)
+  return boundedJsonValueMatches(
+    value,
+    (item) => isRecord2(item) && "activeTurnNotSteerable" in item,
+    128,
+    25e4
   );
 }
 function isRecord2(value) {
@@ -2650,7 +3375,27 @@ function notificationDeadline(notification) {
   if (!Number.isFinite(deadline)) {
     throw new Error("Completion notification has an invalid absolute deadline");
   }
+  if (!Number.isInteger(notification.timeoutMs) || notification.timeoutMs < 1 || notification.timeoutMs > MAX_NOTIFY_TIMEOUT_MS) {
+    throw new Error("Completion notification has an invalid timeout");
+  }
+  const updatedAt = Date.parse(notification.updatedAt);
+  if (!Number.isFinite(updatedAt)) {
+    throw new Error("Completion notification has an invalid update time");
+  }
+  if (deadline - updatedAt > notification.timeoutMs) {
+    throw new Error(
+      "Completion notification deadline exceeds its configured timeout"
+    );
+  }
   return deadline;
+}
+async function markSubmissionLimitReached(runId, submissionWasAmbiguous, lastError) {
+  return await updateNotification(runId, (current) => {
+    current.status = submissionWasAmbiguous ? "unknown" : "failed";
+    current.error = callbackDiagnostic(
+      `Callback submission limit of ${MAX_DELIVERY_SUBMISSIONS} reached: ${lastError}`
+    );
+  });
 }
 function remainingTimeout(deadline) {
   return Math.min(3e4, Math.max(1, deadline - Date.now()));
@@ -2658,6 +3403,9 @@ function remainingTimeout(deadline) {
 async function updateNotification(runId, mutator) {
   const notification = await readCompletionNotification(runId);
   mutator(notification);
+  if (notification.error !== void 0) {
+    notification.error = callbackDiagnostic(notification.error);
+  }
   notification.updatedAt = nowIso();
   await atomicWriteJson(notificationPath(runId), notification);
   return notification;
@@ -2786,7 +3534,7 @@ async function acceptNotificationHandoff(runId, pid, token) {
   throw new Error(`Notifier handoff for ${runId} failed: ${lastError}`);
 }
 async function observeNotificationLock(lockDirectory, ownerPath) {
-  const metadata = await stat(lockDirectory);
+  const metadata = await stat2(lockDirectory);
   const fingerprint = sha256(
     `${metadata.dev}:${metadata.ino}:${metadata.birthtimeMs}`
   ).slice(0, 16);
@@ -2831,7 +3579,7 @@ async function verifyRunningNotifierProcess(runId, expectedEntryPath, owner) {
   ];
   let details;
   try {
-    details = process.platform === "linux" ? await inspectLinuxNotifierProcess(owner.pid) : await inspectPsNotifierProcess(owner.pid);
+    details = process.platform === "linux" ? await inspectLinuxNotifierProcess(owner.pid) : await inspectDarwinNotifierProcess(owner.pid);
   } catch (error) {
     throw notifierAuthorityError(
       runId,
@@ -2895,47 +3643,84 @@ async function inspectLinuxNotifierProcess(pid) {
     );
   }
 }
-async function inspectPsNotifierProcess(pid) {
-  const processDetails = spawnSync2(
-    "ps",
-    ["-ww", "-p", String(pid), "-o", "pgid=", "-o", "args="],
-    { encoding: "utf8", timeout: 2e3 }
-  );
-  if (processDetails.status !== 0 || processDetails.error) {
-    throw new Error(`Could not inspect notifier PID ${pid} with ps`);
-  }
-  const match = /^\s*(\d+)\s+(.+?)\s*$/.exec(processDetails.stdout);
-  if (!match?.[1] || !match[2]) {
-    throw new Error(`Could not parse notifier PID ${pid} from ps`);
-  }
-  const executable = await darwinExecutablePath(pid);
-  return {
-    argv: match[2],
-    executable,
-    pgid: Number(match[1])
-  };
-}
-async function darwinExecutablePath(pid) {
+async function inspectDarwinNotifierProcess(pid) {
   if (process.platform !== "darwin") {
     throw new Error(
-      `Executable verification is unsupported on ${process.platform}`
+      `Darwin process verification is unsupported on ${process.platform}`
     );
   }
+  const mib = Buffer.alloc(12);
+  mib.writeInt32LE(1, 0);
+  mib.writeInt32LE(49, 4);
+  mib.writeInt32LE(pid, 8);
+  const size = Buffer.alloc(8);
+  size.writeBigUInt64LE(BigInt(DARWIN_PROCARGS_BYTES));
   const result = spawnSync2(
-    "/usr/sbin/lsof",
-    ["-a", "-p", String(pid), "-d", "txt", "-Fn"],
-    { encoding: "utf8", timeout: 2e3 }
+    "/usr/bin/osascript",
+    [
+      "-l",
+      "JavaScript",
+      "-e",
+      DARWIN_NOTIFIER_PROCESS_SCRIPT,
+      String(pid),
+      mib.toString("base64"),
+      size.toString("base64")
+    ],
+    {
+      encoding: "utf8",
+      maxBuffer: 2 * 1024 * 1024,
+      timeout: 2e3,
+      windowsHide: true
+    }
   );
   if (result.status !== 0 || result.error) {
-    throw new Error(`Could not inspect notifier PID ${pid} with lsof`);
+    throw new Error(`Could not inspect notifier PID ${pid} with libproc`);
   }
-  const lines = result.stdout.split("\n");
-  const textIndex = lines.indexOf("ftxt");
-  const executable = lines[textIndex + 1];
-  if (textIndex < 0 || !executable?.startsWith("n/")) {
-    throw new Error(`Could not identify notifier PID ${pid} executable`);
+  const encoded = JSON.parse(result.stdout);
+  if (typeof encoded.bsd !== "string" || typeof encoded.executable !== "string" || typeof encoded.processArgs !== "string" || typeof encoded.size !== "string") {
+    throw new Error(`Could not parse notifier PID ${pid} inspection`);
   }
-  return await realpath(executable.slice(1));
+  const bsd = Buffer.from(encoded.bsd, "base64");
+  const executable = Buffer.from(encoded.executable, "base64");
+  const processArgs = Buffer.from(encoded.processArgs, "base64");
+  const returnedSize = Buffer.from(encoded.size, "base64");
+  if (bsd.length !== 136 || returnedSize.length !== 8 || bsd.readUInt32LE(4) === 5 || bsd.readUInt32LE(12) !== pid) {
+    throw new Error(`Could not validate notifier PID ${pid} inspection`);
+  }
+  const processArgsBytes = Number(returnedSize.readBigUInt64LE());
+  if (!Number.isSafeInteger(processArgsBytes) || processArgsBytes < 4 || processArgsBytes > processArgs.length) {
+    throw new Error(`Could not validate notifier PID ${pid} arguments`);
+  }
+  return {
+    argv: parseDarwinProcessArgs(processArgs.subarray(0, processArgsBytes)),
+    executable: await realpath(
+      executable.toString("utf8").replace(/\0+$/, "")
+    ),
+    pgid: bsd.readUInt32LE(100)
+  };
+}
+function parseDarwinProcessArgs(value) {
+  const argumentCount = value.readInt32LE(0);
+  if (argumentCount < 1 || argumentCount > 1024) {
+    throw new Error("Malformed Darwin process argument count");
+  }
+  let offset = value.indexOf(0, 4);
+  if (offset < 0) {
+    throw new Error("Malformed Darwin process executable path");
+  }
+  while (offset < value.length && value[offset] === 0) {
+    offset += 1;
+  }
+  const argv = [];
+  for (let index = 0; index < argumentCount; index += 1) {
+    const end = value.indexOf(0, offset);
+    if (end < 0) {
+      throw new Error("Malformed Darwin process arguments");
+    }
+    argv.push(value.subarray(offset, end).toString("utf8"));
+    offset = end + 1;
+  }
+  return argv;
 }
 function parseLinuxProcessStat(value) {
   const commandEnd = value.lastIndexOf(")");
@@ -2963,9 +3748,6 @@ async function linuxKernelStartIdentity(pid) {
   }
 }
 function sameArgv(actual, expected) {
-  if (typeof actual === "string") {
-    return actual === expected.join(" ");
-  }
   return actual.length === expected.length && actual.every((value, index) => value === expected[index]);
 }
 async function verifyNotifierOwnerUnchanged(runId, expected) {
@@ -3011,6 +3793,7 @@ var BOOLEAN_OPTIONS = /* @__PURE__ */ new Set([
   "foreground",
   "help",
   "json",
+  "no-notify-current-thread",
   "notify-current-thread"
 ]);
 var TERMINAL_STATUSES = /* @__PURE__ */ new Set([
@@ -3022,8 +3805,9 @@ var DEFAULT_AGENT_TIMEOUT_MS = 18e5;
 var DEFAULT_MAX_AGENT_INVOCATIONS2 = 100;
 var DEFAULT_MAX_RUNTIME_MS = 144e5;
 var FORCE_STOP_GRACE_MS = 2e3;
+var CALLBACK_ENDPOINT_ENV = "CCTOOLS_CODEX_CALLBACK_ENDPOINT";
 var TEST_NOTIFY_HANDOFF_DELAY_ENV = "CODEX_WORKFLOW_TEST_NOTIFY_HANDOFF_DELAY_MS";
-var NOTIFIER_ENTRY_PATH = fileURLToPath(import.meta.url);
+var CURRENT_ENTRY_PATH = fileURLToPath(import.meta.url);
 var CleanupPendingError = class extends Error {
   constructor(message) {
     super(message);
@@ -3038,7 +3822,7 @@ Usage:
                      [--concurrency N] [--detach] [--json]
                      [--max-agents N] [--max-runtime-ms N]
                      [--agent-timeout-ms N]
-                     [--notify-current-thread]
+                     [--notify-current-thread | --no-notify-current-thread]
                      [--app-server-endpoint unix://PATH]
                      [--notify-timeout-ms N]
                      [--allow-workspace-write]
@@ -3059,6 +3843,8 @@ Environment:
   CODEX_WORKFLOW_HOME       State root (default: ~/.codex/workflows)
   CODEX_WORKFLOW_CODEX_BIN  Codex executable (default: codex)
   CODEX_THREAD_ID           Current Codex thread (set by Codex tool shells)
+  CCTOOLS_CODEX_CALLBACK_ENDPOINT
+                            Callback default set by codex-dynamic
 
 Workflow scripts receive agent(), pipeline(), parallel(), checkpoint(), log(),
 args, and workflow.runId. Workers default to the read-only Codex sandbox.`);
@@ -3175,13 +3961,18 @@ function outputState(state, json, notification) {
     }
   }
 }
-async function optionalCompletionNotification(runId) {
+async function optionalCompletionNotification(runId, strict = false) {
   if (!await completionNotificationExists(runId)) {
     return void 0;
   }
   try {
     return await readCompletionNotification(runId);
   } catch (error) {
+    if (strict) {
+      throw new Error(
+        `Could not read callback state: ${errorMessage(error)}`
+      );
+    }
     console.error(
       `codex-workflow: warning: could not read callback state: ${errorMessage(
         error
@@ -3197,7 +3988,7 @@ async function recoverTerminalCompletionNotification(store, state) {
   }
   const active = await completionNotifierProcess(
     state.runId,
-    NOTIFIER_ENTRY_PATH
+    await store.ensureRunnerSnapshot(CURRENT_ENTRY_PATH)
   );
   if (active === void 0) {
     await spawnCompletionNotifier(store, state);
@@ -3293,7 +4084,7 @@ async function executeEngine(store) {
   }
 }
 async function superviseEngine(store) {
-  const entry = fileURLToPath(import.meta.url);
+  const entry = await store.ensureRunnerSnapshot(CURRENT_ENTRY_PATH);
   const child = spawn2(process.execPath, [entry, "_engine", store.runId], {
     detached: process.platform !== "win32",
     env: process.env,
@@ -3475,7 +4266,7 @@ async function terminateOrphanedExecution(store, message) {
 }
 function signalOwnedProcessTree(pid, expectedStartedAt, signal, label, strictIdentity = true) {
   if (!isPidRunning(pid)) {
-    if (processTreeIsRunning(pid)) {
+    if (processGroupIsRunning(pid)) {
       throw new CleanupPendingError(
         `${label} PID ${pid} exited while its process group remains`
       );
@@ -3484,7 +4275,7 @@ function signalOwnedProcessTree(pid, expectedStartedAt, signal, label, strictIde
   }
   const actualStartedAt = processStartIdentity(pid);
   if (expectedStartedAt === void 0 || actualStartedAt === void 0) {
-    if (processTreeIsRunning(pid)) {
+    if (processGroupIsRunning(pid)) {
       throw new CleanupPendingError(
         `Could not verify ${label} PID ${pid} before process-group cleanup`
       );
@@ -3504,18 +4295,10 @@ function signalOwnedProcessTree(pid, expectedStartedAt, signal, label, strictIde
 }
 async function waitForProcessTreeExit(pid, timeoutMs = 2e3) {
   const deadline = Date.now() + timeoutMs;
-  while (processTreeIsRunning(pid) && Date.now() < deadline) {
+  while (processGroupIsRunning(pid) && Date.now() < deadline) {
     await sleep(25);
   }
-  return !processTreeIsRunning(pid);
-}
-function processTreeIsRunning(pid) {
-  try {
-    process.kill(process.platform === "win32" ? pid : -pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  return !processGroupIsRunning(pid);
 }
 async function waitForEngineRegistration(runId) {
   const deadline = Date.now() + 5e3;
@@ -3530,7 +4313,7 @@ async function waitForEngineRegistration(runId) {
   throw new Error(`Workflow engine ${process.pid} was not registered`);
 }
 async function spawnDetached(store) {
-  const entry = fileURLToPath(import.meta.url);
+  const entry = await store.ensureRunnerSnapshot(CURRENT_ENTRY_PATH);
   const runnerToken = await store.claimRunner(process.pid);
   let handedOff = false;
   try {
@@ -3602,9 +4385,10 @@ async function spawnCompletionNotifier(store, state) {
       return void 0;
     }
     notifierLog = await openPrivateNotificationLog(store.directory);
+    const entry = await store.ensureRunnerSnapshot(CURRENT_ENTRY_PATH);
     const child = spawn2(
       process.execPath,
-      [NOTIFIER_ENTRY_PATH, "_notify", state.runId, claimToken],
+      [entry, "_notify", state.runId, claimToken],
       {
         detached: true,
         env: process.env,
@@ -3657,7 +4441,7 @@ async function spawnCompletionNotifier(store, state) {
     if (claimToken === void 0 || handedOff) {
       const activeNotifier = await completionNotifierProcess(
         state.runId,
-        NOTIFIER_ENTRY_PATH
+        await store.ensureRunnerSnapshot(CURRENT_ENTRY_PATH)
       ).catch(() => void 0);
       return activeNotifier?.pid;
     }
@@ -3747,7 +4531,7 @@ async function stopCompletionNotifierForResume(store) {
   }
   let notifier = await completionNotifierProcess(
     store.runId,
-    NOTIFIER_ENTRY_PATH
+    await store.ensureRunnerSnapshot(CURRENT_ENTRY_PATH)
   );
   if (!notifier) {
     return;
@@ -3757,7 +4541,7 @@ async function stopCompletionNotifierForResume(store) {
     await sleep(25);
     notifier = await completionNotifierProcess(
       store.runId,
-      NOTIFIER_ENTRY_PATH
+      await store.ensureRunnerSnapshot(CURRENT_ENTRY_PATH)
     );
     if (!notifier) {
       return;
@@ -3770,13 +4554,13 @@ async function stopCompletionNotifierForResume(store) {
   }
   const pid = notifier.pid;
   await signalCompletionNotifierForResume(
-    store.runId,
+    store,
     pid,
     "SIGTERM"
   );
   if (!await waitForProcessTreeExit(pid)) {
     await signalCompletionNotifierForResume(
-      store.runId,
+      store,
       pid,
       "SIGKILL"
     );
@@ -3791,10 +4575,10 @@ async function stopCompletionNotifierForResume(store) {
     `Stopped completion notifier PID ${pid} before resuming the workflow`
   );
 }
-async function signalCompletionNotifierForResume(runId, expectedPid, signal) {
+async function signalCompletionNotifierForResume(store, expectedPid, signal) {
   const notifier = await completionNotifierProcess(
-    runId,
-    NOTIFIER_ENTRY_PATH
+    store.runId,
+    await store.ensureRunnerSnapshot(CURRENT_ENTRY_PATH)
   );
   if (notifier?.phase !== "running" || notifier.pid !== expectedPid) {
     throw new CleanupPendingError(
@@ -3866,6 +4650,7 @@ async function runCommand(parsed) {
       "allow-workspace-write",
       "detach",
       "json",
+      "no-notify-current-thread",
       "notify-current-thread"
     ]
   );
@@ -3877,10 +4662,21 @@ async function runCommand(parsed) {
   }
   const source = await readFile4(workflowPath, "utf8");
   compileWorkflow(source, workflowPath);
-  const notifyCurrentThread = parsed.flags.has("notify-current-thread");
-  if (notifyCurrentThread && !parsed.flags.has("detach")) {
+  const explicitNotification = parsed.flags.has("notify-current-thread");
+  const suppressNotification = parsed.flags.has("no-notify-current-thread");
+  const managedEndpoint = process.env[CALLBACK_ENDPOINT_ENV]?.trim();
+  if (explicitNotification && suppressNotification) {
+    throw new Error(
+      "--notify-current-thread and --no-notify-current-thread conflict"
+    );
+  }
+  if (explicitNotification && !parsed.flags.has("detach")) {
     throw new Error("--notify-current-thread requires --detach");
   }
+  if (suppressNotification && !parsed.flags.has("detach")) {
+    throw new Error("--no-notify-current-thread requires --detach");
+  }
+  const notifyCurrentThread = explicitNotification || parsed.flags.has("detach") && !suppressNotification && managedEndpoint !== void 0 && managedEndpoint.length > 0;
   if (!notifyCurrentThread && (parsed.values.has("app-server-endpoint") || parsed.values.has("notify-timeout-ms"))) {
     throw new Error(
       "--app-server-endpoint and --notify-timeout-ms require --notify-current-thread"
@@ -3901,7 +4697,7 @@ async function runCommand(parsed) {
       MAX_NOTIFY_TIMEOUT_MS
     );
     const endpoint = await verifyNotificationTarget(
-      parsed.values.get("app-server-endpoint") ?? "unix://",
+      parsed.values.get("app-server-endpoint") ?? managedEndpoint ?? "unix://",
       threadId
     );
     notificationTarget = { endpoint, threadId, timeoutMs };
@@ -3910,6 +4706,7 @@ async function runCommand(parsed) {
   const input = await parseInput(parsed.values.get("input"));
   const timestamp = nowIso();
   const workflowHash = sha256(source);
+  const runnerSource = await readFile4(CURRENT_ENTRY_PATH, "utf8");
   const state = {
     ...input === void 0 ? {} : { args: input },
     agentInvocations: 0,
@@ -3935,6 +4732,7 @@ async function runCommand(parsed) {
       DEFAULT_MAX_RUNTIME_MS,
       6048e5
     ),
+    runnerHash: sha256(runnerSource),
     runId: createRunId(),
     status: "starting",
     steps: {},
@@ -3943,7 +4741,7 @@ async function runCommand(parsed) {
     workflowHash,
     workflowPath
   };
-  const store = await StateStore.create(state);
+  const store = await StateStore.create(state, runnerSource);
   await store.appendEvent("run.created", { workflowPath });
   let notification;
   if (notificationTarget) {
@@ -4003,7 +4801,7 @@ async function statusCommand(parsed) {
   outputState(
     state,
     parsed.flags.has("json"),
-    await optionalCompletionNotification(runId)
+    await optionalCompletionNotification(runId, parsed.flags.has("json"))
   );
   return 0;
 }

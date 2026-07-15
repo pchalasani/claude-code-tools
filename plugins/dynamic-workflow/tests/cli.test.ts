@@ -27,6 +27,7 @@ beforeEach(async () => {
     CODEX_WORKFLOW_HOME: path.join(temporaryDirectory, "state"),
     FAKE_CODEX_LOG: path.join(temporaryDirectory, "codex.jsonl"),
   };
+  delete environment.CCTOOLS_CODEX_CALLBACK_ENDPOINT;
 });
 
 afterEach(async () => {

@@ -3,6 +3,7 @@ import { execFile, spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import {
   access,
+  copyFile,
   mkdir,
   mkdtemp,
   readFile,
@@ -24,8 +25,12 @@ import {
 import {
   completionNotifierProcess,
   completionRetryDelayMs,
+  createCompletionNotification,
+  deliverCompletionNotification,
+  prepareNotificationForTerminal,
   type CompletionNotification,
 } from "../src/completion-notification.js";
+import { StateStore } from "../src/state-store.js";
 import type { RunState } from "../src/types.js";
 import { isPidRunning, processStartIdentity } from "../src/utils.js";
 import { createFakeCodex } from "./helpers.js";
@@ -63,13 +68,19 @@ beforeEach(async () => {
     FAKE_CODEX_LOG: path.join(temporaryDirectory, "codex.jsonl"),
   };
   delete environment.CODEX_SANDBOX;
+  delete environment.CCTOOLS_CODEX_CALLBACK_ENDPOINT;
   process.env.CODEX_WORKFLOW_HOME = environment.CODEX_WORKFLOW_HOME;
 });
 
 afterEach(async () => {
   await Promise.all([...servers].map(async (server) => server.close()));
   servers.clear();
-  await rm(temporaryDirectory, { force: true, recursive: true });
+  await rm(temporaryDirectory, {
+    force: true,
+    maxRetries: 10,
+    recursive: true,
+    retryDelay: 50,
+  });
   if (originalCodexSandbox === undefined) {
     delete process.env.CODEX_SANDBOX;
   } else {
@@ -162,6 +173,254 @@ test("bounds and controls retry jitter", () => {
   expect(completionRetryDelayMs(99, () => 1)).toBe(30_000);
 });
 
+test.each([-1, 0, 1.5, 604_800_001])(
+  "does not persist callback timeout %s outside the producer range",
+  async (timeoutMs) => {
+    const runId = `invalid-persisted-timeout-${timeoutMs}`;
+
+    await expect(
+      createCompletionNotification(
+        runId,
+        "thread-under-test",
+        "unix:///tmp/app-server.sock",
+        timeoutMs,
+      ),
+    ).rejects.toThrow(
+      "callback timeoutMs must be an integer from 1 to 604800000",
+    );
+    await expect(access(completionNotificationPath(runId)))
+      .rejects.toBeDefined();
+  },
+);
+
+test.each([1, 604_800_000])(
+  "persists callback timeout %s at a producer boundary",
+  async (timeoutMs) => {
+    const runId = `boundary-persisted-timeout-${timeoutMs}`;
+    await mkdir(runDirectory(runId), { recursive: true });
+
+    const notification = await createCompletionNotification(
+      runId,
+      "thread-under-test",
+      "unix:///tmp/app-server.sock",
+      timeoutMs,
+    );
+
+    expect(notification.timeoutMs).toBe(timeoutMs);
+    expect(
+      JSON.parse(
+        await readFile(completionNotificationPath(runId), "utf8"),
+      ),
+    ).toMatchObject({ timeoutMs });
+  },
+);
+
+test("terminal status distinguishes same-millisecond callback generations", async () => {
+  const runId = "same-millisecond-terminal-generation";
+  const completedAt = "2026-07-15T12:00:00.123Z";
+  await mkdir(runDirectory(runId), { recursive: true });
+  await createCompletionNotification(
+    runId,
+    "thread-under-test",
+    "unix:///tmp/app-server.sock",
+    5_000,
+  );
+  const baseState = {
+    completedAt,
+    concurrency: 1,
+    createdAt: completedAt,
+    cwd: temporaryDirectory,
+    runId,
+    steps: {},
+    updatedAt: completedAt,
+    version: 1 as const,
+    workflowHash: "workflow-hash",
+    workflowPath: path.join(temporaryDirectory, "workflow.js"),
+  };
+
+  const completed = await prepareNotificationForTerminal({
+    ...baseState,
+    status: "completed",
+  });
+  await writeFile(
+    completionNotificationPath(runId),
+    JSON.stringify({
+      ...completed,
+      deliveredAt: completedAt,
+      status: "delivered",
+    } satisfies CompletionNotification),
+    "utf8",
+  );
+
+  const failed = await prepareNotificationForTerminal({
+    ...baseState,
+    error: "resumed generation failed",
+    status: "failed",
+  });
+
+  expect(failed.status).toBe("armed");
+  expect(failed.terminalStatus).toBe("failed");
+  expect(failed.deliveredAt).toBeUndefined();
+  expect(failed.clientUserMessageId).not.toBe(
+    completed.clientUserMessageId,
+  );
+});
+
+test("terminal payload distinguishes same-status callback generations", async () => {
+  const runId = "same-status-terminal-generation";
+  const completedAt = "2026-07-15T12:00:00.123Z";
+  await mkdir(runDirectory(runId), { recursive: true });
+  await createCompletionNotification(
+    runId,
+    "thread-under-test",
+    "unix:///tmp/app-server.sock",
+    5_000,
+  );
+  const baseState = {
+    completedAt,
+    concurrency: 1,
+    createdAt: completedAt,
+    cwd: temporaryDirectory,
+    runId,
+    status: "failed" as const,
+    steps: {},
+    updatedAt: completedAt,
+    version: 1 as const,
+    workflowHash: "workflow-hash",
+    workflowPath: path.join(temporaryDirectory, "workflow.js"),
+  };
+  const first = await prepareNotificationForTerminal({
+    ...baseState,
+    error: "first resumed failure",
+  });
+  await writeFile(
+    completionNotificationPath(runId),
+    JSON.stringify({
+      ...first,
+      deliveredAt: completedAt,
+      status: "delivered",
+    } satisfies CompletionNotification),
+    "utf8",
+  );
+
+  const second = await prepareNotificationForTerminal({
+    ...baseState,
+    error: "distinct resumed failure",
+  });
+
+  expect(second.status).toBe("armed");
+  expect(second.deliveredAt).toBeUndefined();
+  expect(second.clientUserMessageId).not.toBe(first.clientUserMessageId);
+});
+
+test("legacy terminal metadata cannot suppress a resumed generation", async () => {
+  const runId = "legacy-same-status-terminal-generation";
+  const completedAt = "2026-07-15T12:00:00.123Z";
+  await mkdir(runDirectory(runId), { recursive: true });
+  await createCompletionNotification(
+    runId,
+    "thread-under-test",
+    "unix:///tmp/app-server.sock",
+    5_000,
+  );
+  const baseState = {
+    completedAt,
+    concurrency: 1,
+    createdAt: completedAt,
+    cwd: temporaryDirectory,
+    runId,
+    status: "failed" as const,
+    steps: {},
+    updatedAt: completedAt,
+    version: 1 as const,
+    workflowHash: "workflow-hash",
+    workflowPath: path.join(temporaryDirectory, "workflow.js"),
+  };
+  const first = await prepareNotificationForTerminal({
+    ...baseState,
+    error: "legacy failure",
+  });
+  const legacy: CompletionNotification = {
+    ...first,
+    deliveredAt: completedAt,
+    status: "delivered",
+  };
+  delete legacy.terminalFingerprint;
+  await writeFile(
+    completionNotificationPath(runId),
+    JSON.stringify(legacy),
+    "utf8",
+  );
+
+  const second = await prepareNotificationForTerminal({
+    ...baseState,
+    error: "resumed failure",
+  });
+
+  expect(second.status).toBe("armed");
+  expect(second.terminalFingerprint).toBeDefined();
+  expect(second.deliveredAt).toBeUndefined();
+});
+
+test("identical terminal transitions receive unique callback generations", async () => {
+  const runId = "identical-terminal-generations";
+  const completedAt = "2026-07-15T12:00:00.123Z";
+  const initial: RunState = {
+    concurrency: 1,
+    createdAt: completedAt,
+    cwd: temporaryDirectory,
+    runId,
+    status: "running",
+    steps: {},
+    updatedAt: completedAt,
+    version: 1,
+    workflowHash: "workflow-hash",
+    workflowPath: path.join(temporaryDirectory, "workflow.js"),
+  };
+  const store = await StateStore.create(initial);
+  await createCompletionNotification(
+    runId,
+    "thread-under-test",
+    "unix:///tmp/app-server.sock",
+    5_000,
+  );
+
+  const firstState = await store.update((state) => {
+    state.completedAt = completedAt;
+    state.error = "identical failure";
+    state.status = "failed";
+  });
+  const first = await prepareNotificationForTerminal(firstState);
+  await writeFile(
+    completionNotificationPath(runId),
+    JSON.stringify({
+      ...first,
+      deliveredAt: completedAt,
+      status: "delivered",
+    } satisfies CompletionNotification),
+    "utf8",
+  );
+  await store.update((state) => {
+    state.status = "running";
+    delete state.completedAt;
+    delete state.error;
+  });
+  const secondState = await store.update((state) => {
+    state.completedAt = completedAt;
+    state.error = "identical failure";
+    state.status = "failed";
+  });
+
+  const second = await prepareNotificationForTerminal(secondState);
+
+  expect(secondState.terminalFingerprint).not.toBe(
+    firstState.terminalFingerprint,
+  );
+  expect(second.clientUserMessageId).not.toBe(first.clientUserMessageId);
+  expect(second.status).toBe("armed");
+  expect(second.deliveredAt).toBeUndefined();
+});
+
 test("does not answer approval requests owned by the TUI", async () => {
   const server = await startServer("idle");
   server.sendApprovalRequestOnInitialize = true;
@@ -211,6 +470,153 @@ test("delivers a detached completion to an idle Codex thread", async () => {
   expect(server.deliveryText).toContain("Do not call tools");
 });
 
+test.each([
+  {
+    expectedStatus: "completed",
+    field: "result",
+    name: "result",
+    source: 'return "🙂".repeat(50_000)\n',
+  },
+  {
+    expectedStatus: "failed",
+    field: "error",
+    name: "error",
+    source: 'throw new Error("🙂".repeat(50_000))\n',
+  },
+] as const)("bounds a large workflow $name in the callback", async (fixture) => {
+  const server = await startServer("idle");
+  const workflowPath = await writeWorkflow(`large-${fixture.name}.js`);
+  await writeFile(workflowPath, fixture.source, "utf8");
+  const launched = await invoke([
+    "run",
+    workflowPath,
+    "--detach",
+    "--notify-current-thread",
+    "--app-server-endpoint",
+    server.endpoint,
+    "--notify-timeout-ms",
+    "5000",
+    "--json",
+  ]);
+  const { runId } = JSON.parse(launched.stdout) as { runId: string };
+
+  const state = await waitForCallback(runId, "delivered");
+  const deliveryText = server.deliveryText ?? "";
+  expect(state.status).toBe(fixture.expectedStatus);
+  expect(String(state[fixture.field])).toContain("🙂".repeat(1_000));
+  expect(Buffer.byteLength(deliveryText, "utf8")).toBeLessThanOrEqual(4_096);
+  expect(deliveryText).toContain(
+    "[truncated; full details are in durable state]",
+  );
+  expect(deliveryText).not.toContain("�");
+  expect(deliveryText).toContain("</untrusted_workflow_details>");
+  expect(deliveryText).toContain("</dynamic_workflow_completion>");
+});
+
+test("survives removal of its versioned plugin cache", async () => {
+  const server = await startServer("idle");
+  const workflowPath = await writeWorkflow("cache-removal-callback.js");
+  await writeFile(
+    workflowPath,
+    'return await agent("[delay=800] cache removal", { id: "work" })\n',
+    "utf8",
+  );
+  const versionDirectory = path.join(
+    temporaryDirectory,
+    "plugins",
+    "dynamic-workflow",
+    "0.2.0",
+  );
+  const versionedCliPath = path.join(versionDirectory, "bin", "workflow.mjs");
+  await mkdir(path.dirname(versionedCliPath), { recursive: true });
+  await copyFile(cliPath, versionedCliPath);
+
+  const launched = await invokeWithEntry(versionedCliPath, [
+    "run",
+    workflowPath,
+    "--detach",
+    "--notify-current-thread",
+    "--app-server-endpoint",
+    server.endpoint,
+    "--notify-timeout-ms",
+    "5000",
+    "--json",
+  ]);
+  const launch = JSON.parse(launched.stdout) as {
+    notification: CompletionNotification;
+    runId: string;
+  };
+  const runnerSnapshot = path.join(
+    runDirectory(launch.runId),
+    "runtime",
+    "workflow.mjs",
+  );
+  await access(runnerSnapshot);
+  await rm(versionDirectory, { force: true, recursive: true });
+
+  const state = await waitForCallback(launch.runId, "delivered");
+  expect(state.status).toBe("completed");
+  expect(state.result).toBe("result:[delay=800] cache removal");
+  expect(state.runnerHash).toMatch(/^[a-f0-9]{64}$/);
+  expect(server.deliveryCount).toBe(1);
+  await access(runnerSnapshot);
+});
+
+test("codex-dynamic defaults an immediate failure to a callback", async () => {
+  const server = await startServer("idle");
+  environment.CCTOOLS_CODEX_CALLBACK_ENDPOINT = server.endpoint;
+  const workflowPath = await writeWorkflow("implicit-failure-callback.js");
+  await writeFile(
+    workflowPath,
+    'return await agent("[fail]", { id: "fail-fast" })\n',
+    "utf8",
+  );
+
+  const launched = await invoke([
+    "run",
+    workflowPath,
+    "--detach",
+    "--notify-timeout-ms",
+    "5000",
+    "--json",
+  ]);
+  const launch = JSON.parse(launched.stdout) as {
+    notification: CompletionNotification;
+    runId: string;
+  };
+  expect(launch.notification.status).toBe("armed");
+
+  const state = await waitForCallback(launch.runId, "delivered");
+  expect(state.status).toBe("failed");
+  expect(state.error).toMatch(/synthetic worker failure/);
+  expect(server.deliveryMethod).toBe("turn/start");
+  expect(server.deliveryText).toContain(`Run ${launch.runId} failed`);
+  expect(server.deliveryText).toContain("synthetic worker failure");
+});
+
+test("allows an explicit opt-out from codex-dynamic callbacks", async () => {
+  environment.CCTOOLS_CODEX_CALLBACK_ENDPOINT =
+    "unix:///callback-must-not-be-opened.sock";
+  const workflowPath = await writeWorkflow("callback-opt-out.js");
+  const launched = await invoke([
+    "run",
+    workflowPath,
+    "--detach",
+    "--no-notify-current-thread",
+    "--json",
+  ]);
+  const launch = JSON.parse(launched.stdout) as {
+    notification?: CompletionNotification;
+    runId: string;
+  };
+  expect(launch.notification).toBeUndefined();
+
+  const waited = await invoke(["wait", launch.runId, "--json"]);
+  expect((JSON.parse(waited.stdout) as RunState).status).toBe("completed");
+  await expect(access(completionNotificationPath(launch.runId)))
+    .rejects.toBeDefined();
+});
+
 test("steers a completion into an active Codex turn", async () => {
   const server = await startServer("active");
   const workflowPath = await writeWorkflow("active-callback.js");
@@ -253,6 +659,19 @@ test("requires detached mode and a Codex thread ID", async () => {
     stderr: expect.stringMatching(/requires --detach/),
   });
 
+  await expect(
+    invoke([
+      "run",
+      workflowPath,
+      "--detach",
+      "--notify-current-thread",
+      "--no-notify-current-thread",
+    ]),
+  ).rejects.toMatchObject({
+    code: 1,
+    stderr: expect.stringMatching(/conflict/),
+  });
+
   delete environment.CODEX_THREAD_ID;
   await expect(
     invoke([
@@ -266,6 +685,32 @@ test("requires detached mode and a Codex thread ID", async () => {
     stderr: expect.stringMatching(/CODEX_THREAD_ID/),
   });
 });
+
+test.each(["-1", "0", "1.5", "604800001"])(
+  "rejects callback timeout %s before creating a run",
+  async (timeoutMs) => {
+    const workflowPath = await writeWorkflow(`invalid-timeout-${timeoutMs}.js`);
+
+    await expect(
+      invoke([
+        "run",
+        workflowPath,
+        "--detach",
+        "--notify-current-thread",
+        "--notify-timeout-ms",
+        timeoutMs,
+      ]),
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringMatching(
+        /--notify-timeout-ms must be an integer from 1 to 604800000/,
+      ),
+    });
+    await expect(
+      access(path.join(environment.CODEX_WORKFLOW_HOME as string, "runs")),
+    ).rejects.toBeDefined();
+  },
+);
 
 test.skipIf(
   process.platform !== "darwin" || originalCodexSandbox === "seatbelt",
@@ -505,6 +950,82 @@ test("retries a transient app-server rejection", async () => {
   expect(server.deliveryCount).toBe(2);
 });
 
+test("bounds hostile RPC diagnostics across callback retries", async () => {
+  const server = await startServer("idle");
+  server.deliveryError = {
+    code: -32_001,
+    message: "🙂".repeat(50_000),
+  };
+  const workflowPath = await writeWorkflow("bounded-rpc-diagnostic.js");
+  const launched = await invoke([
+    "run",
+    workflowPath,
+    "--detach",
+    "--notify-current-thread",
+    "--app-server-endpoint",
+    server.endpoint,
+    "--notify-timeout-ms",
+    "20000",
+    "--json",
+  ]);
+  const { runId } = JSON.parse(launched.stdout) as { runId: string };
+
+  const state = await waitForCallback(runId, "failed");
+  const diagnostic = state.completionNotification?.error ?? "";
+  const notificationText = await readFile(
+    completionNotificationPath(runId),
+    "utf8",
+  );
+  const events = await readFile(
+    path.join(runDirectory(runId), "events.jsonl"),
+    "utf8",
+  );
+  const log = await readFile(
+    path.join(runDirectory(runId), "workflow.log"),
+    "utf8",
+  );
+
+  expect(state.completionNotification?.attempts).toBe(5);
+  expect(server.deliveryCount).toBe(5);
+  expect(Buffer.byteLength(diagnostic, "utf8")).toBeLessThanOrEqual(4_096);
+  expect(diagnostic).toContain("[truncated callback diagnostic]");
+  expect(diagnostic).not.toContain("�");
+  expect(diagnostic.match(/truncated callback diagnostic/g)).toHaveLength(1);
+  expect(Buffer.byteLength(notificationText, "utf8")).toBeLessThan(8_192);
+  expect(Buffer.byteLength(events, "utf8")).toBeLessThan(16_384);
+  expect(Buffer.byteLength(log, "utf8")).toBeLessThan(8_192);
+});
+
+test("fails a structurally hostile callback response without retrying", async () => {
+  const server = await startServer("idle");
+  server.threadTurns = Array.from({ length: 250_001 }, () => 0);
+  const workflowPath = await writeWorkflow("hostile-thread-response.js");
+  const launched = await invoke([
+    "run",
+    workflowPath,
+    "--detach",
+    "--notify-current-thread",
+    "--app-server-endpoint",
+    server.endpoint,
+    "--notify-timeout-ms",
+    "20000",
+    "--json",
+  ]);
+  const { runId } = JSON.parse(launched.stdout) as { runId: string };
+
+  const state = await waitForCallback(runId, "failed");
+  const resumeRequests = server.requests.filter(
+    (request) => request.method === "thread/resume",
+  );
+
+  expect(state.completionNotification?.attempts).toBe(0);
+  expect(state.completionNotification?.error).toMatch(
+    /maximum node count of 250000/,
+  );
+  expect(resumeRequests).toHaveLength(1);
+  expect(server.deliveryCount).toBe(0);
+});
+
 test("caps repeated callback submissions independently of the deadline", async () => {
   const server = await startServer("idle");
   server.deliveryError = { code: -32_001, message: "server stays busy" };
@@ -526,6 +1047,83 @@ test("caps repeated callback submissions independently of the deadline", async (
   expect(state.completionNotification?.attempts).toBe(5);
   expect(state.completionNotification?.error).toMatch(/submission limit of 5/);
   expect(server.deliveryCount).toBe(5);
+  await waitForNotifierExit(runId);
+});
+
+test("does not submit again when persisted attempts reached the cap", async () => {
+  const server = await startServer("idle");
+  const workflowPath = await writeWorkflow("persisted-submission-cap.js");
+  const launched = await invoke([
+    "run",
+    workflowPath,
+    "--detach",
+    "--notify-current-thread",
+    "--app-server-endpoint",
+    server.endpoint,
+    "--notify-timeout-ms",
+    "5000",
+    "--json",
+  ]);
+  const { runId } = JSON.parse(launched.stdout) as { runId: string };
+  await waitForCallback(runId, "delivered");
+  await waitForNotifierExit(runId);
+  const notificationPath = completionNotificationPath(runId);
+  const notification = JSON.parse(
+    await readFile(notificationPath, "utf8"),
+  ) as CompletionNotification;
+  notification.attempts = 5;
+  notification.deadlineAt = new Date(Date.now() + 5_000).toISOString();
+  notification.lastAttemptAt = new Date().toISOString();
+  notification.status = "sending";
+  delete notification.deliveredAt;
+  delete notification.turnId;
+  await writeFile(notificationPath, JSON.stringify(notification), "utf8");
+  server.clearDeliveryHistory();
+
+  const result = await deliverCompletionNotification(runId);
+
+  expect(result.status).toBe("failed");
+  expect(result.attempts).toBe(5);
+  expect(result.error).toMatch(/submission limit of 5/);
+  expect(server.deliveryCount).toBe(0);
+});
+
+test("rejects a persisted deadline beyond the configured timeout", async () => {
+  const server = await startServer("idle");
+  const workflowPath = await writeWorkflow("persisted-deadline-cap.js");
+  const launched = await invoke([
+    "run",
+    workflowPath,
+    "--detach",
+    "--notify-current-thread",
+    "--app-server-endpoint",
+    server.endpoint,
+    "--notify-timeout-ms",
+    "5000",
+    "--json",
+  ]);
+  const { runId } = JSON.parse(launched.stdout) as { runId: string };
+  await waitForCallback(runId, "delivered");
+  const notificationPath = completionNotificationPath(runId);
+  const notification = JSON.parse(
+    await readFile(notificationPath, "utf8"),
+  ) as CompletionNotification;
+  notification.attempts = 0;
+  notification.deadlineAt = "2099-01-01T00:00:00.000Z";
+  notification.status = "armed";
+  notification.timeoutMs = 1;
+  delete notification.deliveredAt;
+  delete notification.error;
+  delete notification.lastAttemptAt;
+  delete notification.turnId;
+  await writeFile(notificationPath, JSON.stringify(notification), "utf8");
+  server.clearDeliveryHistory();
+
+  const result = await deliverCompletionNotification(runId);
+
+  expect(result.status).toBe("failed");
+  expect(result.error).toMatch(/deadline exceeds its configured timeout/);
+  expect(server.deliveryCount).toBe(0);
 });
 
 test.each([
@@ -919,7 +1517,7 @@ test.skipIf(process.platform === "win32")(
       await waitForNotifierLockPhase(launch.runId, "running");
       const notifier = await completionNotifierProcess(
         launch.runId,
-        cliPath,
+        runnerSnapshotPath(launch.runId),
       );
       expect(notifier?.phase).toBe("running");
       const notifierPid = notifier?.pid;
@@ -934,7 +1532,7 @@ test.skipIf(process.platform === "win32")(
       killProcessGroup(launch.pid);
       const active = await completionNotifierProcess(
         launch.runId,
-        cliPath,
+        runnerSnapshotPath(launch.runId),
       ).catch(() => undefined);
       killProcessGroup(active?.pid);
     }
@@ -973,7 +1571,7 @@ test("requires force after a crash leaves an attempted delivery", async () => {
   expect(server.deliveryCount).toBe(1);
 });
 
-test("reports workflow status when callback metadata is corrupt", async () => {
+test("fails structured status when callback metadata is corrupt", async () => {
   const server = await startServer("idle");
   const workflowPath = await writeWorkflow("corrupt-callback-state.js");
   const launched = await invoke([
@@ -991,9 +1589,11 @@ test("reports workflow status when callback metadata is corrupt", async () => {
   await waitForCallback(runId, "delivered");
   await writeFile(completionNotificationPath(runId), "{broken", "utf8");
 
-  const reported = await invoke(["status", runId, "--json"]);
-  expect((JSON.parse(reported.stdout) as RunState).status).toBe("completed");
-  expect(reported.stderr).toMatch(/warning: could not read callback state/);
+  await expect(invoke(["status", runId, "--json"]))
+    .rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringMatching(/Could not read callback state/),
+    });
 });
 
 test("serializes competing manual callback launches", async () => {
@@ -1104,7 +1704,15 @@ async function invoke(
   args: string[],
   environmentOverrides: NodeJS.ProcessEnv = {},
 ): Promise<{ stderr: string; stdout: string }> {
-  return await execFileAsync(process.execPath, [cliPath, ...args], {
+  return await invokeWithEntry(cliPath, args, environmentOverrides);
+}
+
+async function invokeWithEntry(
+  entryPath: string,
+  args: string[],
+  environmentOverrides: NodeJS.ProcessEnv = {},
+): Promise<{ stderr: string; stdout: string }> {
+  return await execFileAsync(process.execPath, [entryPath, ...args], {
     cwd: temporaryDirectory,
     encoding: "utf8",
     env: { ...environment, ...environmentOverrides },
@@ -1141,6 +1749,10 @@ function runDirectory(runId: string): string {
     "runs",
     runId,
   );
+}
+
+function runnerSnapshotPath(runId: string): string {
+  return path.join(runDirectory(runId), "runtime", "workflow.mjs");
 }
 
 async function waitForRawCallback(
@@ -1189,6 +1801,17 @@ async function waitForNotifierLockPhase(
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error(`Timed out waiting for notifier lock phase ${phase}`);
+}
+
+async function waitForNotifierExit(runId: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if ((await completionNotifierProcess(runId, cliPath)) === undefined) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for notifier exit for ${runId}`);
 }
 
 async function waitForState(
@@ -1246,6 +1869,7 @@ class FakeAppServer {
   resumeErrorOnce = false;
   sendApprovalRequestOnInitialize = false;
   serverRequestResponses = 0;
+  threadTurns: unknown[] | undefined;
 
   private deliveredItem: Record<string, unknown> | undefined;
   private closed = false;
@@ -1489,21 +2113,25 @@ class FakeAppServer {
     return {
       id: "thread-under-test",
       status: { type: this.status },
-      turns,
+      turns: this.threadTurns ?? turns,
     };
   }
 }
 
 function encodeServerFrame(value: unknown): Buffer {
   const payload = Buffer.from(JSON.stringify(value), "utf8");
-  const extendedLength = payload.length < 126 ? 0 : 2;
+  const extendedLength =
+    payload.length < 126 ? 0 : payload.length <= 0xffff ? 2 : 8;
   const frame = Buffer.alloc(2 + extendedLength + payload.length);
   frame[0] = 0x81;
   if (extendedLength === 0) {
     frame[1] = payload.length;
-  } else {
+  } else if (extendedLength === 2) {
     frame[1] = 126;
     frame.writeUInt16BE(payload.length, 2);
+  } else {
+    frame[1] = 127;
+    frame.writeBigUInt64BE(BigInt(payload.length), 2);
   }
   payload.copy(frame, 2 + extendedLength);
   return frame;

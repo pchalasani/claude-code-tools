@@ -4,6 +4,8 @@ description: >-
   Durable JavaScript orchestration for parallel headless Codex workers.
 ---
 
+import { Aside } from "@astrojs/starlight/components";
+
 The `dynamic-workflow` Codex plugin turns a multi-agent plan into a small,
 reviewable JavaScript program. JavaScript owns deterministic control flow;
 headless Codex workers own reasoning and tool use.
@@ -33,6 +35,16 @@ Those two commands are the complete plugin installation.
 
 Restart Codex, then invoke `$dynamic-workflow` or ask for a durable multi-agent
 workflow.
+
+<Aside type="caution" title="Shared-server sessions need a full reload">
+  If you use `codex-dynamic`, starting another TUI does not reload plugins from
+  an app server that was already running. After a plugin update, exit every
+  connected TUI and run `codex-server restart --force` from an ordinary
+  terminal, then start `codex-dynamic` again. A forced restart disconnects all
+  attached TUIs and interrupts their active turns, so never invoke it from
+  inside Codex. Saved conversations remain resumable. See the
+  [`codex-dynamic` lifecycle instructions][codex-dynamic-reload].
+</Aside>
 
 ## Workflow shape
 
@@ -180,6 +192,22 @@ into and extends the active turn instead. Delivery is confirmed with a stable
 client message ID, so a lost response can be reconciled against thread history
 before retry.
 
+Do not start a waiter or polling loop after a launch whose response confirms an
+`armed` callback. Report the run ID and let the user continue chatting. This is
+conditional: a detached run without an armed callback still needs normal
+bounded monitoring when the user wants completion tracked.
+
+When Codex was started with `codex-dynamic`, the runner automatically requests
+a callback for every detached run. This protects against an agent accidentally
+omitting `--notify-current-thread`. Use `--no-notify-current-thread` only as an
+explicit opt-out; in every case, trust the actual launch response rather than
+the requested flags.
+
+Codex currently shows no persistent background-workflow card, spinner, or
+running-status message for the detached run. The launch response is the only
+immediate confirmation; completion later appears through the callback. The
+user can request a one-off status check at any time.
+
 Passive supervision and the local app server add no model calls. Completion
 reporting starts a new turn only while the thread is idle; otherwise it extends
 the active turn. Either reporting path invokes the model and consumes tokens.
@@ -257,3 +285,5 @@ npm test
 
 [codex-app-server]: https://developers.openai.com/codex/app-server
 [codex-dynamic]: /claude-code-tools/tools/codex-dynamic/
+[codex-dynamic-reload]:
+  /claude-code-tools/tools/codex-dynamic/#reload-after-a-plugin-change

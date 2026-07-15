@@ -34,6 +34,7 @@ import {
   errorMessage,
   isPidRunning,
   nowIso,
+  processGroupIsRunning,
   processIdentityMatches,
   processStartIdentity,
   sha256,
@@ -54,6 +55,7 @@ const BOOLEAN_OPTIONS = new Set([
   "foreground",
   "help",
   "json",
+  "no-notify-current-thread",
   "notify-current-thread",
 ]);
 const TERMINAL_STATUSES = new Set<RunStatus>([
@@ -65,9 +67,10 @@ const DEFAULT_AGENT_TIMEOUT_MS = 1_800_000;
 const DEFAULT_MAX_AGENT_INVOCATIONS = 100;
 const DEFAULT_MAX_RUNTIME_MS = 14_400_000;
 const FORCE_STOP_GRACE_MS = 2_000;
+const CALLBACK_ENDPOINT_ENV = "CCTOOLS_CODEX_CALLBACK_ENDPOINT";
 const TEST_NOTIFY_HANDOFF_DELAY_ENV =
   "CODEX_WORKFLOW_TEST_NOTIFY_HANDOFF_DELAY_MS";
-const NOTIFIER_ENTRY_PATH = fileURLToPath(import.meta.url);
+const CURRENT_ENTRY_PATH = fileURLToPath(import.meta.url);
 
 class CleanupPendingError extends Error {
   constructor(message: string) {
@@ -84,7 +87,7 @@ Usage:
                      [--concurrency N] [--detach] [--json]
                      [--max-agents N] [--max-runtime-ms N]
                      [--agent-timeout-ms N]
-                     [--notify-current-thread]
+                     [--notify-current-thread | --no-notify-current-thread]
                      [--app-server-endpoint unix://PATH]
                      [--notify-timeout-ms N]
                      [--allow-workspace-write]
@@ -105,6 +108,8 @@ Environment:
   CODEX_WORKFLOW_HOME       State root (default: ~/.codex/workflows)
   CODEX_WORKFLOW_CODEX_BIN  Codex executable (default: codex)
   CODEX_THREAD_ID           Current Codex thread (set by Codex tool shells)
+  CCTOOLS_CODEX_CALLBACK_ENDPOINT
+                            Callback default set by codex-dynamic
 
 Workflow scripts receive agent(), pipeline(), parallel(), checkpoint(), log(),
 args, and workflow.runId. Workers default to the read-only Codex sandbox.`);
@@ -261,6 +266,7 @@ function outputState(
 
 async function optionalCompletionNotification(
   runId: string,
+  strict = false,
 ): Promise<CompletionNotification | undefined> {
   if (!(await completionNotificationExists(runId))) {
     return undefined;
@@ -268,6 +274,11 @@ async function optionalCompletionNotification(
   try {
     return await readCompletionNotification(runId);
   } catch (error) {
+    if (strict) {
+      throw new Error(
+        `Could not read callback state: ${errorMessage(error)}`,
+      );
+    }
     console.error(
       `codex-workflow: warning: could not read callback state: ${errorMessage(
         error,
@@ -292,7 +303,7 @@ async function recoverTerminalCompletionNotification(
   }
   const active = await completionNotifierProcess(
     state.runId,
-    NOTIFIER_ENTRY_PATH,
+    await store.ensureRunnerSnapshot(CURRENT_ENTRY_PATH),
   );
   if (active === undefined) {
     await spawnCompletionNotifier(store, state);
@@ -395,7 +406,7 @@ async function executeEngine(store: StateStore): Promise<RunState> {
 }
 
 async function superviseEngine(store: StateStore): Promise<RunState> {
-  const entry = fileURLToPath(import.meta.url);
+  const entry = await store.ensureRunnerSnapshot(CURRENT_ENTRY_PATH);
   const child = spawn(process.execPath, [entry, "_engine", store.runId], {
     detached: process.platform !== "win32",
     env: process.env,
@@ -617,7 +628,7 @@ function signalOwnedProcessTree(
   strictIdentity = true,
 ): boolean {
   if (!isPidRunning(pid)) {
-    if (processTreeIsRunning(pid)) {
+    if (processGroupIsRunning(pid)) {
       throw new CleanupPendingError(
         `${label} PID ${pid} exited while its process group remains`,
       );
@@ -628,7 +639,7 @@ function signalOwnedProcessTree(
   if (
     expectedStartedAt === undefined || actualStartedAt === undefined
   ) {
-    if (processTreeIsRunning(pid)) {
+    if (processGroupIsRunning(pid)) {
       throw new CleanupPendingError(
         `Could not verify ${label} PID ${pid} before process-group cleanup`,
       );
@@ -652,19 +663,10 @@ async function waitForProcessTreeExit(
   timeoutMs = 2_000,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
-  while (processTreeIsRunning(pid) && Date.now() < deadline) {
+  while (processGroupIsRunning(pid) && Date.now() < deadline) {
     await sleep(25);
   }
-  return !processTreeIsRunning(pid);
-}
-
-function processTreeIsRunning(pid: number): boolean {
-  try {
-    process.kill(process.platform === "win32" ? pid : -pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  return !processGroupIsRunning(pid);
 }
 
 async function waitForEngineRegistration(runId: string): Promise<StateStore> {
@@ -684,7 +686,7 @@ async function waitForEngineRegistration(runId: string): Promise<StateStore> {
 }
 
 async function spawnDetached(store: StateStore): Promise<number> {
-  const entry = fileURLToPath(import.meta.url);
+  const entry = await store.ensureRunnerSnapshot(CURRENT_ENTRY_PATH);
   const runnerToken = await store.claimRunner(process.pid);
   let handedOff = false;
   try {
@@ -759,9 +761,10 @@ async function spawnCompletionNotifier(
       return undefined;
     }
     notifierLog = await openPrivateNotificationLog(store.directory);
+    const entry = await store.ensureRunnerSnapshot(CURRENT_ENTRY_PATH);
     const child = spawn(
       process.execPath,
-      [NOTIFIER_ENTRY_PATH, "_notify", state.runId, claimToken],
+      [entry, "_notify", state.runId, claimToken],
       {
         detached: true,
         env: process.env,
@@ -815,7 +818,7 @@ async function spawnCompletionNotifier(
     if (claimToken === undefined || handedOff) {
       const activeNotifier = await completionNotifierProcess(
         state.runId,
-        NOTIFIER_ENTRY_PATH,
+        await store.ensureRunnerSnapshot(CURRENT_ENTRY_PATH),
       ).catch(() => undefined);
       return activeNotifier?.pid;
     }
@@ -916,7 +919,7 @@ async function stopCompletionNotifierForResume(
   }
   let notifier = await completionNotifierProcess(
     store.runId,
-    NOTIFIER_ENTRY_PATH,
+    await store.ensureRunnerSnapshot(CURRENT_ENTRY_PATH),
   );
   if (!notifier) {
     return;
@@ -926,7 +929,7 @@ async function stopCompletionNotifierForResume(
     await sleep(25);
     notifier = await completionNotifierProcess(
       store.runId,
-      NOTIFIER_ENTRY_PATH,
+      await store.ensureRunnerSnapshot(CURRENT_ENTRY_PATH),
     );
     if (!notifier) {
       return;
@@ -939,13 +942,13 @@ async function stopCompletionNotifierForResume(
   }
   const pid = notifier.pid;
   await signalCompletionNotifierForResume(
-    store.runId,
+    store,
     pid,
     "SIGTERM",
   );
   if (!(await waitForProcessTreeExit(pid))) {
     await signalCompletionNotifierForResume(
-      store.runId,
+      store,
       pid,
       "SIGKILL",
     );
@@ -962,13 +965,13 @@ async function stopCompletionNotifierForResume(
 }
 
 async function signalCompletionNotifierForResume(
-  runId: string,
+  store: StateStore,
   expectedPid: number,
   signal: NodeJS.Signals,
 ): Promise<void> {
   const notifier = await completionNotifierProcess(
-    runId,
-    NOTIFIER_ENTRY_PATH,
+    store.runId,
+    await store.ensureRunnerSnapshot(CURRENT_ENTRY_PATH),
   );
   if (
     notifier?.phase !== "running" ||
@@ -1058,6 +1061,7 @@ async function runCommand(parsed: ParsedArguments): Promise<number> {
       "allow-workspace-write",
       "detach",
       "json",
+      "no-notify-current-thread",
       "notify-current-thread",
     ],
   );
@@ -1069,10 +1073,26 @@ async function runCommand(parsed: ParsedArguments): Promise<number> {
   }
   const source = await readFile(workflowPath, "utf8");
   compileWorkflow(source, workflowPath);
-  const notifyCurrentThread = parsed.flags.has("notify-current-thread");
-  if (notifyCurrentThread && !parsed.flags.has("detach")) {
+  const explicitNotification = parsed.flags.has("notify-current-thread");
+  const suppressNotification = parsed.flags.has("no-notify-current-thread");
+  const managedEndpoint = process.env[CALLBACK_ENDPOINT_ENV]?.trim();
+  if (explicitNotification && suppressNotification) {
+    throw new Error(
+      "--notify-current-thread and --no-notify-current-thread conflict",
+    );
+  }
+  if (explicitNotification && !parsed.flags.has("detach")) {
     throw new Error("--notify-current-thread requires --detach");
   }
+  if (suppressNotification && !parsed.flags.has("detach")) {
+    throw new Error("--no-notify-current-thread requires --detach");
+  }
+  const notifyCurrentThread =
+    explicitNotification ||
+    (parsed.flags.has("detach") &&
+      !suppressNotification &&
+      managedEndpoint !== undefined &&
+      managedEndpoint.length > 0);
   if (
     !notifyCurrentThread &&
     (parsed.values.has("app-server-endpoint") ||
@@ -1101,7 +1121,9 @@ async function runCommand(parsed: ParsedArguments): Promise<number> {
       MAX_NOTIFY_TIMEOUT_MS,
     );
     const endpoint = await verifyNotificationTarget(
-      parsed.values.get("app-server-endpoint") ?? "unix://",
+      parsed.values.get("app-server-endpoint") ??
+        managedEndpoint ??
+        "unix://",
       threadId,
     );
     notificationTarget = { endpoint, threadId, timeoutMs };
@@ -1110,6 +1132,7 @@ async function runCommand(parsed: ParsedArguments): Promise<number> {
   const input = await parseInput(parsed.values.get("input"));
   const timestamp = nowIso();
   const workflowHash = sha256(source);
+  const runnerSource = await readFile(CURRENT_ENTRY_PATH, "utf8");
   const state: RunState = {
     ...(input === undefined ? {} : { args: input }),
     agentInvocations: 0,
@@ -1135,6 +1158,7 @@ async function runCommand(parsed: ParsedArguments): Promise<number> {
       DEFAULT_MAX_RUNTIME_MS,
       604_800_000,
     ),
+    runnerHash: sha256(runnerSource),
     runId: createRunId(),
     status: "starting",
     steps: {},
@@ -1143,7 +1167,7 @@ async function runCommand(parsed: ParsedArguments): Promise<number> {
     workflowHash,
     workflowPath,
   };
-  const store = await StateStore.create(state);
+  const store = await StateStore.create(state, runnerSource);
   await store.appendEvent("run.created", { workflowPath });
   let notification: CompletionNotification | undefined;
   if (notificationTarget) {
@@ -1207,7 +1231,7 @@ async function statusCommand(parsed: ParsedArguments): Promise<number> {
   outputState(
     state,
     parsed.flags.has("json"),
-    await optionalCompletionNotification(runId),
+    await optionalCompletionNotification(runId, parsed.flags.has("json")),
   );
   return 0;
 }

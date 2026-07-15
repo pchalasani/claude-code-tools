@@ -103,11 +103,11 @@ The skill will:
   conversation open on a wait command.
 </Aside>
 
-By default, a detached workflow is durable but the current Codex turn must poll
-or wait to learn that it finished. Passive supervision makes no model calls,
-but it cannot wake an idle thread. For the Claude-style behavior where you keep
-chatting and the original thread speaks up later, launch Codex through its
-shared app server.
+Outside a callback-ready session, a detached workflow is durable but the
+current Codex turn must poll or wait to learn that it finished. Passive
+supervision makes no model calls, but it cannot wake an idle thread. For the
+Claude-style behavior where you keep chatting and the original thread speaks
+up later, launch Codex through its shared app server.
 
 Install the optional one-command helper:
 
@@ -128,6 +128,16 @@ To continue the most recent conversation instead of starting a new one:
 ```bash
 codex-dynamic resume --last
 ```
+
+<Aside type="caution" title="Plugin updates require a safe server restart">
+  A new TUI does not reload plugins while an older shared app server is still
+  running. After installing or upgrading the plugin, exit every
+  `codex-dynamic` TUI, then run `codex-server restart --force` from an ordinary
+  terminal. Start `codex-dynamic` again afterward. Never run the forced restart
+  inside Codex: it disconnects every TUI attached to that server, interrupts
+  active turns, and makes those TUIs exit. Saved conversations remain
+  resumable. Codex currently has no in-session plugin-reload command.
+</Aside>
 
 Omit `--last` to use Codex's session picker. `codex-dynamic` quietly starts or
 reuses the local app server, then hands the terminal directly to Codex. The
@@ -168,8 +178,25 @@ turn. If a conversation turn is active, it steers the result into and extends
 that turn.
 You do not copy a thread ID, install MCP, run npm, or configure another API key.
 
-Use `codex-server status`, `codex-server logs`, or `codex-server stop` to
-inspect or stop a helper-owned server. See the
+`codex-dynamic` makes callbacks the code-level default for detached workflow
+runs, so a forgotten `--notify-current-thread` flag does not silently lose the
+notification. The user can opt out with `--no-notify-current-thread`.
+
+The no-monitor behavior begins only when the launch response reports an
+`armed` callback. At that point the skill reports the run ID and ends the
+launch turn; it must not start a wait process, poll status, or create a
+background watcher. Without an armed callback, the normal bounded monitoring
+behavior still applies.
+
+Codex does not currently display a persistent background-workflow card,
+spinner, or running-status message in the conversation. After an armed launch,
+the chat simply looks normal until completion arrives. You can ask Codex for an
+explicit status check, but the absence of an indicator is not a reason for the
+agent to monitor automatically.
+
+Use `codex-server status` or `codex-server logs` for nondisruptive inspection.
+Stopping or restarting requires `--force` and must be done only after exiting
+all connected TUIs. See the
 [`codex-dynamic` tool reference][codex-dynamic] for lifecycle and safety
 details.
 

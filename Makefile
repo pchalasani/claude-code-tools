@@ -1,4 +1,4 @@
-.PHONY: install release patch minor major dev-install help clean all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply prep-node update-homebrew docs-dev docs-build docs-preview
+.PHONY: install release patch minor major dev-install help clean all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply update-homebrew docs-dev docs-build docs-preview
 
 help:
 	@echo "Available commands:"
@@ -27,7 +27,6 @@ help:
 	@echo "  make fix-session-metadata-apply - Actually fix sessionId mismatches"
 	@echo "  make delete-helper-sessions       - Find helper sessions to delete (dry-run)"
 	@echo "  make delete-helper-sessions-apply - Actually delete helper sessions"
-	@echo "  make prep-node    - Install node_modules (required before publishing)"
 
 install:
 	uv tool install --force -e .
@@ -78,7 +77,7 @@ clean:
 	rm -rf dist/*
 	@echo "Clean complete!"
 
-all-patch: prep-node
+all-patch:
 	@echo "Ensuring dev dependencies (commitizen)..."
 	@uv sync --extra dev --quiet
 	@echo "Bumping patch version..."
@@ -94,7 +93,7 @@ all-patch: prep-node
 	uv build
 	@echo "Build complete! Ready for: uv publish --token YOUR_TOKEN"
 
-all-minor: prep-node
+all-minor:
 	@echo "Ensuring dev dependencies (commitizen)..."
 	@uv sync --extra dev --quiet
 	@echo "Bumping minor version..."
@@ -110,7 +109,7 @@ all-minor: prep-node
 	uv build
 	@echo "Build complete! Ready for: uv publish --token YOUR_TOKEN"
 
-all-major: prep-node
+all-major:
 	@echo "Ensuring dev dependencies (commitizen)..."
 	@uv sync --extra dev --quiet
 	@echo "Bumping major version..."
@@ -229,15 +228,6 @@ delete-helper-sessions:
 delete-helper-sessions-apply:
 	@echo "Deleting helper sessions..."
 	@python3 scripts/delete_helper_sessions.py -v
-
-prep-node:
-	@echo "Installing Node.js dependencies for packaging..."
-	@if ! command -v npm >/dev/null 2>&1; then \
-		echo "Error: Node.js/npm not found. Install Node.js first."; \
-		exit 1; \
-	fi
-	@cd node_ui && npm install
-	@echo "node_ui/node_modules ready for packaging."
 
 update-homebrew:
 	@if [ -z "$(VERSION)" ]; then \

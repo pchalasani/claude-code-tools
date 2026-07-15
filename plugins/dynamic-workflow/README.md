@@ -17,7 +17,7 @@ Workers run through `codex exec --json`; MCP and the OpenAI API are not required
 - optional completion callbacks to the originating Codex thread
 - cooperative pause, resume, cancel, retry, logs, and raw JSONL events
 - supervisor-enforced run, agent, fan-out, prompt, and result limits
-- process-tree cancellation and durable executed-source snapshots
+- process-tree cancellation and durable workflow and runner snapshots
 - read-only workers by default with per-agent sandbox declarations
 - committed dependency-free runtime bundle
 
@@ -32,6 +32,12 @@ codex plugin add dynamic-workflow@cctools-codex-plugins
 
 Restart Codex after installation, then invoke `$dynamic-workflow` or ask Codex
 to create a durable multi-agent workflow.
+
+When `codex-dynamic` already has a shared app server running, a new TUI alone
+does not reload an updated plugin. Exit every connected TUI, run
+`codex-server restart --force` from an ordinary terminal, and then start Codex
+again. Never force a restart from inside Codex: it disconnects every TUI on the
+server and interrupts active turns. Saved conversations remain resumable.
 
 For local development from the repository root:
 
@@ -102,6 +108,15 @@ keeps its declared sandbox. The runner uses this opt-in launch form:
 node bin/workflow.mjs run workflow.js --detach --notify-current-thread
 ```
 
+`codex-dynamic` also exports `CCTOOLS_CODEX_CALLBACK_ENDPOINT` to its TUI tool
+shells, including through Codex's shell-environment policy when inherited
+variables are restricted. In that environment, every detached run enables the
+same callback by default, even when an agent omits
+`--notify-current-thread`. Use
+`--no-notify-current-thread` for an intentional opt-out. The launch response is
+still the source of truth: only `notification.status: "armed"` permits the main
+turn to stop monitoring.
+
 A sandboxed tool launch stops before creating a run and explains the required
 approval. Approve only the exact runner command, never a generic `node` prefix.
 Do not grant `danger-full-access` to workers merely to enable the callback.
@@ -112,6 +127,11 @@ completion into and extends that turn, so you can keep chatting while the
 workflow runs. This uses the Codex app server directly; it does not use MCP or
 require another API key. The optional Python helper only manages the local
 server process.
+
+Completion messages have a hard 4 KiB budget. Large results and errors appear
+as short previews with a truncation marker; the full value remains available
+in the durable `state.json` path included in the notification. This prevents a
+large reviewer report from consuming the main session's context.
 
 Passive supervision and the local app server add no model calls. Completion
 reporting starts a new turn only while the thread is idle; otherwise it extends
@@ -179,6 +199,11 @@ loaded on that server before creating the run. Notification retries have a hard
 deadline, use a stable client message ID for confirmation, and never answer
 approval or user-input requests on behalf of the TUI. Callback failure does not
 change a workflow's terminal result.
+
+Each new run snapshots the bundled runner under its private state directory
+before detached execution begins. The supervisor, engine, and completion
+notifier all launch from that immutable copy, so reinstalling or upgrading the
+plugin cannot remove an executable needed by an in-flight run.
 
 If a supervisor crashes, its engine notices the lost owner during normal
 execution. Resume and cancel also terminate any persisted orphan engine or
