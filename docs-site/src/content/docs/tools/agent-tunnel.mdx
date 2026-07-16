@@ -193,9 +193,20 @@ Two codex-specific mechanics worth knowing:
 - **Access maps to codex's sandbox, not tool lists.** read →
   `read-only` sandbox, write → `workspace-write` (codex may also run
   *sandboxed* commands at this level — its sandbox confines by
-  filesystem/network, not tool name), bash → `workspace-write` + network,
+  filesystem/network, not tool name, so codex `--write` is **not** "no
+  shell" the way claude `--write` is), bash → `workspace-write` + network,
   and all → `--dangerously-bypass-approvals-and-sandbox`, gated behind
   `[codex] allow_skip_permissions = true` exactly like the Claude gate.
+- **Non-shell tool surfaces are disabled for non-`all` handles.** Codex's
+  sandbox only governs *shell* commands, so the tunnel also switches off the
+  tool surfaces that act outside it — MCP servers, web search, and codex's
+  default-on action features (`apps`, browser/computer use, image
+  generation, host code mode, hooks) — giving parity with claude read's
+  tool allowlist. Two caveats to know before sharing codex to less-trusted
+  colleagues: the `read-only` sandbox still permits **host-wide file reads**
+  (like claude's `Read`/`Grep`/`Glob`), and the disabled-feature list is
+  **codex-version-specific** — audit `codex features list` and your
+  `~/.codex/config.toml`. (Tracked for a version-proof fix in issue #106.)
 
 Codex sessions always run on the headless backend (codex's fork/resume has
 no scriptable interactive mode), so they work under `serve` in either server
@@ -463,6 +474,12 @@ injection in your channel — can also *edit files* in that folder (it still
 never runs shell commands). `>share --dangerously-allow-bash` goes further and
 lets the fork **run shell commands** — that removes the sandbox entirely, so
 use it only for folders and people you fully trust.
+
+The exact meaning of each level above is for **Claude** (a tool allowlist).
+**Codex** enforces the same levels through its OS sandbox instead, so they
+behave differently — notably, codex `--write` **can run sandboxed commands**,
+and codex `bash` stays sandboxed (adds network) rather than removing the
+sandbox. See [Sharing Codex CLI sessions](#sharing-codex-cli-sessions).
 </Aside>
 
 <Aside type="note">
