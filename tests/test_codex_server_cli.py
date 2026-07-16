@@ -15,8 +15,10 @@ from typing import BinaryIO, NoReturn, cast
 import pytest
 from click.testing import CliRunner
 
+import claude_code_tools.codex_server as codex_server
 import claude_code_tools.codex_server_cli as server_cli_module
 import claude_code_tools.codex_server_models as server_models
+from claude_code_tools.codex_server_generation import server_generation
 from claude_code_tools.codex_server import (
     CodexServerError,
     _paths,
@@ -36,6 +38,24 @@ _IMPORTED_FIXTURES = (
     _process_identity_without_ps_fixture,
     _server_environment_fixture,
 )
+
+
+def _desired_paths(environment: dict[str, str]) -> server_models.ServerPaths:
+    """Resolve the generation a fresh server launch would select."""
+    base = server_models.base_paths_from_env(environment)
+    codex_path = codex_server._resolve_codex(environment)
+    identity = codex_server._codex_executable_identity(codex_path)
+    child_env = codex_server._command_env(environment, base)
+    version = codex_server._require_compatible_codex(codex_path, child_env)
+    snapshot = codex_server._plugin_configuration_snapshot(base)
+    generation = server_generation(
+        codex_path,
+        identity,
+        version,
+        snapshot.fingerprint,
+        (),
+    )
+    return server_models.paths_for_generation(base, generation)
 
 
 @pytest.fixture(name="server_environment")
@@ -270,17 +290,73 @@ def test_codex_dynamic_starts_server_and_forwards_resume_arguments(
     )
     assert result.returncode == 0, result.stderr
     invocation = json.loads(arguments_path.read_text(encoding="utf-8"))
+    endpoint = invocation["callbackEndpoint"]
+    assert endpoint.startswith("unix://")
+    assert endpoint.endswith(".sock")
     assert invocation["args"] == [
         "--config",
-        ('shell_environment_policy.set.CCTOOLS_CODEX_CALLBACK_ENDPOINT="unix://"'),
+        (
+            "shell_environment_policy.set.CCTOOLS_CODEX_CALLBACK_ENDPOINT="
+            f"{json.dumps(endpoint)}"
+        ),
         "--remote",
-        "unix://",
+        endpoint,
         "resume",
         "--last",
     ]
-    assert invocation["callbackEndpoint"] == "unix://"
-    assert invocation["codexHome"] == environment["CODEX_HOME"]
+    assert Path(invocation["codexHome"]) == Path(environment["CODEX_HOME"]).resolve()
     assert get_status(environment).status == "running"
+
+
+def test_codex_dynamic_rolls_plugins_without_disconnecting_old_session(
+    server_environment: tuple[Path, dict[str, str]],
+) -> None:
+    """Two wrapper launches can use different live plugin generations."""
+    root, environment = server_environment
+    first_arguments = root / "first-arguments.json"
+    environment["FAKE_CODEX_ARGS"] = str(first_arguments)
+    command = [
+        sys.executable,
+        "-c",
+        "from claude_code_tools.codex_server_cli import dynamic_main; dynamic_main()",
+    ]
+    first_result = subprocess.run(
+        command,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=15,
+    )
+    assert first_result.returncode == 0, first_result.stderr
+    first_invocation = json.loads(first_arguments.read_text(encoding="utf-8"))
+    first_status = get_status(environment)
+
+    config_path = first_status.paths.codex_home / "config.toml"
+    config_path.write_text(
+        '[plugins."sample@example"]\nenabled = true\n',
+        encoding="utf-8",
+    )
+    second_arguments = root / "second-arguments.json"
+    environment["FAKE_CODEX_ARGS"] = str(second_arguments)
+    second_result = subprocess.run(
+        command,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=15,
+    )
+    assert second_result.returncode == 0, second_result.stderr
+    second_invocation = json.loads(second_arguments.read_text(encoding="utf-8"))
+    second_status = get_status(environment)
+
+    assert first_invocation["callbackEndpoint"] != second_invocation["callbackEndpoint"]
+    assert first_invocation["args"][3] == first_invocation["callbackEndpoint"]
+    assert second_invocation["args"][3] == second_invocation["callbackEndpoint"]
+    assert first_status.pid != second_status.pid
+    assert codex_server._process_group_exists(first_status.pid or 0)
+    _wait_for_socket(first_status.paths.socket_path)
 
 
 def test_codex_dynamic_propagates_plugin_configuration_to_server(
@@ -516,8 +592,11 @@ def test_external_server_is_rejected_and_never_stopped(
     """An uncertified listener remains outside helper control."""
     _root, environment = server_environment
     codex = environment["CCTOOLS_CODEX_BIN"]
+    paths = _desired_paths(environment)
+    assert paths.generation is not None
+    environment[server_models.CODEX_SERVER_GENERATION_ENV] = paths.generation
     external = subprocess.Popen(
-        [codex, "app-server", "--listen", "unix://"],
+        [codex, "app-server", "--listen", paths.endpoint],
         env=environment,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -525,8 +604,8 @@ def test_external_server_is_rejected_and_never_stopped(
         start_new_session=True,
     )
     try:
-        _wait_for_socket(_paths(environment).socket_path)
-        with pytest.raises(CodexServerError, match="plugin snapshot"):
+        _wait_for_socket(paths.socket_path)
+        with pytest.raises(CodexServerError, match="version could not be verified"):
             ensure_server(environment)
 
         code, output = _invoke(["stop"], environment)
@@ -548,7 +627,7 @@ def test_stale_wrong_identity_with_live_group_is_retained_without_signalling(
 ) -> None:
     """PID reuse protection retains ambiguous group ownership without signals."""
     root, environment = server_environment
-    paths = _paths(environment)
+    paths = _desired_paths(environment)
     paths.runtime_dir.mkdir(mode=0o700, parents=True)
     innocent = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(300)"],
@@ -630,7 +709,7 @@ def test_stale_socket_and_malformed_state_are_recovered(
 ) -> None:
     """Safe stale artifacts do not permanently block a new server."""
     _root, environment = server_environment
-    paths = _paths(environment)
+    paths = _desired_paths(environment)
     paths.socket_path.parent.mkdir(mode=0o700, parents=True)
     stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     stale.bind(str(paths.socket_path))
@@ -650,7 +729,7 @@ def test_non_socket_endpoint_entry_is_preserved(
 ) -> None:
     """The helper refuses a regular file at Codex's socket path."""
     _root, environment = server_environment
-    socket_path = _paths(environment).socket_path
+    socket_path = _desired_paths(environment).socket_path
     socket_path.parent.mkdir(mode=0o700, parents=True)
     socket_path.write_text("keep me", encoding="utf-8")
 
@@ -665,7 +744,7 @@ def test_app_server_log_symlink_is_refused(
 ) -> None:
     """Starting the helper never follows or modifies an existing log symlink."""
     root, environment = server_environment
-    paths = _paths(environment)
+    paths = _desired_paths(environment)
     paths.runtime_dir.mkdir(mode=0o700, parents=True)
     target = root / "keep.txt"
     target.write_text("keep me", encoding="utf-8")

@@ -38,10 +38,11 @@ main Codex session ──launch──> detached workflow
 codex-dynamic
 ```
 
-The command quietly ensures that Codex's local app server is running, then
-replaces itself with `codex --remote unix://`. Because it uses process
-replacement, Codex keeps direct control of the terminal, keyboard, signals,
-window resizing, and exit status.
+The command quietly ensures that the right generation of Codex's local app
+server is running, then replaces itself with `codex --remote` connected to that
+generation's Unix socket. Because it uses process replacement, Codex keeps
+direct control of the terminal, keyboard, signals, window resizing, and exit
+status.
 
 ## Install
 
@@ -347,15 +348,11 @@ visible as diagnostics instead of hiding otherwise readable runs. Set
   callback retry. `codex-workflows` deliberately has no control operations.
 </Aside>
 
-## Reload after a plugin change
+## Plugin updates without restarts
 
-The shared app server loads the plugin catalog for every TUI connected to it.
-Starting another `codex-dynamic` TUI does not reload that catalog when the same
-server remains alive. Codex currently has no in-session plugin-reload command.
-
-`codex-dynamic` records the plugin and marketplace configuration used when it
-starts the server. If that configuration later changes, the launcher refuses
-to connect another TUI to the stale server and prints the safe recovery steps.
+An app server loads its plugin catalog once, and Codex currently has no
+in-session plugin-reload command. `codex-dynamic` handles this automatically by
+using versioned server generations instead of replacing the shared server.
 
 <Steps>
 
@@ -363,24 +360,7 @@ to connect another TUI to the stale server and prints the safe recovery steps.
 
    Complete the marketplace or plugin update normally.
 
-2. **Exit every callback-ready Codex TUI**
-
-   Finish or interrupt active turns, then exit each session normally. Merely
-   opening a new terminal is not enough because all `codex-dynamic` TUIs share
-   one app-server process.
-
-3. **Restart the now-unused server**
-
-   Run this from an ordinary terminal, not from inside a Codex tool call:
-
-   ```bash
-   codex-server restart --force
-   ```
-
-   `--force` acknowledges that any TUI still connected to the server will be
-   disconnected and will exit.
-
-4. **Start or resume Codex**
+2. **Start or resume Codex**
 
    ```bash
    codex-dynamic
@@ -390,13 +370,24 @@ to connect another TUI to the stale server and prints the safe recovery steps.
 
 </Steps>
 
-<Aside type="caution" title="Restarting disconnects every attached TUI">
-  Codex does not currently reconnect a remote TUI when its app server exits,
-  and the server does not send a WebSocket closing handshake during shutdown.
-  A connected TUI exits with a transport error such as `Connection reset
-  without closing handshake`. Its transcript remains resumable, but any active
-  turn is interrupted. Never run `restart --force` or `stop --force` from
-  inside a connected Codex session.
+The launcher fingerprints the selected Codex executable, plugin catalog, and
+server-affecting options. If they match an existing healthy generation, it
+reuses that generation. Otherwise it starts and certifies a new socket before
+making it the default. Existing TUIs and in-flight callbacks remain connected
+to the old socket, so they are not interrupted and keep the plugin snapshot
+with which they started.
+
+Codex does not expose a reliable count of clients attached to an app server,
+so the helper never guesses that an old generation is unused and kills it.
+Retained generations are capped at 64; reaching that defensive limit produces
+an explicit cleanup instruction instead of disconnecting sessions silently.
+
+<Aside type="caution" title="Forced cleanup still disconnects sessions">
+  Old generations remain available for sessions and callbacks that still use
+  them. `codex-server stop --force` and `restart --force` deliberately stop
+  every retained generation. Codex cannot reconnect those TUIs, so exit them
+  normally before forced cleanup. Ordinary installs and `codex-dynamic`
+  launches never require these commands.
 </Aside>
 
 ## Server controls
@@ -406,17 +397,18 @@ automatically. These commands are useful for inspection and cleanup:
 
 | Command | Purpose |
 | --- | --- |
-| `codex-server status` | Show endpoint health and process ownership |
-| `codex-server logs` | Show the most recent app-server output |
-| `codex-server logs --follow` | Follow app-server output |
-| `codex-server restart --force` | Restart after acknowledging TUI exits |
-| `codex-server stop --force` | Stop after acknowledging TUI exits |
+| `codex-server status` | Show the current default generation |
+| `codex-server logs` | Show the current generation's recent output |
+| `codex-server logs --follow` | Follow the current generation's output |
+| `codex-server restart --force` | Stop all generations, then start a fresh one |
+| `codex-server stop --force` | Stop every retained generation |
 
 Add `--json` to lifecycle commands for machine-readable output.
 
-Without `--force`, `stop` and `restart` refuse to terminate a running shared
-server. The guard is deliberately conservative because a server can have more
-than one TUI attached and Codex exposes no graceful reconnect protocol.
+Without `--force`, `stop` and `restart` refuse to terminate a running
+generation. The guard is deliberately conservative because a generation can
+have more than one TUI attached and Codex exposes no graceful reconnect
+protocol.
 
 The helper reuses only a healthy app server that it previously started and can
 certify against its recorded ownership and plugin state. It rejects an app
@@ -424,9 +416,10 @@ server started another way because it cannot verify which plugin snapshot that
 server loaded. Lifecycle commands also verify the recorded process identity
 before sending a signal.
 
-State and logs live under `$CODEX_HOME/cctools-app-server/`. The default
-`CODEX_HOME` is `~/.codex`. Set `CCTOOLS_CODEX_BIN` when the desired Codex
-executable is not the first `codex` on `PATH`.
+Per-generation state and logs live under
+`$CODEX_HOME/cctools-app-server/<generation>/`. The default `CODEX_HOME` is
+`~/.codex`. Set `CCTOOLS_CODEX_BIN` when the desired Codex executable is not
+the first `codex` on `PATH`.
 
 ## Manual alternative
 
@@ -460,10 +453,10 @@ MCP layer, extra API key, or hosted coordination service.
 
 ```text
 codex-dynamic
-  |-- ensure/reuse --> [app-server supervisor] --> [local app server]
+  |-- select generation --> [versioned supervisor] --> [versioned app server]
   `-- exec ---------> [Codex TUI]
                             |
-                            `-- local Unix socket --> [local app server]
+                            `-- generation socket --> [versioned app server]
 
 [Codex TUI] -- reviewed launch --> [workflow supervisor]
                                            |
@@ -488,14 +481,19 @@ codex-dynamic
 1. **Establish a callback-capable session**
 
    `codex-dynamic` resolves the exact Codex executable, checks its version, and
-   takes a lifecycle lock. It reuses a compatible app server when one already
-   exists or starts a supervised `codex app-server --listen unix://`.
+   fingerprints that executable together with the effective plugin catalog and
+   server options. It reuses the matching healthy generation or starts a
+   supervised app server on a generation-specific Unix socket. The current
+   generation marker changes only after the new listener passes ownership,
+   process-identity, plugin-snapshot, and socket-peer checks. A failed rollout
+   therefore leaves the previous default untouched.
 
-   The launcher then replaces itself with `codex --remote unix://`. It is not a
-   proxy in front of the TUI, so Codex still owns the terminal, signals, and
-   exit status directly. It also injects the local callback endpoint through
-   Codex's shell-environment policy, making callbacks the default for detached
-   workflow launches even under a restrictive inheritance policy.
+   The launcher then replaces itself with `codex --remote` using that exact
+   socket. It is not a proxy in front of the TUI, so Codex still owns the
+   terminal, signals, and exit status directly. The same immutable endpoint is
+   injected through Codex's shell-environment policy, making callbacks the
+   default for detached workflow launches even under a restrictive inheritance
+   policy.
 
 2. **Verify the callback before creating the run**
 

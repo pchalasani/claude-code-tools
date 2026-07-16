@@ -18,6 +18,7 @@ import pytest
 from click.testing import CliRunner
 
 import claude_code_tools.codex_server as codex_server
+import claude_code_tools.codex_server_models as server_models
 import claude_code_tools.codex_server_process as codex_server_process
 from claude_code_tools.codex_server import (
     CodexServerError,
@@ -27,7 +28,6 @@ from claude_code_tools.codex_server import (
     _process_group_exists,
     ensure_server,
     get_status,
-    restart_server,
     stop_server,
 )
 from claude_code_tools.codex_server_cli import server_cli
@@ -46,16 +46,18 @@ import sys
 from pathlib import Path
 
 
-def socket_path() -> Path:
+def socket_path(endpoint: str = "unix://") -> Path:
+    if endpoint != "unix://":
+        return Path(endpoint.removeprefix("unix://"))
     home = Path(os.environ["CODEX_HOME"])
     return home / "app-server-control" / "app-server-control.sock"
 
 
-def can_connect() -> bool:
+def can_connect(path: Path | None = None) -> bool:
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     client.settimeout(0.2)
     try:
-        client.connect(str(socket_path()))
+        client.connect(str(path or socket_path()))
     except OSError:
         return False
     finally:
@@ -63,7 +65,7 @@ def can_connect() -> bool:
     return True
 
 
-def run_server() -> int:
+def run_server(path: Path) -> int:
     if os.environ.get("FAKE_CODEX_FAIL_START"):
         print("intentional startup failure", flush=True)
         return 23
@@ -72,14 +74,13 @@ def run_server() -> int:
         import time
 
         time.sleep(delay)
-    path = socket_path()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if path.exists() or path.is_socket():
         info = path.lstat()
         if not stat.S_ISSOCK(info.st_mode):
             print("refusing non-socket path", flush=True)
             return 24
-        if can_connect():
+        if can_connect(path):
             print("listener already exists", flush=True)
             return 25
         path.unlink()
@@ -143,14 +144,17 @@ def main() -> int:
             "appServerVersion": cli_version.split()[-1],
         }))
         return 0
-    if arguments[-3:] == ["app-server", "--listen", "unix://"]:
+    if len(arguments) >= 3 and arguments[-3:-1] == ["app-server", "--listen"]:
+        endpoint = arguments[-1]
+        if not endpoint.startswith("unix://"):
+            return 26
         destination = os.environ.get("FAKE_CODEX_SERVER_ARGS")
         if destination:
             Path(destination).write_text(
                 json.dumps(arguments[:-3]),
                 encoding="utf-8",
             )
-        return run_server()
+        return run_server(socket_path(endpoint))
     destination = os.environ.get("FAKE_CODEX_ARGS")
     if destination:
         Path(destination).write_text(json.dumps({
@@ -306,10 +310,10 @@ def test_start_status_restart_and_stop(
     assert json.loads(output)["status"] == "stopped"
 
 
-def test_plugin_configuration_change_requires_explicit_restart(
+def test_plugin_configuration_change_rolls_to_a_new_generation(
     server_environment: tuple[Path, dict[str, str]],
 ) -> None:
-    """A new TUI never silently reuses a stale plugin snapshot."""
+    """A new TUI gets fresh plugins without disconnecting the old server."""
     root, environment = server_environment
     started = ensure_server(environment)
     config_path = _paths(environment).codex_home / "config.toml"
@@ -318,15 +322,81 @@ def test_plugin_configuration_change_requires_explicit_restart(
         encoding="utf-8",
     )
 
-    with pytest.raises(CodexServerError, match="plugin or marketplace"):
-        ensure_server(environment)
+    rolled = ensure_server(environment)
 
-    preserved = get_status(environment)
-    assert preserved.pid == started.pid
-    restarted = restart_server(environment, allow_disconnect=True)
-    assert restarted.pid != started.pid
+    assert rolled.pid != started.pid
+    assert rolled.paths.endpoint != started.paths.endpoint
+    assert _process_group_exists(started.pid)
+    _wait_for_socket(started.paths.socket_path)
+    assert get_status(environment).pid == rolled.pid
     launches = (root / "launches.txt").read_text(encoding="utf-8").splitlines()
     assert len(launches) == 2
+
+
+def test_failed_rollover_preserves_the_current_generation(
+    server_environment: tuple[Path, dict[str, str]],
+) -> None:
+    """A failed replacement cannot redirect future clients from a live server."""
+    _root, environment = server_environment
+    first = ensure_server(environment)
+    config_path = first.paths.codex_home / "config.toml"
+    config_path.write_text(
+        '[plugins."sample@example"]\nenabled = true\n',
+        encoding="utf-8",
+    )
+    environment["FAKE_CODEX_FAIL_START"] = "1"
+
+    with pytest.raises(CodexServerError, match="app-server"):
+        ensure_server(environment)
+
+    assert _paths(environment) == first.paths
+    assert _process_group_exists(first.pid or 0)
+    _wait_for_socket(first.paths.socket_path)
+
+
+def test_force_stop_cleans_every_retained_generation(
+    server_environment: tuple[Path, dict[str, str]],
+) -> None:
+    """Explicit cleanup stops old and current generations together."""
+    _root, environment = server_environment
+    first = ensure_server(environment)
+    config_path = first.paths.codex_home / "config.toml"
+    config_path.write_text(
+        '[plugins."sample@example"]\nenabled = true\n',
+        encoding="utf-8",
+    )
+    second = ensure_server(environment)
+
+    stopped = stop_server(environment, allow_disconnect=True)
+
+    assert stopped.status == "stopped"
+    assert not _process_group_exists(first.pid or 0)
+    assert not _process_group_exists(second.pid or 0)
+    assert not first.paths.socket_path.exists()
+    assert not second.paths.socket_path.exists()
+    assert _paths(environment).generation is None
+
+
+def test_force_cleanup_releases_generation_capacity(
+    server_environment: tuple[Path, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stopped historical directories do not consume the live-server cap."""
+    _root, environment = server_environment
+    monkeypatch.setattr(server_models, "MAX_SERVER_GENERATIONS", 1)
+    first = ensure_server(environment)
+    config_path = first.paths.codex_home / "config.toml"
+    config_path.write_text(
+        '[plugins."sample@example"]\nenabled = true\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(CodexServerError, match="generation limit"):
+        ensure_server(environment)
+
+    stop_server(environment, allow_disconnect=True)
+    second = ensure_server(environment)
+
+    assert second.paths.generation != first.paths.generation
 
 
 def test_non_plugin_configuration_change_reuses_server(

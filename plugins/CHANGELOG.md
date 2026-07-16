@@ -1,5 +1,13 @@
 # Plugin Changelog
 
+## 2026-07-16
+
+### dynamic-workflow 0.2.1
+
+- fix: document automatic `codex-dynamic` server-generation rollover
+  - plugin and Codex upgrades no longer require a forced shared-server restart
+  - existing sessions and callbacks remain connected to their original server
+
 ## 2026-07-13
 
 ### dynamic-workflow 0.2.0

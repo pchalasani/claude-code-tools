@@ -174,12 +174,17 @@ def _arrange_live_helper(
     sleeps: list[float] = []
     commands: list[Sequence[str]] = []
 
-    def run_command(
-        command: Sequence[str],
-        _env: Mapping[str, str],
-    ) -> Diagnostic:
-        commands.append(command)
-        return diagnostics()
+    def probe(*_args: object) -> ServerProbe:
+        commands.append(("socket-probe",))
+        diagnostic = diagnostics()
+        if diagnostic is None or diagnostic.returncode != 0:
+            return ServerProbe(running=False)
+        return ServerProbe(
+            running=True,
+            server_version=codex_server._server_version_from_output(diagnostic.stdout),
+            method="socket",
+            accepting=True,
+        )
 
     monkeypatch.setattr(codex_server, "_resolve_codex", lambda _env: state.codex_path)
     monkeypatch.setattr(
@@ -208,7 +213,7 @@ def _arrange_live_helper(
         "_listener_matches_worker",
         lambda _state, _paths: True,
     )
-    monkeypatch.setattr(codex_server, "_run_command", run_command)
+    monkeypatch.setattr(codex_server, "_probe_server", probe)
     monkeypatch.setattr(
         codex_server,
         "_plugin_configuration_snapshot",
@@ -348,6 +353,7 @@ def test_plugin_change_during_reuse_probe_is_revalidated(
     snapshots = iter(
         [
             _snapshot(),
+            _snapshot(),
             _snapshot(generation="changed during probe"),
         ]
     )
@@ -370,7 +376,11 @@ def test_plugin_change_during_reuse_probe_is_revalidated(
     with pytest.raises(CodexServerError, match="changed during app-server reuse"):
         ensure_server(environment)
 
-    assert observed == ["stable generation", "changed during probe"]
+    assert observed == [
+        "stable generation",
+        "stable generation",
+        "changed during probe",
+    ]
 
 
 def test_listener_replacement_during_final_snapshot_is_not_certified(
@@ -393,7 +403,7 @@ def test_listener_replacement_during_final_snapshot_is_not_certified(
     ) -> codex_server._PluginSnapshot:
         nonlocal replaced, snapshots
         snapshots += 1
-        if snapshots == 2:
+        if snapshots == 3:
             replaced = True
         return _snapshot()
 
@@ -412,7 +422,7 @@ def test_listener_replacement_during_final_snapshot_is_not_certified(
     with pytest.raises(CodexServerError, match="changed during app-server reuse"):
         ensure_server(environment)
 
-    assert snapshots == 2
+    assert snapshots == 3
     assert listener_checks >= 3
 
 
@@ -437,18 +447,17 @@ def test_final_reuse_revalidates_server_version(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """A replaced app server cannot reuse an earlier version probe."""
-    replacement = subprocess.CompletedProcess(
-        args=[],
-        returncode=0,
-        stdout=json.dumps({"appServerVersion": "9.9.10"}),
-        stderr="",
-    )
-    diagnostics = iter([_success(), replacement])
+    """A changed selected Codex version cannot inherit certification."""
     environment, _sleeps, _commands = _arrange_live_helper(
         monkeypatch,
         tmp_path,
-        lambda: next(diagnostics),
+        _success,
+    )
+    versions = iter(["codex-cli 9.9.9", "codex-cli 9.9.10"])
+    monkeypatch.setattr(
+        codex_server,
+        "_require_compatible_codex",
+        lambda _path, _env: next(versions),
     )
 
     with pytest.raises(CodexServerError, match="version"):
@@ -490,7 +499,7 @@ def test_final_reuse_revalidates_worker_liveness(
     ) -> codex_server._PluginSnapshot:
         nonlocal snapshots, vanished
         snapshots += 1
-        if snapshots == 2:
+        if snapshots == 3:
             vanished = True
         return _snapshot()
 
@@ -517,6 +526,7 @@ def test_plugin_change_during_startup_is_not_certified(
     )
     snapshots = iter(
         [
+            _snapshot("startup snapshot", "startup generation"),
             _snapshot("startup snapshot", "startup generation"),
             _snapshot("startup snapshot", "changed during startup"),
         ]
@@ -592,6 +602,7 @@ def test_plugin_change_during_startup_is_not_certified(
 
     assert observed == [
         "startup generation",
+        "startup generation",
         "changed during startup",
     ]
     assert terminated == [starting]
@@ -620,7 +631,7 @@ def test_listener_replacement_during_startup_snapshot_is_not_certified(
     ) -> codex_server._PluginSnapshot:
         nonlocal replaced, snapshots
         snapshots += 1
-        if snapshots == 2:
+        if snapshots == 3:
             replaced = True
         return _snapshot("startup snapshot", "startup generation")
 
@@ -677,7 +688,7 @@ def test_listener_replacement_during_startup_snapshot_is_not_certified(
     with pytest.raises(CodexServerError, match="changed during startup checks"):
         ensure_server({"CODEX_HOME": str(tmp_path / "home")})
 
-    assert snapshots == 2
+    assert snapshots == 3
     assert terminated == [starting]
     assert len(removals) == 1
 
@@ -779,11 +790,11 @@ def test_listener_replacement_after_running_state_is_not_certified(
     assert terminated == [starting]
 
 
-def test_upgrade_metadata_refuses_automatic_rollover(
+def test_generation_collision_refuses_mismatched_metadata(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """A CLI version change cannot silently disconnect remote TUIs."""
+    """Mismatched state at a selected generation fails closed."""
     state = _live_state(codex_version="codex-cli 9.9.8")
     probes = 0
 
@@ -828,7 +839,7 @@ def test_upgrade_metadata_refuses_automatic_rollover(
     monkeypatch.setattr(codex_server, "_remove_state", _forbid_mutation)
     monkeypatch.setattr(codex_server, "spawn_supervisor", _forbid_mutation)
 
-    with pytest.raises(CodexServerError, match="disconnect every"):
+    with pytest.raises(CodexServerError, match="Codex CLI version changed"):
         ensure_server({"CODEX_HOME": str(tmp_path / "home")})
 
     assert probes == 1

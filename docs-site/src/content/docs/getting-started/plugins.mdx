@@ -48,19 +48,15 @@ remote TUI interfaces as experimental, so their CLI and protocol surfaces may
 evolve.
 
 If a `codex-dynamic` app server is already running during an install or update,
-exit every connected TUI and run `codex-server restart --force` from an ordinary
-terminal before starting Codex again. The forced restart disconnects all
-attached TUIs, so never invoke it from inside Codex. See the
-[safe plugin-reload sequence][codex-dynamic-reload].
+start Codex normally afterward. The helper automatically selects a fresh
+server generation while existing TUIs and callbacks remain connected to their
+original generation.
 
 See the
 [Dynamic Workflow detail page](/claude-code-tools/plugins-detail/dynamic-workflow/)
 for its JavaScript API, state model, and safety boundaries.
 
 [codex-dynamic]: /claude-code-tools/tools/codex-dynamic/
-[codex-dynamic-reload]:
-  /claude-code-tools/tools/codex-dynamic/#reload-after-a-plugin-change
-
 ## Claude Code Plugin Installation
 
 <Steps>

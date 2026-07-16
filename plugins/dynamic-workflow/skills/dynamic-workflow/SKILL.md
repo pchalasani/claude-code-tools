@@ -244,16 +244,14 @@ request. The plugin itself does not require that package. The equivalent manual
 setup keeps `codex app-server --listen unix://` running in one terminal and
 starts `codex --remote unix://` in another.
 
-The shared app server snapshots plugin configuration for its connected TUIs.
-After a plugin or marketplace change, a new TUI alone may still receive the old
-snapshot. `codex-dynamic` detects a changed configuration and refuses to reuse
-that server. Tell the user to exit every connected `codex-dynamic` TUI, then run
-`codex-server restart --force` from an ordinary terminal before starting or
-resuming Codex. Never run `codex-server restart --force` or
-`codex-server stop --force` from inside a connected Codex turn: the command
-disconnects every attached TUI, interrupts active turns, and makes those TUIs
-exit. Saved transcripts remain resumable. Without `--force`, lifecycle commands
-refuse to stop a running shared server.
+The app server snapshots plugin configuration for its connected TUIs. After a
+plugin or marketplace change, tell the user to start or resume with
+`codex-dynamic` normally. The helper selects a fresh server generation while
+existing TUIs and callbacks keep using their original generation. Do not tell
+the user to restart the server after an ordinary update. Forced lifecycle
+commands are only for explicit cleanup; they stop every retained generation,
+disconnect attached TUIs, and interrupt active turns. Without `--force`, those
+commands refuse to stop a running generation.
 
 Callbacks require Codex CLI 0.136.0 or newer. It is the first compatible CLI
 release combining WebSocket-over-Unix framing with the echoed client message

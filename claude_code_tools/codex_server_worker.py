@@ -10,8 +10,8 @@ from typing import Mapping, NoReturn, Sequence
 
 from claude_code_tools.codex_server_models import (
     CODEX_SERVER_OPTIONS_ENV,
-    ENDPOINT,
     CodexServerError,
+    paths_from_env,
 )
 
 
@@ -37,9 +37,10 @@ def run_worker_gate(
     if release != launch_token:
         raise CodexServerError("app-server worker release token did not match")
     options = _server_options(env)
+    endpoint = paths_from_env(env).endpoint
     os.execve(
         codex_path,
-        [codex_path, *options, "app-server", "--listen", ENDPOINT],
+        [codex_path, *options, "app-server", "--listen", endpoint],
         dict(env),
     )
     raise AssertionError("os.execve returned unexpectedly")

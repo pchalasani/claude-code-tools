@@ -36,14 +36,10 @@ Those two commands are the complete plugin installation.
 Restart Codex, then invoke `$dynamic-workflow` or ask for a durable multi-agent
 workflow.
 
-<Aside type="caution" title="Shared-server sessions need a full reload">
-  If you use `codex-dynamic`, starting another TUI does not reload plugins from
-  an app server that was already running. After a plugin update, exit every
-  connected TUI and run `codex-server restart --force` from an ordinary
-  terminal, then start `codex-dynamic` again. A forced restart disconnects all
-  attached TUIs and interrupts their active turns, so never invoke it from
-  inside Codex. Saved conversations remain resumable. See the
-  [`codex-dynamic` lifecycle instructions][codex-dynamic-reload].
+<Aside type="tip" title="Plugin updates use a fresh server generation">
+  After a plugin update, start `codex-dynamic` normally. It starts or reuses a
+  server generation containing the new plugin while existing TUIs and
+  callbacks keep their original generation. No forced restart is required.
 </Aside>
 
 ## Workflow shape
@@ -285,5 +281,3 @@ npm test
 
 [codex-app-server]: https://developers.openai.com/codex/app-server
 [codex-dynamic]: /claude-code-tools/tools/codex-dynamic/
-[codex-dynamic-reload]:
-  /claude-code-tools/tools/codex-dynamic/#reload-after-a-plugin-change

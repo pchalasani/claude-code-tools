@@ -20,6 +20,7 @@ from click.testing import CliRunner
 
 import claude_code_tools.codex_server as codex_server
 import claude_code_tools.codex_server_fingerprint as fingerprinting
+from claude_code_tools.codex_server_generation import server_generation
 from claude_code_tools.codex_server import (
     CodexServerError,
     _plugin_configuration_snapshot,
@@ -27,7 +28,6 @@ from claude_code_tools.codex_server import (
     _read_state,
     ensure_server,
     get_status,
-    restart_server,
     stop_server,
 )
 from claude_code_tools.codex_server_cli import server_cli
@@ -36,8 +36,11 @@ from claude_code_tools.codex_server_models import (
     LOG_TAIL_MAX_BYTES,
     STATE_MAX_BYTES,
     StateFileError,
+    ServerPaths,
+    base_paths_from_env,
     log_tail,
     read_state,
+    paths_for_generation,
     trim_oversized_log,
 )
 from claude_code_tools.codex_server_process import (
@@ -67,11 +70,18 @@ def control_path(name: str) -> Path:
     return Path(os.environ["CODEX_HOME"]) / "app-server-control" / name
 
 
-def can_connect() -> bool:
+def server_path() -> Path:
+    endpoint = os.environ.get("FAKE_CODEX_LISTEN_ENDPOINT", "unix://")
+    if endpoint != "unix://":
+        return Path(endpoint.removeprefix("unix://"))
+    return control_path("app-server-control.sock")
+
+
+def can_connect(path: Path | None = None) -> bool:
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     client.settimeout(0.2)
     try:
-        client.connect(str(control_path("app-server-control.sock")))
+        client.connect(str(path or control_path("app-server-control.sock")))
     except OSError:
         return False
     finally:
@@ -96,12 +106,12 @@ def emit_noise(total: int) -> None:
 
 def run_server() -> int:
     emit_noise(int(os.environ.get("FAKE_CODEX_STARTUP_NOISE", "0")))
-    path = control_path("app-server-control.sock")
+    path = server_path()
     version_path = control_path("server-version")
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if path.exists() or path.is_socket():
         info = path.lstat()
-        if not stat.S_ISSOCK(info.st_mode) or can_connect():
+        if not stat.S_ISSOCK(info.st_mode) or can_connect(path):
             return 24
         path.unlink()
     launches = os.environ.get("FAKE_CODEX_LAUNCHES")
@@ -171,7 +181,10 @@ def main() -> int:
             value["appServerVersion"] = control_path("server-version").read_text()
         print(json.dumps(value))
         return 0
-    if arguments == ["app-server", "--listen", "unix://"]:
+    if len(arguments) == 3 and arguments[:2] == ["app-server", "--listen"]:
+        if not arguments[2].startswith("unix://"):
+            return 25
+        os.environ["FAKE_CODEX_LISTEN_ENDPOINT"] = arguments[2]
         if os.environ.get("FAKE_CODEX_NODE_WRAPPER"):
             return run_wrapper()
         return run_server()
@@ -182,6 +195,24 @@ def main() -> int:
 
 raise SystemExit(main())
 """
+
+
+def _desired_paths(environment: dict[str, str]) -> ServerPaths:
+    """Resolve the generation a fresh server launch would select."""
+    base = base_paths_from_env(environment)
+    codex_path = codex_server._resolve_codex(environment)
+    identity = codex_server._codex_executable_identity(codex_path)
+    child_env = codex_server._command_env(environment, base)
+    version = codex_server._require_compatible_codex(codex_path, child_env)
+    snapshot = codex_server._plugin_configuration_snapshot(base)
+    generation = server_generation(
+        codex_path,
+        identity,
+        version,
+        snapshot.fingerprint,
+        (),
+    )
+    return paths_for_generation(base, generation)
 
 
 class _RecordingDigest:
@@ -736,52 +767,46 @@ def test_callback_version_floor_obeys_semver_prereleases(
     assert not (root / "launches.txt").exists()
 
 
-def test_helper_with_unknown_server_version_is_not_certified(
+def test_generated_helper_is_certified_from_its_pinned_executable(
     hardened_environment: tuple[Path, dict[str, str]],
 ) -> None:
-    """A helper cannot succeed without a final certified server version."""
-    root, environment = hardened_environment
+    """A generated socket need not rely on the default daemon-version probe."""
+    _root, environment = hardened_environment
     environment["FAKE_CODEX_HIDE_SERVER_VERSION"] = "1"
 
-    with pytest.raises(CodexServerError, match="version.*uncertified"):
-        ensure_server(environment)
+    status = ensure_server(environment)
 
-    assert len((root / "launches.txt").read_text().splitlines()) == 1
-    assert get_status(environment).status == "stopped"
+    assert status.status == "running"
+    assert status.server_version == "9.9.9"
 
 
-def test_helper_requires_explicit_restart_after_cli_changes(
+def test_helper_rolls_generations_after_cli_changes(
     hardened_environment: tuple[Path, dict[str, str]],
 ) -> None:
-    """CLI changes never silently disconnect attached remote TUIs."""
+    """CLI changes select a fresh server and preserve attached remote TUIs."""
     root, environment = hardened_environment
     first = ensure_server(environment)
     environment["FAKE_CODEX_VERSION"] = "codex-cli 9.9.10"
-    with pytest.raises(CodexServerError, match="disconnect every"):
-        ensure_server(environment)
-    assert get_status(environment).pid == first.pid
-    second = restart_server(environment, allow_disconnect=True)
+    second = ensure_server(environment)
     assert second.pid != first.pid
-    assert second.server_version == "9.9.10"
+    assert process_group_exists(first.pid)
 
     replacement = root / "replacement-codex"
     shutil.copy2(environment["CCTOOLS_CODEX_BIN"], replacement)
     replacement.chmod(0o755)
     environment["CCTOOLS_CODEX_BIN"] = str(replacement)
-    with pytest.raises(CodexServerError, match="disconnect every"):
-        ensure_server(environment)
-    assert get_status(environment).pid == second.pid
-    third = restart_server(environment, allow_disconnect=True)
+    third = ensure_server(environment)
 
     assert third.pid != second.pid
+    assert process_group_exists(second.pid)
     assert third.codex_path == str(replacement.resolve())
     assert len((root / "launches.txt").read_text().splitlines()) == 3
 
 
-def test_same_path_executable_replacement_is_not_certified(
+def test_same_path_executable_replacement_rolls_generation(
     hardened_environment: tuple[Path, dict[str, str]],
 ) -> None:
-    """An inode replacement cannot inherit the old executable identity."""
+    """An inode replacement cannot inherit the old server generation."""
     root, environment = hardened_environment
     first = ensure_server(environment)
     codex = Path(environment["CCTOOLS_CODEX_BIN"])
@@ -790,10 +815,10 @@ def test_same_path_executable_replacement_is_not_certified(
     incoming.chmod(0o755)
     os.replace(incoming, codex)
 
-    with pytest.raises(CodexServerError, match="executable was replaced"):
-        ensure_server(environment)
+    second = ensure_server(environment)
 
-    assert get_status(environment).pid == first.pid
+    assert second.pid != first.pid
+    assert process_group_exists(first.pid)
 
 
 def test_external_server_without_plugin_certification_is_rejected(
@@ -802,8 +827,9 @@ def test_external_server_without_plugin_certification_is_rejected(
     """Even version-matched listeners cannot prove their plugin snapshot."""
     _root, environment = hardened_environment
     codex = environment["CCTOOLS_CODEX_BIN"]
+    paths = _desired_paths(environment)
     external = subprocess.Popen(
-        [codex, "app-server", "--listen", "unix://"],
+        [codex, "app-server", "--listen", paths.endpoint],
         env=environment,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -811,21 +837,9 @@ def test_external_server_without_plugin_certification_is_rejected(
         start_new_session=True,
     )
     try:
-        _wait_for_socket(_paths(environment).socket_path)
-        with pytest.raises(CodexServerError, match="plugin snapshot"):
+        _wait_for_socket(paths.socket_path)
+        with pytest.raises(CodexServerError, match="version could not be verified"):
             ensure_server(environment)
-        assert external.poll() is None
-
-        changed = dict(environment)
-        changed["FAKE_CODEX_VERSION"] = "codex-cli 9.9.10"
-        with pytest.raises(CodexServerError, match="does not match"):
-            ensure_server(changed)
-        assert external.poll() is None
-
-        unknown = dict(environment)
-        unknown["FAKE_CODEX_HIDE_SERVER_VERSION"] = "1"
-        with pytest.raises(CodexServerError, match="could not be verified"):
-            ensure_server(unknown)
         assert external.poll() is None
     finally:
         os.killpg(external.pid, signal.SIGTERM)
@@ -838,7 +852,7 @@ def test_accepting_uncertified_socket_is_refused_without_spawning(
 ) -> None:
     """A generic protocol failure cannot launch over an accepting socket."""
     _root, environment = hardened_environment
-    paths = _paths(environment)
+    paths = _desired_paths(environment)
     paths.socket_path.parent.mkdir(parents=True)
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     listener.bind(str(paths.socket_path))
@@ -849,24 +863,6 @@ def test_accepting_uncertified_socket_is_refused_without_spawning(
         nonlocal spawned
         spawned = True
 
-    diagnostic = subprocess.CompletedProcess(
-        args=[],
-        returncode=1,
-        stdout="",
-        stderr="temporary protocol failure",
-    )
-    monkeypatch.setattr(codex_server, "_resolve_codex", lambda _env: "/codex")
-    monkeypatch.setattr(
-        codex_server,
-        "_codex_executable_identity",
-        lambda _path: "verified executable",
-    )
-    monkeypatch.setattr(
-        codex_server,
-        "_require_compatible_codex",
-        lambda _path, _env: "codex-cli 9.9.9",
-    )
-    monkeypatch.setattr(codex_server, "_run_command", lambda *_args: diagnostic)
     monkeypatch.setattr(codex_server, "spawn_supervisor", spawn)
     try:
         with pytest.raises(CodexServerError, match="version could not be verified"):
@@ -890,7 +886,12 @@ def test_replacement_listener_cannot_inherit_helper_certification(
     paths = _paths(environment)
     paths.socket_path.unlink()
     replacement = subprocess.Popen(
-        [environment["CCTOOLS_CODEX_BIN"], "app-server", "--listen", "unix://"],
+        [
+            environment["CCTOOLS_CODEX_BIN"],
+            "app-server",
+            "--listen",
+            paths.endpoint,
+        ],
         env=environment,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -926,7 +927,7 @@ def test_invalid_home_and_fifo_log_fail_without_traceback_or_blocking(
         assert "not a directory" in result.output
         assert "Traceback" not in result.output
 
-    paths = _paths(environment)
+    paths = _desired_paths(environment)
     paths.runtime_dir.mkdir(mode=0o700, parents=True)
     os.mkfifo(paths.log_path, mode=0o600)
     result = subprocess.run(
@@ -960,7 +961,11 @@ def test_hostile_config_and_state_are_prompt_diagnostic_failures(
 ) -> None:
     """Hostile parsed files fail without following, blocking, or traceback."""
     root, environment = hardened_environment
-    paths = _paths(environment)
+    paths = (
+        _paths(environment)
+        if input_name == "configuration"
+        else _desired_paths(environment)
+    )
     if input_name == "configuration":
         paths.codex_home.mkdir(parents=True, exist_ok=True)
         hostile = paths.codex_home / "config.toml"

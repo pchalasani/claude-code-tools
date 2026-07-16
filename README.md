@@ -72,10 +72,12 @@ codex-dynamic resume --last
 ```
 
 `codex-dynamic` starts or reuses the local app server and then hands the
-terminal directly to Codex. Use `codex-server status` or `logs` for
-nondisruptive inspection. A forced stop or restart disconnects every attached
-TUI, so exit those sessions before running `codex-server stop --force` or
-`codex-server restart --force` from an ordinary terminal.
+terminal directly to Codex. After a plugin or Codex upgrade, the next launch
+automatically starts a fresh server generation; existing sessions and workflow
+callbacks stay connected to their old generation. No manual restart is needed.
+Use `codex-server status` or `logs` for nondisruptive inspection. A forced stop
+or restart cleans up every retained generation and disconnects its attached
+TUIs, so use those commands only after exiting the sessions normally.
 
 The Python package also installs `codex-workflows`, an observational dashboard
 for durable workflow runs:
