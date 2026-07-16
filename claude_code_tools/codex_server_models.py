@@ -11,9 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Mapping
 
+from claude_code_tools.codex_server_generation import validate_generation
+
 
 ENDPOINT = "unix://"
 CODEX_SERVER_OPTIONS_ENV = "CCTOOLS_CODEX_SERVER_OPTIONS"
+CODEX_SERVER_GENERATION_ENV = "CCTOOLS_CODEX_SERVER_GENERATION"
 STATE_VERSION = 1
 START_TIMEOUT_SECONDS = 10.0
 GRACEFUL_STOP_SECONDS = 60.0
@@ -32,6 +35,9 @@ LOG_TRUNCATION_MARKER_MAX_BYTES = (
     len(LOG_TRUNCATION_MARKER_PREFIX) + LOG_TRUNCATION_GENERATION_BYTES + 2
 )
 MAX_PROCESS_IDENTIFIER = (1 << 31) - 1
+MAX_SERVER_GENERATIONS = 64
+MAX_SERVER_GENERATION_DIRECTORIES = 256
+MAX_SERVER_DIRECTORY_ENTRIES = 512
 
 
 class CodexServerError(RuntimeError):
@@ -52,6 +58,14 @@ class ServerPaths:
     state_path: Path
     lock_path: Path
     log_path: Path
+    generation: str | None = None
+
+    @property
+    def endpoint(self) -> str:
+        """Return the Unix WebSocket endpoint represented by these paths."""
+        if self.generation is None:
+            return ENDPOINT
+        return f"unix://{self.socket_path}"
 
 
 @dataclass(frozen=True)
@@ -266,7 +280,8 @@ class ServerStatus:
         return {
             "status": self.status,
             "ownership": self.ownership,
-            "endpoint": ENDPOINT,
+            "endpoint": self.paths.endpoint,
+            "generation": self.paths.generation,
             "socketPath": str(self.paths.socket_path),
             "pid": self.pid,
             "codexPath": self.codex_path,
@@ -292,13 +307,29 @@ def paths_from_env(env: Mapping[str, str]) -> ServerPaths:
     Raises:
         CodexServerError: If ``CODEX_HOME`` is inaccessible or not a directory.
     """
+    base = base_paths_from_env(env)
+    raw_generation = env.get(CODEX_SERVER_GENERATION_ENV)
+    if raw_generation is not None:
+        try:
+            generation = validate_generation(raw_generation)
+        except ValueError as exc:
+            raise CodexServerError(str(exc)) from exc
+    else:
+        generation = read_current_generation(base)
+    if generation is None:
+        return base
+    return paths_for_generation(base, generation)
+
+
+def base_paths_from_env(env: Mapping[str, str]) -> ServerPaths:
+    """Resolve legacy base paths without consulting the generation marker."""
     home_value = env.get("CODEX_HOME")
     raw_home = Path(home_value).expanduser() if home_value else Path.home() / ".codex"
     raw_home = raw_home.absolute()
     try:
         info = raw_home.stat()
     except FileNotFoundError:
-        codex_home = raw_home
+        codex_home = raw_home.resolve(strict=False)
     except OSError as exc:
         raise CodexServerError(f"cannot access CODEX_HOME {raw_home}: {exc}") from exc
     else:
@@ -322,6 +353,176 @@ def paths_from_env(env: Mapping[str, str]) -> ServerPaths:
     )
 
 
+def paths_for_generation(base: ServerPaths, generation: str) -> ServerPaths:
+    """Resolve isolated runtime and socket paths for one generation."""
+    try:
+        checked = validate_generation(generation)
+    except ValueError as exc:
+        raise CodexServerError(str(exc)) from exc
+    runtime_dir = base.runtime_dir / checked
+    return ServerPaths(
+        codex_home=base.codex_home,
+        runtime_dir=runtime_dir,
+        socket_path=base.socket_path.parent / f"g-{checked[:16]}.sock",
+        state_path=runtime_dir / "state.json",
+        lock_path=runtime_dir / "lifecycle.lock",
+        log_path=runtime_dir / "app-server.log",
+        generation=checked,
+    )
+
+
+def read_current_generation(base: ServerPaths) -> str | None:
+    """Read the safely published default generation, if one exists."""
+    marker = base.runtime_dir / "current-generation"
+    info = _lstat(marker)
+    if info is None:
+        return None
+    _require_regular_owned(info, marker, "generation marker")
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise CodexServerError("safe generation selection requires O_NOFOLLOW")
+    try:
+        fd = os.open(marker, os.O_RDONLY | os.O_NONBLOCK | no_follow)
+        try:
+            initial = os.fstat(fd)
+            _require_regular_owned(initial, marker, "generation marker")
+            raw = _read_bounded_fd(fd, 64)
+            if _file_generation(os.fstat(fd)) != _file_generation(initial):
+                raise CodexServerError("app-server generation changed while read")
+        finally:
+            os.close(fd)
+        value = raw.decode("ascii").strip()
+        return validate_generation(value)
+    except (OSError, UnicodeError, ValueError, StateFileError) as exc:
+        raise CodexServerError(
+            f"cannot read generation marker {marker}: {exc}"
+        ) from exc
+
+
+def publish_current_generation(base: ServerPaths, generation: str) -> None:
+    """Atomically select a fully certified generation for future launches."""
+    checked = validate_generation(generation)
+    prepare_runtime(base)
+    marker = base.runtime_dir / "current-generation"
+    marker_info = _lstat(marker)
+    if marker_info is not None:
+        _require_regular_owned(marker_info, marker, "generation marker")
+    temporary = base.runtime_dir / f"current-generation.{os.getpid()}.tmp"
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(temporary, flags, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(f"{checked}\n".encode("ascii"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, marker)
+        marker.chmod(0o600)
+        _fsync_directory(base.runtime_dir)
+    except OSError as exc:
+        raise CodexServerError(f"cannot publish app-server generation: {exc}") from exc
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def clear_current_generation(base: ServerPaths) -> None:
+    """Remove the default-generation marker after explicit server cleanup."""
+    marker = base.runtime_dir / "current-generation"
+    info = _lstat(marker)
+    if info is None:
+        return
+    _require_regular_owned(info, marker, "generation marker")
+    try:
+        marker.unlink()
+        _fsync_directory(base.runtime_dir)
+    except OSError as exc:
+        raise CodexServerError(f"cannot clear generation marker: {exc}") from exc
+
+
+def all_server_paths(base: ServerPaths) -> list[ServerPaths]:
+    """Return bounded helper generations eligible for explicit cleanup."""
+    info = _lstat(base.runtime_dir)
+    if info is None:
+        return [base]
+    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        raise CodexServerError(f"unsafe runtime path: {base.runtime_dir}")
+    if info.st_uid != os.getuid():
+        raise CodexServerError(
+            f"runtime directory is owned by another user: {base.runtime_dir}"
+        )
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if no_follow is None or directory is None:
+        raise CodexServerError("safe generation scanning is unsupported")
+    try:
+        directory_fd = os.open(
+            base.runtime_dir,
+            os.O_RDONLY | no_follow | directory,
+        )
+    except OSError as exc:
+        raise CodexServerError(
+            f"cannot enumerate app-server generations: {exc}"
+        ) from exc
+    generations: list[str] = []
+    scanned = 0
+    try:
+        if _file_generation(os.fstat(directory_fd)) != _file_generation(info):
+            raise CodexServerError("app-server runtime changed during inspection")
+        with os.scandir(directory_fd) as entries:
+            for entry in entries:
+                scanned += 1
+                if scanned > MAX_SERVER_DIRECTORY_ENTRIES:
+                    raise CodexServerError("too many app-server runtime entries")
+                try:
+                    generation = validate_generation(entry.name)
+                except ValueError:
+                    continue
+                try:
+                    entry_info = entry.stat(follow_symlinks=False)
+                except OSError as exc:
+                    raise CodexServerError(
+                        f"cannot inspect app-server generation {entry.name}: {exc}"
+                    ) from exc
+                if not stat.S_ISDIR(entry_info.st_mode) or stat.S_ISLNK(
+                    entry_info.st_mode
+                ):
+                    raise CodexServerError(
+                        f"unsafe app-server generation path: {entry.name}"
+                    )
+                if entry_info.st_uid != os.getuid():
+                    raise CodexServerError(
+                        f"app-server generation is owned by another user: {entry.name}"
+                    )
+                generations.append(generation)
+                if len(generations) > MAX_SERVER_GENERATION_DIRECTORIES:
+                    raise CodexServerError(
+                        "too many app-server generations to inspect safely"
+                    )
+    finally:
+        os.close(directory_fd)
+    return [base, *(paths_for_generation(base, item) for item in sorted(generations))]
+
+
+def require_generation_capacity(base: ServerPaths, generation: str) -> None:
+    """Bound retained servers before creating another generation."""
+    target = paths_for_generation(base, generation)
+    if _lstat(target.runtime_dir) is not None:
+        return
+    retained = sum(
+        _lstat(paths.state_path) is not None or _lstat(paths.socket_path) is not None
+        for paths in all_server_paths(base)[1:]
+    )
+    if retained >= MAX_SERVER_GENERATIONS:
+        raise CodexServerError(
+            "app-server generation limit reached; exit callback-ready sessions "
+            "and run `codex-server stop --force` before launching another"
+        )
+
+
 def prepare_runtime(paths: ServerPaths) -> None:
     """Create a private, non-symlinked helper runtime directory."""
     try:
@@ -329,7 +530,18 @@ def prepare_runtime(paths: ServerPaths) -> None:
         home_info = paths.codex_home.stat()
         if not stat.S_ISDIR(home_info.st_mode):
             raise CodexServerError(f"CODEX_HOME is not a directory: {paths.codex_home}")
-        paths.runtime_dir.mkdir(mode=0o700, exist_ok=True)
+        base_runtime = paths.codex_home / "cctools-app-server"
+        base_runtime.mkdir(mode=0o700, exist_ok=True)
+        base_info = base_runtime.lstat()
+        if not stat.S_ISDIR(base_info.st_mode) or stat.S_ISLNK(base_info.st_mode):
+            raise CodexServerError(
+                f"unsafe runtime path (must be a directory): {base_runtime}"
+            )
+        if base_info.st_uid != os.getuid():
+            raise CodexServerError(
+                f"runtime directory is owned by another user: {base_runtime}"
+            )
+        paths.runtime_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         info = paths.runtime_dir.lstat()
         control_dir = paths.socket_path.parent
         control_dir.mkdir(mode=0o700, exist_ok=True)
@@ -359,6 +571,8 @@ def prepare_runtime(paths: ServerPaths) -> None:
     try:
         if stat.S_IMODE(info.st_mode) != 0o700:
             paths.runtime_dir.chmod(0o700)
+        if stat.S_IMODE(base_info.st_mode) != 0o700:
+            base_runtime.chmod(0o700)
         if stat.S_IMODE(control_info.st_mode) != 0o700:
             control_dir.chmod(0o700)
     except OSError as exc:

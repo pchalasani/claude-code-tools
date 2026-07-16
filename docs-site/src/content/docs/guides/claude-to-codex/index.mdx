@@ -129,14 +129,11 @@ To continue the most recent conversation instead of starting a new one:
 codex-dynamic resume --last
 ```
 
-<Aside type="caution" title="Plugin updates require a safe server restart">
-  A new TUI does not reload plugins while an older shared app server is still
-  running. After installing or upgrading the plugin, exit every
-  `codex-dynamic` TUI, then run `codex-server restart --force` from an ordinary
-  terminal. Start `codex-dynamic` again afterward. Never run the forced restart
-  inside Codex: it disconnects every TUI attached to that server, interrupts
-  active turns, and makes those TUIs exit. Saved conversations remain
-  resumable. Codex currently has no in-session plugin-reload command.
+<Aside type="tip" title="Plugin updates do not require a restart">
+  After installing or upgrading the plugin, run `codex-dynamic` normally. It
+  starts a fresh server generation while existing sessions and callbacks keep
+  using their original generation. Forced lifecycle commands are needed only
+  for explicit cleanup, and they disconnect every retained session.
 </Aside>
 
 Omit `--last` to use Codex's session picker. `codex-dynamic` quietly starts or

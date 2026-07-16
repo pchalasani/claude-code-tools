@@ -33,11 +33,10 @@ codex plugin add dynamic-workflow@cctools-codex-plugins
 Restart Codex after installation, then invoke `$dynamic-workflow` or ask Codex
 to create a durable multi-agent workflow.
 
-When `codex-dynamic` already has a shared app server running, a new TUI alone
-does not reload an updated plugin. Exit every connected TUI, run
-`codex-server restart --force` from an ordinary terminal, and then start Codex
-again. Never force a restart from inside Codex: it disconnects every TUI on the
-server and interrupts active turns. Saved conversations remain resumable.
+After a plugin update, start `codex-dynamic` normally. It automatically uses a
+fresh server generation containing the new plugin while existing sessions and
+callbacks remain connected to their original generation. A forced restart is
+needed only for explicit cleanup and disconnects every retained session.
 
 For local development from the repository root:
 

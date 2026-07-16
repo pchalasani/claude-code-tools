@@ -12,7 +12,6 @@ from typing import BinaryIO, NoReturn, Sequence
 import click
 
 from claude_code_tools.codex_server import (
-    ENDPOINT,
     CodexServerError,
     ServerStatus,
     _command_env,
@@ -58,9 +57,6 @@ NON_TUI_COMMANDS = {
 }
 
 CALLBACK_ENDPOINT_ENV = "CCTOOLS_CODEX_CALLBACK_ENDPOINT"
-CALLBACK_SHELL_CONFIG = (
-    f'shell_environment_policy.set.{CALLBACK_ENDPOINT_ENV}="{ENDPOINT}"'
-)
 
 GLOBAL_OPTIONS_WITH_VALUES = {
     "--add-dir",
@@ -107,20 +103,20 @@ def _echo_status(status: ServerStatus, json_output: bool) -> None:
         click.echo(f"{status.status} (managed by codex-server, pid {status.pid})")
     else:
         click.echo(status.status)
-    click.echo(f"endpoint: {ENDPOINT}")
+    click.echo(f"endpoint: {status.paths.endpoint}")
     if status.detail:
         click.echo(f"detail: {status.detail}")
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def server_cli() -> None:
-    """Manage the shared app server used for Codex workflow callbacks."""
+    """Manage generated app servers used for Codex workflow callbacks."""
 
 
 @server_cli.command("start")
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON status.")
 def start_command(json_output: bool) -> None:
-    """Start the server, or reuse the listener already running."""
+    """Start or reuse the server for the current Codex/plugin generation."""
     try:
         status = ensure_server()
     except CodexServerError as exc:
@@ -143,11 +139,11 @@ def status_command(json_output: bool) -> None:
 @click.option(
     "--force",
     is_flag=True,
-    help="Acknowledge that every connected codex-dynamic TUI will exit.",
+    help="Stop all generations; every connected codex-dynamic TUI will exit.",
 )
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON status.")
 def stop_command(force: bool, json_output: bool) -> None:
-    """Stop a helper-owned server after acknowledging TUI disconnection."""
+    """Stop the current generation; use --force to stop all generations."""
     try:
         status = stop_server(allow_disconnect=force)
     except CodexServerError as exc:
@@ -159,11 +155,11 @@ def stop_command(force: bool, json_output: bool) -> None:
 @click.option(
     "--force",
     is_flag=True,
-    help="Acknowledge that every connected codex-dynamic TUI will exit.",
+    help="Restart all generations; every connected codex-dynamic TUI will exit.",
 )
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON status.")
 def restart_command(force: bool, json_output: bool) -> None:
-    """Restart after acknowledging that connected TUIs will exit."""
+    """Restart the current generation; use --force to clean up all."""
     try:
         status = restart_server(allow_disconnect=force)
     except CodexServerError as exc:
@@ -331,34 +327,38 @@ def dynamic_main() -> NoReturn:
         raise SystemExit(2)
     active_env = dict(os.environ)
     use_remote = not (_is_information_only(arguments) or _is_non_tui_command(arguments))
+    endpoint: str | None = None
     try:
         codex_path = _resolve_codex(active_env)
         if use_remote:
-            paths = _paths(active_env)
-            child_env = _command_env(active_env, paths)
-            ensure_server(
-                child_env,
+            status = ensure_server(
+                active_env,
                 codex_options=_server_configuration_options(arguments),
             )
-            child_env[CALLBACK_ENDPOINT_ENV] = ENDPOINT
+            endpoint = status.paths.endpoint
+            child_env = _command_env(active_env, status.paths)
+            child_env[CALLBACK_ENDPOINT_ENV] = endpoint
         else:
             child_env = dict(active_env)
             child_env.pop(CALLBACK_ENDPOINT_ENV, None)
     except CodexServerError as exc:
         click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1) from exc
-    command = (
-        [
+    if use_remote:
+        assert endpoint is not None
+        command = [
             codex_path,
             "--config",
-            CALLBACK_SHELL_CONFIG,
+            (
+                f"shell_environment_policy.set.{CALLBACK_ENDPOINT_ENV}="
+                f"{json.dumps(endpoint)}"
+            ),
             "--remote",
-            ENDPOINT,
+            endpoint,
             *arguments,
         ]
-        if use_remote
-        else [codex_path, *arguments]
-    )
+    else:
+        command = [codex_path, *arguments]
     try:
         os.execvpe(codex_path, command, child_env)
     except OSError as exc:
