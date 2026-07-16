@@ -11,7 +11,7 @@ Use the `all-*` Make commands to prepare a release, then publish:
 
 ```bash
 make all-patch   # or all-minor, all-major
-uv publish
+make publish
 ```
 
 ### What the Commands Do
@@ -31,7 +31,17 @@ inconsistent lock file stops the build.
 The built package includes its Node dependencies, so users do not need to run
 `npm install`. They need Node.js 18 or newer.
 
-After the build completes, run `uv publish` to upload to PyPI.
+After the build completes, run `make publish` to upload to PyPI. The command
+loads `PYPI_TOKEN` from the primary Git checkout's `.env`, passes it to uv
+without printing it, and requires both wheel and source distributions in
+`dist/`. Linked worktrees therefore share the primary checkout's secret file;
+you do not need to copy `.env` into each worktree.
+
+To use another dotenv file, set `PYPI_ENV_FILE`:
+
+```bash
+make publish PYPI_ENV_FILE=~/.config/claude-code-tools/pypi.env
+```
 
 ## Rust Binaries (crates.io)
 

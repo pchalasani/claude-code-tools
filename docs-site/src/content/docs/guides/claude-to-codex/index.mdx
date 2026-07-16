@@ -191,6 +191,23 @@ the chat simply looks normal until completion arrives. You can ask Codex for an
 explicit status check, but the absence of an indicator is not a reason for the
 agent to monitor automatically.
 
+## Monitor running workflows
+
+The Python package also installs `codex-workflows`. Run it from any directory
+to see active workflows across all projects:
+
+```bash
+codex-workflows
+codex-workflows watch
+codex-workflows show RUN_ID
+```
+
+The default view shows active runs and the project that launched each one.
+`watch` refreshes the display, while `show` expands one run's steps, callback,
+errors, and complete working directory. See the
+[codex-workflows command reference][codex-workflows] for filters, status
+meanings, JSON output, and the observational safety model.
+
 Use `codex-server status` or `codex-server logs` for nondisruptive inspection.
 Stopping or restarting requires `--force` and must be done only after exiting
 all connected TUIs. See the
@@ -246,3 +263,5 @@ to the repository.
   https://developers.openai.com/codex/build-plugins#add-a-marketplace-from-the-cli
 [codex-app-server]: https://developers.openai.com/codex/app-server
 [codex-dynamic]: /claude-code-tools/tools/codex-dynamic/
+[codex-workflows]:
+  /claude-code-tools/tools/codex-dynamic/#monitor-workflows-with-codex-workflows

@@ -87,7 +87,20 @@ export default defineConfig({
             { label: "env-safe", slug: "tools/env-safe" },
             { label: "sasy-guard", slug: "tools/sasy-guard" },
             { label: "agent-tunnel", slug: "tools/agent-tunnel" },
-            { label: "codex-dynamic", slug: "tools/codex-dynamic" },
+            {
+              label: "codex-dynamic",
+              collapsed: false,
+              items: [
+                {
+                  label: "Overview",
+                  slug: "tools/codex-dynamic",
+                },
+                {
+                  label: "codex-workflows",
+                  link: "/tools/codex-dynamic/#monitor-workflows-with-codex-workflows",
+                },
+              ],
+            },
           ],
         },
         {
