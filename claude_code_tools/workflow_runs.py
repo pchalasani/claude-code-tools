@@ -44,6 +44,7 @@ from claude_code_tools.workflow_validation import (
     validate_state_observation,
 )
 
+ACTIVE_STATUSES = tuple(sorted(NONTERMINAL_STATUSES | {"unverifiable"}))
 FILTER_STATUSES = tuple(
     sorted(
         TERMINAL_STATUSES

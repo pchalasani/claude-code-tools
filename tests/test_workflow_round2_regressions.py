@@ -842,7 +842,7 @@ def test_one_cli_response_uses_one_observation_time(
 
     result = CliRunner().invoke(
         cli,
-        ["--json"],
+        ["--status", "unverifiable", "--json"],
         env={"CODEX_WORKFLOW_HOME": str(tmp_path)},
     )
 

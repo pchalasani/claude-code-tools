@@ -154,7 +154,7 @@ def test_schema_v1_uses_independent_literal_exact_keys(tmp_path: Path) -> None:
     runner = CliRunner()
     environment = {"CODEX_WORKFLOW_HOME": str(tmp_path), "NO_COLOR": "1"}
 
-    listed = runner.invoke(cli, ["--json"], env=environment)
+    listed = runner.invoke(cli, ["--all", "--json"], env=environment)
     shown = runner.invoke(cli, ["show", "schema-run", "--json"], env=environment)
 
     assert listed.exit_code == 0, listed.output
@@ -181,7 +181,13 @@ def _run_json(
         "PYTHONPATH": str(REPOSITORY),
     }
     return subprocess.run(
-        [sys.executable, "-m", "claude_code_tools.workflow_cli", "--json"],
+        [
+            sys.executable,
+            "-m",
+            "claude_code_tools.workflow_cli",
+            "--all",
+            "--json",
+        ],
         check=False,
         capture_output=True,
         cwd=REPOSITORY,
@@ -333,7 +339,10 @@ def test_json_rejects_undecodable_posix_run_directory_names(
     assert names == ("bad\ufffd",)
 
 
-@pytest.mark.parametrize("arguments", [["--limit", "1"], ["--status", "failed"]])
+@pytest.mark.parametrize(
+    "arguments",
+    [["--all"], ["--limit", "1"], ["--status", "failed"]],
+)
 def test_show_reports_list_watch_only_group_options(arguments: list[str]) -> None:
     """Misplaced filters do not recommend invalid show syntax."""
     result = CliRunner().invoke(cli, [*arguments, "show", "run"])
@@ -351,7 +360,7 @@ def test_posix_backslash_run_can_be_listed_and_shown(tmp_path: Path) -> None:
     runner = CliRunner()
     environment = {"CODEX_WORKFLOW_HOME": str(tmp_path), "NO_COLOR": "1"}
 
-    listed = runner.invoke(cli, ["--json"], env=environment)
+    listed = runner.invoke(cli, ["--all", "--json"], env=environment)
     shown = runner.invoke(cli, ["show", run_id, "--json"], env=environment)
 
     assert listed.exit_code == 0

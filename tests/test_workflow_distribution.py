@@ -516,7 +516,7 @@ def test_wheel_installs_workflow_entry_point(tmp_path: Path) -> None:
         timeout=30,
     )
     assert help_result.returncode == 0, help_result.stdout + help_result.stderr
-    assert "Observe local durable dynamic-workflow runs" in help_result.stdout
+    assert "global cross-project store" in help_result.stdout
 
     workflow_home = tmp_path / "workflow-home"
     run_directory = workflow_home / "runs" / "installed-wheel-smoke"
@@ -542,7 +542,7 @@ def test_wheel_installs_workflow_entry_point(tmp_path: Path) -> None:
     run_environment = installed_environment.copy()
     run_environment["CODEX_WORKFLOW_HOME"] = str(workflow_home)
     result = subprocess.run(
-        [str(workflow_executable), "--json"],
+        [str(workflow_executable), "--all", "--json"],
         cwd=tmp_path,
         env=run_environment,
         capture_output=True,

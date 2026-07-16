@@ -83,7 +83,7 @@ def test_colliding_abbreviations_display_actionable_full_ids(
     for run_id in run_ids:
         _write_run(tmp_path, _state(run_id))
 
-    listed = _invoke(tmp_path, ["--limit", "1"])
+    listed = _invoke(tmp_path, ["--all", "--limit", "1"])
     ambiguous = _invoke(tmp_path, ["show", "abcdefgh~12345678"])
 
     assert listed.exit_code == 0
@@ -104,7 +104,7 @@ def test_show_resolves_exposed_malformed_directory_name_safely(
     outside.mkdir()
     (outside / "state.json").write_text("outside-secret", encoding="utf-8")
 
-    listed = _invoke(tmp_path, [])
+    listed = _invoke(tmp_path, ["--all"])
     shown = _invoke(tmp_path, ["show", malformed_id])
     traversal = _invoke(tmp_path, ["show", "../outside"])
 
@@ -122,7 +122,7 @@ def test_long_malformed_run_id_is_listed_in_actionable_full_form(
     run_id = "bad idXX-middle-12345678"
     _write_run(tmp_path, _state(run_id))
 
-    listed = _invoke(tmp_path, [])
+    listed = _invoke(tmp_path, ["--all"])
     shown = _invoke(tmp_path, ["show", run_id])
 
     assert listed.exit_code == 0
@@ -139,7 +139,7 @@ def test_component_over_128_characters_is_listed_and_showable(
     assert len(run_id) == 129
     _write_run(tmp_path, _state(run_id))
 
-    listed = _invoke(tmp_path, ["--json"])
+    listed = _invoke(tmp_path, ["--all", "--json"])
     shown = _invoke(tmp_path, ["show", run_id, "--json"])
 
     assert listed.exit_code == 0
@@ -270,7 +270,7 @@ def test_inferred_output_width_is_clamped(tmp_path: Path) -> None:
     """A hostile COLUMNS value cannot amplify redirected output."""
     _write_run(tmp_path, _state("wide-run", error="x" * 10_000))
 
-    listed = _invoke(tmp_path, [], width=100_000)
+    listed = _invoke(tmp_path, ["--all"], width=100_000)
     shown = _invoke(tmp_path, ["show", "wide-run"], width=100_000)
 
     assert listed.exit_code == 0
@@ -373,7 +373,7 @@ def test_json_list_reports_when_matching_runs_are_truncated(
     newer["updatedAt"] = "2026-07-14T15:00:00Z"
     _write_run(tmp_path, newer)
 
-    result = _invoke(tmp_path, ["--limit", "1", "--json"])
+    result = _invoke(tmp_path, ["--all", "--limit", "1", "--json"])
     payload = json.loads(result.output)
 
     assert result.exit_code == 0

@@ -91,10 +91,10 @@ def _invoke(home: Path, arguments: list[str]) -> Result:
 
 
 def test_static_output_lists_local_runs_cleanly(tmp_path: Path) -> None:
-    """The default command renders a clean static summary table."""
+    """The explicit history view renders a clean static summary table."""
     _write_run(tmp_path, _state("20260714-one", status="completed"))
 
-    result = _invoke(tmp_path, [])
+    result = _invoke(tmp_path, ["--all"])
 
     assert result.exit_code == 0
     assert "audit-routes" in result.output
@@ -103,11 +103,81 @@ def test_static_output_lists_local_runs_cleanly(tmp_path: Path) -> None:
     assert "\x1b[" not in result.output
 
 
+def test_default_lists_only_active_workflows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Terminal history appears only when the user explicitly requests it."""
+
+    def alive_probe(
+        _pid: int,
+        *,
+        include_legacy: bool = True,
+        remaining_seconds: float | None = None,
+        prior_probe: ProcessProbe | None = None,
+    ) -> ProcessProbe:
+        del include_legacy, remaining_seconds, prior_probe
+        return ProcessProbe(status="alive", identity="active-process")
+
+    monkeypatch.setattr(workflow_runs, "process_start_identity", alive_probe)
+    active = _state("active-run", status="running")
+    active["pid"] = os.getpid()
+    active["pidStartedAt"] = "active-process"
+    _write_run(tmp_path, active)
+    _write_run(tmp_path, _state("failed-run", status="failed"))
+    _write_run(tmp_path, _state("canceled-run", status="canceled"))
+    delivered = {
+        "attempts": 1,
+        "clientUserMessageId": "delivered-message",
+        "createdAt": BASE_TIME,
+        "deadlineAt": BASE_TIME,
+        "deliveredAt": BASE_TIME,
+        "endpoint": "unix://",
+        "lastAttemptAt": BASE_TIME,
+        "runId": "completed-run",
+        "status": "delivered",
+        "terminalCompletedAt": BASE_TIME,
+        "terminalStatus": "completed",
+        "threadId": "thread-1",
+        "timeoutMs": 1_000,
+        "updatedAt": BASE_TIME,
+        "version": 1,
+    }
+    _write_run(
+        tmp_path,
+        _state("completed-run", status="completed"),
+        delivered,
+    )
+
+    default_result = _invoke(tmp_path, ["--json"])
+    history_result = _invoke(tmp_path, ["--all", "--json"])
+
+    assert default_result.exit_code == 0
+    assert [item["runId"] for item in json.loads(default_result.output)["runs"]] == [
+        "active-run"
+    ]
+    assert history_result.exit_code == 0
+    assert {item["runId"] for item in json.loads(history_result.output)["runs"]} == {
+        "active-run",
+        "canceled-run",
+        "completed-run",
+        "failed-run",
+    }
+
+
+def test_all_and_status_are_mutually_exclusive(tmp_path: Path) -> None:
+    """History and explicit-status modes cannot silently override each other."""
+    result = _invoke(tmp_path, ["--all", "--status", "failed"])
+
+    assert result.exit_code != 0
+    assert "--all cannot be combined with --status" in result.output
+
+
 def test_json_output_has_stable_normalized_fields(tmp_path: Path) -> None:
     """Automation output is valid JSON with a versioned normalized schema."""
     _write_run(tmp_path, _state("json-run"))
 
-    result = _invoke(tmp_path, ["--json"])
+    result = _invoke(tmp_path, ["--all", "--json"])
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
@@ -173,7 +243,7 @@ def test_callback_state_is_separate_from_workflow_status(tmp_path: Path) -> None
     }
     _write_run(tmp_path, _state("callback-run"), callback)
 
-    result = _invoke(tmp_path, ["--json"])
+    result = _invoke(tmp_path, ["--all", "--json"])
 
     payload = json.loads(result.output)["runs"][0]
     assert payload["status"] == "completed"
@@ -193,7 +263,7 @@ def test_malformed_state_and_callback_are_visible(tmp_path: Path) -> None:
     valid = _write_run(tmp_path, _state("valid-run"))
     (valid / "completion-notification.json").write_text("[]", encoding="utf-8")
 
-    result = _invoke(tmp_path, ["--json"])
+    result = _invoke(tmp_path, ["--all", "--json"])
 
     assert result.exit_code == 0
     payload = {item["runId"]: item for item in json.loads(result.output)["runs"]}
@@ -235,7 +305,7 @@ def test_legacy_supervisor_mismatch_is_unverifiable_without_mutation(
     directory = _write_run(tmp_path, state)
     before = (directory / "state.json").read_bytes()
 
-    result = _invoke(tmp_path, ["--status", "unverifiable", "--json"])
+    result = _invoke(tmp_path, ["--json"])
 
     payload = json.loads(result.output)["runs"]
     assert payload[0]["status"] == "unverifiable"
@@ -298,7 +368,7 @@ def test_old_state_without_supervisor_identity_is_not_orphaned(
     monkeypatch.setattr(workflow_runs, "datetime", ObservedDateTime)
     _write_run(tmp_path, _state("legacy-running", status="running"))
 
-    result = _invoke(tmp_path, ["--json"])
+    result = _invoke(tmp_path, ["--status", "unverifiable", "--json"])
 
     assert result.exit_code == 0
     payload = json.loads(result.output)["runs"]
@@ -436,7 +506,7 @@ def test_offset_timestamps_are_sorted_chronologically(tmp_path: Path) -> None:
         _state("newer", created_at="2026-07-14T13:00:00+00:00"),
     )
 
-    result = _invoke(tmp_path, ["--json"])
+    result = _invoke(tmp_path, ["--all", "--json"])
 
     assert result.exit_code == 0
     assert [item["runId"] for item in json.loads(result.output)["runs"]] == [

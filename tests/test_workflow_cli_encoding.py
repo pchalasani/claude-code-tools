@@ -77,7 +77,7 @@ def test_legacy_encoded_abbreviation_remains_actionable(
     command = [sys.executable, "-m", "claude_code_tools.workflow_cli"]
 
     listed = subprocess.run(
-        command,
+        [*command, "--all"],
         check=False,
         capture_output=True,
         cwd=REPOSITORY,

@@ -233,6 +233,7 @@ def test_dumb_tty_watch_is_rejected_with_static_guidance(
     [
         (["--limit", "1", "watch"], "--limit"),
         (["--status", "failed", "watch"], "--status"),
+        (["--all", "watch"], "--all"),
         (["--json", "show", "run"], "--json"),
     ],
 )
@@ -296,7 +297,7 @@ def test_human_output_sanitizes_persisted_controls(
     if no_color:
         environment["NO_COLOR"] = "1"
 
-    listed = runner.invoke(cli, [], env=environment)
+    listed = runner.invoke(cli, ["--all"], env=environment)
     arguments = ["--no-color", "show", "unsafe"] if no_color else ["show", "unsafe"]
     shown = runner.invoke(cli, arguments, env=environment)
 
@@ -322,9 +323,9 @@ def test_output_safely_handles_persisted_lone_surrogates(tmp_path: Path) -> None
     runner = CliRunner()
     environment = {"CODEX_WORKFLOW_HOME": str(tmp_path), "NO_COLOR": "1"}
 
-    listed = runner.invoke(cli, [], env=environment)
+    listed = runner.invoke(cli, ["--all"], env=environment)
     shown = runner.invoke(cli, ["show", "surrogate"], env=environment)
-    json_result = runner.invoke(cli, ["--json"], env=environment)
+    json_result = runner.invoke(cli, ["--all", "--json"], env=environment)
 
     assert listed.exit_code == 0
     assert shown.exit_code == 0
@@ -363,7 +364,7 @@ def test_human_output_sanitizes_unicode_format_and_separators(
     )
     environment = {"CODEX_WORKFLOW_HOME": str(tmp_path), "NO_COLOR": "1"}
 
-    listed = CliRunner().invoke(cli, [], env=environment)
+    listed = CliRunner().invoke(cli, ["--all"], env=environment)
     shown = CliRunner().invoke(
         cli,
         ["show", "unicode-controls"],
@@ -643,6 +644,32 @@ def test_status_help_uses_short_wrapping_metavar(width: int) -> None:
     assert max(len(line) for line in result.output.splitlines()) <= max(width, 40)
 
 
+def test_help_describes_scope_commands_and_every_option() -> None:
+    """Help identifies the global store and all supported command options."""
+    runner = CliRunner()
+
+    root = runner.invoke(cli, ["--help"], terminal_width=120)
+    watch = runner.invoke(cli, ["watch", "--help"], terminal_width=120)
+    show = runner.invoke(cli, ["show", "--help"], terminal_width=120)
+
+    assert root.exit_code == 0
+    assert "global cross-project store" in root.output
+    assert "unverifiable nonterminal runs" in root.output
+    for option in ("--status", "--all", "--limit", "--json", "--no-color"):
+        assert option in root.output
+    assert watch.exit_code == 0
+    assert "global cross-project store" in watch.output
+    assert "--no-color" in watch.output
+    assert "JSON is not supported" in watch.output
+    for option in ("--status", "--all", "--limit", "--refresh"):
+        assert option in watch.output
+    assert show.exit_code == 0
+    assert "global store" in show.output
+    assert "--no-color" in show.output
+    for option in ("--json", "--full"):
+        assert option in show.output
+
+
 def test_watch_refreshes_filtered_state_and_exits_130(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -812,7 +839,7 @@ def test_warning_statuses_have_explicit_non_neutral_styles() -> None:
     assert workflow_cli.CALLBACK_STYLES["stale"] != "bright_black"
 
 
-@pytest.mark.parametrize("arguments", [[], ["show", "ascii-run"]])
+@pytest.mark.parametrize("arguments", [["--all"], ["show", "ascii-run"]])
 @pytest.mark.parametrize("encoding", ["ascii", "cp1252"])
 def test_redirected_legacy_encoded_human_output_is_graceful(
     arguments: list[str],
@@ -904,7 +931,7 @@ def test_show_accepts_the_listed_run_id_abbreviation(
 
     listed = CliRunner().invoke(
         cli,
-        [],
+        ["--all"],
         env={
             "CODEX_WORKFLOW_HOME": str(tmp_path),
             "COLUMNS": str(width),

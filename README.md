@@ -82,13 +82,15 @@ for durable workflow runs:
 
 ```bash
 codex-workflows
-codex-workflows watch --status running --limit 20
+codex-workflows watch --limit 20
 codex-workflows show RUN_ID
-codex-workflows --json
+codex-workflows --all
 ```
 
-The command reads durable workflow state and process metadata. It never changes
-a run, sends a signal, repairs state, or launches an agent. See the
+The default list contains only active workflows. Use `--all` to include
+completed and diagnostic history. The command reads durable workflow state and
+process metadata. It never changes a run, sends a signal, repairs state, or
+launches an agent. See the
 [codex-workflows reference][codex-workflows-reference] for filters, JSON output,
 and the complete versioned schema.
 

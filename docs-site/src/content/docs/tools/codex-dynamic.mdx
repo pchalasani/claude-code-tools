@@ -138,29 +138,90 @@ Codex to track it to completion.
 ## Observe workflow runs
 
 The Python package also installs `codex-workflows`, a strictly observational
-dashboard for durable runs. Its default view is a static table; `watch`
-refreshes a live dashboard about once per second, and `show` expands one run's
+dashboard for durable runs. Its default view contains only active workflows;
+`watch` refreshes that view about once per second, and `show` expands one run's
 callback, error, and agent-step details.
+
+The command reads one global store for every project. It does not limit results
+to the current directory. The default store is `~/.codex/workflows`; set
+`CODEX_WORKFLOW_HOME` to inspect another store.
 
 ```bash
 codex-workflows
-codex-workflows watch --status running --limit 20
+codex-workflows watch --limit 20
 codex-workflows show RUN_ID
 codex-workflows show RUN_ID --full
+codex-workflows --all
 ```
+
+### Command Reference
+
+`codex-workflows` without a subcommand prints a static list. It supports these
+options:
+
+- `--status STATUS` selects one effective status. Repeat it to select several
+  statuses. An explicit status selection replaces the active-only default.
+- `--all` includes terminal and diagnostic history. It cannot be combined with
+  `--status`.
+- `--limit N` returns at most `N` rows. The default is 50; the accepted range is
+  1 through 1,000.
+- `--json` emits the versioned list schema described below.
+- `--no-color` disables ANSI color. The `NO_COLOR` environment variable has the
+  same effect.
+
+`codex-workflows watch` displays a full-screen live view until Ctrl-C. It
+accepts `--status`, `--all`, and `--limit` with the same meanings as the static
+list. Use `--refresh SECONDS` to set an interval from 0.2 through 60 seconds;
+the default is one second. `watch` requires an interactive terminal and does
+not support JSON output.
+
+`codex-workflows show RUN_ID` displays one run from the global store. `RUN_ID`
+may be a full ID or an unambiguous abbreviation printed by the list. Pass
+`--full` to disable human-output truncation, or `--json` for complete structured
+output. Put the global `--no-color` option before any subcommand:
+
+```bash
+codex-workflows --no-color show RUN_ID
+```
+
+Every command accepts `--help`.
 
 By default, human `show` output truncates field values to the terminal width
 and limits displayed steps according to that width. Use `show RUN_ID --full`
 for complete human-readable details or `show RUN_ID --json` for complete
 normalized output.
 
-Filter the static view by repeating `--status`, or use JSON for scripts:
+The active-only default includes `starting`, `running`, `pausing`, `paused`,
+`canceling`, and `unverifiable`. An `unverifiable` run is still nonterminal, but
+the monitor could not strongly certify its supervisor process identity. Use
+`--all` for terminal and diagnostic history, repeat `--status` for a specific
+selection, or use JSON for scripts:
 
 ```bash
 codex-workflows --status failed --status stale --limit 50
 codex-workflows --json
 codex-workflows show RUN_ID --json
 ```
+
+### Workflow and Callback Statuses
+
+Workflow status and callback status answer different questions. The workflow
+status says whether the work is running, completed, failed, or canceled. The
+callback status says what happened to its completion notification.
+
+The callback states are:
+
+- `armed`: the callback target passed preflight and awaits a terminal result.
+- `sending`: the bounded notifier is delivering or confirming the message.
+- `delivered`: the app server confirmed that the Codex chat received it.
+- `failed`: delivery stopped without an ambiguous accepted submission.
+- `unknown`: delivery may have occurred, but the notifier could not confirm it
+  safely without risking a duplicate message.
+- `invalid`: the dashboard could not validate the callback metadata.
+
+Thus, `delivered` is not a workflow result. A successfully delivered failure
+has workflow status `failed` and callback status `delivered`. Terminal workflows
+remain hidden from the default active view regardless of callback status.
 
 List-mode JSON uses this version-1 envelope:
 
@@ -476,6 +537,33 @@ codex-dynamic
    therefore do not consume the main conversation's context.
 
 </Steps>
+
+### Durable State and Callback Lifecycle
+
+The workflow and its callback share a durable run directory, but they have
+separate outcomes. The normal callback path is:
+
+```text
+preflight -> armed -> workflow terminal -> sending -> delivered
+                                            |-> failed
+                                            `-> unknown
+```
+
+The workflow result becomes durable before notification begins. A notifier
+failure therefore cannot change a completed workflow into a failed workflow.
+The dashboard can still show the complete result and callback diagnostic.
+
+Delivery identity belongs to one terminal generation of a run. The runner
+binds a stable client message ID to the terminal fingerprint. When a resumed
+run reaches a new terminal generation, it receives a new fingerprint and the
+callback is armed again. A notification delivered for an earlier failed
+attempt therefore does not silence the resumed attempt.
+
+The notifier retries transient connection and server errors within fixed time
+and submission limits. If a connection fails after a submission may have been
+accepted, it reconciles the stable client message ID against thread history
+before sending again. This produces `delivered` when confirmation is found and
+`unknown` when safe confirmation is impossible.
 
 ### Process ownership and failure isolation
 

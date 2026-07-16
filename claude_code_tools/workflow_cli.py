@@ -35,6 +35,7 @@ from claude_code_tools.workflow_cli_rendering import (
 )
 from claude_code_tools.workflow_cli_contract import list_payload, show_payload
 from claude_code_tools.workflow_runs import (
+    ACTIVE_STATUSES,
     FILTER_STATUSES,
     RunLookupResult,
     RunQueryResult,
@@ -190,6 +191,10 @@ def _empty_message(
     Returns:
         A precise human-readable empty-state message.
     """
+    if statuses == ACTIVE_STATUSES and (has_runs or live):
+        if live:
+            return "Waiting for active workflow runs…"
+        return "No active workflow runs. Use --all to show history."
     if has_runs and statuses:
         selected = ", ".join(_sanitize(status) for status in statuses)
         prefix = "Waiting; no workflow runs match" if live else "No workflow runs match"
@@ -383,10 +388,37 @@ def _status_option(function: Callable[..., object]) -> Callable[..., object]:
         callback=_unique_statuses,
         metavar="STATUS",
         help=(
-            "Include only this effective status; repeat for more. "
+            "Override the active-only default with this effective status; "
+            "repeat for more. "
             f"Accepted values: {accepted}."
         ),
     )(function)
+
+
+def _all_option(function: Callable[..., object]) -> Callable[..., object]:
+    """Decorate a list command with the explicit history switch."""
+    return click.option(
+        "--all",
+        "show_all",
+        is_flag=True,
+        help=(
+            "Include terminal and diagnostic workflow history; cannot be "
+            "combined with --status."
+        ),
+    )(function)
+
+
+def _effective_statuses(
+    statuses: tuple[str, ...],
+    *,
+    show_all: bool,
+) -> tuple[str, ...]:
+    """Resolve explicit filters against the active-only default."""
+    if show_all and statuses:
+        raise click.UsageError("--all cannot be combined with --status.")
+    if show_all:
+        return ()
+    return statuses or ACTIVE_STATUSES
 
 
 def _limit_option(function: Callable[..., object]) -> Callable[..., object]:
@@ -535,11 +567,21 @@ def _finite_refresh(
 @click.group(
     cls=_BoundedGroup,
     invoke_without_command=True,
-    help="Observe local durable dynamic-workflow runs without changing them.",
+    help=(
+        "Observe durable dynamic-workflow runs in the global cross-project "
+        "store without changing them. With no subcommand, list active runs, "
+        "including unverifiable nonterminal runs."
+    ),
 )
 @_status_option
+@_all_option
 @_limit_option
-@click.option("--json", "json_output", is_flag=True, help="Emit stable JSON.")
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    help="Emit versioned list JSON.",
+)
 @click.option(
     "--no-color",
     is_flag=True,
@@ -549,6 +591,7 @@ def _finite_refresh(
 def cli(
     context: click.Context,
     statuses: tuple[str, ...],
+    show_all: bool,
     limit: int,
     json_output: bool,
     no_color: bool,
@@ -558,6 +601,7 @@ def cli(
     Args:
         context: Active Click context.
         statuses: Effective status filters for the default list.
+        show_all: Whether terminal and diagnostic history is included.
         limit: Maximum rows for the default list.
         json_output: Whether the default list is JSON.
         no_color: Whether ANSI styling is disabled.
@@ -570,7 +614,7 @@ def cli(
     if context.invoked_subcommand is not None:
         misplaced = [
             option
-            for option in ("statuses", "limit", "json_output")
+            for option in ("statuses", "show_all", "limit", "json_output")
             if context.get_parameter_source(option) is ParameterSource.COMMANDLINE
         ]
         if misplaced:
@@ -580,11 +624,17 @@ def cli(
                     "codex-workflows --json (without watch)."
                 )
             show_only_list_options = [
-                option for option in misplaced if option in {"statuses", "limit"}
+                option
+                for option in misplaced
+                if option in {"statuses", "show_all", "limit"}
             ]
             if show_only_list_options and context.invoked_subcommand == "show":
                 rendered = ", ".join(
-                    "--status" if option == "statuses" else "--limit"
+                    "--status"
+                    if option == "statuses"
+                    else "--all"
+                    if option == "show_all"
+                    else "--limit"
                     for option in show_only_list_options
                 )
                 raise click.UsageError(
@@ -593,6 +643,8 @@ def cli(
             rendered = ", ".join(
                 "--status"
                 if option == "statuses"
+                else "--all"
+                if option == "show_all"
                 else "--json"
                 if option == "json_output"
                 else "--limit"
@@ -600,8 +652,9 @@ def cli(
             )
             raise click.UsageError(f"{rendered} must appear after the subcommand.")
     if context.invoked_subcommand is None:
+        selected_statuses = _effective_statuses(statuses, show_all=show_all)
         snapshot = _query_list(
-            statuses=statuses,
+            statuses=selected_statuses,
             limit=limit,
         )
         if json_output:
@@ -610,8 +663,14 @@ def cli(
             _print_list(snapshot, no_color=no_color)
 
 
-@cli.command(help="Watch a live dashboard until Ctrl-C.")
+@cli.command(
+    help=(
+        "Watch active runs from the global cross-project store until Ctrl-C. "
+        "JSON is not supported; put --no-color before watch when needed."
+    )
+)
 @_status_option
+@_all_option
 @_limit_option
 @click.option(
     "--refresh",
@@ -628,6 +687,7 @@ def cli(
 def watch(
     context: click.Context,
     statuses: tuple[str, ...],
+    show_all: bool,
     limit: int,
     refresh: float,
 ) -> None:
@@ -636,6 +696,7 @@ def watch(
     Args:
         context: Active Click context.
         statuses: Effective statuses to include.
+        show_all: Whether terminal and diagnostic history is included.
         limit: Maximum rows to show.
         refresh: Seconds between state reads.
 
@@ -644,6 +705,7 @@ def watch(
         click.exceptions.Exit: When the user interrupts the dashboard.
     """
     no_color = bool(context.obj.get("no_color"))
+    selected_statuses = _effective_statuses(statuses, show_all=show_all)
     console = _console(no_color)
     term = os.environ.get("TERM", "").strip().lower()
     if not _stdout_is_tty() or console.is_dumb_terminal or term in {"dumb", "unknown"}:
@@ -654,7 +716,7 @@ def watch(
     try:
         _refresh_console_size(console)
         initial_snapshot = _query_list(
-            statuses=statuses,
+            statuses=selected_statuses,
             limit=limit,
         )
         initial = _list_renderable(
@@ -673,7 +735,7 @@ def watch(
                 time.sleep(refresh)
                 _refresh_console_size(console)
                 snapshot = _query_list(
-                    statuses=statuses,
+                    statuses=selected_statuses,
                     limit=limit,
                 )
                 rendered = _list_renderable(
@@ -690,9 +752,19 @@ def watch(
         raise click.exceptions.Exit(130) from None
 
 
-@cli.command(help="Show detailed state for RUN_ID.")
+@cli.command(
+    help=(
+        "Show detailed state for RUN_ID from the global store. Put --no-color "
+        "before show when needed."
+    )
+)
 @click.argument("run_id")
-@click.option("--json", "json_output", is_flag=True, help="Emit stable JSON.")
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    help="Emit complete versioned JSON.",
+)
 @click.option(
     "--full",
     is_flag=True,
