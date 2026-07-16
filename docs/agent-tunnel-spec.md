@@ -1,10 +1,12 @@
-# agent-tunnel: let teammates talk to your local Claude sessions
+# agent-tunnel: let teammates talk to your local agent sessions
 
-`agent-tunnel` exposes long-lived, context-rich local Claude Code sessions
-("experts") to teammates over Discord, so they can ask questions directly
-instead of relaying through you. You publish *a specific session* at runtime
-with `>share`; colleagues address it by its **handle**; each conversation is
-answered against a read-only **fork** of that session.
+`agent-tunnel` exposes long-lived, context-rich local Claude Code (and Codex
+CLI) sessions ("experts") to teammates over Discord, so they can ask
+questions directly instead of relaying through you. You publish *a specific
+session* at runtime with `>share` (Claude) or `agent-tunnel share --agent
+codex` (Codex — see "Codex CLI sessions"); colleagues address it by its
+**handle**; each conversation is answered against a read-only **fork** of
+that session.
 
 ## Motivation
 
@@ -258,6 +260,45 @@ dir is propagated end to end:
   thread replays the expert session's full context (~its token count per cold
   question) — fine for Q&A.
 
+## Codex CLI sessions
+
+The same tunnel publishes **Codex CLI** (OpenAI) sessions; colleagues see
+identical handles/threads. Every record (registry + store) carries an
+`agent` field ("claude" default, so pre-field records load correctly), and
+backend dispatch keys on `(agent, backend)`.
+
+- **Publish**: `agent-tunnel share --agent codex <name>` from the project
+  dir (codex has no `UserPromptSubmit`-style hook; the CLI finds the newest
+  rollout whose recorded `cwd` matches). The plugin hook also detects a
+  codex-shaped `transcript_path` defensively, since codex can load
+  Claude-plugin hooks.
+- **Fork = file copy**. Verified live (codex-cli 0.144): `codex exec resume
+  <id>` APPENDS to the resumed session's own rollout (same id, same file),
+  and `codex fork` is TUI-only. So `CodexHeadlessBackend` forks by copying
+  the expert rollout under a fresh uuid7 — rewriting the meta id and
+  stamping `forked_from_id`/`parent_thread_id` like codex's own fork — then
+  every turn runs `codex exec resume <fork-id> - --json` (prompt on stdin).
+  The owner's file is never touched; the fork id is STABLE across turns
+  (claude's headless fork mints a new id per turn).
+- **Access → sandbox**, not tool lists: read → `-c sandbox_mode=read-only`,
+  write → `workspace-write` (codex can also run *sandboxed* commands at
+  this level), bash → `workspace-write` + `network_access=true`, all →
+  `--dangerously-bypass-approvals-and-sandbox` gated by `[codex]
+  allow_skip_permissions` (same double opt-in as claude). Non-interactive
+  turns also set `-c approval_policy=never`.
+- **Persona rides the fork prompt**: codex has no `--append-system-prompt`,
+  so the persona (and outbox instruction) is prepended to the first prompt
+  of each fork and persists in the fork's context; a live access change
+  re-sends the outbox note once.
+- **Auth/env**: `CODEX_HOME` pinned from the record's `config_dir`;
+  `OPENAI_API_KEY` stripped by default (`[codex] unset_api_key`) so forks
+  use the owner's ChatGPT login — mirroring the claude behavior.
+- **Headless-only**: codex records always bind `backend=headless`
+  (`backend_name_for`); the answer text is the last `agent_message` item of
+  the `--json` event stream (equivalent to `--output-last-message`), and
+  the tmux reaper skips codex records. `agent-tunnel resume` execs
+  `codex resume <fork-id>`.
+
 ## Security model
 
 - Read-only tools by default, hard-enforced by the CLI permission layer.
@@ -292,6 +333,10 @@ dir is propagated end to end:
   auto-submitted, answer captured from the transcript and posted back;
   follow-ups and `!done` exercised. Confirmed against a private `-L` tmux
   server while the main server was fd-saturated.
+- Live end-to-end (codex, headless): `agent-tunnel share --agent codex` →
+  auto-detected the newest rollout by cwd → `ask --handle` forked it at the
+  file level and the fork recalled the full session context; follow-up
+  reused the same fork id; original rollout byte-identical throughout.
 
 ## Roadmap
 

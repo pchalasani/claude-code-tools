@@ -12,9 +12,10 @@ Schema (``registry.json``)::
       "records": {
         "<handle>": {
           "handle": "<handle>",
-          "session_id": "<claude session uuid>",
+          "session_id": "<claude/codex session uuid>",
           "cwd": "<absolute project dir of that session>",
-          "config_dir": "<claude config dir the session lives under>",
+          "config_dir": "<agent config dir: CLAUDE_CONFIG_DIR or CODEX_HOME>",
+          "agent": "claude" | "codex",
           "access": "read" | "write" | "bash",
           "label": "<optional friendly label>",
           "transcript_path": "<absolute .jsonl path, best-effort>",
@@ -64,7 +65,10 @@ class PublishRecord:
     handle: str
     session_id: str
     cwd: str
-    config_dir: str = ""  # Claude config dir the session lives under
+    config_dir: str = ""  # CLAUDE_CONFIG_DIR (claude) / CODEX_HOME (codex)
+    # Which agent CLI owns the session: "claude" (Claude Code) or "codex"
+    # (OpenAI Codex CLI). Records written before this field default to claude.
+    agent: str = "claude"
     # "read", "write" (>share --write), or "bash"
     # (>share --dangerously-allow-bash; also enables command execution).
     access: str = "read"
@@ -103,6 +107,7 @@ class Registry:
             # Defensive: an old hook could write access=null; treat it as read
             # so it never displays or behaves oddly (null != "write" anyway).
             record.access = record.access or "read"
+            record.agent = record.agent or "claude"
             # Backfill config_dir for records written before it was tracked:
             # the transcript path is <config-dir>/projects/...
             if not record.config_dir and "/projects/" in record.transcript_path:
@@ -136,6 +141,80 @@ class Registry:
             records = self._read()
             records[record.handle] = record
             self._write(records)
+
+    def publish(
+        self,
+        session_id: str,
+        cwd: str,
+        config_dir: str = "",
+        agent: str = "claude",
+        access: Optional[str] = None,
+        label: str = "",
+        transcript_path: str = "",
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Insert/update a session's record (the out-of-session `>share`).
+
+        Mirrors the hook's semantics: a re-published session keeps its handle
+        (unless a new label is given) and preserves access/label/created_at
+        unless overridden; a revoked handle may be reclaimed by anyone; a
+        LIVE handle owned by a different session is a collision. ``access``
+        of None preserves the prior level (defaulting to "read").
+
+        Returns:
+            (handle, None) on success, (None, handle) on collision.
+        """
+        with file_lock(self.path):
+            records = self._read()
+            existing = next(
+                (
+                    h
+                    for h, r in records.items()
+                    if r.session_id == session_id and not r.revoked
+                ),
+                None,
+            )
+            prior = records.get(existing) if existing else None
+            if label:
+                handle = label
+                taken = records.get(handle)
+                if (
+                    taken is not None
+                    and not taken.revoked
+                    and taken.session_id != session_id
+                ):
+                    return None, handle
+                if existing and existing != handle:
+                    records.pop(existing, None)
+            elif existing:
+                handle = existing
+            else:
+                handle = derive_handle(session_id)
+                while (
+                    handle in records
+                    and records[handle].session_id != session_id
+                ):
+                    handle += "x"
+            if prior is None:
+                # Inherit only from a record this session already owns; a
+                # revoked handle reclaimed from ANOTHER session is a fresh
+                # publish and must not inherit its access/label/created_at.
+                under = records.get(handle)
+                if under is not None and under.session_id == session_id:
+                    prior = under
+            records[handle] = PublishRecord(
+                handle=handle,
+                session_id=session_id,
+                cwd=cwd,
+                config_dir=config_dir,
+                agent=agent or "claude",
+                access=access or (prior.access if prior else "") or "read",
+                label=label or (prior.label if prior else ""),
+                transcript_path=transcript_path,
+                created_at=prior.created_at if prior else time.time(),
+                revoked=False,
+            )
+            self._write(records)
+        return handle, None
 
     def revoke(self, handle: str) -> bool:
         """Mark a handle revoked. Returns True if it existed."""

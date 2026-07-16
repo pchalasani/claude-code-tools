@@ -72,13 +72,35 @@ def _atomic_write(path, records):
     os.replace(tmp, path)
 
 
-def _config_dir(transcript_path):
-    """Detect the Claude config dir this session lives under, path-agnostically.
+def _detect_agent(transcript_path):
+    """"codex" when the transcript is a codex rollout, else "claude".
 
-    The transcript path is <config-dir>/projects/<encoded-cwd>/<id>.jsonl, so
-    the config dir is everything before /projects/. Falls back to
-    CLAUDE_CONFIG_DIR, then ~/.claude.
+    Codex rollouts live at <codex-home>/sessions/YYYY/MM/DD/rollout-*.jsonl;
+    Claude transcripts at <config-dir>/projects/<encoded-cwd>/<id>.jsonl.
+    Codex can load Claude-plugin hooks (same hooks.json format), so this hook
+    may fire inside a codex session — label the record correctly so the
+    daemon drives it with the codex backend, not claude.
     """
+    path = transcript_path or ""
+    if "/sessions/" in path and os.path.basename(path).startswith("rollout-"):
+        return "codex"
+    return "claude"
+
+
+def _config_dir(transcript_path, agent):
+    """Detect the agent config dir this session lives under, path-agnostically.
+
+    Claude: everything before /projects/ (falling back to CLAUDE_CONFIG_DIR,
+    then ~/.claude). Codex: everything before /sessions/ (falling back to
+    CODEX_HOME, then ~/.codex).
+    """
+    if agent == "codex":
+        if transcript_path and "/sessions/" in transcript_path:
+            return transcript_path.split("/sessions/")[0]
+        env = os.environ.get("CODEX_HOME")
+        if env:
+            return os.path.expanduser(env)
+        return os.path.expanduser("~/.codex")
     if transcript_path and "/projects/" in transcript_path:
         return transcript_path.split("/projects/")[0]
     env = os.environ.get("CLAUDE_CONFIG_DIR")
@@ -87,7 +109,8 @@ def _config_dir(transcript_path):
     return os.path.expanduser("~/.claude")
 
 
-def _publish(session_id, cwd, transcript_path, config_dir, access, label):
+def _publish(session_id, cwd, transcript_path, config_dir, access, label,
+             agent="claude"):
     """Insert/update this session's record under a read-modify-write lock.
 
     access is "read"/"write", or None to preserve an existing record's level.
@@ -139,6 +162,7 @@ def _publish(session_id, cwd, transcript_path, config_dir, access, label):
                 "session_id": session_id,
                 "cwd": cwd,
                 "config_dir": config_dir,
+                "agent": agent or "claude",
                 # `or "read"` (not a .get default) so a pre-existing null
                 # access — written by an old hook — can't persist on re-share.
                 "access": access
@@ -249,9 +273,11 @@ def main():
                     f"(2-32 chars), e.g. >share payments-auth.{RESET}"
                 )
             else:
-                config_dir = _config_dir(transcript_path)
+                agent = _detect_agent(transcript_path)
+                config_dir = _config_dir(transcript_path, agent)
                 handle, collision = _publish(
-                    session_id, cwd, transcript_path, config_dir, access, label
+                    session_id, cwd, transcript_path, config_dir, access,
+                    label, agent
                 )
                 if collision:
                     message = (

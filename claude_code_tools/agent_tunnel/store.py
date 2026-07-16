@@ -35,6 +35,9 @@ class ThreadRecord:
     access: str = "read"
     fork_session_id: str = ""
     backend: str = ""
+    # Agent CLI the bound session runs on: "claude" or "codex". Legacy
+    # records (pre-field) load as claude via the dataclass default.
+    agent: str = "claude"
     asker: str = ""
     tmux_window: str = ""
     created_at: float = field(default_factory=time.time)
@@ -70,6 +73,7 @@ class TunnelStore:
             # backend without re-deriving it — and the fix persists on save.
             if not record.backend and record.tmux_window:
                 record.backend = "tmux"
+            record.agent = record.agent or "claude"
             self._records[key] = record
         self._fork_ids = set(data.get("fork_ids", []))
 
@@ -117,6 +121,7 @@ class TunnelStore:
         config_dir: str = "",
         access: str = "read",
         asker: str = "",
+        agent: str = "claude",
     ) -> ThreadRecord:
         """Create a pending binding for a thread if not already present.
 
@@ -137,6 +142,7 @@ class TunnelStore:
                 access=access,
                 backend=backend,
                 asker=asker,
+                agent=agent or "claude",
             )
             self._records[thread_key] = rec
             self._save_locked()

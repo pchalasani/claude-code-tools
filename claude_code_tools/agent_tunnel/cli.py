@@ -18,7 +18,14 @@ from .backends import (
     BackendError,
     _window_name,
     backend_for_record,
-    make_backend,
+    backend_name_for,
+)
+from .codex_session import (
+    codex_home_for,
+    count_codex_turns,
+    find_codex_session_file,
+    find_latest_codex_session,
+    rollout_session_id,
 )
 from .config import (
     DEFAULT_CONFIG_PATH,
@@ -26,6 +33,7 @@ from .config import (
     load_config,
     sample_config,
 )
+from .publishing import share
 from .registry import Registry
 from .session import count_turns, find_latest_session, transcript_dir
 from .store import ThreadRecord, TunnelStore
@@ -55,9 +63,13 @@ def cli() -> None:
     Publish a session from inside it by typing `>share` (the agent-tunnel
     plugin), hand the resulting handle to colleagues, and run
     `agent-tunnel serve` so they can ask it questions in Discord — each
-    answered against a read-only fork. Run `agent-tunnel help` for the full
+    answered against a read-only fork. Codex CLI sessions are shared with
+    `agent-tunnel share --agent codex`. Run `agent-tunnel help` for the full
     rundown of every command and where to run it.
     """
+
+
+cli.add_command(share)
 
 
 @cli.command()
@@ -150,6 +162,14 @@ def serve(
     is_flag=True,
     help="Grant FULL access (skip-permissions; needs allow_skip_permissions).",
 )
+@click.option(
+    "--agent",
+    "agent_",
+    type=click.Choice(["claude", "codex"]),
+    default="claude",
+    show_default=True,
+    help="Agent CLI to target (with --session/auto; a --handle knows its own).",
+)
 @click.argument("question")
 def ask(
     config: Optional[str],
@@ -161,6 +181,7 @@ def ask(
     write: bool,
     allow_bash: bool,
     skip_perms: bool,
+    agent_: str,
     question: str,
 ) -> None:
     """Ask one question through the full pipeline (no Discord).
@@ -170,12 +191,21 @@ def ask(
     """
     cfg = _build(config, backend)
     store = TunnelStore(cfg.state_path)
-    bk = make_backend(cfg, store)
     thread_key = f"cli:{thread}"
 
     if store.get(thread_key) is None:
-        expert_id, project_dir, hname, config_dir, access = _resolve_target(
-            cfg, store, handle, session, project, write, allow_bash, skip_perms
+        expert_id, project_dir, hname, config_dir, access, agent = (
+            _resolve_target(
+                cfg,
+                store,
+                handle,
+                session,
+                project,
+                write,
+                allow_bash,
+                skip_perms,
+                agent_,
+            )
         )
         store.bind(
             thread_key,
@@ -184,9 +214,11 @@ def ask(
             project_dir=str(project_dir),
             config_dir=config_dir,
             access=access,
-            backend=cfg.backend,
+            backend=backend_name_for(cfg, agent),
             asker="cli",
+            agent=agent,
         )
+    bk = backend_for_record(cfg, store, store.get(thread_key))
     try:
         answer = bk.ask(thread_key, question)
     except BackendError as exc:
@@ -208,14 +240,21 @@ def _resolve_target(
     write: bool = False,
     allow_bash: bool = False,
     skip_perms: bool = False,
-) -> tuple[str, Path, str, str, str]:
-    """Resolve (expert_session_id, project_dir, handle, config_dir, access)."""
+    agent: str = "claude",
+) -> tuple[str, Path, str, str, str, str]:
+    """Resolve (expert_session_id, project_dir, handle, config_dir, access,
+    agent)."""
     if handle:
         rec = Registry(cfg.registry_path).get(handle)
         if rec is None:
             raise click.ClickException(f"No live handle {handle!r}.")
-        return rec.session_id, Path(rec.cwd), rec.handle, rec.config_dir, (
-            rec.access
+        return (
+            rec.session_id,
+            Path(rec.cwd),
+            rec.handle,
+            rec.config_dir,
+            rec.access,
+            rec.agent,
         )
     access = (
         "all"
@@ -223,9 +262,31 @@ def _resolve_target(
         else "bash" if allow_bash else "write" if write else "read"
     )
     project_dir = Path(project or os.getcwd()).expanduser().resolve()
+    if agent == "codex":
+        if session:
+            path = find_codex_session_file(session)
+            home = codex_home_for(path) if path else None
+            return session, project_dir, "cli", str(home or ""), access, agent
+        latest = find_latest_codex_session(
+            project_dir, exclude=store.known_fork_ids()
+        )
+        if latest is None:
+            raise click.ClickException(
+                f"No Codex session found for {project_dir}. Pass --session, "
+                "--handle, or run from a project with a codex session."
+            )
+        home = codex_home_for(latest)
+        return (
+            rollout_session_id(latest),
+            project_dir,
+            "cli",
+            str(home or ""),
+            access,
+            agent,
+        )
     env_dir = os.environ.get("CLAUDE_CONFIG_DIR", "")
     if session:
-        return session, project_dir, "cli", env_dir, access
+        return session, project_dir, "cli", env_dir, access, agent
     latest = find_latest_session(
         project_dir, exclude=store.known_fork_ids(), claude_home=cfg.claude_home
     )
@@ -236,7 +297,7 @@ def _resolve_target(
         )
     sp = str(latest)
     cfg_dir = sp.split("/projects/")[0] if "/projects/" in sp else env_dir
-    return latest.stem, project_dir, "cli", cfg_dir, access
+    return latest.stem, project_dir, "cli", cfg_dir, access, agent
 
 
 @cli.command()
@@ -292,15 +353,24 @@ def _forks(
 def _fork_path(rec: ThreadRecord) -> Optional[Path]:
     """Locate a fork's transcript file (under its own config dir)."""
     home = Path(rec.config_dir) if rec.config_dir else None
+    if rec.agent == "codex":
+        return find_codex_session_file(rec.fork_session_id, home)
     path = transcript_dir(Path(rec.project_dir), home) / (
         f"{rec.fork_session_id}.jsonl"
     )
     return path if path.exists() else None
 
 
+def _fork_turns(rec: ThreadRecord, fp: Optional[Path]) -> int:
+    """User-turn count of a fork's transcript, by the record's agent."""
+    if fp is None:
+        return 0
+    return count_codex_turns(fp) if rec.agent == "codex" else count_turns(fp)
+
+
 def _fork_line(rec: ThreadRecord, marker: str = "") -> str:
     fp = _fork_path(rec)
-    turns = count_turns(fp) if fp else 0
+    turns = _fork_turns(rec, fp)
     cfgdir = f" [{Path(rec.config_dir).name}]" if rec.config_dir else ""
     return (
         f"{marker}{rec.handle}{cfgdir}  asker={rec.asker or '?'}  "
@@ -338,11 +408,12 @@ def _fork_status(backend: Backend, rec: ThreadRecord) -> str:
 def _fork_row(rec: ThreadRecord, status: str) -> dict[str, str]:
     """Display fields for one fork (shared by the table, JSON, and picker)."""
     fp = _fork_path(rec)
-    turns = count_turns(fp) if fp else 0
+    turns = _fork_turns(rec, fp)
     cfgdir = Path(rec.config_dir).name if rec.config_dir else ""
     proj = Path(rec.project_dir).name if rec.project_dir else "?"
     return {
         "thread_key": rec.thread_key,
+        "agent": rec.agent or "claude",
         "handle": rec.handle or "?",
         "access": rec.access or "read",
         "asker": rec.asker or "?",
@@ -531,19 +602,23 @@ def resume(
             )
 
     env = {**os.environ}
-    if chosen.config_dir:
-        env["CLAUDE_CONFIG_DIR"] = chosen.config_dir
+    if chosen.agent == "codex":
+        if chosen.config_dir:
+            env["CODEX_HOME"] = chosen.config_dir
+        binary = cfg.codex.binary
+        argv = [binary, "resume", chosen.fork_session_id]
+    else:
+        if chosen.config_dir:
+            env["CLAUDE_CONFIG_DIR"] = chosen.config_dir
+        binary = cfg.claude.binary
+        argv = [binary, "--resume", chosen.fork_session_id]
     try:
         os.chdir(chosen.project_dir)
     except OSError as exc:
         raise click.ClickException(
             f"Cannot enter {chosen.project_dir}: {exc}"
         )
-    os.execvpe(
-        cfg.claude.binary,
-        [cfg.claude.binary, "--resume", chosen.fork_session_id],
-        env,
-    )
+    os.execvpe(binary, argv, env)
 
 
 @cli.command()
@@ -650,6 +725,7 @@ def doctor(config: Optional[str]) -> None:
     from .discord_bot import resolve_token
 
     cfg = _build(config)
+    active = Registry(cfg.registry_path).active()
     checks: list[tuple[bool, str]] = [
         (
             bool(resolve_token(cfg)),
@@ -664,6 +740,14 @@ def doctor(config: Optional[str]) -> None:
             f"claude binary on PATH ({cfg.claude.binary})",
         ),
     ]
+    if any(r.agent == "codex" for r in active):
+        checks.append(
+            (
+                shutil.which(cfg.codex.binary) is not None,
+                f"codex binary on PATH ({cfg.codex.binary}; codex "
+                "session(s) published)",
+            )
+        )
     if cfg.backend == "tmux":
         checks.append(
             (shutil.which("tmux") is not None, "tmux on PATH (tmux backend)")
@@ -672,8 +756,7 @@ def doctor(config: Optional[str]) -> None:
     for ok, label in checks:
         click.echo(f"  {'✓' if ok else '✗'} {label}")
         ok_all = ok_all and ok
-    n = len(Registry(cfg.registry_path).active())
-    click.echo(f"  • {n} published session(s) live")
+    click.echo(f"  • {len(active)} published session(s) live")
     if cfg.attachments.convert == "off":
         conv = "off (config)"
     else:
@@ -699,9 +782,10 @@ def status(config: Optional[str]) -> None:
         idle_min = (now - rec.last_used) / 60
         fork = rec.fork_session_id[:8] if rec.fork_session_id else "pending"
         window = f" window={rec.tmux_window}" if rec.tmux_window else ""
+        agent = f" agent={rec.agent}" if rec.agent != "claude" else ""
         click.echo(
             f"{rec.thread_key}: handle={rec.handle or '-'} fork={fork} "
-            f"backend={rec.backend} asker={rec.asker or '-'} "
+            f"backend={rec.backend}{agent} asker={rec.asker or '-'} "
             f"idle={idle_min:.0f}m{window}"
         )
 
@@ -790,8 +874,11 @@ Where to run each command:
              works inside tmux too, just with awkward prefix keys
   >share     inside the Claude Code session you want to publish (it's a hook
              from the agent-tunnel plugin, not a subcommand)
-  resume     a normal terminal where you want the Claude session — it execs
-             `claude --resume` and drops you into the fork
+  share      plain CLI, run from the session's project dir — the
+             out-of-session `>share`; the only way to publish a Codex CLI
+             session (`agent-tunnel share --agent codex <name>`)
+  resume     a normal terminal where you want the session — it execs
+             `claude --resume` (or `codex resume`) and drops you into the fork
   ask / published / status / forks / rename / doctor / forget / init
              plain CLI — run anywhere, tmux context does not matter
 """

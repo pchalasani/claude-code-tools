@@ -24,6 +24,11 @@ agent-tunnel Discord channel, and the `agent-tunnel serve` daemon answers
 from a read-only fork of that session. See the `agent-tunnel` tool docs for
 the daemon side and Discord setup.
 
+Sharing a **Codex CLI** session instead? Codex has no in-session hook — use
+`agent-tunnel share --agent codex <name>` from the project directory. (If
+your codex build loads Claude-plugin hooks, `>share` typed inside codex is
+detected and labeled correctly too.)
+
 ## Why a hook (not a CLI command)
 
 Only code running *inside* a session knows which session it is — and a single
