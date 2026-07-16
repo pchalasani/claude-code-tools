@@ -609,7 +609,10 @@ def is_valid_session(filepath: Path) -> bool:
     codex_valid_types = {"event_msg", "response_item", "turn_context"}
 
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
+        # errors="replace": a non-UTF-8 byte in one rollout must not crash
+        # session discovery / validation — the mangled line just fails its
+        # JSON parse below and is skipped.
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
             has_any_content = False
 
             for line in f:
@@ -621,6 +624,10 @@ def is_valid_session(filepath: Path) -> bool:
 
                 try:
                     data = json.loads(line)
+                    # A line may decode to null/list/scalar (valid JSON but
+                    # not a session entry) — skip it rather than crash.
+                    if not isinstance(data, dict):
+                        continue
                     entry_type = data.get("type", "")
 
                     # Claude Code: valid type with non-null sessionId

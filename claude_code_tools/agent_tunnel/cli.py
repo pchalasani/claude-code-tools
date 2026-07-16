@@ -313,6 +313,7 @@ def published(config: Optional[str]) -> None:
         label = (
             f" ({rec.label})" if rec.label and rec.label != rec.handle else ""
         )
+        agent = f"  [{rec.agent}]" if rec.agent != "claude" else ""
         cfgdir = f"  [{Path(rec.config_dir).name}]" if rec.config_dir else ""
         access = {
             "write": "  ✍️ write",
@@ -320,8 +321,8 @@ def published(config: Optional[str]) -> None:
             "all": "  🚨 all",
         }.get(rec.access, "")
         click.echo(
-            f"{rec.handle}{label}: {rec.session_id[:8]} @ {rec.cwd}{cfgdir}"
-            f"{access}"
+            f"{rec.handle}{label}: {rec.session_id[:8]} @ {rec.cwd}{agent}"
+            f"{cfgdir}{access}"
         )
 
 
@@ -601,17 +602,7 @@ def resume(
                 err=True,
             )
 
-    env = {**os.environ}
-    if chosen.agent == "codex":
-        if chosen.config_dir:
-            env["CODEX_HOME"] = chosen.config_dir
-        binary = cfg.codex.binary
-        argv = [binary, "resume", chosen.fork_session_id]
-    else:
-        if chosen.config_dir:
-            env["CLAUDE_CONFIG_DIR"] = chosen.config_dir
-        binary = cfg.claude.binary
-        argv = [binary, "--resume", chosen.fork_session_id]
+    binary, argv, env = _resume_argv(cfg, chosen)
     try:
         os.chdir(chosen.project_dir)
     except OSError as exc:
@@ -619,6 +610,30 @@ def resume(
             f"Cannot enter {chosen.project_dir}: {exc}"
         )
     os.execvpe(binary, argv, env)
+
+
+def _resume_argv(
+    cfg: TunnelConfig, rec: ThreadRecord
+) -> tuple[str, list[str], dict[str, str]]:
+    """(binary, argv, env) to exec when resuming a fork, by its agent.
+
+    Claude resumes with ``claude --resume <id>`` under CLAUDE_CONFIG_DIR;
+    codex with ``codex resume <id>`` under CODEX_HOME (codex's resume takes
+    the id positionally, no flag). Factored out of ``resume`` so the
+    per-agent command construction is unit-testable without exec-ing.
+    """
+    env = {**os.environ}
+    if rec.agent == "codex":
+        if rec.config_dir:
+            env["CODEX_HOME"] = rec.config_dir
+        binary = cfg.codex.binary
+        argv = [binary, "resume", rec.fork_session_id]
+    else:
+        if rec.config_dir:
+            env["CLAUDE_CONFIG_DIR"] = rec.config_dir
+        binary = cfg.claude.binary
+        argv = [binary, "--resume", rec.fork_session_id]
+    return binary, argv, env
 
 
 @cli.command()
@@ -726,6 +741,12 @@ def doctor(config: Optional[str]) -> None:
 
     cfg = _build(config)
     active = Registry(cfg.registry_path).active()
+    agents = {r.agent for r in active}
+    # A binary is only required for an agent that is actually published. With
+    # nothing published yet, check claude (the default) so a fresh setup is
+    # still validated; a codex-only deployment never needs claude or tmux.
+    need_claude = ("claude" in agents) or not active
+    need_codex = "codex" in agents
     checks: list[tuple[bool, str]] = [
         (
             bool(resolve_token(cfg)),
@@ -735,12 +756,15 @@ def doctor(config: Optional[str]) -> None:
             bool(cfg.discord.channel_ids),
             f"Watched channel(s): {cfg.discord.channel_ids or 'none set'}",
         ),
-        (
-            shutil.which(cfg.claude.binary) is not None,
-            f"claude binary on PATH ({cfg.claude.binary})",
-        ),
     ]
-    if any(r.agent == "codex" for r in active):
+    if need_claude:
+        checks.append(
+            (
+                shutil.which(cfg.claude.binary) is not None,
+                f"claude binary on PATH ({cfg.claude.binary})",
+            )
+        )
+    if need_codex:
         checks.append(
             (
                 shutil.which(cfg.codex.binary) is not None,
@@ -748,7 +772,8 @@ def doctor(config: Optional[str]) -> None:
                 "session(s) published)",
             )
         )
-    if cfg.backend == "tmux":
+    # tmux matters only when a Claude tmux backend could actually run.
+    if cfg.backend == "tmux" and need_claude:
         checks.append(
             (shutil.which("tmux") is not None, "tmux on PATH (tmux backend)")
         )

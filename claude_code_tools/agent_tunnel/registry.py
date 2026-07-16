@@ -94,20 +94,55 @@ class Registry:
             return {}
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
+            # ValueError covers JSONDecodeError AND UnicodeDecodeError (one
+            # bad byte in registry.json must not break >share or the daemon).
+            return {}
+        # A corrupted or hand-edited file may hold null/non-object values at
+        # any level — degrade to skipping, never crash the daemon or CLI.
+        if not isinstance(data, dict):
             return {}
         out: dict[str, PublishRecord] = {}
         known = {f.name for f in PublishRecord.__dataclass_fields__.values()}
-        for handle, rec in data.get("records", {}).items():
+        records_tbl = data.get("records")
+        if not isinstance(records_tbl, dict):
+            return {}
+        for handle, rec in records_tbl.items():
+            if not isinstance(rec, dict):
+                continue
             fields = {k: v for k, v in rec.items() if k in known}
             try:
                 record = PublishRecord(**fields)
             except TypeError:
                 continue
-            # Defensive: an old hook could write access=null; treat it as read
-            # so it never displays or behaves oddly (null != "write" anyway).
-            record.access = record.access or "read"
-            record.agent = record.agent or "claude"
+            # A record without a usable session id cannot be bound, compared,
+            # or displayed (`session_id[:8]`) — drop it at the load boundary.
+            if not isinstance(record.session_id, str) or not record.session_id:
+                continue
+            # Defensive: an old hook could write nulls (or wrong types) for
+            # any field (access=null was seen in the wild); normalize so
+            # comparisons, sorting, and substring checks never hit None.
+            record.handle = (
+                record.handle
+                if isinstance(record.handle, str) and record.handle
+                else str(handle)
+            )
+            for name in ("cwd", "config_dir", "label", "transcript_path"):
+                if not isinstance(getattr(record, name), str):
+                    setattr(record, name, "")
+            record.access = (
+                record.access
+                if isinstance(record.access, str) and record.access
+                else "read"
+            )
+            # Strict enum: an unknown agent value dispatches as claude, so
+            # it can't be displayed as one agent yet run through another.
+            record.agent = (
+                record.agent if record.agent in ("claude", "codex")
+                else "claude"
+            )
+            if not isinstance(record.created_at, (int, float)):
+                record.created_at = 0.0
             # Backfill config_dir for records written before it was tracked:
             # the transcript path is <config-dir>/projects/...
             if not record.config_dir and "/projects/" in record.transcript_path:
@@ -160,16 +195,26 @@ class Registry:
         LIVE handle owned by a different session is a collision. ``access``
         of None preserves the prior level (defaulting to "read").
 
+        Session identity is ``(agent, session_id)``, not the id alone: a
+        claude and a codex session that (however improbably) share an id are
+        distinct owners, so one can never relabel, inherit from, or overwrite
+        the other's live handle.
+
         Returns:
             (handle, None) on success, (None, handle) on collision.
         """
+        agent = agent or "claude"
+
+        def _same_session(rec: PublishRecord) -> bool:
+            return rec.session_id == session_id and rec.agent == agent
+
         with file_lock(self.path):
             records = self._read()
             existing = next(
                 (
                     h
                     for h, r in records.items()
-                    if r.session_id == session_id and not r.revoked
+                    if _same_session(r) and not r.revoked
                 ),
                 None,
             )
@@ -180,7 +225,7 @@ class Registry:
                 if (
                     taken is not None
                     and not taken.revoked
-                    and taken.session_id != session_id
+                    and not _same_session(taken)
                 ):
                     return None, handle
                 if existing and existing != handle:
@@ -189,9 +234,13 @@ class Registry:
                 handle = existing
             else:
                 handle = derive_handle(session_id)
+                # Only a LIVE handle of a DIFFERENT session forces a suffix —
+                # a revoked one, or one this same (agent, session) owns, is
+                # reusable (same rule as the label path and Registry.rename).
                 while (
                     handle in records
-                    and records[handle].session_id != session_id
+                    and not records[handle].revoked
+                    and not _same_session(records[handle])
                 ):
                     handle += "x"
             if prior is None:
@@ -199,7 +248,7 @@ class Registry:
                 # revoked handle reclaimed from ANOTHER session is a fresh
                 # publish and must not inherit its access/label/created_at.
                 under = records.get(handle)
-                if under is not None and under.session_id == session_id:
+                if under is not None and _same_session(under):
                     prior = under
             records[handle] = PublishRecord(
                 handle=handle,
@@ -251,10 +300,14 @@ class Registry:
             if rec is None or rec.revoked:
                 return (False, f"No handle {old!r} in the registry.")
             taken = records.get(new)
+            # Identity is (agent, session_id): a live handle owned by a
+            # different (agent, session) blocks the rename — even if it
+            # shares this record's session id under the other agent.
             if (
                 taken is not None
                 and not taken.revoked
-                and taken.session_id != rec.session_id
+                and (taken.session_id, taken.agent or "claude")
+                != (rec.session_id, rec.agent or "claude")
             ):
                 return (
                     False,

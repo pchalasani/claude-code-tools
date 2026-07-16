@@ -40,8 +40,51 @@ class ThreadRecord:
     agent: str = "claude"
     asker: str = ""
     tmux_window: str = ""
+    # Codex backend only: instructions the fork's context still needs —
+    # "intro" (persona + outbox note; set when the file-level fork is
+    # created) or "outbox" (after a live access change). Cleared after a
+    # successful turn. Durable on the record because the daemon builds a
+    # fresh backend per turn and may restart between a failed turn and its
+    # retry; in-memory markers would silently drop the persona.
+    pending_instructions: str = ""
     created_at: float = field(default_factory=time.time)
     last_used: float = field(default_factory=time.time)
+
+
+# String fields normalized on load: a null (or non-string) value from a
+# hand-edited/corrupted file must never crash slicing, sorting, or path ops.
+_STR_FIELDS = (
+    "thread_key",
+    "handle",
+    "expert_session_id",
+    "project_dir",
+    "config_dir",
+    "fork_session_id",
+    "backend",
+    "asker",
+    "tmux_window",
+    "pending_instructions",
+)
+
+
+def _normalize_record(record: ThreadRecord) -> None:
+    """Coerce every nullable/mistyped persisted field to a usable value."""
+    for name in _STR_FIELDS:
+        value = getattr(record, name)
+        if not isinstance(value, str):
+            setattr(record, name, "")
+    record.access = (
+        record.access if isinstance(record.access, str) and record.access
+        else "read"
+    )
+    # Strict enum: an unknown/garbage agent (e.g. "codex " with a stray
+    # space) must dispatch as claude, never be shown as one agent yet run as
+    # another. Only the two known values survive.
+    record.agent = record.agent if record.agent in ("claude", "codex") else "claude"
+    if not isinstance(record.created_at, (int, float)):
+        record.created_at = 0.0
+    if not isinstance(record.last_used, (int, float)):
+        record.last_used = 0.0
 
 
 class TunnelStore:
@@ -60,12 +103,30 @@ class TunnelStore:
             return
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
+            # ValueError covers JSONDecodeError AND UnicodeDecodeError (one
+            # bad byte in state.json must not wedge the daemon).
+            return
+        # A hand-edited or corrupted file may hold null/non-object values at
+        # any level; never let that stop the daemon from loading state.
+        if not isinstance(data, dict):
             return
         known = {f.name for f in ThreadRecord.__dataclass_fields__.values()}
-        for key, rec in data.get("records", {}).items():
+        records_tbl = data.get("records")
+        if not isinstance(records_tbl, dict):
+            records_tbl = {}
+        for key, rec in records_tbl.items():
+            if not isinstance(rec, dict):
+                continue
             fields = {k: v for k, v in rec.items() if k in known}
-            record = ThreadRecord(**fields)
+            # A record missing thread_key gets it from its map key.
+            fields.setdefault("thread_key", str(key))
+            try:
+                record = ThreadRecord(**fields)
+            except TypeError:
+                continue
+            _normalize_record(record)
+            record.thread_key = record.thread_key or str(key)
             # Single normalization point: a legacy record written before the
             # `backend` field existed loads blank, but a live `tmux_window`
             # means its fork runs under tmux. Backfill it here so every
@@ -73,9 +134,13 @@ class TunnelStore:
             # backend without re-deriving it — and the fix persists on save.
             if not record.backend and record.tmux_window:
                 record.backend = "tmux"
-            record.agent = record.agent or "claude"
             self._records[key] = record
-        self._fork_ids = set(data.get("fork_ids", []))
+        raw_ids = data.get("fork_ids")
+        self._fork_ids = (
+            {f for f in raw_ids if isinstance(f, str)}
+            if isinstance(raw_ids, list)
+            else set()
+        )
 
     def _reload_locked(self) -> None:
         """Re-read state from disk, replacing the in-memory snapshot.
@@ -152,12 +217,12 @@ class TunnelStore:
         """Merge caller-owned fields into the latest on-disk record.
 
         Re-reads under the lock, then copies only the fields the caller owns
-        (fork id, tmux window, ``last_used``) onto the freshly reloaded
-        record. A concurrent CLI ``rename``/``forget`` during a long backend
-        call is therefore not clobbered by this now-stale ``record``: a
-        renamed handle survives and a removed thread is not resurrected. The
-        fork id is always kept in the exclusion set so it is never reused,
-        even for a thread forgotten mid-call.
+        (fork id, tmux window, pending instructions, ``last_used``) onto the
+        freshly reloaded record. A concurrent CLI ``rename``/``forget``
+        during a long backend call is therefore not clobbered by this
+        now-stale ``record``: a renamed handle survives and a removed thread
+        is not resurrected. The fork id is always kept in the exclusion set
+        so it is never reused, even for a thread forgotten mid-call.
         """
         with self._lock, file_lock(self.path):
             self._reload_locked()
@@ -176,6 +241,7 @@ class TunnelStore:
                 return
             current.fork_session_id = record.fork_session_id
             current.tmux_window = record.tmux_window
+            current.pending_instructions = record.pending_instructions
             current.last_used = time.time()
             self._save_locked()
 

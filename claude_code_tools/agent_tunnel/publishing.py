@@ -54,7 +54,13 @@ def _claude_config_dir(transcript: str) -> str:
     help="Project dir of that session (default: cwd).",
 )
 @click.option(
-    "--write", is_flag=True, help="Let colleagues edit files (no shell)."
+    "--write",
+    is_flag=True,
+    help=(
+        "Let colleagues edit files. Claude: no shell. Codex: workspace-write "
+        "also permits SANDBOXED commands (its sandbox confines by "
+        "filesystem/network, not tool name)."
+    ),
 )
 @click.option(
     "--dangerously-allow-bash",
@@ -174,6 +180,15 @@ def share(
         click.echo(
             f"⚠️  {access.upper()} access — colleagues' agents can run "
             "commands via this handle. Trusted people only."
+        )
+    elif access == "write" and agent_ == "codex":
+        # Unlike claude write (edits, never shell), codex workspace-write
+        # can run SANDBOXED commands — surface that so "write" isn't read
+        # as "no execution".
+        click.echo(
+            "⚠️  Codex WRITE = workspace-write: the fork can also run "
+            "sandboxed commands (confined by filesystem/network, not tool "
+            "name), not just edit files."
         )
     click.echo(
         f"Colleagues: post  {handle} <question>  in the agent-tunnel "

@@ -194,6 +194,11 @@ class _BaseBackend:
             reg is not None
             and reg.access
             and reg.session_id == rec.expert_session_id
+            # Identity is (agent, session_id): a same-name handle republished
+            # for the OTHER agent with the same id (e.g. the sentinel "cli"
+            # handle, or a reclaimed revoked name) must not sync its access
+            # onto this thread.
+            and (reg.agent or "claude") == (rec.agent or "claude")
         ):
             return reg.access
         return rec.access
@@ -665,6 +670,11 @@ class TmuxBackend(_BaseBackend):
             return 0
         reaped = 0
         for rec in self.store.all_records():
+            # Codex records never own tmux windows (codex runs headless
+            # only); guard explicitly so a corrupted/hand-edited record can
+            # never route a codex thread through the tmux reaper.
+            if (rec.agent or "claude") == "codex":
+                continue
             # A legacy blank-backend record with a live window belongs to tmux.
             if (
                 not rec.tmux_window

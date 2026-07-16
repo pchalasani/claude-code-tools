@@ -285,7 +285,25 @@ backend dispatch keys on `(agent, backend)`.
   this level), bash → `workspace-write` + `network_access=true`, all →
   `--dangerously-bypass-approvals-and-sandbox` gated by `[codex]
   allow_skip_permissions` (same double opt-in as claude). Non-interactive
-  turns also set `-c approval_policy=never`.
+  turns also set `-c approval_policy=never`. The enforced per-handle flags
+  are appended LAST and sandbox/approval overrides are stripped from
+  `[codex] headless_extra_args`, so extra args can never weaken a handle's
+  access. Note: like claude's read preset (`Read`/`Grep`/`Glob` are not
+  path-scoped), the codex `read-only` sandbox permits **host-wide reads** —
+  a colleague can surface any file the owner's user can read; publish
+  accordingly.
+- **Non-shell tool surfaces**: codex's OS sandbox governs only shell
+  commands, so for every non-`all` handle the tunnel also disables the tool
+  surfaces that act outside it — MCP servers (`-c mcp_servers={}`), web
+  search (`-c tools.web_search=false`), and codex's default-on action
+  features via `--disable` (`apps`, `browser_use*`, `computer_use`,
+  `in_app_browser`, `image_generation`, `code_mode_host`, `hooks`) — giving
+  parity with claude read's tool allowlist. `all` keeps them. Caveat: this
+  `--disable` set is **codex-version-specific** (from `codex features list`
+  on codex-cli 0.144); a newer codex could add an action feature not on the
+  list. Before publishing a codex session to less-trusted colleagues, audit
+  `codex features list` and your `~/.codex/config.toml`. Exhaustive,
+  version-tracking feature lockdown is a follow-up.
 - **Persona rides the fork prompt**: codex has no `--append-system-prompt`,
   so the persona (and outbox instruction) is prepended to the first prompt
   of each fork and persists in the fork's context; a live access change
@@ -301,10 +319,18 @@ backend dispatch keys on `(agent, backend)`.
 
 ## Security model
 
-- Read-only tools by default, hard-enforced by the CLI permission layer.
-  `>share --write` adds file edits (still no Bash); `>share
-  --dangerously-allow-bash` additionally permits command execution and so
-  drops the sandbox — reserve it for fully trusted colleagues.
+- Read-only by default. The access levels mean DIFFERENT things per agent
+  because the enforcement mechanism differs — read < write < bash < all:
+    - **Claude** (tool allowlist): `>share --write` adds file edits (still
+      **no Bash**); `>share --dangerously-allow-bash` additionally permits
+      command execution and drops the tool sandbox.
+    - **Codex** (OS sandbox): read = `read-only`; **write = `workspace-write`,
+      which also permits *sandboxed* command execution** (confined by
+      filesystem/network, not by tool name) — it is NOT "no shell"; bash =
+      `workspace-write` + network; all = no sandbox. See "Codex CLI sessions"
+      for the full mapping. Grant codex `--write` knowing it can run confined
+      commands.
+  Both reserve bash/all for fully trusted colleagues.
 - Access = Discord channel membership + optional user/role allowlists. Anyone
   who can ask can surface anything in the session context or readable project
   tree — publish accordingly; the persona discourages leaking secrets but is a
