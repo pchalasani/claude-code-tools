@@ -399,6 +399,62 @@ def test_force_cleanup_releases_generation_capacity(
     assert second.paths.generation != first.paths.generation
 
 
+def test_inactive_history_does_not_block_start_or_force_cleanup(
+    server_environment: tuple[Path, dict[str, str]],
+) -> None:
+    """Stopped log directories do not consume bounded live scan entries."""
+    _root, environment = server_environment
+    base = server_models.base_paths_from_env(environment)
+    base.runtime_dir.mkdir(mode=0o700, parents=True)
+    histories = server_models.MAX_SERVER_GENERATION_DIRECTORIES + 1
+    for index in range(histories):
+        runtime = base.runtime_dir / f"{index:024x}"
+        runtime.mkdir(mode=0o700)
+        (runtime / "lifecycle.lock").write_text("", encoding="utf-8")
+        (runtime / "app-server.log").write_text("stopped\n", encoding="utf-8")
+
+    started = ensure_server(environment)
+    stopped = stop_server(environment, allow_disconnect=True)
+
+    assert started.status == "running"
+    assert stopped.status == "stopped"
+    assert (base.runtime_dir / f"{0:024x}").is_dir()
+
+
+def test_empty_existing_target_does_not_bypass_live_generation_cap(
+    server_environment: tuple[Path, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An inactive target directory still requires free live capacity."""
+    _root, environment = server_environment
+    monkeypatch.setattr(server_models, "MAX_SERVER_GENERATIONS", 1)
+    base = server_models.base_paths_from_env(environment)
+    live = server_models.paths_for_generation(base, "a" * 24)
+    target = server_models.paths_for_generation(base, "b" * 24)
+    live.runtime_dir.mkdir(mode=0o700, parents=True)
+    live.state_path.write_text("{}", encoding="utf-8")
+    target.runtime_dir.mkdir(mode=0o700)
+
+    with pytest.raises(CodexServerError, match="generation limit"):
+        server_models.require_generation_capacity(base, target.generation or "")
+
+
+def test_generation_scan_still_bounds_unrecognized_runtime_entries(
+    server_environment: tuple[Path, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ignoring inactive history does not unbound unrelated root entries."""
+    _root, environment = server_environment
+    monkeypatch.setattr(server_models, "MAX_SERVER_DIRECTORY_ENTRIES", 1)
+    base = server_models.base_paths_from_env(environment)
+    base.runtime_dir.mkdir(mode=0o700, parents=True)
+    (base.runtime_dir / "first").write_text("", encoding="utf-8")
+    (base.runtime_dir / "second").write_text("", encoding="utf-8")
+
+    with pytest.raises(CodexServerError, match="too many app-server runtime"):
+        server_models.all_server_paths(base)
+
+
 def test_non_plugin_configuration_change_reuses_server(
     server_environment: tuple[Path, dict[str, str]],
 ) -> None:
