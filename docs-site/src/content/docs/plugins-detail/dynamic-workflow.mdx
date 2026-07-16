@@ -4,6 +4,8 @@ description: >-
   Durable JavaScript orchestration for parallel headless Codex workers.
 ---
 
+import { Aside } from "@astrojs/starlight/components";
+
 The `dynamic-workflow` Codex plugin turns a multi-agent plan into a small,
 reviewable JavaScript program. JavaScript owns deterministic control flow;
 headless Codex workers own reasoning and tool use.
@@ -33,6 +35,16 @@ Those two commands are the complete plugin installation.
 
 Restart Codex, then invoke `$dynamic-workflow` or ask for a durable multi-agent
 workflow.
+
+<Aside type="caution" title="Shared-server sessions need a full reload">
+  If you use `codex-dynamic`, starting another TUI does not reload plugins from
+  an app server that was already running. After a plugin update, exit every
+  connected TUI and run `codex-server restart --force` from an ordinary
+  terminal, then start `codex-dynamic` again. A forced restart disconnects all
+  attached TUIs and interrupts their active turns, so never invoke it from
+  inside Codex. Saved conversations remain resumable. See the
+  [`codex-dynamic` lifecycle instructions][codex-dynamic-reload].
+</Aside>
 
 ## Workflow shape
 
@@ -99,6 +111,127 @@ Pause is cooperative: active workers finish, while new workers wait. Resume
 replays the JavaScript and returns cached results for compatible completed
 steps. This works across Codex CLI sessions because state lives on disk.
 
+## Completion callbacks
+
+A detached `wait` process can observe completion without making model calls,
+but it cannot wake the main Codex thread. The plugin also supports an opt-in
+true callback through Codex's shared app server:
+
+```text
+detached workflow -> callback sidecar -> shared app server -> original thread
+                                                   ^
+                                                   |
+                                              Codex TUI
+```
+
+For a one-command setup, install the optional Python CLI helper and launch Codex
+through it:
+
+```bash
+uv tool install claude-code-tools
+codex-dynamic
+```
+
+If the package is already installed, refresh it with
+`uv tool install --force claude-code-tools`. To continue the most recent Codex
+conversation, use:
+
+```bash
+codex-dynamic resume --last
+```
+
+The helper quietly starts or reuses the server and then hands the terminal
+directly to Codex. It is not required for the plugin itself. Without the helper,
+the equivalent manual setup is:
+
+```bash
+# Terminal 1
+codex app-server --listen unix://
+
+# Terminal 2
+codex --remote unix://
+```
+
+Callbacks require Codex CLI 0.136.0 or newer. That is the first compatible CLI
+release combining the WebSocket-over-Unix transport with the echoed client
+message IDs used to confirm callback delivery. Codex still marks the app-server
+and remote TUI interfaces as experimental, so their surfaces may evolve.
+
+Callback preflight validates the connected App Server too, so a stale external
+server fails before the workflow is created.
+
+To preserve an existing conversation manually, exit its current TUI and run
+`codex resume --remote unix://`, then select that session in the picker or pass
+its session ID. An already-running local TUI cannot reconnect in place.
+
+Then ask `$dynamic-workflow` to run in the background and notify the current
+thread. Every `run` or `resume` needs explicit host execution for that exact
+trusted supervisor command. This lets the supervisor write durable state and
+launch headless workers without inheriting the outer tool sandbox. For a
+callback, the same authorization lets its notifier reach the host App Server
+socket. The workflow remains in the restricted VM, and each worker retains its
+declared sandbox. The corresponding direct runner option is:
+
+```bash
+node bin/workflow.mjs run workflow.js --detach --notify-current-thread
+```
+
+A sandboxed launch fails before creating a run. Approve only the exact runner
+command, never a generic `node` prefix. Do not grant workers
+`danger-full-access` to work around the callback boundary.
+
+Codex automatically supplies the current thread ID to tool shells. The runner
+checks that the thread is loaded on the same server before it creates the run;
+there is no thread ID to copy or configure manually. A custom Unix socket can
+be selected with `--app-server-endpoint unix://PATH` when both the TUI and the
+runner use that path.
+
+When the workflow becomes terminal, the sidecar starts a turn if the original
+thread is idle. If you are already chatting with Codex, it steers the completion
+into and extends the active turn instead. Delivery is confirmed with a stable
+client message ID, so a lost response can be reconciled against thread history
+before retry.
+
+Do not start a waiter or polling loop after a launch whose response confirms an
+`armed` callback. Report the run ID and let the user continue chatting. This is
+conditional: a detached run without an armed callback still needs normal
+bounded monitoring when the user wants completion tracked.
+
+When Codex was started with `codex-dynamic`, the runner automatically requests
+a callback for every detached run. This protects against an agent accidentally
+omitting `--notify-current-thread`. Use `--no-notify-current-thread` only as an
+explicit opt-out; in every case, trust the actual launch response rather than
+the requested flags.
+
+Codex currently shows no persistent background-workflow card, spinner, or
+running-status message for the detached run. The launch response is the only
+immediate confirmation; completion later appears through the callback. The
+user can request a one-off status check at any time.
+
+Passive supervision and the local app server add no model calls. Completion
+reporting starts a new turn only while the thread is idle; otherwise it extends
+the active turn. Either reporting path invokes the model and consumes tokens.
+This path uses the Codex app-server protocol directly; it does not use MCP, the
+Agents SDK, or another service. The optional helper manages only the local
+process lifecycle. Codex currently labels the app-server and remote TUI
+interfaces as experimental, so their CLI and protocol surfaces may evolve.
+See the [official app-server documentation][codex-app-server] and the
+[`codex-dynamic` tool reference][codex-dynamic].
+
+Callback status is stored separately from workflow status. A socket outage can
+therefore produce a successful workflow with a failed callback. Inspect or
+retry it with:
+
+```bash
+node bin/workflow.mjs status <run-id> --json
+node bin/workflow.mjs notify <run-id>
+```
+
+Retries have a 24-hour deadline by default, a seven-day maximum, and at most
+five delivery submissions. A callback in `unknown` state, or one left in
+`sending` after submission began, may already have been accepted. Inspect the
+target thread before explicitly retrying with `notify <run-id> --force`.
+
 ## Safety
 
 - Workflow JavaScript has no injected filesystem, shell, process, or imports.
@@ -123,6 +256,13 @@ steps. This works across Codex CLI sessions because state lives on disk.
   matches, protecting unrelated processes after PID reuse.
 - Unconfirmed cleanup remains recoverable and nonterminal for a later retry.
 - Unawaited agent, pipeline, and parallel calls fail instead of leaking work.
+- Completion callbacks are explicit, detached-only, and limited to local Unix
+  app-server sockets.
+- The callback verifies its target before launch and has an absolute retry
+  deadline.
+- It never answers app-server approvals or user-input requests for the TUI.
+- Workflow results embedded in callback messages are marked as untrusted data.
+- Callback delivery failure does not rewrite the workflow's terminal result.
 
 Context-capacity failures are classified as non-retryable. Chunk the failing
 input or use tree reduction, then resume; completed compatible siblings remain
@@ -142,3 +282,8 @@ npm ci
 npm run typecheck
 npm test
 ```
+
+[codex-app-server]: https://developers.openai.com/codex/app-server
+[codex-dynamic]: /claude-code-tools/tools/codex-dynamic/
+[codex-dynamic-reload]:
+  /claude-code-tools/tools/codex-dynamic/#reload-after-a-plugin-change

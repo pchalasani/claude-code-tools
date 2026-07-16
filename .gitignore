@@ -175,6 +175,7 @@ hooks/settings.json
 .env*
 node_modules/
 package-lock.json
+!node_ui/package-lock.json
 !docs-site/package-lock.json
 !plugins/dynamic-workflow/package-lock.json
 

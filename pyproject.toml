@@ -1,6 +1,6 @@
 [project]
 name = "claude-code-tools"
-version = "1.14.2"
+version = "1.15.0"
 description = "Collection of tools for working with Claude Code"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -27,6 +27,9 @@ gdocs = [
     "Pillow>=10.0.0",
 ]
 
+[dependency-groups]
+dev = ["hatchling==1.28.0"]
+
 [project.scripts]
 # Unified session management interface
 # All session commands accessible via: aichat <subcommand>
@@ -45,16 +48,19 @@ fix-session = "claude_code_tools.fix_session:main"
 msg = "claude_code_tools.msg.cli:main"
 msg-hook = "claude_code_tools.msg.hooks:main"
 agent-tunnel = "claude_code_tools.agent_tunnel.cli:main"
+codex-server = "claude_code_tools.codex_server_cli:server_main"
+codex-dynamic = "claude_code_tools.codex_server_cli:dynamic_main"
+codex-workflows = "claude_code_tools.workflow_cli:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.28.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.hooks.custom]
-# Runs hatch_build.py to ensure node_ui/node_modules is installed before packaging
+# Runs hatch_build.py to prepare locked Node dependencies for wheels.
 
 [tool.hatch.build]
-# Don't respect .gitignore - we want to include node_modules
+# Use explicit artifact inputs rather than VCS ignore rules.
 ignore-vcs = true
 include = [
     "claude_code_tools/**/*.py",
@@ -62,7 +68,7 @@ include = [
     "node_ui/menu.js",
     "node_ui/action_config.js",
     "node_ui/package.json",
-    "node_ui/node_modules/**/*",
+    "node_ui/package-lock.json",
     "claude_code_tools/action_rpc.py",
 ]
 exclude = [
@@ -96,7 +102,7 @@ markers = [
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "1.14.2"
+version = "1.15.0"
 tag_format = "v$version"
 version_files = [
     "pyproject.toml:version",

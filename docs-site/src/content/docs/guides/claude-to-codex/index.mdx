@@ -38,12 +38,12 @@ for Codex through an installable skill and a durable JavaScript runtime.
 
 ## Install in Codex
 
-<Aside type="note" title="No claude-code-tools or npm install needed">
-  Do **not** run `uv tool install claude-code-tools` for this feature. That
-  installs the repository's separate Python CLI and is not a prerequisite for
-  the Codex plugin. The plugin already contains the skill and a compiled
-  JavaScript runner, so there is no `npm install` step either. Node.js 20 or
-  newer must merely be available because it executes that bundled runner.
+<Aside type="note" title="Plugin installation needs no Python or npm">
+  The plugin already contains the skill and a compiled JavaScript runner. It
+  does not require the repository's Python package or an `npm install` step.
+  Node.js 20 or newer must merely be available to execute the bundled runner.
+  The optional Python helper described below only simplifies completion
+  callbacks.
 </Aside>
 
 <Steps>
@@ -94,6 +94,126 @@ The skill will:
 - enforce reviewed agent, runtime, fan-out, prompt, and result limits
 - terminate runaway workflow JavaScript and worker process trees
 
+## Keep chatting and receive completion
+
+<Aside type="tip" title="The same day-to-day behavior">
+  Start the workflow, continue chatting in the main session, and let that same
+  session notify you when the background work finishes. This matches the
+  interaction pattern of Claude Code dynamic workflows without holding the
+  conversation open on a wait command.
+</Aside>
+
+Outside a callback-ready session, a detached workflow is durable but the
+current Codex turn must poll or wait to learn that it finished. Passive
+supervision makes no model calls, but it cannot wake an idle thread. For the
+Claude-style behavior where you keep chatting and the original thread speaks
+up later, launch Codex through its shared app server.
+
+Install the optional one-command helper:
+
+```bash
+uv tool install claude-code-tools
+```
+
+If the package is already installed, refresh it with
+`uv tool install --force claude-code-tools`. Then start Codex normally through
+the helper:
+
+```bash
+codex-dynamic
+```
+
+To continue the most recent conversation instead of starting a new one:
+
+```bash
+codex-dynamic resume --last
+```
+
+<Aside type="caution" title="Plugin updates require a safe server restart">
+  A new TUI does not reload plugins while an older shared app server is still
+  running. After installing or upgrading the plugin, exit every
+  `codex-dynamic` TUI, then run `codex-server restart --force` from an ordinary
+  terminal. Start `codex-dynamic` again afterward. Never run the forced restart
+  inside Codex: it disconnects every TUI attached to that server, interrupts
+  active turns, and makes those TUIs exit. Saved conversations remain
+  resumable. Codex currently has no in-session plugin-reload command.
+</Aside>
+
+Omit `--last` to use Codex's session picker. `codex-dynamic` quietly starts or
+reuses the local app server, then hands the terminal directly to Codex. The
+server remains available after the TUI exits. Passive server supervision makes
+no model calls. Callbacks require Codex CLI 0.136.0 or newer; it is the first
+compatible CLI release for this callback protocol. The helper rejects older
+versions before starting the server or TUI. Callback preflight also validates
+the connected App Server before creating a workflow.
+
+The Python package is only a convenience for this callback setup. Without it,
+use Codex's manual two-terminal form:
+
+```bash
+# Terminal 1
+codex app-server --listen unix://
+
+# Terminal 2
+codex --remote unix://
+```
+
+An already-running local TUI cannot reconnect itself in place; exit it first,
+then resume it with `codex-dynamic` as shown above.
+
+Now the request is simple:
+
+```text
+$dynamic-workflow Run the approved workflow in the background. Let me keep
+using this thread, and notify me here when it finishes.
+```
+
+The skill requests command-scoped approval for the exact trusted supervisor
+command. Every workflow `run` or `resume` needs this narrow host execution so
+durable state and headless workers do not inherit the outer tool sandbox. The
+same approval lets a callback notifier reach the host Unix socket. Workflow
+JavaScript stays in the restricted VM, and each worker retains its declared
+sandbox. If the thread is idle at completion, Codex starts a result-reporting
+turn. If a conversation turn is active, it steers the result into and extends
+that turn.
+You do not copy a thread ID, install MCP, run npm, or configure another API key.
+
+`codex-dynamic` makes callbacks the code-level default for detached workflow
+runs, so a forgotten `--notify-current-thread` flag does not silently lose the
+notification. The user can opt out with `--no-notify-current-thread`.
+
+The no-monitor behavior begins only when the launch response reports an
+`armed` callback. At that point the skill reports the run ID and ends the
+launch turn; it must not start a wait process, poll status, or create a
+background watcher. Without an armed callback, the normal bounded monitoring
+behavior still applies.
+
+Codex does not currently display a persistent background-workflow card,
+spinner, or running-status message in the conversation. After an armed launch,
+the chat simply looks normal until completion arrives. You can ask Codex for an
+explicit status check, but the absence of an indicator is not a reason for the
+agent to monitor automatically.
+
+Use `codex-server status` or `codex-server logs` for nondisruptive inspection.
+Stopping or restarting requires `--force` and must be done only after exiting
+all connected TUIs. See the
+[`codex-dynamic` tool reference][codex-dynamic] for lifecycle and safety
+details.
+
+Passive supervision and the local app server add no model calls. Completion
+reporting starts a new turn only while the thread is idle; otherwise it extends
+the active turn. Either reporting path invokes the model and consumes tokens.
+Callback delivery has a 24-hour retry deadline, at most five submissions, and
+separate status, so an app-server outage does not turn a successful workflow
+into a failed one.
+
+<Aside type="note" title="Codex app-server status">
+  Codex currently labels the app-server and remote TUI interfaces as
+  experimental. The plugin uses their documented `unix://` transport, but
+  their CLI and protocol surfaces may evolve. See the
+  [official Codex app-server documentation][codex-app-server].
+</Aside>
+
 ## Port an existing workflow
 
 Point the skill at the existing script and ask it to port and review it:
@@ -127,3 +247,5 @@ to the repository.
 
 [codex-marketplace]:
   https://developers.openai.com/codex/build-plugins#add-a-marketplace-from-the-cli
+[codex-app-server]: https://developers.openai.com/codex/app-server
+[codex-dynamic]: /claude-code-tools/tools/codex-dynamic/

@@ -1,7 +1,7 @@
 {
   "name": "dynamic-workflow",
-  "version": "0.1.0",
-  "description": "Run durable JavaScript workflows over headless Codex agents",
+  "version": "0.2.0",
+  "description": "Run durable JavaScript workflows with Codex callbacks",
   "author": {
     "name": "Prasad Chalasani"
   },
@@ -9,13 +9,14 @@
   "interface": {
     "displayName": "Dynamic Workflow",
     "shortDescription": "Run resumable multi-agent Codex workflows",
-    "longDescription": "Generate and run deterministic JavaScript orchestration with bounded parallel Codex workers, durable state, caching, pause, resume, and cancellation.",
+    "longDescription": "Generate and run deterministic JavaScript orchestration with bounded parallel Codex workers, durable state, controls, and optional callbacks to the originating Codex thread.",
     "developerName": "Prasad Chalasani",
     "category": "Developer Tools",
     "capabilities": [
       "JavaScript workflow generation",
       "Parallel headless Codex workers",
-      "Durable pause and resume"
+      "Durable pause and resume",
+      "Originating-thread completion callbacks"
     ],
     "defaultPrompt": "Use $dynamic-workflow to create or run a durable Codex workflow for this task."
   }

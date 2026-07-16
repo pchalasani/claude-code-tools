@@ -55,8 +55,55 @@ codex plugin add dynamic-workflow@cctools-codex-plugins
 ```
 
 The Codex plugin installs independently: it does not require the Python
-`claude-code-tools` package or an npm install. Node.js 20 or newer only needs to
-be available to execute the plugin's bundled workflow runner.
+`claude-code-tools` package or an npm install. Node.js 20 or newer and Codex
+CLI 0.136.0 or newer are required for callbacks. Version 0.136.0 is the first
+compatible CLI release for this callback protocol. Codex still marks the app
+server and remote TUI interfaces as experimental, so those surfaces may evolve.
+The plugin can notify the originating Codex thread through Codex's shared app
+server after a detached workflow finishes. Callback preflight also rejects a
+stale connected server.
+
+The optional Python package makes that callback setup a single command:
+
+```bash
+codex-dynamic
+# Or continue the latest conversation:
+codex-dynamic resume --last
+```
+
+`codex-dynamic` starts or reuses the local app server and then hands the
+terminal directly to Codex. Use `codex-server status` or `logs` for
+nondisruptive inspection. A forced stop or restart disconnects every attached
+TUI, so exit those sessions before running `codex-server stop --force` or
+`codex-server restart --force` from an ordinary terminal.
+
+The Python package also installs `codex-workflows`, an observational dashboard
+for durable workflow runs:
+
+```bash
+codex-workflows
+codex-workflows watch --limit 20
+codex-workflows show RUN_ID
+codex-workflows --all
+```
+
+The default list contains only active workflows. Use `--all` to include
+completed and diagnostic history. The command reads durable workflow state and
+process metadata. It never changes a run, sends a signal, repairs state, or
+launches an agent. See the
+[codex-workflows reference][codex-workflows-reference] for filters, JSON output,
+and the complete versioned schema.
+
+[codex-workflows-reference]:
+  //pchalasani.github.io/claude-code-tools/tools/codex-dynamic/#observe-workflow-runs
+
+Server management and passive supervision add no model calls. Completion
+reporting starts a new turn only while the thread is idle; otherwise it steers
+and extends the active turn. Either reporting path consumes model tokens.
+
+Each workflow `run` or `resume` uses narrow host execution for that exact
+reviewed supervisor command. The workflow JavaScript remains restricted, and
+every headless Codex worker keeps its declared sandbox.
 
 See the
 [Claude → Codex migration guide][claude-to-codex-guide]

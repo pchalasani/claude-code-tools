@@ -1,5 +1,17 @@
 # Plugin Changelog
 
+## 2026-07-13
+
+### dynamic-workflow 0.2.0
+
+- feat: add opt-in completion callbacks to the originating Codex thread
+  - connect through Codex's supported shared app-server Unix socket
+  - start a turn when the thread is idle or steer the active turn
+  - confirm delivery with a stable client message ID before recording success
+  - retry socket outages within a hard deadline without changing run status
+  - expose callback state in `status --json` and support manual retry
+  - keep the runtime dependency-free and require no MCP server
+
 ## 2026-07-12
 
 ### dynamic-workflow

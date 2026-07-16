@@ -1,7 +1,7 @@
 {
   "name": "@cctools/dynamic-workflow",
-  "version": "0.1.0",
-  "description": "Durable JavaScript workflows for headless Codex agents",
+  "version": "0.2.0",
+  "description": "Durable JavaScript workflows with Codex thread callbacks",
   "private": true,
   "type": "module",
   "bin": {

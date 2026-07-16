@@ -6,6 +6,7 @@ import {
   readFile,
   rename,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
@@ -18,6 +19,7 @@ import type {
 } from "./types.js";
 import {
   atomicWriteJson,
+  boundedJsonStringify,
   errorMessage,
   fileExists,
   isPidRunning,
@@ -30,6 +32,9 @@ import {
   workflowHome,
 } from "./utils.js";
 
+const MAX_EVENT_HISTORY_BYTES = 16 * 1024 * 1024;
+const MAX_STATE_BYTES = 16 * 1024 * 1024;
+
 export class StateStore {
   readonly directory: string;
   readonly eventsPath: string;
@@ -37,6 +42,8 @@ export class StateStore {
   readonly runId: string;
 
   private state: RunState;
+  private eventQueue: Promise<void> = Promise.resolve();
+  private eventsSaturated = false;
   private queue: Promise<void> = Promise.resolve();
 
   private constructor(state: RunState) {
@@ -71,10 +78,34 @@ export class StateStore {
     return path.join(StateStore.runDirectory(runId), "runner.lock");
   }
 
-  static async create(state: RunState): Promise<StateStore> {
+  static runnerSnapshotPath(runId: string): string {
+    return path.join(
+      StateStore.runDirectory(runId),
+      "runtime",
+      "workflow.mjs",
+    );
+  }
+
+  static async create(
+    state: RunState,
+    runnerSource?: string,
+  ): Promise<StateStore> {
+    synchronizeTerminalFingerprint(state);
     const store = new StateStore(state);
-    await mkdir(store.directory, { recursive: true });
-    await atomicWriteJson(StateStore.statePath(state.runId), state);
+    await mkdir(store.directory, { mode: 0o700, recursive: true });
+    if (runnerSource !== undefined) {
+      const runnerHash = sha256(runnerSource);
+      if (state.runnerHash !== undefined && state.runnerHash !== runnerHash) {
+        throw new Error("Runner source does not match its durable hash");
+      }
+      state.runnerHash = runnerHash;
+      await store.writeRunnerSnapshot(runnerSource, runnerHash);
+    }
+    await atomicWriteJson(
+      StateStore.statePath(state.runId),
+      state,
+      MAX_STATE_BYTES,
+    );
     await store.writeControl("run", state.authorization);
     return store;
   }
@@ -115,10 +146,17 @@ export class StateStore {
   async update(mutator: (state: RunState) => void): Promise<RunState> {
     let result = this.snapshot();
     const operation = this.queue.then(async () => {
-      mutator(this.state);
-      this.state.updatedAt = nowIso();
-      await atomicWriteJson(StateStore.statePath(this.runId), this.state);
-      result = this.snapshot();
+      const nextState = structuredClone(this.state);
+      mutator(nextState);
+      synchronizeTerminalFingerprint(nextState, this.state);
+      nextState.updatedAt = nowIso();
+      await atomicWriteJson(
+        StateStore.statePath(this.runId),
+        nextState,
+        MAX_STATE_BYTES,
+      );
+      this.state = nextState;
+      result = structuredClone(nextState);
     });
     this.queue = operation.catch(() => {});
     await operation;
@@ -279,11 +317,48 @@ export class StateStore {
   }
 
   async appendEvent(type: string, data: unknown = {}): Promise<void> {
-    await appendFile(
-      this.eventsPath,
-      `${JSON.stringify({ at: nowIso(), type, data })}\n`,
-      "utf8",
-    );
+    const operation = this.eventQueue.then(async () => {
+      if (this.eventsSaturated) {
+        return;
+      }
+      const event = boundedJsonStringify(
+        { at: nowIso(), type, data },
+        MAX_EVENT_HISTORY_BYTES - 1,
+      );
+      const record = `${event}\n`;
+      const recordBytes = Buffer.byteLength(record, "utf8");
+      const currentBytes = await this.eventFileBytes();
+      if (recordBytes <= MAX_EVENT_HISTORY_BYTES - currentBytes) {
+        await appendFile(this.eventsPath, record, "utf8");
+        return;
+      }
+
+      const marker = `${boundedJsonStringify({
+        at: nowIso(),
+        type: "events.truncated",
+        data: { maximumBytes: MAX_EVENT_HISTORY_BYTES },
+      }, MAX_EVENT_HISTORY_BYTES - 1)}\n`;
+      if (
+        Buffer.byteLength(marker, "utf8") <=
+        MAX_EVENT_HISTORY_BYTES - currentBytes
+      ) {
+        await appendFile(this.eventsPath, marker, "utf8");
+      }
+      this.eventsSaturated = true;
+    });
+    this.eventQueue = operation.catch(() => {});
+    await operation;
+  }
+
+  private async eventFileBytes(): Promise<number> {
+    try {
+      return (await stat(this.eventsPath)).size;
+    } catch (error) {
+      if (errorCode(error) === "ENOENT") {
+        return 0;
+      }
+      throw error;
+    }
   }
 
   async appendLog(message: string): Promise<void> {
@@ -295,6 +370,71 @@ export class StateStore {
       return await readFile(this.logPath, "utf8");
     } catch {
       return "";
+    }
+  }
+
+  async ensureRunnerSnapshot(currentEntryPath: string): Promise<string> {
+    const snapshotPath = StateStore.runnerSnapshotPath(this.runId);
+    try {
+      const source = await readFile(snapshotPath, "utf8");
+      const hash = sha256(source);
+      if (this.state.runnerHash !== undefined && this.state.runnerHash !== hash) {
+        throw new Error(
+          `Runner snapshot for ${this.runId} failed its integrity check`,
+        );
+      }
+      if (this.state.runnerHash === undefined) {
+        await this.update((state) => {
+          state.runnerHash = hash;
+        });
+      }
+      return snapshotPath;
+    } catch (error) {
+      if (errorCode(error) !== "ENOENT") {
+        throw error;
+      }
+    }
+
+    const source = await readFile(currentEntryPath, "utf8");
+    const hash = sha256(source);
+    if (this.state.runnerHash !== undefined && this.state.runnerHash !== hash) {
+      throw new Error(
+        `Runner snapshot for ${this.runId} is missing and the installed ` +
+          "runner no longer matches it",
+      );
+    }
+    await this.writeRunnerSnapshot(source, hash);
+    if (this.state.runnerHash === undefined) {
+      await this.update((state) => {
+        state.runnerHash = hash;
+      });
+    }
+    return snapshotPath;
+  }
+
+  private async writeRunnerSnapshot(
+    source: string,
+    expectedHash: string,
+  ): Promise<void> {
+    const directory = path.join(this.directory, "runtime");
+    const snapshotPath = StateStore.runnerSnapshotPath(this.runId);
+    await mkdir(directory, { mode: 0o700, recursive: true });
+    try {
+      await writeFile(snapshotPath, source, {
+        encoding: "utf8",
+        flag: "wx",
+        mode: 0o600,
+      });
+    } catch (error) {
+      if (errorCode(error) !== "EEXIST") {
+        throw error;
+      }
+    }
+    const persisted = await readFile(snapshotPath, "utf8");
+    if (sha256(persisted) !== expectedHash) {
+      throw new Error(
+        `Runner snapshot for ${this.runId} does not match its source`,
+      );
     }
   }
 
@@ -347,6 +487,41 @@ export class StateStore {
     }
     throw new Error(`Runner handoff for ${this.runId} timed out`);
   }
+}
+
+export function terminalStateFingerprint(state: RunState): string {
+  const terminalPayload = JSON.stringify([
+    state.status,
+    state.completedAt,
+    state.error ?? null,
+    state.result ?? null,
+  ]);
+  return sha256(terminalPayload);
+}
+
+function synchronizeTerminalFingerprint(
+  state: RunState,
+  previous?: RunState,
+): void {
+  if (
+    (state.status === "canceled" ||
+      state.status === "completed" ||
+      state.status === "failed") &&
+    state.completedAt !== undefined
+  ) {
+    const previousWasTerminal =
+      previous !== undefined &&
+      (previous.status === "canceled" ||
+        previous.status === "completed" ||
+        previous.status === "failed") &&
+      previous.completedAt !== undefined;
+    state.terminalFingerprint =
+      previousWasTerminal && previous.terminalFingerprint !== undefined
+        ? previous.terminalFingerprint
+        : sha256(randomUUID());
+    return;
+  }
+  delete state.terminalFingerprint;
 }
 
 function errorCode(error: unknown): string | undefined {

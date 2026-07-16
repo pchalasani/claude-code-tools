@@ -180,7 +180,7 @@ cargo install aichat-search         # Rust search TUI
 
 Prerequisites:
 
-- Node.js 16+ - for action menus (resume, export, etc.)
+- Node.js 18+ - for action menus (resume, export, etc.)
 - Rust/Cargo - for aichat search
 
 If you don't have uv or cargo:
