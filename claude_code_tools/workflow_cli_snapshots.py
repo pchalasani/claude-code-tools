@@ -68,6 +68,7 @@ class RunState:
 
     run_id: str | None = None
     status: str | None = None
+    cwd: str | None = None
     workflow_path: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
@@ -111,6 +112,16 @@ def _workflow_name(workflow_path: str | None) -> str:
         return "unknown"
     name = workflow_path.replace("\\", "/").rsplit("/", maxsplit=1)[-1]
     return name[:-3] if name.endswith(".js") else name
+
+
+def _project_name(cwd: str | None) -> str:
+    """Derive a cross-platform project label from a persisted directory."""
+    if not cwd:
+        return "unknown"
+    normalized = cwd.replace("\\", "/").rstrip("/")
+    if not normalized:
+        return cwd
+    return normalized.rsplit("/", maxsplit=1)[-1]
 
 
 @dataclass(frozen=True)
@@ -175,6 +186,16 @@ class RunRecord:
     def workflow_name(self) -> str:
         """Return a display name derived from the workflow path."""
         return _workflow_name(self.workflow_path)
+
+    @property
+    def cwd(self) -> str | None:
+        """Return the persisted workflow launch directory."""
+        return self.state.cwd
+
+    @property
+    def project_name(self) -> str:
+        """Return a compact project label derived from the launch directory."""
+        return _project_name(self.cwd)
 
     @property
     def created_at(self) -> str | None:

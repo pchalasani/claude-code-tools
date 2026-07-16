@@ -64,6 +64,7 @@ MAX_SHOW_STEPS = 50
 NARROW_DETAIL_WIDTH = 64
 ULTRA_NARROW_WIDTH = 4
 PLAIN_SHOW_MAX_WIDTH = 7
+WIDE_LIST_WIDTH = 140
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,7 @@ class RunRowView:
     abbreviated_id: str
     abbreviation_ambiguous: bool
     workflow_name: str
+    project_name: str
     status: str
     agents: str
     agents_with_workers: str
@@ -97,6 +99,11 @@ class RunRowView:
             abbreviation_ambiguous=run.abbreviation_ambiguous,
             workflow_name=bounded_text(
                 run.workflow_name,
+                maximum=MAX_LIST_NAME_CHARS,
+                full=False,
+            )[0],
+            project_name=bounded_text(
+                run.project_name,
                 maximum=MAX_LIST_NAME_CHARS,
                 full=False,
             )[0],
@@ -198,6 +205,7 @@ def _build_runs_table_from_views(
             records.extend(
                 [
                     Text(view.workflow_name, style="bold"),
+                    Text(view.project_name, style="cyan"),
                     Text(display_id, style="bright_black"),
                     _compact_run_details(
                         view,
@@ -220,7 +228,11 @@ def _build_runs_table_from_views(
             identity = Text()
             identity.append(view.workflow_name, style="bold")
             identity.append(
-                f" · {display_id}",
+                f"\n{view.project_name}",
+                style="cyan",
+            )
+            identity.append(
+                f"\n{display_id}",
                 style="bright_black",
             )
             table.add_row(
@@ -234,16 +246,20 @@ def _build_runs_table_from_views(
                 )
             )
         return table
-    if width < 118:
+    if width < WIDE_LIST_WIDTH:
         table.add_column(
-            "Workflow / run",
-            width=17,
+            "Workflow / project / run",
+            width=30,
             overflow="ellipsis",
         )
         table.add_column("State / activity", min_width=20, ratio=3)
         for view, display_id in zip(views, display_ids, strict=True):
             identity = Text()
             identity.append(view.workflow_name, style="bold")
+            identity.append(
+                f"\n{view.project_name}",
+                style="cyan",
+            )
             identity.append(
                 f"\n{display_id}",
                 style="bright_black",
@@ -258,7 +274,12 @@ def _build_runs_table_from_views(
             )
         return table
 
-    table.add_column("Workflow", ratio=2, max_width=26, overflow="ellipsis")
+    table.add_column(
+        "Workflow / Project",
+        ratio=4,
+        max_width=48,
+        overflow="ellipsis",
+    )
     table.add_column("Run", width=17, no_wrap=True)
     table.add_column("Status", width=12, no_wrap=True)
     table.add_column("Agents", width=8, no_wrap=True)
@@ -268,8 +289,10 @@ def _build_runs_table_from_views(
     table.add_column("Callback", width=10, no_wrap=True)
     table.add_column("Error / activity", ratio=3, overflow="ellipsis")
     for view, display_id in zip(views, display_ids, strict=True):
+        identity = Text(view.workflow_name, style="bold")
+        identity.append(f"\n{view.project_name}", style="cyan")
         row: list[RenderableType] = [
-            Text(view.workflow_name, style="bold"),
+            identity,
             Text(display_id),
             _status_renderable(view, live),
             Text(view.agents),
@@ -317,6 +340,8 @@ def _summary_grid(run: RunRecord, now: datetime, width: int, full: bool) -> Tabl
     values = (
         ("Run ID", run.run_id),
         ("Workflow", run.workflow_name),
+        ("Project", run.project_name),
+        ("Working directory", run.cwd or "—"),
         ("Workflow path", run.workflow_path or "—"),
         ("Status", run.status),
         ("Recorded status", run.recorded_status),

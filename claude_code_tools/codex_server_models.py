@@ -444,7 +444,7 @@ def clear_current_generation(base: ServerPaths) -> None:
 
 
 def all_server_paths(base: ServerPaths) -> list[ServerPaths]:
-    """Return bounded helper generations eligible for explicit cleanup."""
+    """Return bounded helper generations retaining state or a socket."""
     info = _lstat(base.runtime_dir)
     if info is None:
         return [base]
@@ -474,12 +474,12 @@ def all_server_paths(base: ServerPaths) -> list[ServerPaths]:
             raise CodexServerError("app-server runtime changed during inspection")
         with os.scandir(directory_fd) as entries:
             for entry in entries:
-                scanned += 1
-                if scanned > MAX_SERVER_DIRECTORY_ENTRIES:
-                    raise CodexServerError("too many app-server runtime entries")
                 try:
                     generation = validate_generation(entry.name)
                 except ValueError:
+                    scanned += 1
+                    if scanned > MAX_SERVER_DIRECTORY_ENTRIES:
+                        raise CodexServerError("too many app-server runtime entries")
                     continue
                 try:
                     entry_info = entry.stat(follow_symlinks=False)
@@ -497,6 +497,15 @@ def all_server_paths(base: ServerPaths) -> list[ServerPaths]:
                     raise CodexServerError(
                         f"app-server generation is owned by another user: {entry.name}"
                     )
+                paths = paths_for_generation(base, generation)
+                if (
+                    _lstat(paths.state_path) is None
+                    and _lstat(paths.socket_path) is None
+                ):
+                    continue
+                scanned += 1
+                if scanned > MAX_SERVER_DIRECTORY_ENTRIES:
+                    raise CodexServerError("too many app-server runtime entries")
                 generations.append(generation)
                 if len(generations) > MAX_SERVER_GENERATION_DIRECTORIES:
                     raise CodexServerError(
@@ -510,13 +519,10 @@ def all_server_paths(base: ServerPaths) -> list[ServerPaths]:
 def require_generation_capacity(base: ServerPaths, generation: str) -> None:
     """Bound retained servers before creating another generation."""
     target = paths_for_generation(base, generation)
-    if _lstat(target.runtime_dir) is not None:
+    retained = all_server_paths(base)[1:]
+    if any(paths.generation == target.generation for paths in retained):
         return
-    retained = sum(
-        _lstat(paths.state_path) is not None or _lstat(paths.socket_path) is not None
-        for paths in all_server_paths(base)[1:]
-    )
-    if retained >= MAX_SERVER_GENERATIONS:
+    if len(retained) >= MAX_SERVER_GENERATIONS:
         raise CodexServerError(
             "app-server generation limit reached; exit callback-ready sessions "
             "and run `codex-server stop --force` before launching another"

@@ -570,7 +570,7 @@ def _finite_refresh(
     help=(
         "Observe durable dynamic-workflow runs in the global cross-project "
         "store without changing them. With no subcommand, list active runs, "
-        "including unverifiable nonterminal runs."
+        "including their launch projects and unverifiable nonterminal runs."
     ),
 )
 @_status_option
@@ -580,7 +580,7 @@ def _finite_refresh(
     "--json",
     "json_output",
     is_flag=True,
-    help="Emit versioned list JSON.",
+    help="Emit versioned list JSON, including each launch directory.",
 )
 @click.option(
     "--no-color",
@@ -754,8 +754,8 @@ def watch(
 
 @cli.command(
     help=(
-        "Show detailed state for RUN_ID from the global store. Put --no-color "
-        "before show when needed."
+        "Show detailed state and the full launch directory for RUN_ID from "
+        "the global store. Put --no-color before show when needed."
     )
 )
 @click.argument("run_id")
@@ -763,7 +763,7 @@ def watch(
     "--json",
     "json_output",
     is_flag=True,
-    help="Emit complete versioned JSON.",
+    help="Emit complete versioned JSON, including the launch directory.",
 )
 @click.option(
     "--full",

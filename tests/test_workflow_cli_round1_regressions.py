@@ -42,6 +42,7 @@ EXPECTED_RUN_KEYS = {
     "callbackError",
     "completedAt",
     "createdAt",
+    "cwd",
     "durationSeconds",
     "error",
     "recordedStatus",

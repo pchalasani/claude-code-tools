@@ -95,6 +95,25 @@ def test_domain_records_do_not_impersonate_persisted_mappings() -> None:
         _ = callback["status"]  # type: ignore[index]
 
 
+@pytest.mark.parametrize(
+    ("cwd", "expected"),
+    [
+        ("/Users/example/Git/project", "project"),
+        (r"C:\Users\example\project", "project"),
+        ("/", "/"),
+        (None, "unknown"),
+    ],
+)
+def test_project_name_is_derived_cross_platform(
+    cwd: str | None,
+    expected: str,
+) -> None:
+    """Project labels use the final persisted path component on every host."""
+    run = RunRecord(directory=Path("run"), state=RunState(cwd=cwd))
+
+    assert run.project_name == expected
+
+
 def test_snapshot_models_do_not_import_persistence_validation() -> None:
     """Importing snapshot models does not recreate the validation cycle."""
     script = "\n".join(
@@ -229,6 +248,7 @@ def test_direct_payload_normalizes_hostile_unicode_recursively() -> None:
     """Python payload callers see the same Unicode-safe contract as JSON."""
     state = _state("hostile-unicode")
     state["error"] = "outer-\ud800-error"
+    state["cwd"] = "/work/hostile-\ud800-project"
     state["workflowPath"] = "/work/hostile-\udcff.js"
     state["steps"] = {
         "worker": {
@@ -247,6 +267,7 @@ def test_direct_payload_normalizes_hostile_unicode_recursively() -> None:
     )
 
     assert payload["error"] == "outer-\ufffd-error"
+    assert payload["cwd"] == "/work/hostile-\ufffd-project"
     assert payload["workflowPath"] == "/work/hostile-\ufffd.js"
     steps = payload["steps"]
     assert isinstance(steps, list)

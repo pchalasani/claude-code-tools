@@ -144,8 +144,11 @@ dashboard for durable runs. Its default view contains only active workflows;
 callback, error, and agent-step details.
 
 The command reads one global store for every project. It does not limit results
-to the current directory. The default store is `~/.codex/workflows`; set
-`CODEX_WORKFLOW_HOME` to inspect another store.
+to the current directory. List and watch views identify each run with a
+`Project` value derived from the final component of its persisted launch
+directory. `show` displays both that label and the complete working directory.
+The default store is `~/.codex/workflows`; set `CODEX_WORKFLOW_HOME` to inspect
+another store.
 
 ```bash
 codex-workflows
@@ -166,7 +169,8 @@ options:
   `--status`.
 - `--limit N` returns at most `N` rows. The default is 50; the accepted range is
   1 through 1,000.
-- `--json` emits the versioned list schema described below.
+- `--json` emits the versioned list schema described below, including the full
+  launch directory for every run.
 - `--no-color` disables ANSI color. The `NO_COLOR` environment variable has the
   same effect.
 
@@ -179,7 +183,8 @@ not support JSON output.
 `codex-workflows show RUN_ID` displays one run from the global store. `RUN_ID`
 may be a full ID or an unambiguous abbreviation printed by the list. Pass
 `--full` to disable human-output truncation, or `--json` for complete structured
-output. Put the global `--no-color` option before any subcommand:
+output. Human output includes the project label and full launch directory. Put
+the global `--no-color` option before any subcommand:
 
 ```bash
 codex-workflows --no-color show RUN_ID
@@ -257,6 +262,7 @@ Run = {
   abbreviatedRunId: string,
   workflowName: string,
   workflowPath: string | null,
+  cwd: string | null,
   recordedStatus: string,
   status: string,
   agentProgress: {
