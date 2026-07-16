@@ -8,12 +8,19 @@ import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from click.testing import CliRunner
 
-from claude_code_tools import workflow_runs, workflow_store_io
+from claude_code_tools import (
+    workflow_processes,
+    workflow_runs,
+    workflow_store_io,
+    workflow_validation,
+)
 from claude_code_tools.workflow_cli import cli
+from claude_code_tools.workflow_cli_contract import callback_payload
 from claude_code_tools.workflow_processes import ProcessProbe
 
 TIME = "2026-07-14T14:00:00Z"
@@ -38,9 +45,11 @@ def _fixed_process_probe(
         _pid: int,
         *,
         include_legacy: bool = True,
+        remaining_seconds: float | None = None,
+        prior_probe: ProcessProbe | None = None,
     ) -> ProcessProbe:
         """Return the configured observation."""
-        del include_legacy
+        del include_legacy, remaining_seconds, prior_probe
         return probe
 
     return observe
@@ -356,7 +365,7 @@ def test_zero_attempt_crashed_notifier_is_not_left_sending(
         _fixed_process_probe(probe),
     )
 
-    rendered = workflow_runs.load_run(directory).callback_json()
+    rendered = callback_payload(workflow_runs.load_run(directory))
 
     assert rendered is not None
     assert rendered["status"] == expected_status
@@ -403,7 +412,11 @@ def test_boundary_timestamp_and_invalid_creation_remain_sortable(
 
     runs = workflow_runs.load_runs(tmp_path)
 
-    assert [run.run_id for run in runs] == ["fallback", "ordinary", "boundary"]
+    assert [run.run_id for run in runs.records] == [
+        "fallback",
+        "ordinary",
+        "boundary",
+    ]
 
 
 def test_steps_sort_chronologically_across_offsets_with_stable_ties() -> None:
@@ -428,7 +441,10 @@ def test_steps_sort_chronologically_across_offsets_with_stable_ties() -> None:
         "overflow": step("overflow", "0001-01-01T00:00:00+14:00"),
         "same-a": step("same-a", "2026-07-14T09:00:00-04:00"),
     }
-    run = workflow_runs.RunRecord(directory=Path("ordered"), state=state)
+    run = workflow_validation.parse_run_record(
+        directory=Path("ordered"),
+        state=state,
+    )
 
     assert [record.id for record in run.steps] == [
         "overflow",
@@ -446,10 +462,10 @@ def test_directory_missing_state_is_preserved_as_partial_record(
 
     runs = workflow_runs.load_runs(tmp_path)
 
-    assert len(runs) == 1
-    assert runs[0].run_id == "partial"
-    assert runs[0].status == "malformed"
-    assert runs[0].state_error is not None
+    assert len(runs.records) == 1
+    assert runs.records[0].run_id == "partial"
+    assert runs.records[0].status == "malformed"
+    assert runs.records[0].state_error is not None
 
 
 def test_run_scan_limit_fails_before_parsing_or_process_probes(
@@ -489,9 +505,9 @@ def test_hostile_json_becomes_per_run_diagnostic(
 
     runs = workflow_runs.load_runs(tmp_path)
 
-    assert len(runs) == 1
-    assert runs[0].status == "malformed"
-    assert runs[0].state_error is not None
+    assert len(runs.records) == 1
+    assert runs.records[0].status == "malformed"
+    assert runs.records[0].state_error is not None
 
 
 def test_malformed_step_entry_is_preserved_diagnostically(tmp_path: Path) -> None:
@@ -563,7 +579,10 @@ def test_activity_uses_first_nonblank_error_line() -> None:
     state = _state("leading-blank", status="failed")
     state["error"] = "\n  \n critical failure: credentials expired"
 
-    run = workflow_runs.RunRecord(directory=Path("leading-blank"), state=state)
+    run = workflow_validation.parse_run_record(
+        directory=Path("leading-blank"),
+        state=state,
+    )
 
     assert run.activity() == "critical failure: credentials expired"
 
@@ -572,9 +591,11 @@ def test_future_update_is_not_treated_as_startup_grace() -> None:
     """Future timestamps cannot keep identity-less stale state active."""
     state = _state("future", status="running")
 
+    typed_state, _error = workflow_validation.parse_state(state, "future")
     observed = workflow_runs._supervisor_state(
-        state,
+        typed_state,
         now=datetime(2026, 7, 14, 13, 59, 59, tzinfo=UTC),
+        observer=workflow_processes.ObservationContext(),
     )
 
     assert observed == "unverifiable"
@@ -602,7 +623,7 @@ def test_symlinked_run_directory_is_not_discovered(
     runs_directory = tmp_path / "home" / "runs"
     runs_directory.mkdir(parents=True)
     _symlink_or_skip(runs_directory / "linked", outside, True)
-    assert workflow_runs.load_runs(tmp_path / "home") == []
+    assert workflow_runs.load_runs(tmp_path / "home").records == ()
 
 
 @pytest.mark.parametrize("filename", ["state.json", "completion-notification.json"])
@@ -652,7 +673,7 @@ def test_state_symlink_swap_during_open_cannot_escape_store(
     def racing_stat(
         path: int | str | bytes | os.PathLike[str] | os.PathLike[bytes],
         *args: object,
-        **kwargs: object,
+        **kwargs: Any,
     ) -> os.stat_result:
         """Replace state with a symlink after returning its regular mode."""
         nonlocal swapped
@@ -668,7 +689,7 @@ def test_state_symlink_swap_during_open_cannot_escape_store(
     run = workflow_runs.load_run(directory)
 
     assert swapped
-    assert run.state == {}
+    assert run.state == workflow_validation.RunState()
     assert run.status == "malformed"
 
 
@@ -730,7 +751,7 @@ def test_ambiguous_delivery_keeps_unknown_status_when_notifier_is_lost(
         _fixed_process_probe(probe),
     )
 
-    rendered = workflow_runs.load_run(directory).callback_json()
+    rendered = callback_payload(workflow_runs.load_run(directory))
 
     assert rendered is not None
     assert rendered["status"] == "unknown"
@@ -765,34 +786,31 @@ def test_state_is_reread_when_callback_belongs_to_new_generation(
     }
     _write_mapping(directory / "state.json", completed)
     _write_mapping(directory / "completion-notification.json", callback)
-    real_read = workflow_runs._read_mapping
+    real_read = workflow_store_io.VerifiedDirectory.read_mapping
     state_reads = 0
 
     def racing_read(
-        path: Path,
-        *,
-        description: str = "JSON",
-        directory_fd: int | None = None,
-        missing_ok: bool = False,
-        omit_result_payloads: bool = False,
-        budget: workflow_store_io.ReadWorkBudget | None = None,
+        verified: workflow_store_io.VerifiedDirectory,
+        name: str,
+        **kwargs: Any,
     ) -> tuple[dict[str, object] | None, str | None]:
         """Return an old state once, then the atomically published state."""
         nonlocal state_reads
-        if path.name == "state.json":
+        if name == "state.json":
             state_reads += 1
             if state_reads == 1:
                 return running, None
         return real_read(
-            path,
-            description=description,
-            directory_fd=directory_fd,
-            missing_ok=missing_ok,
-            omit_result_payloads=omit_result_payloads,
-            budget=budget,
+            verified,
+            name,
+            **kwargs,
         )
 
-    monkeypatch.setattr(workflow_runs, "_read_mapping", racing_read)
+    monkeypatch.setattr(
+        workflow_store_io.VerifiedDirectory,
+        "read_mapping",
+        racing_read,
+    )
 
     run = workflow_runs.load_run(directory)
 
@@ -822,41 +840,39 @@ def test_callback_is_reread_when_it_advances_to_state_generation(
         directory / "completion-notification.json",
         current_callback,
     )
-    real_read = workflow_runs._read_mapping
+    real_read = workflow_store_io.VerifiedDirectory.read_mapping
     callback_reads = 0
 
     def racing_read(
-        path: Path,
-        *,
-        description: str = "JSON",
-        directory_fd: int | None = None,
-        missing_ok: bool = False,
-        omit_result_payloads: bool = False,
-        budget: workflow_store_io.ReadWorkBudget | None = None,
+        verified: workflow_store_io.VerifiedDirectory,
+        name: str,
+        **kwargs: Any,
     ) -> tuple[dict[str, object] | None, str | None]:
         """Return the previous callback generation exactly once."""
         nonlocal callback_reads
-        if path.name == "completion-notification.json":
+        if name == "completion-notification.json":
             callback_reads += 1
             if callback_reads == 1:
                 return old_callback, None
         return real_read(
-            path,
-            description=description,
-            directory_fd=directory_fd,
-            missing_ok=missing_ok,
-            omit_result_payloads=omit_result_payloads,
-            budget=budget,
+            verified,
+            name,
+            **kwargs,
         )
 
-    monkeypatch.setattr(workflow_runs, "_read_mapping", racing_read)
+    monkeypatch.setattr(
+        workflow_store_io.VerifiedDirectory,
+        "read_mapping",
+        racing_read,
+    )
 
     run = workflow_runs.load_run(directory)
 
     assert callback_reads == 2
     assert run.callback_status == "delivered"
     assert run.callback is not None
-    assert run.callback["terminalCompletedAt"] == completed["completedAt"]
+    assert run.callback is not None
+    assert run.callback.terminal_completed_at == completed["completedAt"]
 
 
 @pytest.mark.parametrize(
@@ -969,14 +985,22 @@ def test_recent_invalid_supervisor_metadata_is_not_startup_grace(
     state[field] = value
 
     current = datetime(2026, 7, 14, 14, tzinfo=UTC)
-    assert workflow_runs._supervisor_state(state, current) == "unverifiable"
+    typed_state, _error = workflow_validation.parse_state(state, "recent")
+    assert (
+        workflow_runs._supervisor_state(
+            typed_state,
+            current,
+            workflow_processes.ObservationContext(),
+        )
+        == "unverifiable"
+    )
 
 
 def test_windows_numeric_identity_mismatch_proves_pid_reuse(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Raw PowerShell ticks remain a stable Windows process identity."""
-    monkeypatch.setattr(workflow_runs.os, "name", "nt")
+    monkeypatch.setattr(workflow_processes, "_IS_WINDOWS", True)
     monkeypatch.setattr(
         workflow_runs,
         "process_start_identity",
@@ -995,3 +1019,248 @@ def test_darwin_native_identity_keeps_current_process_running() -> None:
     assert probe.identity is not None
     assert probe.identity.startswith("darwin:")
     assert workflow_runs.observed_process_state(os.getpid(), probe.identity) is None
+
+
+def test_exact_show_bypasses_bounded_catalog_enumeration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An exact safe child remains inspectable in an oversized store."""
+    home = tmp_path / "home"
+    for run_id in ("exact-run", "other-a", "other-b", "other-c"):
+        directory = home / "runs" / run_id
+        _write_mapping(directory / "state.json", _state(run_id))
+    monkeypatch.setattr(workflow_runs, "MAX_RUN_DIRECTORIES", 3)
+
+    result = CliRunner().invoke(
+        cli,
+        ["show", "exact-run"],
+        env={"CODEX_WORKFLOW_HOME": str(home), "NO_COLOR": "1"},
+    )
+
+    assert result.exit_code == 0
+    assert "exact-run" in result.output
+
+
+def test_exact_legacy_safe_child_does_not_enumerate_catalog(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A safe legacy name gets the same bounded direct lookup as modern IDs."""
+    home = tmp_path / "home"
+    run_id = "legacy run"
+    _write_mapping(
+        home / "runs" / run_id / "state.json",
+        _state(run_id),
+    )
+
+    def reject_enumeration(
+        _directory: workflow_store_io.VerifiedDirectory,
+        _runs_directory: Path,
+    ) -> tuple[str, ...]:
+        raise AssertionError("exact lookup must not enumerate the run catalog")
+
+    monkeypatch.setattr(workflow_runs, "_directory_names", reject_enumeration)
+
+    lookup = workflow_runs.load_named_run(run_id, home=home)
+
+    assert lookup.resolution.kind is workflow_runs.RunResolutionKind.FOUND
+    assert lookup.resolution.directory == home / "runs" / run_id
+    assert lookup.record is not None
+    assert lookup.record.run_id == run_id
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX surrogate-escaped filename")
+def test_exact_lookup_rejects_surrogate_escaped_directory_identity(
+    tmp_path: Path,
+) -> None:
+    """Undecodable POSIX names cannot collide with valid Unicode run IDs."""
+    home = tmp_path / "home"
+    escaped_run_id = os.fsdecode(b"bad\x80")
+    unicode_run_id = "bad\ufffd"
+    assert escaped_run_id != unicode_run_id
+    assert not workflow_runs._safe_exact_name(escaped_run_id)
+    assert workflow_runs._safe_exact_name(unicode_run_id)
+    _write_mapping(
+        home / "runs" / unicode_run_id / "state.json",
+        _state(unicode_run_id),
+    )
+
+    rejected = workflow_runs.load_named_run(escaped_run_id, home=home)
+    accepted = workflow_runs.load_named_run(unicode_run_id, home=home)
+
+    assert rejected.resolution.kind is workflow_runs.RunResolutionKind.INVALID
+    assert rejected.record is None
+    assert accepted.resolution.kind is workflow_runs.RunResolutionKind.FOUND
+    assert accepted.record is not None
+    assert accepted.record.run_id == unicode_run_id
+
+
+def test_list_enumeration_and_reads_share_one_parent_capability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A scan does not reopen its verified runs directory by pathname."""
+    home = tmp_path / "home"
+    _write_mapping(
+        home / "runs" / "one" / "state.json",
+        _state("one"),
+    )
+    original_open = workflow_store_io.VerifiedDirectory.open.__func__
+    parent_opens = 0
+
+    def counting_open(
+        cls: type[workflow_store_io.VerifiedDirectory],
+        path: Path,
+        *,
+        parent: workflow_store_io.VerifiedDirectory | None = None,
+    ) -> workflow_store_io.VerifiedDirectory:
+        """Count only pathname-based parent capability opens."""
+        nonlocal parent_opens
+        if parent is None:
+            parent_opens += 1
+        return original_open(cls, path, parent=parent)
+
+    monkeypatch.setattr(
+        workflow_store_io.VerifiedDirectory,
+        "open",
+        classmethod(counting_open),
+    )
+
+    result = workflow_runs.load_runs(home, observe=False)
+
+    assert [record.run_id for record in result.records] == ["one"]
+    assert parent_opens == 1
+
+
+def test_read_completion_controls_validation_and_snapshot_metadata(
+    tmp_path: Path,
+) -> None:
+    """A publication completed during a query remains valid."""
+    directory = tmp_path / "future-publication"
+    state = _state(directory.name, status="running")
+    state["createdAt"] = "2026-07-14T14:00:01Z"
+    state["updatedAt"] = "2026-07-14T14:00:01Z"
+    _write_mapping(directory / "state.json", state)
+    query_at = datetime(2026, 7, 14, 14, tzinfo=UTC)
+
+    record = workflow_runs.load_run(directory, now=query_at, observe=False)
+
+    assert record.state_error is None
+    with workflow_store_io.VerifiedDirectory.open(directory) as verified:
+        snapshot = workflow_runs.read_validated_snapshot_once(
+            verified,
+            directory.name,
+            budget=workflow_store_io.ReadWorkBudget(1_000_000),
+            query_at=query_at,
+        )
+    assert snapshot.query_at == query_at
+    assert snapshot.read_completed_at >= query_at
+    assert snapshot.state_error is None
+
+
+def test_identical_generation_mismatch_stops_after_one_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stable stale callback metadata cannot multiply bounded read work."""
+    directory = tmp_path / "stable-mismatch"
+    state = _state(directory.name)
+    state["completedAt"] = "2026-07-14T15:00:00Z"
+    state["updatedAt"] = state["completedAt"]
+    _write_mapping(directory / "state.json", state)
+    _write_mapping(
+        directory / "completion-notification.json",
+        _callback(directory.name),
+    )
+    state_reads = 0
+    callback_reads = 0
+    original_state = workflow_store_io.VerifiedDirectory.read_state
+    original_callback = workflow_store_io.VerifiedDirectory.read_callback
+
+    def count_state(
+        verified: workflow_store_io.VerifiedDirectory,
+        **kwargs: Any,
+    ) -> tuple[dict[str, object] | None, str | None]:
+        nonlocal state_reads
+        state_reads += 1
+        return original_state(verified, **kwargs)
+
+    def count_callback(
+        verified: workflow_store_io.VerifiedDirectory,
+        **kwargs: Any,
+    ) -> tuple[dict[str, object] | None, str | None]:
+        nonlocal callback_reads
+        callback_reads += 1
+        return original_callback(verified, **kwargs)
+
+    monkeypatch.setattr(
+        workflow_store_io.VerifiedDirectory,
+        "read_state",
+        count_state,
+    )
+    monkeypatch.setattr(
+        workflow_store_io.VerifiedDirectory,
+        "read_callback",
+        count_callback,
+    )
+
+    record = workflow_runs.load_run(directory)
+
+    assert record.callback_status == "stale"
+    assert state_reads == 2
+    assert callback_reads == 2
+
+
+def test_retry_budget_exhaustion_preserves_last_valid_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A coherence retry cannot discard an already validated stale pair."""
+    query_at = datetime(2026, 7, 14, 16, tzinfo=UTC)
+    state, state_error = workflow_validation.parse_state(
+        _state("budgeted"),
+        "budgeted",
+    )
+    raw_callback = _callback("budgeted")
+    raw_callback["terminalStatus"] = "failed"
+    callback, callback_error = workflow_validation.parse_callback(
+        raw_callback,
+        "budgeted",
+    )
+    assert state_error is None
+    assert callback_error is None
+    snapshot = workflow_runs.ValidatedSnapshot(
+        state=state,
+        callback=callback,
+        state_error=None,
+        callback_error=None,
+        query_at=query_at,
+        read_completed_at=query_at,
+    )
+    calls = 0
+
+    def budgeted_read(*args: object, **kwargs: object) -> object:
+        """Return one valid pair, then emulate aggregate budget exhaustion."""
+        nonlocal calls
+        del args, kwargs
+        calls += 1
+        if calls == 1:
+            return snapshot
+        raise workflow_store_io.ReadBudgetExceeded("retry budget exhausted")
+
+    monkeypatch.setattr(
+        workflow_runs,
+        "read_validated_snapshot_once",
+        budgeted_read,
+    )
+    with workflow_store_io.VerifiedDirectory.open(tmp_path) as verified:
+        observed = workflow_runs._read_coherent_snapshot(
+            verified,
+            "budgeted",
+            budget=workflow_store_io.ReadWorkBudget(1),
+            query_at=query_at,
+        )
+
+    assert observed is snapshot
+    assert calls == 2

@@ -6,7 +6,7 @@ import sys
 import unicodedata
 from datetime import datetime
 
-from claude_code_tools.workflow_runs import parse_timestamp
+from claude_code_tools.workflow_cli_snapshots import parse_timestamp
 
 MAX_ERROR_CHARS = 2_000
 MAX_ERROR_LINES = 20

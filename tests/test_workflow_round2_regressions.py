@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import tracemalloc
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -13,6 +13,7 @@ from click.testing import CliRunner
 
 from claude_code_tools import (
     workflow_cli,
+    workflow_processes,
     workflow_runs,
     workflow_validation,
 )
@@ -27,6 +28,25 @@ ATTEMPT_TIME = "2026-07-14T14:02:00Z"
 DELIVERY_TIME = "2026-07-14T14:03:00Z"
 UPDATE_TIME = "2026-07-14T14:04:00Z"
 DEADLINE_TIME = UPDATE_TIME
+
+
+def _fixed_process_probe(
+    probe: ProcessProbe,
+) -> Callable[..., ProcessProbe]:
+    """Return a process provider implementing the bounded probe contract."""
+
+    def observe(
+        _pid: int,
+        *,
+        include_legacy: bool = True,
+        remaining_seconds: float | None = None,
+        prior_probe: ProcessProbe | None = None,
+    ) -> ProcessProbe:
+        """Return the configured observation within the supplied budget."""
+        del include_legacy, remaining_seconds, prior_probe
+        return probe
+
+    return observe
 
 
 def _state(run_id: str, *, status: str = "completed") -> dict[str, object]:
@@ -143,6 +163,92 @@ def test_run_and_runner_timestamps_stay_within_run_lifecycle(
 
     assert error is not None
     assert diagnostic in error
+
+
+def test_resumed_runner_may_follow_original_workflow_start() -> None:
+    """A resumed supervisor starts after the workflow's original start."""
+    state = _state("resumed-runner")
+    state.update(
+        {
+            "runnerStartedAt": "2026-07-14T14:03:00Z",
+            "startedAt": "2026-07-14T14:01:00Z",
+            "completedAt": "2026-07-14T14:04:00Z",
+            "updatedAt": "2026-07-14T14:05:00Z",
+        }
+    )
+
+    error = workflow_validation.validate_state(state, "resumed-runner")
+
+    assert error is None
+
+
+@pytest.mark.parametrize("attempt", [-7, 0])
+def test_step_attempt_must_be_positive(attempt: int) -> None:
+    """Persisted step attempts use the producer's one-based ordinal."""
+    state = _state("invalid-step-attempt")
+    state["steps"] = {
+        "step": {
+            "attempt": attempt,
+            "completedAt": TIME,
+            "fingerprint": "fingerprint",
+            "id": "step",
+            "label": "step",
+            "startedAt": TIME,
+            "status": "completed",
+        }
+    }
+
+    error = workflow_validation.validate_state(state, "invalid-step-attempt")
+
+    assert error is not None
+    assert "step 'step': attempt must be a positive integer" in error
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "diagnostic"),
+    [
+        ("concurrency", 0, "concurrency must be an integer from 1 to 64"),
+        ("concurrency", 65, "concurrency must be an integer from 1 to 64"),
+        ("agentInvocations", -1, "agentInvocations cannot be negative"),
+        (
+            "maxAgentInvocations",
+            0,
+            "maxAgentInvocations must be an integer from 1 to 1000",
+        ),
+        (
+            "maxAgentInvocations",
+            1_001,
+            "maxAgentInvocations must be an integer from 1 to 1000",
+        ),
+    ],
+)
+def test_run_ordinals_match_producer_ranges(
+    field: str,
+    value: int,
+    diagnostic: str,
+) -> None:
+    """Persisted counters and limits cannot contain impossible values."""
+    state = _state("invalid-run-ordinal")
+    state[field] = value
+
+    error = workflow_validation.validate_state(state, "invalid-run-ordinal")
+
+    assert error is not None
+    assert diagnostic in error
+
+
+def test_run_ordinal_boundaries_are_valid() -> None:
+    """Producer-supported integer boundaries remain observable as valid."""
+    state = _state("valid-run-ordinals")
+    state.update(
+        {
+            "agentInvocations": 0,
+            "concurrency": 64,
+            "maxAgentInvocations": 1_000,
+        }
+    )
+
+    assert workflow_validation.validate_state(state, "valid-run-ordinals") is None
 
 
 def test_reversed_step_lifecycle_is_malformed(tmp_path: Path) -> None:
@@ -330,6 +436,22 @@ def test_callback_rejects_impossible_attempt_metadata(
     assert diagnostic in error
 
 
+def test_delivered_callback_requires_submission_metadata() -> None:
+    """Delivery confirmation cannot exist before a recorded submission."""
+    callback = _callback("delivered-without-submission")
+    callback["attempts"] = 0
+    callback.pop("lastAttemptAt")
+
+    error = workflow_validation.validate_callback(
+        callback,
+        "delivered-without-submission",
+    )
+
+    assert error is not None
+    assert "delivered callback requires at least one attempt" in error
+    assert "delivered callback requires lastAttemptAt" in error
+
+
 @pytest.mark.parametrize("timeout_ms", [0, -1, 604_800_001])
 def test_callback_timeout_matches_producer_range(timeout_ms: int) -> None:
     """Persisted callbacks cannot exceed the producer's timeout range."""
@@ -348,10 +470,7 @@ def test_callback_timeout_accepts_producer_boundaries(timeout_ms: int) -> None:
     callback = _callback("timeout-boundary", status="armed")
     callback["timeoutMs"] = timeout_ms
 
-    assert (
-        workflow_validation.validate_callback(callback, "timeout-boundary")
-        is None
-    )
+    assert workflow_validation.validate_callback(callback, "timeout-boundary") is None
 
 
 def test_callback_deadline_cannot_exceed_its_timeout_window() -> None:
@@ -380,10 +499,14 @@ def test_callback_future_update_cannot_extend_deadline_window() -> None:
     callback["deadlineAt"] = "2099-01-01T00:00:00Z"
     callback["timeoutMs"] = 1
 
-    error = workflow_validation.validate_callback(
+    typed, structural_error = workflow_validation.parse_callback(
         callback,
         "future-deadline",
-        now=datetime(2026, 7, 15, tzinfo=UTC),
+    )
+    assert structural_error is None
+    error = workflow_validation.validate_callback_observation(
+        typed,
+        datetime(2026, 7, 15, tzinfo=UTC),
     )
 
     assert error is not None
@@ -409,6 +532,30 @@ def test_callback_fingerprint_marks_same_millisecond_generation_stale(
     run = workflow_runs.load_run(directory)
 
     assert run.callback_status == "stale"
+
+
+@pytest.mark.parametrize("fingerprint_owner", ["state", "callback"])
+def test_mixed_legacy_fingerprint_snapshots_remain_compatible(
+    tmp_path: Path,
+    fingerprint_owner: str,
+) -> None:
+    """One optional fingerprint does not invalidate a legacy generation."""
+    state = _state(f"mixed-fingerprint-{fingerprint_owner}")
+    callback = _callback(str(state["runId"]))
+    callback["terminalCompletedAt"] = state["completedAt"]
+    if fingerprint_owner == "state":
+        state["terminalFingerprint"] = "a" * 64
+    else:
+        callback["terminalFingerprint"] = "a" * 64
+    directory = _write_state(tmp_path, state)
+    (directory / "completion-notification.json").write_text(
+        json.dumps(callback),
+        encoding="utf-8",
+    )
+
+    run = workflow_runs.load_run(directory)
+
+    assert run.callback_status == "delivered"
 
 
 @pytest.mark.parametrize(
@@ -486,8 +633,7 @@ def test_oversized_step_map_is_rejected_before_step_validation(
     """The runner's maximum bounds work before any per-step validation."""
     state = _state("too-many-steps")
     state["steps"] = {
-        f"step-{index}": {}
-        for index in range(workflow_validation.MAX_STATE_STEPS + 1)
+        f"step-{index}": {} for index in range(workflow_validation.MAX_STATE_STEPS + 1)
     }
 
     def fail_step_validation(
@@ -497,16 +643,13 @@ def test_oversized_step_map_is_rejected_before_step_validation(
         raise AssertionError("oversized state must skip per-step validation")
 
     monkeypatch.setattr(workflow_validation, "step_errors", fail_step_validation)
-    monkeypatch.setattr(workflow_runs, "_step_errors", fail_step_validation)
 
-    error = workflow_validation.validate_state(state, "too-many-steps")
-    record = workflow_runs.RunRecord(
+    record = workflow_validation.parse_run_record(
         directory=Path("too-many-steps"),
         state=state,
-        state_error=error,
     )
 
-    assert error == "steps contains 1001 entries; maximum is 1000"
+    assert record.state_error == ("steps contains 1001 entries; maximum is 1000")
     assert record.steps == ()
 
 
@@ -520,14 +663,14 @@ def test_load_run_discards_oversized_projected_step_map(tmp_path: Path) -> None:
 
     assert record.state_error is not None
     assert "steps contains 100000 entries; maximum is 1000" in record.state_error
-    assert record.state.get("steps") == {}
+    assert record.state.steps == ()
 
 
 def test_activity_bounds_newline_heavy_error_allocation() -> None:
     """Rendering an activity summary does not split the complete error."""
     state = _state("newline-heavy-error", status="failed")
     state["error"] = "\n" * 4_000_001
-    record = workflow_runs.RunRecord(
+    record = workflow_validation.parse_run_record(
         directory=Path("newline-heavy-error"),
         state=state,
     )
@@ -548,10 +691,7 @@ def test_direct_load_uses_practical_aggregate_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A direct observation cannot inherit the raw multi-gigabyte ceiling."""
-    assert (
-        workflow_runs.MAX_SINGLE_RUN_JSON_BYTES
-        == workflow_runs.MAX_SCAN_JSON_BYTES
-    )
+    assert workflow_runs.MAX_SINGLE_RUN_JSON_BYTES == workflow_runs.MAX_SCAN_JSON_BYTES
     monkeypatch.setattr(workflow_runs, "MAX_SINGLE_RUN_JSON_BYTES", 256)
     state = _state("direct-budget")
     state["error"] = "x" * 1_024
@@ -559,7 +699,7 @@ def test_direct_load_uses_practical_aggregate_budget(
 
     record = workflow_runs.load_run(directory, observe=False)
 
-    assert record.state == {}
+    assert record.state == workflow_validation.RunState()
     assert "aggregate work limit of 256 bytes" in (record.state_error or "")
 
 
@@ -567,23 +707,20 @@ def test_validation_diagnostic_count_is_bounded() -> None:
     """Many malformed steps cannot amplify the diagnostic item count."""
     state = _state("many-errors")
     state["steps"] = {
-        f"step-{index}": None
-        for index in range(workflow_validation.MAX_STATE_STEPS)
+        f"step-{index}": None for index in range(workflow_validation.MAX_STATE_STEPS)
     }
 
     error = workflow_validation.validate_state(state, "many-errors")
 
     assert error is not None
-    assert len(error.split("; ")) <= (
-        workflow_validation.MAX_VALIDATION_DIAGNOSTICS
-    )
+    assert len(error.split("; ")) <= (workflow_validation.MAX_VALIDATION_DIAGNOSTICS)
     assert "additional validation diagnostics omitted" in error
 
 
 def test_validation_diagnostic_bytes_are_bounded_for_hostile_key() -> None:
     """A hostile multibyte step key cannot inflate validation output."""
     state = _state("huge-diagnostic")
-    state["steps"] = {"\N{collision symbol}" * 20_000: None}
+    state["steps"] = {"\N{COLLISION SYMBOL}" * 20_000: None}
 
     error = workflow_validation.validate_state(state, "huge-diagnostic")
 
@@ -591,14 +728,17 @@ def test_validation_diagnostic_bytes_are_bounded_for_hostile_key() -> None:
     assert len(error.encode("utf-8")) <= (
         workflow_validation.MAX_VALIDATION_DIAGNOSTIC_BYTES
     )
-    assert error.endswith(" [truncated]")
+    assert "[truncated value]" in error
 
 
 def test_malformed_step_record_diagnostic_is_bounded_independently() -> None:
     """The JSON record cannot retain a hostile step key again in its error."""
     key = "x" * 4_000_000
 
-    record = workflow_runs.StepRecord.malformed(key, None)
+    state = _state("malformed-step")
+    state["steps"] = {key: None}
+    typed, _error = workflow_validation.parse_state(state, "malformed-step")
+    record = typed.steps[0]
 
     assert record.id == key
     assert record.label == key
@@ -606,7 +746,7 @@ def test_malformed_step_record_diagnostic_is_bounded_independently() -> None:
     assert len(record.error.encode("utf-8")) <= (
         workflow_validation.MAX_VALIDATION_DIAGNOSTIC_BYTES
     )
-    assert record.error.endswith(" [truncated]")
+    assert "[truncated value]" in record.error
 
 
 def test_linux_compatibility_identity_mismatch_is_stale(
@@ -621,12 +761,10 @@ def test_linux_compatibility_identity_mismatch_is_stale(
     monkeypatch.setattr(
         workflow_runs,
         "process_start_identity",
-        lambda _pid, *, include_legacy=True: probe,
+        _fixed_process_probe(probe),
     )
 
-    assert workflow_runs.observed_process_state(123, "linux:123") == (
-        "unverifiable"
-    )
+    assert workflow_runs.observed_process_state(123, "linux:123") == ("unverifiable")
     assert workflow_runs.observed_process_state(123, "linux:124") == "stale"
 
 
@@ -646,7 +784,7 @@ def test_nonterminal_compatibility_identity_mismatch_is_stale(
     monkeypatch.setattr(
         workflow_runs,
         "process_start_identity",
-        lambda _pid, *, include_legacy=True: probe,
+        _fixed_process_probe(probe),
     )
 
     record = workflow_runs.load_run(directory)
@@ -676,9 +814,7 @@ def test_partial_supervisor_pair_is_never_granted_startup_grace(
     )
 
     assert record.status == "malformed"
-    assert "pid and pidStartedAt must be present together" in (
-        record.state_error or ""
-    )
+    assert "pid and pidStartedAt must be present together" in (record.state_error or "")
 
 
 def test_one_cli_response_uses_one_observation_time(
@@ -692,22 +828,13 @@ def test_one_cli_response_uses_one_observation_time(
     original = workflow_runs._supervisor_state
 
     def record_time(
-        state: Mapping[str, object],
-        now: datetime | None = None,
-        *,
-        observations: dict[tuple[int, str], str | None] | None = None,
-        observation_deadline: float | None = None,
-        observation_report: workflow_runs.ObservationReport | None = None,
+        state: workflow_validation.RunState,
+        now: datetime,
+        observer: workflow_processes.ObservationContext,
     ) -> str | None:
         """Capture the observation instant while retaining real behavior."""
         observed_times.append(now)
-        return original(
-            state,
-            now,
-            observations=observations,
-            observation_deadline=observation_deadline,
-            observation_report=observation_report,
-        )
+        return original(state, now, observer)
 
     fixed = datetime(2026, 7, 14, 14, 0, 4, tzinfo=UTC)
     monkeypatch.setattr(workflow_cli, "_now", lambda: fixed)
@@ -720,17 +847,17 @@ def test_one_cli_response_uses_one_observation_time(
     )
 
     assert result.exit_code == 0
-    assert observed_times == [fixed, fixed]
-    assert {
-        item["status"] for item in json.loads(result.output)["runs"]
-    } == {"running"}
+    assert len(observed_times) == 2 and observed_times[0] == observed_times[1]
+    assert {item["status"] for item in json.loads(result.output)["runs"]} == {
+        "unverifiable"
+    }
 
 
 def test_limit_defers_process_probes_for_excluded_runs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A display limit bounds process observations as well as output rows."""
+    """A query probes one extra match to disclose row-limit truncation."""
     older = _state("older", status="running")
     older.update({"pid": 101, "pidStartedAt": STRONG_IDENTITY})
     newer = _state("newer", status="running")
@@ -746,17 +873,25 @@ def test_limit_defers_process_probes_for_excluded_runs(
     _write_state(tmp_path, newer)
     observed: list[int] = []
 
-    def observe(pid: int, _expected: str) -> str | None:
+    def observe(
+        pid: int,
+        *,
+        include_legacy: bool = True,
+        remaining_seconds: float | None = None,
+        prior_probe: ProcessProbe | None = None,
+    ) -> ProcessProbe:
         """Record process observations without touching the host process table."""
+        del include_legacy, remaining_seconds, prior_probe
         observed.append(pid)
-        return None
+        return ProcessProbe("alive", identity=STRONG_IDENTITY)
 
-    monkeypatch.setattr(workflow_runs, "observed_process_state", observe)
+    monkeypatch.setattr(workflow_runs, "process_start_identity", observe)
 
     records = workflow_runs.load_runs(tmp_path, limit=1)
 
-    assert [record.run_id for record in records] == ["newer"]
-    assert observed == [202]
+    assert [record.run_id for record in records.records] == ["newer"]
+    assert records.truncated is True
+    assert observed == [202, 101]
 
 
 def test_recorded_status_prefilter_skips_impossible_process_probes(
@@ -776,12 +911,19 @@ def test_recorded_status_prefilter_skips_impossible_process_probes(
     _write_state(tmp_path, running)
     _write_state(tmp_path, _state("old-completed"))
 
-    def fail_observation(_pid: int, _expected: str) -> str | None:
+    def fail_observation(
+        _pid: int,
+        *,
+        include_legacy: bool = True,
+        remaining_seconds: float | None = None,
+        prior_probe: ProcessProbe | None = None,
+    ) -> ProcessProbe:
+        del include_legacy, remaining_seconds, prior_probe
         raise AssertionError("excluded nonterminal run must not be probed")
 
     monkeypatch.setattr(
         workflow_runs,
-        "observed_process_state",
+        "process_start_identity",
         fail_observation,
     )
 
@@ -791,7 +933,7 @@ def test_recorded_status_prefilter_skips_impossible_process_probes(
         limit=1,
     )
 
-    assert [record.run_id for record in records] == ["old-completed"]
+    assert [record.run_id for record in records.records] == ["old-completed"]
 
 
 def test_filtered_scan_has_aggregate_process_probe_deadline(
@@ -811,29 +953,33 @@ def test_filtered_scan_has_aggregate_process_probe_deadline(
     clock = iter((0.0, 0.0, 6.0))
     observed: list[int] = []
 
-    def observe(pid: int, _expected: str) -> str | None:
+    def observe(
+        pid: int,
+        *,
+        include_legacy: bool = True,
+        remaining_seconds: float | None = None,
+        prior_probe: ProcessProbe | None = None,
+    ) -> ProcessProbe:
         """Record the only process probe allowed before the deadline."""
+        del include_legacy, remaining_seconds, prior_probe
         observed.append(pid)
-        return "orphaned"
+        return ProcessProbe("dead")
 
     monkeypatch.setattr(
         workflow_runs,
         "monotonic",
         lambda: next(clock, 6.0),
     )
-    monkeypatch.setattr(workflow_runs, "observed_process_state", observe)
-    report = workflow_runs.ObservationReport()
-
+    monkeypatch.setattr(workflow_runs, "process_start_identity", observe)
     records = workflow_runs.load_runs(
         tmp_path,
         statuses=("orphaned", "unverifiable"),
-        observation_report=report,
     )
 
     assert observed == [303]
-    assert report.complete is False
-    assert report.skipped == 2
-    assert [record.status for record in records] == [
+    assert records.observation_complete is False
+    assert records.observation_skipped == 2
+    assert [record.status for record in records.records] == [
         "orphaned",
         "unverifiable",
         "unverifiable",
@@ -852,13 +998,16 @@ def test_json_list_discloses_incomplete_process_observation(
         limit: int | None = None,
         now: datetime | None = None,
         observe: bool = True,
-        observation_report: workflow_runs.ObservationReport | None = None,
-    ) -> list[workflow_runs.RunRecord]:
+    ) -> workflow_runs.RunQueryResult:
         """Emulate a filtered scan whose live-process deadline expired."""
-        del statuses, limit, now
-        if observe and observation_report is not None:
-            observation_report.mark_skipped()
-        return []
+        del statuses, limit, now, observe
+        return workflow_runs.RunQueryResult(
+            (),
+            truncated=False,
+            store_has_runs=True,
+            observation_complete=False,
+            observation_skipped=1,
+        )
 
     monkeypatch.setattr(workflow_cli, "load_runs", incomplete_load_runs)
 

@@ -8,11 +8,30 @@ import subprocess
 import sys
 from pathlib import Path
 
+import click
 import pytest
+from click.testing import CliRunner
+
+from claude_code_tools import workflow_cli
 
 BASE_TIME = "2026-07-14T14:00:00Z"
 REPOSITORY = Path(__file__).parents[1]
 SUBPROCESS_TIMEOUT_SECONDS = 10
+
+
+def test_json_emitter_only_encodes_the_supplied_payload() -> None:
+    """The JSON output adapter does not rewrite versioned payload values."""
+    payload = {"hostile": "before\ud800after"}
+
+    @click.command()
+    def emit() -> None:
+        """Emit the test payload through Click's isolated stdout."""
+        workflow_cli._emit_json(payload)
+
+    result = CliRunner().invoke(emit)
+
+    assert result.exit_code == 0
+    assert json.loads(result.output) == payload
 
 
 def _write_run(home: Path, run_id: str) -> None:

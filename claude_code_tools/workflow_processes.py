@@ -3,16 +3,40 @@
 from __future__ import annotations
 
 import ctypes
+import errno
 import os
+import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import replace
 from pathlib import Path
-from typing import Literal
+from time import monotonic
+from typing import Callable
+
+from claude_code_tools.workflow_cli_identity_policy import (
+    DOTNET_FILETIME_OFFSET,
+    MAX_LINUX_START_TICKS,
+    MAX_SUPPORTED_PID,
+    MIN_WINDOWS_DATETIME_TICKS,
+    PersistedProcessIdentity as PersistedProcessIdentity,
+    ProcessObservation,
+    ProcessObservationContext,
+    ProcessProbe,
+    ProcessProbeProvider,
+    ProcessStatus,
+    compare_persisted_identity,
+    compare_process_claim,
+    parse_bounded_decimal,
+    parse_persisted_identity as parse_persisted_identity,
+    parse_persisted_identity_claim,
+)
 
 _LINUX_BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
 _PROC_PIDTBSDINFO = 3
-_MAX_SUPPORTED_PID = (1 << 31) - 1
+_MAX_SUPPORTED_PID = MAX_SUPPORTED_PID
+_MAX_LINUX_START_TICKS = MAX_LINUX_START_TICKS
+_DOTNET_FILETIME_OFFSET = DOTNET_FILETIME_OFFSET
+_MIN_WINDOWS_DATETIME_TICKS = MIN_WINDOWS_DATETIME_TICKS
 _IS_WINDOWS = os.name == "nt"
 _PS_EXECUTABLE = "/bin/ps"
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -22,19 +46,29 @@ _WAIT_TIMEOUT = 258
 _WAIT_FAILED = 0xFFFFFFFF
 _ERROR_INVALID_PARAMETER = 87
 _ERROR_NOT_FOUND = 1168
-_DOTNET_FILETIME_OFFSET = 504_911_232_000_000_000
 _DEAD_POSIX_PROCESS_STATES = frozenset({"Z", "X", "x"})
 
 
-@dataclass(frozen=True)
-class ProcessProbe:
-    """Result of observing a persisted process without mutating it."""
+class ObservationContext(ProcessObservationContext):
+    """Compatibility adapter that injects the native probe provider."""
 
-    status: Literal["alive", "dead", "unverifiable"]
-    identity: str | None = None
-    legacy_identity: str | None = None
-    compatibility_identities: tuple[str, ...] = ()
-    detail: str | None = None
+    def __init__(
+        self,
+        deadline: float | None = None,
+        probe_factory: ProcessProbeProvider | None = None,
+        clock: Callable[[], float] = monotonic,
+        skipped: int = 0,
+        _probes: dict[int, ProcessProbe] | None = None,
+    ) -> None:
+        """Initialize pure observation policy with an explicit provider."""
+        provider = process_start_identity if probe_factory is None else probe_factory
+        super().__init__(
+            provider=provider,
+            deadline=deadline,
+            clock=clock,
+            skipped=skipped,
+            _probes=_probes,
+        )
 
 
 class _ProcBsdInfo(ctypes.Structure):
@@ -75,23 +109,53 @@ class _FileTime(ctypes.Structure):
     ]
 
 
-def _pid_exists(pid: int) -> Literal["alive", "dead", "unverifiable"]:
-    """Check PID existence while distinguishing permission failures."""
+def observe_persisted_identity(
+    pid: int,
+    token: str,
+    *,
+    probe: ProcessProbe | None = None,
+) -> ProcessObservation:
+    """Observe a persisted ownership claim without signaling its process.
+
+    Supplying ``probe`` lets a store scan cache one raw observation per PID and
+    compare any number of attacker-controlled identity claims to that snapshot.
+    """
+    if probe is not None:
+        return compare_process_claim(pid, token, probe)
+    persisted = parse_persisted_identity_claim(pid, token)
+    if persisted is None:
+        return "unverifiable"
+    observed = process_start_identity(
+        pid,
+        include_legacy=persisted.kind == "legacy",
+    )
+    return compare_persisted_identity(persisted, observed)
+
+
+def _pid_exists(pid: int) -> ProcessStatus:
+    """Check PID existence using process metadata, never a signal API."""
     if pid <= 0:
         return "dead"
     if pid > _MAX_SUPPORTED_PID or _IS_WINDOWS:
         return "unverifiable"
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return "dead"
-    except (OverflowError, PermissionError, OSError, ValueError):
-        return "unverifiable"
-    return "alive"
+    probe = _legacy_posix_probe(pid)
+    return probe.status
 
 
-def _legacy_posix_identity(pid: int) -> tuple[str | None, str | None]:
-    """Return the process state and legacy second-resolution start text."""
+def _legacy_posix_probe(
+    pid: int,
+    *,
+    remaining_seconds: float | None = None,
+) -> ProcessProbe:
+    """Read process state and legacy start text through trusted system ps."""
+    timeout = 1.0
+    if remaining_seconds is not None:
+        timeout = min(timeout, remaining_seconds)
+    if timeout <= 0:
+        return ProcessProbe(
+            "unverifiable",
+            detail="process-observation budget exhausted",
+        )
     try:
         observed = subprocess.run(
             [
@@ -106,17 +170,80 @@ def _legacy_posix_identity(pid: int) -> tuple[str | None, str | None]:
             capture_output=True,
             check=False,
             text=True,
-            timeout=1,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
         )
-    except (OSError, subprocess.SubprocessError) as error:
-        return None, str(error)
+    except subprocess.TimeoutExpired as error:
+        return ProcessProbe(
+            "unverifiable",
+            detail=str(error),
+            legacy_observed=False,
+        )
+    except (OSError, subprocess.SubprocessError, UnicodeError) as error:
+        return ProcessProbe(
+            "unverifiable",
+            detail=str(error),
+            legacy_observed=True,
+        )
     line = observed.stdout.strip()
+    error_text = observed.stderr.strip()
     pieces = line.split(maxsplit=1)
-    if observed.returncode != 0 or len(pieces) != 2:
-        return None, observed.stderr.strip() or "ps returned no process data"
+    if observed.returncode != 0:
+        return ProcessProbe(
+            "unverifiable",
+            detail=error_text or "ps returned no process data",
+            legacy_observed=True,
+        )
+    if len(pieces) != 2:
+        return ProcessProbe(
+            "unverifiable",
+            detail=error_text or "ps returned no process data",
+            legacy_observed=True,
+        )
     if pieces[0][0] in _DEAD_POSIX_PROCESS_STATES:
-        return "zombie", None
-    return pieces[1], None
+        return ProcessProbe("dead", legacy_observed=True)
+    return ProcessProbe(
+        "alive",
+        legacy_identity=pieces[1],
+        legacy_observed=True,
+    )
+
+
+def _enrich_with_legacy(
+    pid: int,
+    probe: ProcessProbe,
+    *,
+    remaining_seconds: float | None,
+) -> ProcessProbe:
+    """Add bounded POSIX compatibility evidence to one native observation."""
+    if probe.legacy_observed:
+        return probe
+    if probe.status == "dead":
+        return replace(probe, legacy_observed=True)
+    if _IS_WINDOWS:
+        if probe.status == "unverifiable":
+            return probe
+        return replace(probe, legacy_observed=True)
+    legacy = _legacy_posix_probe(
+        pid,
+        remaining_seconds=remaining_seconds,
+    )
+    if legacy.status == "dead":
+        return replace(legacy, family=probe.family)
+    if legacy.status == "unverifiable":
+        return replace(
+            probe,
+            detail=probe.detail or legacy.detail,
+            legacy_observed=legacy.legacy_observed,
+        )
+    return replace(
+        probe,
+        status="alive",
+        legacy_identity=legacy.legacy_identity,
+        detail=probe.detail or legacy.detail,
+        legacy_observed=True,
+    )
 
 
 def _windows_last_error() -> int:
@@ -210,53 +337,85 @@ def _windows_process_identity(pid: int) -> ProcessProbe:
     )
 
 
-def _linux_process_identity(
-    pid: int,
-    *,
-    include_legacy: bool = True,
-) -> ProcessProbe | None:
+def _linux_pid_liveness(pid: int) -> ProcessProbe:
+    """Use a pidfd to distinguish a missing PID from hidden procfs metadata."""
+    pidfd_open = getattr(os, "pidfd_open", None)
+    if pidfd_open is None:
+        return ProcessProbe(
+            "unverifiable",
+            detail="procfs metadata is unavailable and pidfd is unsupported",
+        )
+    try:
+        descriptor = pidfd_open(pid, 0)
+    except ProcessLookupError:
+        return ProcessProbe("dead")
+    except (OSError, OverflowError, PermissionError, ValueError) as error:
+        return ProcessProbe("unverifiable", detail=str(error))
+    try:
+        return ProcessProbe(
+            "unverifiable",
+            detail="process is alive but procfs metadata is unavailable",
+        )
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+
+
+def _linux_process_identity(pid: int) -> ProcessProbe | None:
     """Read a boot-scoped Linux kernel start-ticks identity from procfs."""
     if not os.path.exists("/proc/self/stat"):
         return None
     try:
-        value = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        value = Path(f"/proc/{pid}/stat").read_bytes()
     except FileNotFoundError:
-        return ProcessProbe("dead")
-    except (OSError, UnicodeError) as error:
+        return _linux_pid_liveness(pid)
+    except OSError as error:
         return ProcessProbe("unverifiable", detail=str(error))
+    closing_parenthesis = value.rfind(b")")
+    fields = value[closing_parenthesis + 2 :].split()
+    if closing_parenthesis < 0 or len(fields) <= 19:
+        return ProcessProbe("unverifiable", detail="malformed procfs identity")
+    if fields[0] in {b"Z", b"X", b"x"}:
+        return ProcessProbe("dead")
+    try:
+        ticks = fields[19].decode("ascii")
+    except UnicodeDecodeError:
+        return ProcessProbe("unverifiable", detail="malformed procfs identity")
+    parsed_ticks = parse_bounded_decimal(
+        ticks,
+        maximum=_MAX_LINUX_START_TICKS,
+    )
+    if parsed_ticks is None or parsed_ticks <= 0:
+        return ProcessProbe("unverifiable", detail="malformed procfs identity")
     try:
         boot_id = _LINUX_BOOT_ID.read_text(encoding="ascii").strip().lower()
     except (OSError, UnicodeError) as error:
-        return ProcessProbe("unverifiable", detail=str(error))
-    closing_parenthesis = value.rfind(")")
-    fields = value[closing_parenthesis + 2 :].split()
-    if closing_parenthesis < 0 or len(fields) <= 19 or not boot_id:
-        return ProcessProbe("unverifiable", detail="malformed procfs identity")
-    if fields[0] in _DEAD_POSIX_PROCESS_STATES:
-        return ProcessProbe("dead")
-    ticks = fields[19]
-    legacy = None
-    if include_legacy:
-        legacy, _ = _legacy_posix_identity(pid)
+        boot_id = ""
+        boot_error = str(error)
+    else:
+        boot_error = None
+    if not boot_id:
+        boot_error = boot_error or "procfs boot ID is unavailable"
+    elif not re.fullmatch(
+        r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}",
+        boot_id,
+    ):
+        boot_id = ""
+        boot_error = "malformed procfs boot ID"
     return ProcessProbe(
         "alive",
-        identity=f"linux:{boot_id}:{ticks}",
-        legacy_identity=legacy if legacy != "zombie" else None,
+        identity=f"linux:{boot_id}:{ticks}" if boot_id else None,
         compatibility_identities=(f"linux:{ticks}",),
+        detail=boot_error,
     )
 
 
-def _darwin_process_identity(
-    pid: int,
-    *,
-    include_legacy: bool = True,
-) -> ProcessProbe | None:
+def _darwin_process_identity(pid: int) -> ProcessProbe | None:
     """Read Darwin's microsecond-resolution native process start timeval."""
     if sys.platform != "darwin":
         return None
-    existence = _pid_exists(pid)
-    if existence != "alive":
-        return ProcessProbe(existence)
     try:
         library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
         proc_pidinfo = library.proc_pidinfo
@@ -270,6 +429,7 @@ def _darwin_process_identity(
         proc_pidinfo.restype = ctypes.c_int
         info = _ProcBsdInfo()
         size = ctypes.sizeof(info)
+        ctypes.set_errno(0)
         result = proc_pidinfo(
             pid,
             _PROC_PIDTBSDINFO,
@@ -277,22 +437,29 @@ def _darwin_process_identity(
             ctypes.byref(info),
             size,
         )
+        observed_errno = ctypes.get_errno()
     except (AttributeError, OSError) as error:
         return ProcessProbe("unverifiable", detail=str(error))
     if result != size or info.pbi_pid != pid:
-        existence = _pid_exists(pid)
-        return ProcessProbe(existence, detail="libproc returned no process data")
+        if observed_errno == errno.ESRCH:
+            return ProcessProbe("dead")
+        if observed_errno != 0:
+            return ProcessProbe(
+                "unverifiable",
+                detail=(
+                    "libproc failed with errno "
+                    f"{observed_errno}: {os.strerror(observed_errno)}"
+                ),
+            )
+        return ProcessProbe(
+            "unverifiable",
+            detail="libproc returned no process data",
+        )
     if info.pbi_status == 5:
         return ProcessProbe("dead")
-    legacy = None
-    if include_legacy:
-        legacy, _ = _legacy_posix_identity(pid)
-        if legacy == "zombie":
-            return ProcessProbe("dead")
     return ProcessProbe(
         "alive",
         identity=(f"darwin:{info.pbi_start_tvsec}:{info.pbi_start_tvusec}"),
-        legacy_identity=legacy,
     )
 
 
@@ -300,16 +467,28 @@ def process_start_identity(
     pid: int,
     *,
     include_legacy: bool = True,
+    remaining_seconds: float | None = None,
+    prior_probe: ProcessProbe | None = None,
 ) -> ProcessProbe:
     """Read process liveness and its available start identities.
 
     Args:
         pid: Native process identifier to inspect.
         include_legacy: Whether to invoke the POSIX ``ps`` compatibility probe.
+        remaining_seconds: Maximum remaining wall time for blocking fallback work.
+        prior_probe: Cached native generation to enrich without probing it again.
 
     Returns:
         The strongest available non-mutating process observation.
     """
+    if prior_probe is not None:
+        if not include_legacy:
+            return prior_probe
+        return _enrich_with_legacy(
+            pid,
+            prior_probe,
+            remaining_seconds=remaining_seconds,
+        )
     if pid <= 0:
         return ProcessProbe("dead")
     if pid > _MAX_SUPPORTED_PID:
@@ -317,17 +496,32 @@ def process_start_identity(
             "unverifiable",
             detail=f"PID exceeds supported maximum {_MAX_SUPPORTED_PID}",
         )
-    linux_probe = _linux_process_identity(pid, include_legacy=include_legacy)
+    started_at = monotonic()
+    linux_probe = _linux_process_identity(pid)
     if linux_probe is not None:
-        return linux_probe
-    darwin_probe = _darwin_process_identity(pid, include_legacy=include_legacy)
-    if darwin_probe is not None:
-        return darwin_probe
-    if _IS_WINDOWS:
-        return _windows_process_identity(pid)
-    legacy, detail = _legacy_posix_identity(pid)
-    if legacy == "zombie":
-        return ProcessProbe("dead")
-    if legacy is None:
-        return ProcessProbe(_pid_exists(pid), detail=detail)
-    return ProcessProbe("alive", legacy_identity=legacy)
+        native_probe = replace(linux_probe, family="linux")
+    else:
+        darwin_probe = _darwin_process_identity(pid)
+        if darwin_probe is not None:
+            native_probe = replace(darwin_probe, family="darwin")
+        elif _IS_WINDOWS:
+            native_probe = replace(
+                _windows_process_identity(pid),
+                family="windows",
+            )
+        else:
+            native_probe = ProcessProbe(
+                "unverifiable",
+                detail="native process identity is unavailable",
+                family="legacy",
+            )
+    if not include_legacy:
+        return native_probe
+    legacy_budget = remaining_seconds
+    if legacy_budget is not None:
+        legacy_budget = max(0.0, legacy_budget - (monotonic() - started_at))
+    return _enrich_with_legacy(
+        pid,
+        native_probe,
+        remaining_seconds=legacy_budget,
+    )

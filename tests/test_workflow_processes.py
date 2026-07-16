@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import subprocess
@@ -11,6 +12,7 @@ from typing import Any, Callable
 import pytest
 
 from claude_code_tools import workflow_processes, workflow_runs
+from claude_code_tools.workflow_cli_contract import callback_payload
 
 TIME = "2026-07-14T14:00:00Z"
 HUGE_PID = 10**100
@@ -100,12 +102,12 @@ def _force_windows_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         workflow_processes,
         "_linux_process_identity",
-        lambda _pid, *, include_legacy=True: None,
+        lambda _pid: None,
     )
     monkeypatch.setattr(
         workflow_processes,
         "_darwin_process_identity",
-        lambda _pid, *, include_legacy=True: None,
+        lambda _pid: None,
     )
 
 
@@ -237,6 +239,101 @@ def test_windows_pid_exists_never_calls_os_kill(
     assert workflow_processes._pid_exists(123) == "unverifiable"
 
 
+def test_posix_pid_exists_never_calls_os_kill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The generic POSIX existence fallback reads metadata without signals."""
+
+    def fail_kill(_pid: int, _signal: int) -> None:
+        raise AssertionError("POSIX liveness observation must not signal")
+
+    monkeypatch.setattr(workflow_processes, "_IS_WINDOWS", False)
+    monkeypatch.setattr(workflow_processes.os, "kill", fail_kill)
+    monkeypatch.setattr(
+        workflow_processes,
+        "_legacy_posix_probe",
+        lambda _pid: workflow_processes.ProcessProbe("alive"),
+    )
+
+    assert workflow_processes._pid_exists(123) == "alive"
+
+
+def test_darwin_native_probe_never_calls_os_kill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Darwin's native metadata API is not preceded by a signal-zero probe."""
+
+    def set_process_info(
+        pid: int,
+        _flavor: object,
+        _arg: object,
+        info: object,
+        _size: object,
+    ) -> None:
+        value: Any = info
+        value._obj.pbi_pid = pid
+        value._obj.pbi_status = 1
+        value._obj.pbi_start_tvsec = 100
+        value._obj.pbi_start_tvusec = 200
+
+    class FakeLibproc:
+        """Minimal metadata-only Darwin process API."""
+
+        proc_pidinfo = _FakeWin32Function(
+            ctypes.sizeof(workflow_processes._ProcBsdInfo()),
+            set_process_info,
+        )
+
+    def fail_kill(_pid: int, _signal: int) -> None:
+        raise AssertionError("Darwin liveness observation must not signal")
+
+    monkeypatch.setattr(workflow_processes.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        workflow_processes.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: FakeLibproc(),
+    )
+    monkeypatch.setattr(workflow_processes.os, "kill", fail_kill)
+
+    probe = workflow_processes._darwin_process_identity(123)
+
+    assert probe is not None
+    assert probe.status == "alive"
+    assert probe.identity == "darwin:100:200"
+
+
+def test_darwin_failed_native_probe_never_owns_legacy_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A strong Darwin claim never launches the compatibility subprocess."""
+
+    class EmptyLibproc:
+        """Darwin API stand-in that returns no process metadata."""
+
+        proc_pidinfo = _FakeWin32Function(0)
+
+    def fail_legacy(
+        _pid: int,
+        *,
+        remaining_seconds: float | None = None,
+    ) -> workflow_processes.ProcessProbe:
+        del remaining_seconds
+        raise AssertionError("strong Darwin observation must not invoke ps")
+
+    monkeypatch.setattr(workflow_processes.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        workflow_processes.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: EmptyLibproc(),
+    )
+    monkeypatch.setattr(workflow_processes, "_legacy_posix_probe", fail_legacy)
+
+    probe = workflow_processes._darwin_process_identity(123)
+
+    assert probe is not None
+    assert probe.status == "unverifiable"
+
+
 def test_posix_legacy_probe_uses_absolute_system_ps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -257,11 +354,133 @@ def test_posix_legacy_probe_uses_absolute_system_ps(
 
     monkeypatch.setattr(workflow_processes.subprocess, "run", fake_run)
 
-    identity, error = workflow_processes._legacy_posix_identity(123)
+    probe = workflow_processes._legacy_posix_probe(123)
 
-    assert error is None
-    assert identity == "Tue Jul 14 10:00:00 2026"
+    assert probe.detail is None
+    assert probe.legacy_identity == "Tue Jul 14 10:00:00 2026"
     assert command[0] == "/bin/ps"
+
+
+def test_posix_legacy_probe_uses_deterministic_replacement_decoding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Locale-dependent undecodable ps bytes cannot abort observation."""
+    options: dict[str, object] = {}
+
+    def fake_run(
+        args: list[str],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        options.update(kwargs)
+        return subprocess.CompletedProcess(
+            args,
+            0,
+            stdout="S Tue Jul 14 10:00:00 2026\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(workflow_processes.subprocess, "run", fake_run)
+
+    probe = workflow_processes._legacy_posix_probe(123)
+
+    assert probe.status == "alive"
+    assert options["encoding"] == "utf-8"
+    assert options["errors"] == "replace"
+
+
+def test_posix_legacy_probe_contains_unicode_decoder_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unexpected decoder failure becomes an unverifiable observation."""
+
+    def fail_run(*_args: object, **_kwargs: object) -> None:
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")
+
+    monkeypatch.setattr(workflow_processes.subprocess, "run", fail_run)
+
+    probe = workflow_processes._legacy_posix_probe(123)
+
+    assert probe.status == "unverifiable"
+    assert probe.detail is not None
+
+
+def test_posix_legacy_probe_caps_timeout_to_remaining_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The subprocess timeout cannot outlive the aggregate scan deadline."""
+    observed_timeout: list[float] = []
+
+    def fake_run(
+        args: list[str],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        timeout = kwargs["timeout"]
+        assert isinstance(timeout, (float, int))
+        observed_timeout.append(float(timeout))
+        return subprocess.CompletedProcess(
+            args,
+            0,
+            stdout="S Tue Jul 14 10:00:00 2026\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(workflow_processes.subprocess, "run", fake_run)
+
+    probe = workflow_processes._legacy_posix_probe(
+        123,
+        remaining_seconds=0.125,
+    )
+
+    assert probe.status == "alive"
+    assert observed_timeout == [0.125]
+
+
+def test_posix_legacy_probe_timeout_remains_unobserved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A subprocess deadline cannot masquerade as completed observation."""
+
+    def timeout(*_args: object, **_kwargs: object) -> None:
+        raise subprocess.TimeoutExpired(["ps"], 0.125)
+
+    monkeypatch.setattr(workflow_processes.subprocess, "run", timeout)
+    monkeypatch.setattr(
+        workflow_processes,
+        "_linux_process_identity",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        workflow_processes,
+        "_darwin_process_identity",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(workflow_processes, "_IS_WINDOWS", False)
+    context = workflow_processes.ObservationContext(
+        deadline=1.0,
+        clock=lambda: 0.0,
+    )
+
+    assert context.classify(123, "legacy identity") == "unverifiable"
+    assert context.complete is False
+    assert context.skipped == 1
+
+
+def test_posix_missing_metadata_does_not_assert_process_death(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty ps result may reflect process-visibility restrictions."""
+
+    def fake_run(
+        args: list[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+
+    monkeypatch.setattr(workflow_processes.subprocess, "run", fake_run)
+
+    probe = workflow_processes._legacy_posix_probe(123)
+
+    assert probe.status == "unverifiable"
 
 
 @pytest.mark.parametrize("state", ["Z", "X", "x"])
@@ -284,10 +503,10 @@ def test_posix_legacy_probe_treats_dead_states_as_dead(
 
     monkeypatch.setattr(workflow_processes.subprocess, "run", fake_run)
 
-    identity, error = workflow_processes._legacy_posix_identity(123)
+    probe = workflow_processes._legacy_posix_probe(123)
 
-    assert error is None
-    assert identity == "zombie"
+    assert probe.status == "dead"
+    assert probe.detail is None
 
 
 @pytest.mark.parametrize("state", ["Z", "X", "x"])
@@ -297,29 +516,297 @@ def test_linux_procfs_probe_treats_dead_states_as_dead(
 ) -> None:
     """Procfs states for zombies and exited processes are not live."""
     proc_stat = f"123 (worker) {state} " + " ".join(["0"] * 20)
-    original_read_text = Path.read_text
+    original_read_bytes = Path.read_bytes
+
+    def fake_read_bytes(path: Path) -> bytes:
+        if path == Path("/proc/123/stat"):
+            return proc_stat.encode("ascii")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(workflow_processes.os.path, "exists", lambda _path: True)
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
+
+    probe = workflow_processes._linux_process_identity(123)
+
+    assert probe is not None
+    assert probe.status == "dead"
+
+
+def test_linux_dead_state_does_not_require_boot_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A conclusive procfs zombie remains dead when boot identity is hidden."""
+    proc_stat = "123 (worker) Z " + " ".join(["0"] * 20)
+
+    def fake_read_bytes(path: Path) -> bytes:
+        if path == Path("/proc/123/stat"):
+            return proc_stat.encode("ascii")
+        raise AssertionError(f"unexpected byte read: {path}")
 
     def fake_read_text(
         path: Path,
         encoding: str | None = None,
         errors: str | None = None,
     ) -> str:
-        if path == Path("/proc/123/stat"):
-            return proc_stat
-        if path == workflow_processes._LINUX_BOOT_ID:
-            return "00000000-0000-0000-0000-000000000000\n"
-        return original_read_text(path, encoding=encoding, errors=errors)
+        del path, encoding, errors
+        raise PermissionError("boot ID is hidden")
 
     monkeypatch.setattr(workflow_processes.os.path, "exists", lambda _path: True)
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
     monkeypatch.setattr(Path, "read_text", fake_read_text)
 
-    probe = workflow_processes._linux_process_identity(
-        123,
-        include_legacy=False,
-    )
+    probe = workflow_processes._linux_process_identity(123)
 
     assert probe is not None
     assert probe.status == "dead"
+
+
+def test_linux_missing_boot_id_preserves_compatibility_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Start ticks remain useful for safe comparisons without a boot ID."""
+    proc_stat = "123 (worker) S " + " ".join(["0"] * 18 + ["456"])
+
+    def fake_read_bytes(path: Path) -> bytes:
+        if path == Path("/proc/123/stat"):
+            return proc_stat.encode("ascii")
+        raise AssertionError(f"unexpected byte read: {path}")
+
+    def fake_read_text(
+        path: Path,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> str:
+        del path, encoding, errors
+        raise PermissionError("boot ID is hidden")
+
+    monkeypatch.setattr(workflow_processes.os.path, "exists", lambda _path: True)
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    probe = workflow_processes._linux_process_identity(123)
+
+    assert probe is not None
+    assert probe.status == "alive"
+    assert probe.identity is None
+    assert probe.compatibility_identities == ("linux:456",)
+    assert probe.detail == "boot ID is hidden"
+
+
+def test_linux_stat_accepts_non_utf8_process_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Arbitrary comm bytes do not hide the numeric kernel start identity."""
+    proc_stat = b"123 (work\xffer) S " + b" ".join([b"0"] * 18 + [b"456"])
+
+    def fake_read_bytes(path: Path) -> bytes:
+        assert path == Path("/proc/123/stat")
+        return proc_stat
+
+    def fake_read_text(
+        path: Path,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> str:
+        del encoding, errors
+        assert path == workflow_processes._LINUX_BOOT_ID
+        return "00000000-0000-0000-0000-000000000000\n"
+
+    monkeypatch.setattr(workflow_processes.os.path, "exists", lambda _path: True)
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    probe = workflow_processes._linux_process_identity(123)
+
+    assert probe is not None
+    assert probe.status == "alive"
+    assert probe.identity == ("linux:00000000-0000-0000-0000-000000000000:456")
+
+
+def test_linux_hidden_stat_for_live_pid_is_unverifiable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A live pidfd prevents hidden procfs metadata from asserting death."""
+    closed: list[int] = []
+
+    def missing_stat(_path: Path) -> bytes:
+        raise FileNotFoundError("procfs entry is hidden")
+
+    monkeypatch.setattr(workflow_processes.os.path, "exists", lambda _path: True)
+    monkeypatch.setattr(Path, "read_bytes", missing_stat)
+    monkeypatch.setattr(
+        workflow_processes.os,
+        "pidfd_open",
+        lambda _pid, _flags: 7,
+        raising=False,
+    )
+    monkeypatch.setattr(workflow_processes.os, "close", closed.append)
+
+    probe = workflow_processes._linux_process_identity(123)
+
+    assert probe is not None
+    assert probe.status == "unverifiable"
+    assert closed == [7]
+
+
+def test_linux_missing_stat_is_dead_only_after_conclusive_pidfd(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ESRCH from the native pidfd API conclusively identifies a dead PID."""
+
+    def missing_stat(_path: Path) -> bytes:
+        raise FileNotFoundError("procfs entry is absent")
+
+    def missing_pid(_pid: int, _flags: int) -> int:
+        raise ProcessLookupError("no such process")
+
+    monkeypatch.setattr(workflow_processes.os.path, "exists", lambda _path: True)
+    monkeypatch.setattr(Path, "read_bytes", missing_stat)
+    monkeypatch.setattr(
+        workflow_processes.os,
+        "pidfd_open",
+        missing_pid,
+        raising=False,
+    )
+
+    probe = workflow_processes._linux_process_identity(123)
+
+    assert probe is not None
+    assert probe.status == "dead"
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "darwin:not-an-identity",
+        "darwin:1:1000000",
+        "linux:not-an-identity",
+        "linux:0",
+        "linux:" + "9" * 5_000,
+        "linux:00000000-0000-0000-0000-000000000000:0",
+    ],
+)
+def test_invalid_persisted_identity_is_rejected_without_probe(
+    token: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Malformed durable tokens never reach a native process API."""
+
+    def fail_probe(
+        _pid: int,
+        *,
+        include_legacy: bool = True,
+    ) -> workflow_processes.ProcessProbe:
+        del include_legacy
+        raise AssertionError("malformed identity must not be probed")
+
+    monkeypatch.setattr(workflow_processes, "process_start_identity", fail_probe)
+
+    assert workflow_processes.observe_persisted_identity(123, token) == ("unverifiable")
+
+
+def test_cached_raw_probe_compares_multiple_claims_without_reprobe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One PID snapshot can safely compare distinct hostile durable claims."""
+    raw_probe = workflow_processes.ProcessProbe(
+        "alive",
+        identity="linux:00000000-0000-0000-0000-000000000000:123",
+        compatibility_identities=("linux:123",),
+    )
+
+    def fail_probe(
+        _pid: int,
+        *,
+        include_legacy: bool = True,
+    ) -> workflow_processes.ProcessProbe:
+        del include_legacy
+        raise AssertionError("caller-supplied snapshots must be reused")
+
+    monkeypatch.setattr(workflow_processes, "process_start_identity", fail_probe)
+
+    assert (
+        workflow_processes.observe_persisted_identity(
+            123,
+            "linux:123",
+            probe=raw_probe,
+        )
+        == "unverifiable"
+    )
+    assert (
+        workflow_processes.observe_persisted_identity(
+            123,
+            "linux:124",
+            probe=raw_probe,
+        )
+        == "stale"
+    )
+
+
+@pytest.mark.parametrize(
+    ("probe", "token", "expected"),
+    [
+        (
+            workflow_processes.ProcessProbe(
+                "alive",
+                identity=("linux:00000000-0000-0000-0000-000000000000:123"),
+            ),
+            "linux:00000000-0000-0000-0000-000000000000:123",
+            None,
+        ),
+        (
+            workflow_processes.ProcessProbe(
+                "alive",
+                identity=("linux:11111111-1111-1111-1111-111111111111:123"),
+            ),
+            "linux:00000000-0000-0000-0000-000000000000:123",
+            "stale",
+        ),
+        (
+            workflow_processes.ProcessProbe(
+                "alive",
+                identity="darwin:100:200",
+            ),
+            "darwin:100:200",
+            None,
+        ),
+        (
+            workflow_processes.ProcessProbe(
+                "alive",
+                identity="darwin:100:201",
+            ),
+            "darwin:100:200",
+            "stale",
+        ),
+        (
+            workflow_processes.ProcessProbe(
+                "alive",
+                legacy_identity="Tue Jul 14 10:00:00 2026",
+            ),
+            "Tue Jul 14 09:00:00 2026",
+            "unverifiable",
+        ),
+        (
+            workflow_processes.ProcessProbe("dead"),
+            "darwin:100:200",
+            "orphaned",
+        ),
+    ],
+)
+def test_persisted_identity_comparison_policy(
+    probe: workflow_processes.ProcessProbe,
+    token: str,
+    expected: workflow_processes.ProcessObservation,
+) -> None:
+    """The process adapter owns durable-token comparison semantics."""
+    assert (
+        workflow_processes.observe_persisted_identity(
+            123,
+            token,
+            probe=probe,
+        )
+        == expected
+    )
 
 
 def test_strong_linux_probe_does_not_launch_legacy_ps(
@@ -327,12 +814,17 @@ def test_strong_linux_probe_does_not_launch_legacy_ps(
 ) -> None:
     """Callers can omit the expensive compatibility probe for strong IDs."""
 
-    def fail_legacy(_pid: int) -> tuple[str | None, str | None]:
+    def fail_legacy(
+        _pid: int,
+        *,
+        remaining_seconds: float | None = None,
+    ) -> workflow_processes.ProcessProbe:
+        del remaining_seconds
         raise AssertionError("strong identity observation must not launch ps")
 
     monkeypatch.setattr(
         workflow_processes,
-        "_legacy_posix_identity",
+        "_legacy_posix_probe",
         fail_legacy,
     )
 
@@ -356,12 +848,17 @@ def test_strong_durable_identity_comparison_does_not_launch_ps(
     )
     assert initial.identity is not None
 
-    def fail_legacy(_pid: int) -> tuple[str | None, str | None]:
+    def fail_legacy(
+        _pid: int,
+        *,
+        remaining_seconds: float | None = None,
+    ) -> workflow_processes.ProcessProbe:
+        del remaining_seconds
         raise AssertionError("strong durable identities must not launch ps")
 
     monkeypatch.setattr(
         workflow_processes,
-        "_legacy_posix_identity",
+        "_legacy_posix_probe",
         fail_legacy,
     )
 
@@ -417,7 +914,7 @@ def test_huge_callback_pid_is_isolated_to_its_callback(tmp_path: Path) -> None:
     )
     _write_mapping(directory / "completion-notification.json", callback)
 
-    rendered = workflow_runs.load_run(directory).callback_json()
+    rendered = callback_payload(workflow_runs.load_run(directory))
 
     assert rendered is not None
     assert rendered["status"] == "unverifiable"

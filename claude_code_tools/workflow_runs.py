@@ -1,37 +1,47 @@
-"""Read-only models for durable dynamic-workflow run state."""
+"""Read-only repository and models for durable dynamic-workflow runs."""
 
 from __future__ import annotations
 
 import errno
 import os
-import re
-from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from contextlib import ExitStack
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
 from time import monotonic
 
-from claude_code_tools.workflow_processes import process_start_identity
-from claude_code_tools.workflow_store_io import (
-    ReadWorkBudget,
-    close_directory as _close_directory,
-    directory_entries as _directory_entries,
-    open_directory as _open_directory,
+from claude_code_tools.workflow_processes import (
+    ObservationContext,
+    process_start_identity,
 )
-from claude_code_tools.workflow_store_io import read_mapping as _read_mapping
+from claude_code_tools.workflow_cli_snapshots import (
+    CallbackRecord,
+    RunLookupResult,
+    RunQueryResult,
+    RunRecord,
+    RunState,
+)
+from claude_code_tools.workflow_cli_identity_policy import (
+    ABBREVIATED_RUN_ID_PATTERN,
+    RUN_ID_PATTERN,
+    RunResolution,
+    RunResolutionKind,
+    abbreviate_run_id,
+    colliding_abbreviations,
+)
+from claude_code_tools.workflow_store_io import (
+    ReadBudgetExceeded,
+    ReadWorkBudget,
+    VerifiedDirectory,
+)
 from claude_code_tools.workflow_validation import (
-    MAX_STATE_STEPS,
-    MAX_VALIDATION_DIAGNOSTIC_BYTES,
     NONTERMINAL_STATUSES,
     TERMINAL_STATUSES,
-    as_utc as _as_utc,
-    integer as _integer,
-    mapping as _mapping,
-    parse_timestamp,
-    step_errors as _step_errors,
-    string as _string,
-    validate_callback as _validate_callback,
-    validate_state as _validate_state,
+    as_utc,
+    parse_run_record,
+    validate_callback_observation,
+    validate_state_observation,
 )
 
 FILTER_STATUSES = tuple(
@@ -47,30 +57,12 @@ MAX_RUN_DIRECTORIES = 1_000
 MAX_SCAN_JSON_BYTES = 128 * 1024 * 1024
 MAX_SINGLE_RUN_JSON_BYTES = MAX_SCAN_JSON_BYTES
 MAX_PROCESS_OBSERVATION_SECONDS = 5.0
-MAX_ACTIVITY_ERROR_SCAN_CHARS = 4_096
-MAX_SUPPORTED_PID = (1 << 31) - 1
-_LINUX_IDENTITY = re.compile(
-    r"linux:[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}:[0-9]+"
-)
-_LINUX_COMPATIBILITY_IDENTITY = re.compile(r"linux:[0-9]+")
-_DARWIN_IDENTITY = re.compile(r"darwin:[0-9]+:[0-9]+")
+MAX_POSIX_RUN_NAME_BYTES = 255
+MAX_WINDOWS_RUN_NAME_UTF16_BYTES = 510
 
 
 class WorkflowStoreError(RuntimeError):
     """Raised when the configured workflow store cannot be inspected."""
-
-
-@dataclass
-class ObservationReport:
-    """Report whether every requested live-process observation was attempted."""
-
-    complete: bool = True
-    skipped: int = 0
-
-    def mark_skipped(self) -> None:
-        """Record one process identity skipped after the shared deadline."""
-        self.complete = False
-        self.skipped += 1
 
 
 def workflow_home() -> Path:
@@ -81,589 +73,108 @@ def workflow_home() -> Path:
     return Path(os.path.abspath(Path.home() / ".codex" / "workflows"))
 
 
-def _workflow_name(workflow_path: str | None) -> str:
-    """Derive a display name from a persisted workflow path."""
-    if not workflow_path:
-        return "unknown"
-    name = workflow_path.replace("\\", "/").rsplit("/", maxsplit=1)[-1]
-    return name[:-3] if name.endswith(".js") else name
-
-
-@dataclass(frozen=True)
-class StepRecord:
-    """Defensive view of one persisted agent step."""
-
-    id: str
-    label: str
-    status: str
-    attempt: int | None
-    started_at: str | None
-    completed_at: str | None
-    error: str | None
-    worker_pid: int | None
-    thread_id: str | None
-
-    @classmethod
-    def from_mapping(cls, key: str, value: Mapping[str, object]) -> StepRecord:
-        """Build a step from version-1 JSON under its authoritative key."""
-        errors = _step_errors(key, value)
-        status = _string(value, "status")
-        return cls(
-            id=key,
-            label=_string(value, "label") or _string(value, "id") or key,
-            status="malformed" if errors else status or "unknown",
-            attempt=_integer(value, "attempt"),
-            started_at=_string(value, "startedAt"),
-            completed_at=_string(value, "completedAt"),
-            error="; ".join(errors) if errors else _string(value, "error"),
-            worker_pid=_integer(value, "workerPid"),
-            thread_id=_string(value, "threadId"),
-        )
-
-    @classmethod
-    def malformed(cls, key: str, value: object) -> StepRecord:
-        """Preserve a malformed step as an explicit diagnostic record."""
-        maximum_key_chars = MAX_VALIDATION_DIAGNOSTIC_BYTES // 4
-        bounded_key = key[:maximum_key_chars]
-        key_was_truncated = len(key) > maximum_key_chars
-        error = (
-            f"step {bounded_key!r} must be a JSON object, got "
-            f"{type(value).__name__}"
-        )
-        if key_was_truncated:
-            error += " [truncated]"
-        encoded_error = error.encode("utf-8")
-        if len(encoded_error) > MAX_VALIDATION_DIAGNOSTIC_BYTES:
-            suffix = b" [truncated]"
-            prefix = encoded_error[
-                : MAX_VALIDATION_DIAGNOSTIC_BYTES - len(suffix)
-            ]
-            error = prefix.decode("utf-8", errors="ignore") + suffix.decode()
-        return cls(
-            id=key,
-            label=key,
-            status="malformed",
-            attempt=None,
-            started_at=None,
-            completed_at=None,
-            error=error,
-            worker_pid=None,
-            thread_id=None,
-        )
-
-    def duration_seconds(self, now: datetime) -> float | None:
-        """Return this step's nonnegative elapsed or total duration."""
-        started = parse_timestamp(self.started_at)
-        if started is None:
-            return None
-        completed = parse_timestamp(self.completed_at)
-        end = completed or (now if self.status == "running" else None)
-        if end is None:
-            return None
-        try:
-            return max(0.0, (end - started).total_seconds())
-        except OverflowError:
-            return None
-
-    def to_json(self, now: datetime) -> dict[str, object]:
-        """Return a stable automation representation."""
-        return {
-            "id": self.id,
-            "label": self.label,
-            "status": self.status,
-            "attempt": self.attempt,
-            "startedAt": self.started_at,
-            "completedAt": self.completed_at,
-            "durationSeconds": self.duration_seconds(now),
-            "workerPid": self.worker_pid,
-            "threadId": self.thread_id,
-            "error": self.error,
-        }
-
-
-@dataclass(frozen=True)
-class RunRecord:
-    """Normalized, read-only view of a workflow run directory."""
-
-    directory: Path
-    state: Mapping[str, object] = field(default_factory=dict)
-    callback: Mapping[str, object] | None = None
-    state_error: str | None = None
-    callback_error: str | None = None
-    supervisor_state: str | None = None
-    callback_state: str | None = None
-    callback_process_state: str | None = None
-    abbreviation_ambiguous: bool = False
-
-    @property
-    def run_id(self) -> str:
-        """Return the persisted run ID, falling back to the directory name."""
-        persisted = _string(self.state, "runId")
-        if persisted is not None and persisted == self.directory.name:
-            return persisted
-        return self.directory.name
-
-    @property
-    def abbreviated_id(self) -> str:
-        """Return a compact but recognizable run ID."""
-        if len(self.run_id) <= 17:
-            return self.run_id
-        return f"{self.run_id[:8]}~{self.run_id[-8:]}"
-
-    @property
-    def recorded_status(self) -> str:
-        """Return the durable status exactly as recorded when possible."""
-        return _string(self.state, "status") or "unknown"
-
-    @property
-    def status(self) -> str:
-        """Return the observational status, including stale classification."""
-        if self.state_error:
-            return "malformed"
-        if self.supervisor_state:
-            return self.supervisor_state
-        if self.recorded_status not in TERMINAL_STATUSES | NONTERMINAL_STATUSES:
-            return "unknown"
-        return self.recorded_status
-
-    @property
-    def workflow_path(self) -> str | None:
-        """Return the recorded workflow path without opening it."""
-        return _string(self.state, "workflowPath")
-
-    @property
-    def workflow_name(self) -> str:
-        """Return a name derived from the recorded workflow path."""
-        return _workflow_name(self.workflow_path)
-
-    @property
-    def created_at(self) -> str | None:
-        """Return the persisted creation timestamp."""
-        return _string(self.state, "createdAt")
-
-    @property
-    def updated_at(self) -> str | None:
-        """Return the persisted last-update timestamp."""
-        return _string(self.state, "updatedAt")
-
-    @property
-    def started_at(self) -> str | None:
-        """Return the best available start timestamp."""
-        return _string(self.state, "startedAt") or self.created_at
-
-    @property
-    def completed_at(self) -> str | None:
-        """Return the persisted completion timestamp."""
-        return _string(self.state, "completedAt")
-
-    @property
-    def error(self) -> str | None:
-        """Return the run-level or parsing error."""
-        return self.state_error or _string(self.state, "error")
-
-    @property
-    def callback_status(self) -> str:
-        """Return the callback state, including corrupt metadata."""
-        if self.callback_error:
-            return "invalid"
-        if self.callback is None:
-            return "none"
-        return self.callback_state or _string(self.callback, "status") or "unknown"
-
-    @property
-    def steps(self) -> tuple[StepRecord, ...]:
-        """Return agent steps, preserving malformed entries diagnostically."""
-        source = _mapping(self.state.get("steps"))
-        if source is None or len(source) > MAX_STATE_STEPS:
-            return ()
-        records = [
-            (
-                StepRecord.from_mapping(str(key), child)
-                if (child := _mapping(value)) is not None
-                else StepRecord.malformed(str(key), value)
-            )
-            for key, value in source.items()
-        ]
-        oldest = datetime.min.replace(tzinfo=UTC)
-        return tuple(
-            sorted(
-                records,
-                key=lambda step: (_as_utc(step.started_at) or oldest, step.id),
-            )
-        )
-
-    @property
-    def active_workers(self) -> int:
-        """Count persisted running agent steps."""
-        return sum(step.status == "running" for step in self.steps)
-
-    @property
-    def progress(self) -> dict[str, int]:
-        """Return stable step progress counts."""
-        counts = {
-            "total": len(self.steps),
-            "completed": 0,
-            "failed": 0,
-            "canceled": 0,
-            "running": 0,
-        }
-        for step in self.steps:
-            if step.status in counts:
-                counts[step.status] += 1
-        return counts
-
-    def duration_seconds(self, now: datetime) -> float | None:
-        """Return the run's elapsed or total duration.
-
-        Args:
-            now: Current aware time for a nonterminal run.
-
-        Returns:
-            Nonnegative seconds, or ``None`` when the start is invalid.
-        """
-        started = parse_timestamp(self.started_at)
-        if started is None:
-            return None
-        completed = parse_timestamp(self.completed_at)
-        if self.recorded_status in TERMINAL_STATUSES:
-            end = completed or parse_timestamp(self.updated_at)
-            if end is None:
-                return None
-        else:
-            end = now
-        try:
-            return max(0.0, (end - started).total_seconds())
-        except OverflowError:
-            return None
-
-    def activity(self) -> str:
-        """Return a compact error or current-activity indication."""
-        if self.error:
-            summary = next(
-                (
-                    line.strip()
-                    for line in self.error[
-                        :MAX_ACTIVITY_ERROR_SCAN_CHARS
-                    ].splitlines()
-                    if line.strip()
-                ),
-                None,
-            )
-            if summary is not None:
-                return summary
-        if self.supervisor_state == "stale":
-            return "supervisor PID was reused"
-        if self.supervisor_state == "orphaned":
-            return "supervisor is not running"
-        if self.supervisor_state == "unverifiable":
-            return "supervisor identity cannot be verified"
-        running = [step.label for step in self.steps if step.status == "running"]
-        if running:
-            suffix = f" +{len(running) - 1}" if len(running) > 1 else ""
-            return f"{running[0]}{suffix}"
-        if self.state.get("cleanupPending") is True:
-            return "cleanup pending"
-        if self.recorded_status in TERMINAL_STATUSES:
-            return self.recorded_status
-        return "waiting"
-
-    def callback_json(self) -> dict[str, object] | None:
-        """Return stable callback details when callback metadata exists."""
-        if self.callback_error:
-            return {
-                "status": "invalid",
-                "attempts": None,
-                "createdAt": None,
-                "updatedAt": None,
-                "deliveredAt": None,
-                "deadlineAt": None,
-                "lastAttemptAt": None,
-                "terminalCompletedAt": None,
-                "terminalStatus": None,
-                "clientUserMessageId": None,
-                "endpoint": None,
-                "threadId": None,
-                "timeoutMs": None,
-                "turnId": None,
-                "notifierPid": None,
-                "notifierStartedAt": None,
-                "notifierProcessStatus": None,
-                "error": self.callback_error,
-            }
-        if self.callback is None:
-            return None
-        return {
-            "status": self.callback_status,
-            "attempts": _integer(self.callback, "attempts"),
-            "createdAt": _string(self.callback, "createdAt"),
-            "updatedAt": _string(self.callback, "updatedAt"),
-            "deliveredAt": _string(self.callback, "deliveredAt"),
-            "deadlineAt": _string(self.callback, "deadlineAt"),
-            "lastAttemptAt": _string(self.callback, "lastAttemptAt"),
-            "terminalCompletedAt": _string(
-                self.callback,
-                "terminalCompletedAt",
-            ),
-            "terminalStatus": _string(self.callback, "terminalStatus"),
-            "clientUserMessageId": _string(
-                self.callback,
-                "clientUserMessageId",
-            ),
-            "endpoint": _string(self.callback, "endpoint"),
-            "threadId": _string(self.callback, "threadId"),
-            "timeoutMs": _integer(self.callback, "timeoutMs"),
-            "turnId": _string(self.callback, "turnId"),
-            "notifierPid": _integer(self.callback, "notifierPid"),
-            "notifierStartedAt": _string(
-                self.callback,
-                "notifierStartedAt",
-            ),
-            "notifierProcessStatus": self.callback_process_state,
-            "error": _string(self.callback, "error"),
-        }
-
-    def to_json(
-        self,
-        now: datetime,
-        *,
-        include_steps: bool = False,
-    ) -> dict[str, object]:
-        """Return a stable automation representation.
-
-        Args:
-            now: Current aware time.
-            include_steps: Whether to include detailed agent-step records.
-
-        Returns:
-            A JSON-compatible run object.
-        """
-        progress = self.progress
-        value: dict[str, object] = {
-            "schemaVersion": 1,
-            "runId": self.run_id,
-            "abbreviatedRunId": self.abbreviated_id,
-            "workflowName": self.workflow_name,
-            "workflowPath": self.workflow_path,
-            "recordedStatus": self.recorded_status,
-            "status": self.status,
-            "agentProgress": progress,
-            "activeWorkers": self.active_workers,
-            "createdAt": self.created_at,
-            "startedAt": self.started_at,
-            "completedAt": self.completed_at,
-            "updatedAt": self.updated_at,
-            "durationSeconds": self.duration_seconds(now),
-            "callback": self.callback_json(),
-            "activity": self.activity(),
-            "error": self.error,
-            "stateError": self.state_error,
-            "callbackError": self.callback_error,
-        }
-        if include_steps:
-            value["steps"] = [step.to_json(now) for step in self.steps]
-        return value
-
-
-def _bounded_decimal(value: str, *, maximum: int | None = None) -> int | None:
-    """Parse a short decimal without invoking Python's huge-integer parser."""
-    if not value or len(value) > 20 or not value.isdecimal():
-        return None
-    parsed = int(value)
-    return parsed if maximum is None or parsed <= maximum else None
-
-
-def _process_identity_kind(expected: str) -> str:
-    """Classify durable, compatibility, legacy, and malformed identities."""
-    if expected.startswith("linux:"):
-        if _LINUX_IDENTITY.fullmatch(expected):
-            ticks = _bounded_decimal(expected.rsplit(":", 1)[1])
-            return "strong" if ticks is not None and ticks > 0 else "malformed"
-        if _LINUX_COMPATIBILITY_IDENTITY.fullmatch(expected):
-            ticks = _bounded_decimal(expected.removeprefix("linux:"))
-            return "compatibility" if ticks is not None and ticks > 0 else "malformed"
-        return "malformed"
-    if expected.startswith("darwin:"):
-        if not _DARWIN_IDENTITY.fullmatch(expected):
-            return "malformed"
-        raw_seconds, raw_microseconds = expected.split(":")[1:]
-        seconds = _bounded_decimal(raw_seconds)
-        microseconds = _bounded_decimal(raw_microseconds, maximum=999_999)
-        return (
-            "strong"
-            if seconds is not None and seconds > 0 and microseconds is not None
-            else "malformed"
-        )
-    if os.name == "nt" and expected.isdecimal():
-        ticks = _bounded_decimal(expected)
-        return "strong" if ticks is not None and ticks > 0 else "malformed"
-    return "legacy"
-
-
 def observed_process_state(pid: int, expected: str) -> str | None:
-    """Compare a durable process identity with a tri-state live probe.
-
-    Exact durable identities establish ownership. Older boot-relative Linux
-    tokens and second-resolution ``ps`` values can only establish a mismatch;
-    an exact compatibility match remains intentionally unverifiable.
-    """
-    identity_kind = _process_identity_kind(expected)
-    if pid <= 0 or pid > MAX_SUPPORTED_PID or identity_kind == "malformed":
-        return "unverifiable"
-    probe = process_start_identity(
+    """Observe one process claim through the shared context policy."""
+    return ObservationContext(probe_factory=process_start_identity).classify(
         pid,
-        include_legacy=identity_kind == "legacy",
+        expected,
     )
-    if probe.status == "dead":
-        return "orphaned"
-    if probe.status == "unverifiable":
-        return "unverifiable"
-    if probe.identity == expected:
-        return "unverifiable" if identity_kind == "compatibility" else None
-    compatibility = set(probe.compatibility_identities)
-    if probe.legacy_identity is not None:
-        compatibility.add(probe.legacy_identity)
-    if expected in compatibility:
-        return "unverifiable"
-    if identity_kind == "compatibility" and probe.compatibility_identities:
-        return "stale"
-    if identity_kind == "strong" and probe.identity is not None:
-        return "stale"
-    return "unverifiable"
 
 
-def _within_startup_grace(
-    state: Mapping[str, object], now: datetime | None = None
-) -> bool:
-    """Check whether identity-less state is still in its publication window."""
-    updated = _as_utc(state.get("updatedAt")) or _as_utc(state.get("createdAt"))
+def _within_startup_grace(state: RunState, now: datetime) -> bool:
+    """Return whether identity-less state is in its publication window."""
+    updated = as_utc(state.updated_at) or as_utc(state.created_at)
     if updated is None:
         return False
-    current = now or datetime.now(UTC)
     try:
-        age = (current.astimezone(UTC) - updated).total_seconds()
+        age = (now.astimezone(UTC) - updated).total_seconds()
     except (OverflowError, ValueError):
         return False
     return 0.0 <= age <= STARTUP_GRACE_SECONDS
 
 
 def _supervisor_state(
-    state: Mapping[str, object],
-    now: datetime | None = None,
-    *,
-    observations: dict[tuple[int, str], str | None] | None = None,
-    observation_deadline: float | None = None,
-    observation_report: ObservationReport | None = None,
+    state: RunState,
+    now: datetime,
+    observer: ObservationContext,
 ) -> str | None:
-    """Classify a nonterminal run's supervisor observation.
-
-    Args:
-        state: Durable version-1 run state.
-        now: Optional current time for deterministic tests.
-
-    Returns:
-        ``orphaned``, ``stale``, or ``unverifiable`` when applicable.
-    """
-    status = _string(state, "status")
-    if status not in NONTERMINAL_STATUSES:
+    """Classify a nonterminal run's supervisor."""
+    if state.status not in NONTERMINAL_STATUSES:
         return None
-    pid = _integer(state, "pid")
-    expected = _string(state, "pidStartedAt")
-    if (pid is not None and not 0 < pid <= MAX_SUPPORTED_PID) or (
-        expected is not None and _process_identity_kind(expected) == "malformed"
-    ):
-        return "unverifiable"
-    if pid is None and expected is None:
+    if state.pid is None and state.pid_started_at is None:
         return None if _within_startup_grace(state, now) else "unverifiable"
-    if pid is None or expected is None:
+    if state.pid is None or state.pid_started_at is None:
         return "unverifiable"
-    return _cached_process_state(
-        pid,
-        expected,
-        observations,
-        observation_deadline=observation_deadline,
-        observation_report=observation_report,
+    return observer.classify(state.pid, state.pid_started_at)
+
+
+class CallbackGeneration(Enum):
+    """Relationship between callback metadata and a run generation."""
+
+    UNBOUND = "unbound"
+    MATCHES = "matches"
+    MISMATCH = "mismatch"
+
+
+def _timestamps_equal(left: str | None, right: str | None) -> bool:
+    """Compare two valid persisted timestamps by instant."""
+    normalized_left = as_utc(left)
+    normalized_right = as_utc(right)
+    return normalized_left is not None and normalized_left == normalized_right
+
+
+def callback_generation_relation(
+    state: RunState,
+    callback: CallbackRecord,
+) -> CallbackGeneration:
+    """Correlate callback terminal metadata with one run generation."""
+    if callback.terminal_completed_at is None and callback.terminal_status is None:
+        return CallbackGeneration.UNBOUND
+    base_matches = (
+        state.status in TERMINAL_STATUSES
+        and _timestamps_equal(
+            callback.terminal_completed_at,
+            state.completed_at,
+        )
+        and callback.terminal_status == state.status
     )
-
-
-def _cached_process_state(
-    pid: int,
-    expected: str,
-    observations: dict[tuple[int, str], str | None] | None,
-    *,
-    observation_deadline: float | None = None,
-    observation_report: ObservationReport | None = None,
-) -> str | None:
-    """Observe a persisted identity at most once during one store scan."""
-    key = (pid, expected)
-    if observations is not None and key in observations:
-        return observations[key]
-    if observation_deadline is not None and monotonic() >= observation_deadline:
-        result = "unverifiable"
-        if observation_report is not None:
-            observation_report.mark_skipped()
-    else:
-        result = observed_process_state(pid, expected)
-    if observations is not None:
-        observations[key] = result
-    return result
+    if not base_matches:
+        return CallbackGeneration.MISMATCH
+    if (
+        callback.terminal_fingerprint is not None
+        and state.terminal_fingerprint is not None
+    ):
+        return (
+            CallbackGeneration.MATCHES
+            if callback.terminal_fingerprint == state.terminal_fingerprint
+            else CallbackGeneration.MISMATCH
+        )
+    return CallbackGeneration.MATCHES
 
 
 def _callback_observation(
-    state: Mapping[str, object],
-    callback: Mapping[str, object],
-    observations: dict[tuple[int, str], str | None] | None = None,
-    *,
-    observation_deadline: float | None = None,
-    observation_report: ObservationReport | None = None,
+    state: RunState,
+    callback: CallbackRecord,
+    observer: ObservationContext,
 ) -> tuple[str | None, str | None]:
-    """Correlate callback state with its run generation and notifier.
-
-    Args:
-        state: Valid durable run state.
-        callback: Valid durable callback metadata.
-
-    Returns:
-        A delivery-status override and separate notifier process status.
-    """
-    terminal_completed = _string(callback, "terminalCompletedAt")
-    callback_fingerprint = _string(callback, "terminalFingerprint")
-    state_fingerprint = _string(state, "terminalFingerprint")
-    terminal_status = _string(callback, "terminalStatus")
-    if terminal_completed is not None or terminal_status is not None:
-        if (
-            _string(state, "status") not in TERMINAL_STATUSES
-            or not _timestamps_equal(
-                terminal_completed,
-                _string(state, "completedAt"),
-            )
-            or terminal_status != _string(state, "status")
-            or (
-                callback_fingerprint is not None
-                and state_fingerprint is not None
-                and callback_fingerprint != state_fingerprint
-            )
-        ):
-            return "stale", None
-    if _string(callback, "status") != "sending":
+    """Correlate callback generation and notifier process status."""
+    if callback_generation_relation(state, callback) is CallbackGeneration.MISMATCH:
+        return "stale", None
+    if callback.status != "sending":
         return None, None
-    pid = _integer(callback, "notifierPid")
-    expected = _string(callback, "notifierStartedAt")
-    if pid is None or expected is None:
+    if callback.notifier_pid is None or callback.notifier_started_at is None:
         process_state = "unverifiable"
     else:
         process_state = (
-            _cached_process_state(
-                pid,
-                expected,
-                observations,
-                observation_deadline=observation_deadline,
-                observation_report=observation_report,
+            observer.classify(
+                callback.notifier_pid,
+                callback.notifier_started_at,
             )
             or "running"
         )
     delivery_state = (
         "unknown"
-        if (_integer(callback, "attempts") or 0) > 0
+        if (callback.attempts or 0) > 0
         else None
         if process_state == "running"
         else process_state
@@ -671,158 +182,12 @@ def _callback_observation(
     return delivery_state, process_state
 
 
-def _timestamps_equal(left: object, right: object) -> bool:
-    """Compare two valid persisted timestamps by instant."""
-    normalized_left = _as_utc(left)
-    normalized_right = _as_utc(right)
-    return normalized_left is not None and normalized_left == normalized_right
-
-
-def _callback_matches_generation(
-    state: Mapping[str, object],
-    callback: Mapping[str, object],
-) -> bool:
-    """Return whether callback terminal metadata matches the loaded state."""
-    terminal_completed = _string(callback, "terminalCompletedAt")
-    callback_fingerprint = _string(callback, "terminalFingerprint")
-    state_fingerprint = _string(state, "terminalFingerprint")
-    terminal_status = _string(callback, "terminalStatus")
-    if terminal_completed is None and terminal_status is None:
-        return True
-    return (
-        _string(state, "status") in TERMINAL_STATUSES
-        and _timestamps_equal(terminal_completed, _string(state, "completedAt"))
-        and terminal_status == _string(state, "status")
-        and (
-            callback_fingerprint is None
-            or state_fingerprint is None
-            or callback_fingerprint == state_fingerprint
-        )
-    )
-
-
-def _discard_oversized_steps(
-    state: Mapping[str, object],
-) -> Mapping[str, object]:
-    """Drop a rejected step map before retaining the surrounding state."""
-    steps = _mapping(state.get("steps"))
-    if steps is None or len(steps) <= MAX_STATE_STEPS:
-        return state
-    bounded = dict(state)
-    bounded["steps"] = {}
-    return bounded
-
-
-def load_run(
-    directory: Path,
-    *,
-    now: datetime | None = None,
-    observe: bool = True,
-    budget: ReadWorkBudget | None = None,
-    observations: dict[tuple[int, str], str | None] | None = None,
-    _parent_fd: int | None = None,
-) -> RunRecord:
-    """Load one run directory without modifying it.
-
-    Args:
-        directory: Verified run directory to inspect.
-        now: Shared observation time used for startup-grace classification.
-        observe: Whether to perform process observations immediately.
-        budget: Optional aggregate JSON-read budget for a multi-run scan.
-        observations: Optional process-observation cache shared by a scan.
-
-    Returns:
-        A defensive run record.
-    """
-    parent_fd = _parent_fd
-    owns_parent_fd = parent_fd is None
-    directory_fd: int | None = None
-    try:
-        if parent_fd is None:
-            parent_fd = _open_directory(directory.parent)
-        directory_fd = _open_directory(directory, parent_fd=parent_fd)
-    except OSError as error:
-        return RunRecord(directory=directory, state_error=str(error))
-    finally:
-        if owns_parent_fd and parent_fd is not None:
-            _close_directory(parent_fd)
-    state_path = directory / "state.json"
-    callback_path = directory / "completion-notification.json"
-    active_budget = budget or ReadWorkBudget(MAX_SINGLE_RUN_JSON_BYTES)
-    try:
-        state, state_error = _read_mapping(
-            state_path,
-            description="state",
-            directory_fd=directory_fd,
-            omit_result_payloads=True,
-            budget=active_budget,
-        )
-        if state is not None:
-            state_error = _validate_state(state, directory.name)
-        callback, callback_error = _read_mapping(
-            callback_path,
-            description="callback metadata",
-            directory_fd=directory_fd,
-            missing_ok=True,
-            budget=active_budget,
-        )
-        if callback is not None:
-            callback_error = _validate_callback(callback, directory.name)
-        if state_error is None and callback_error is None and callback is not None:
-            for _ in range(COHERENCE_READ_ATTEMPTS - 1):
-                if callback is None or (
-                    state is not None and _callback_matches_generation(state, callback)
-                ):
-                    break
-                state, state_error = _read_mapping(
-                    state_path,
-                    description="state",
-                    directory_fd=directory_fd,
-                    omit_result_payloads=True,
-                    budget=active_budget,
-                )
-                callback, callback_error = _read_mapping(
-                    callback_path,
-                    description="callback metadata",
-                    directory_fd=directory_fd,
-                    missing_ok=True,
-                    budget=active_budget,
-                )
-                if state is not None:
-                    state_error = _validate_state(state, directory.name)
-                if callback is not None:
-                    callback_error = _validate_callback(callback, directory.name)
-                if state_error is not None or callback_error is not None:
-                    break
-    finally:
-        if directory_fd is not None:
-            _close_directory(directory_fd)
-    normalized = _discard_oversized_steps(state) if state is not None else {}
-    record = RunRecord(
-        directory=directory,
-        state=normalized,
-        callback=callback,
-        state_error=state_error,
-        callback_error=callback_error,
-    )
-    if not observe:
-        return record
-    return _observe_record(
-        record,
-        now or datetime.now(UTC),
-        observations=observations,
-    )
-
-
 def _observe_record(
     record: RunRecord,
     now: datetime,
-    *,
-    observations: dict[tuple[int, str], str | None] | None = None,
-    observation_deadline: float | None = None,
-    observation_report: ObservationReport | None = None,
+    observer: ObservationContext,
 ) -> RunRecord:
-    """Attach process-derived classifications using one observation instant."""
+    """Attach process-derived classifications to one immutable record."""
     callback_state: str | None = None
     callback_process_state: str | None = None
     if record.callback_error is None and record.callback is not None:
@@ -832,20 +197,10 @@ def _observe_record(
             callback_state, callback_process_state = _callback_observation(
                 record.state,
                 record.callback,
-                observations,
-                observation_deadline=observation_deadline,
-                observation_report=observation_report,
+                observer,
             )
     supervisor_state = (
-        None
-        if record.state_error
-        else _supervisor_state(
-            record.state,
-            now,
-            observations=observations,
-            observation_deadline=observation_deadline,
-            observation_report=observation_report,
-        )
+        None if record.state_error else _supervisor_state(record.state, now, observer)
     )
     return replace(
         record,
@@ -855,115 +210,329 @@ def _observe_record(
     )
 
 
+@dataclass(frozen=True)
+class ValidatedSnapshot:
+    """One typed state/callback pair with explicit observation clocks."""
+
+    state: RunState
+    callback: CallbackRecord | None
+    state_error: str | None
+    callback_error: str | None
+    query_at: datetime
+    read_completed_at: datetime
+
+
+def read_validated_snapshot_once(
+    run_directory: VerifiedDirectory,
+    directory_name: str,
+    *,
+    budget: ReadWorkBudget,
+    query_at: datetime,
+) -> ValidatedSnapshot:
+    """Read each file and validate it against its acquisition completion."""
+    raw_state, state_error = run_directory.read_state(budget=budget)
+    state_read_completed_at = datetime.now(UTC)
+    raw_callback, callback_error = run_directory.read_callback(budget=budget)
+    callback_read_completed_at = datetime.now(UTC)
+
+    raw_record = parse_run_record(
+        Path(directory_name),
+        state=raw_state,
+        callback=raw_callback,
+    )
+    state = raw_record.state
+    if raw_state is not None:
+        state_error = raw_record.state_error
+        if state_error is None:
+            state_error = validate_state_observation(
+                state,
+                state_read_completed_at,
+            )
+
+    callback = raw_record.callback
+    if raw_callback is not None:
+        callback_error = raw_record.callback_error
+        if callback_error is None:
+            assert callback is not None
+            callback_error = validate_callback_observation(
+                callback,
+                callback_read_completed_at,
+            )
+    return ValidatedSnapshot(
+        state=state,
+        callback=callback,
+        state_error=state_error,
+        callback_error=callback_error,
+        query_at=query_at,
+        read_completed_at=callback_read_completed_at,
+    )
+
+
+def _read_coherent_snapshot(
+    run_directory: VerifiedDirectory,
+    directory_name: str,
+    *,
+    budget: ReadWorkBudget,
+    query_at: datetime,
+) -> ValidatedSnapshot:
+    """Retry changing mismatches without amplifying identical snapshots."""
+    snapshot = read_validated_snapshot_once(
+        run_directory,
+        directory_name,
+        budget=budget,
+        query_at=query_at,
+    )
+    for _ in range(COHERENCE_READ_ATTEMPTS - 1):
+        if (
+            snapshot.state_error is not None
+            or snapshot.callback_error is not None
+            or snapshot.callback is None
+            or callback_generation_relation(
+                snapshot.state,
+                snapshot.callback,
+            )
+            is not CallbackGeneration.MISMATCH
+        ):
+            break
+        try:
+            candidate = read_validated_snapshot_once(
+                run_directory,
+                directory_name,
+                budget=budget,
+                query_at=query_at,
+            )
+        except ReadBudgetExceeded:
+            return snapshot
+        if (
+            candidate.state == snapshot.state
+            and candidate.callback == snapshot.callback
+            and candidate.state_error == snapshot.state_error
+            and candidate.callback_error == snapshot.callback_error
+        ):
+            break
+        snapshot = candidate
+    return snapshot
+
+
+def _record_from_open_directory(
+    directory: Path,
+    run_directory: VerifiedDirectory,
+    *,
+    query_at: datetime,
+    observe: bool,
+    budget: ReadWorkBudget,
+    observer: ObservationContext | None,
+) -> RunRecord:
+    """Build one record from an already verified run capability."""
+    snapshot = _read_coherent_snapshot(
+        run_directory,
+        directory.name,
+        budget=budget,
+        query_at=query_at,
+    )
+    record = RunRecord(
+        directory=directory,
+        state=snapshot.state,
+        callback=snapshot.callback,
+        state_error=snapshot.state_error,
+        callback_error=snapshot.callback_error,
+    )
+    if not observe:
+        return record
+    active_observer = observer or ObservationContext(
+        probe_factory=process_start_identity
+    )
+    return _observe_record(
+        record,
+        snapshot.read_completed_at,
+        active_observer,
+    )
+
+
+def load_run(
+    directory: Path,
+    *,
+    now: datetime | None = None,
+    observe: bool = True,
+    budget: ReadWorkBudget | None = None,
+    observer: ObservationContext | None = None,
+    _parent_directory: VerifiedDirectory | None = None,
+) -> RunRecord:
+    """Load one run directory without modifying it."""
+    observed_at = now or datetime.now(UTC)
+    owns_budget = budget is None
+    active_budget = budget or ReadWorkBudget(MAX_SINGLE_RUN_JSON_BYTES)
+    try:
+        with ExitStack() as stack:
+            parent = _parent_directory
+            if parent is None:
+                parent = stack.enter_context(VerifiedDirectory.open(directory.parent))
+            run_directory = stack.enter_context(parent.open_child(directory.name))
+            return _record_from_open_directory(
+                directory,
+                run_directory,
+                query_at=observed_at,
+                observe=observe,
+                budget=active_budget,
+                observer=observer,
+            )
+    except ReadBudgetExceeded as error:
+        if not owns_budget:
+            raise
+        return RunRecord(directory=directory, state_error=str(error))
+    except (OSError, ValueError) as error:
+        return RunRecord(directory=directory, state_error=str(error))
+
+
+def _has_surrogate(value: str) -> bool:
+    """Return whether text contains a non-reversible surrogate code point."""
+    return any(0xD800 <= ord(character) <= 0xDFFF for character in value)
+
+
+def _directory_names(
+    verified_runs: VerifiedDirectory,
+    runs_directory: Path,
+) -> tuple[str, ...]:
+    """Enumerate a bounded catalog of reversible Unicode identities."""
+    names: list[str] = []
+    for entry_count, (name, is_directory) in enumerate(
+        verified_runs.entries(),
+        start=1,
+    ):
+        if entry_count > MAX_RUN_DIRECTORIES:
+            raise WorkflowStoreError(
+                "Workflow run scan exceeds the safety limit of "
+                f"{MAX_RUN_DIRECTORIES} directory entries in "
+                f"{runs_directory}"
+            )
+        if is_directory and not _has_surrogate(name):
+            names.append(name)
+    return tuple(names)
+
+
 def load_runs(
     home: Path | None = None,
     *,
     statuses: tuple[str, ...] = (),
-    limit: int | None = None,
     now: datetime | None = None,
     observe: bool = True,
-    observation_report: ObservationReport | None = None,
-) -> list[RunRecord]:
-    """Load sorted local run states within aggregate work and output bounds.
-
-    ``observation_report`` is marked incomplete when the shared process-probe
-    deadline prevents a live observation. Callers applying status filters can
-    then disclose that an unprobed run might have matched the filter.
-    """
+    limit: int | None = None,
+) -> RunQueryResult:
+    """Load, sort, filter, and bound immutable run snapshots."""
+    observed_at = now or datetime.now(UTC)
     runs_directory = (home or workflow_home()) / "runs"
-    runs_fd: int | None = None
     records: list[RunRecord] = []
+    budget = ReadWorkBudget(MAX_SCAN_JSON_BYTES)
     try:
-        runs_fd = _open_directory(runs_directory)
-        if runs_fd is None:
-            raise OSError(errno.ENOTSUP, "missing verified directory handle")
-        directories: list[Path] = []
-        for entry_count, (name, is_directory) in enumerate(
-            _directory_entries(runs_fd),
-            start=1,
-        ):
-            if entry_count > MAX_RUN_DIRECTORIES:
-                raise WorkflowStoreError(
-                    "Workflow run scan exceeds the safety limit of "
-                    f"{MAX_RUN_DIRECTORIES} directory entries in "
-                    f"{runs_directory}"
-                )
-            if is_directory:
-                directories.append(runs_directory / name)
-        budget = ReadWorkBudget(MAX_SCAN_JSON_BYTES)
-        for path in directories:
-            record = load_run(
-                path,
-                observe=False,
-                budget=budget,
-                _parent_fd=runs_fd,
-            )
-            if budget.limit_exceeded:
-                raise WorkflowStoreError(
-                    "Workflow run JSON scan exceeds the aggregate work limit of "
-                    f"{budget.maximum_bytes} bytes in {runs_directory}"
-                )
-            records.append(record)
+        with VerifiedDirectory.open(runs_directory) as verified_runs:
+            names = _directory_names(verified_runs, runs_directory)
+            for name in names:
+                directory = runs_directory / name
+                try:
+                    with verified_runs.open_child(name) as run_directory:
+                        record = _record_from_open_directory(
+                            directory,
+                            run_directory,
+                            query_at=observed_at,
+                            observe=False,
+                            budget=budget,
+                            observer=None,
+                        )
+                except (OSError, ValueError) as error:
+                    record = RunRecord(
+                        directory=directory,
+                        state_error=str(error),
+                    )
+                records.append(record)
     except FileNotFoundError:
-        return []
+        read_completed_at = datetime.now(UTC)
+        return RunQueryResult(
+            (),
+            False,
+            False,
+            query_at=observed_at,
+            read_completed_at=read_completed_at,
+        )
+    except ReadBudgetExceeded as error:
+        raise WorkflowStoreError(
+            f"Workflow run JSON scan exceeds its aggregate work limit in "
+            f"{runs_directory}: {error}"
+        ) from error
     except OSError as error:
         raise WorkflowStoreError(
             f"Cannot read workflow runs from {runs_directory}: {error}"
         ) from error
-    finally:
-        if runs_fd is not None:
-            _close_directory(runs_fd)
-
-    def sort_key(run: RunRecord) -> tuple[datetime, str]:
-        """Return a total, overflow-safe ordering key for one run."""
-        normalized = _as_utc(run.created_at) or _as_utc(run.updated_at)
-        if normalized is None:
-            normalized = datetime.min.replace(tzinfo=UTC)
-        return normalized, run.run_id
-
-    sorted_records = sorted(
-        records,
-        key=sort_key,
-        reverse=True,
-    )
-    abbreviation_counts: dict[str, int] = {}
-    for record in sorted_records:
-        abbreviation_counts[record.abbreviated_id] = (
-            abbreviation_counts.get(record.abbreviated_id, 0) + 1
+    read_completed_at = datetime.now(UTC)
+    if not names:
+        return RunQueryResult(
+            (),
+            False,
+            False,
+            query_at=observed_at,
+            read_completed_at=read_completed_at,
         )
+
+    oldest = datetime.min.replace(tzinfo=UTC)
+
+    def sort_key(run: RunRecord) -> tuple[bool, datetime, str]:
+        normalized = as_utc(run.created_at) or as_utc(run.updated_at) or oldest
+        return run.state_error is None, normalized, run.run_id
+
+    sorted_records = sorted(records, key=sort_key, reverse=True)
+    collisions = colliding_abbreviations(
+        [(record.run_id, record.abbreviated_id) for record in sorted_records]
+    )
     sorted_records = [
         replace(
             record,
-            abbreviation_ambiguous=(
-                abbreviation_counts[record.abbreviated_id] > 1
-            ),
+            abbreviation_ambiguous=record.abbreviated_id in collisions,
         )
         for record in sorted_records
     ]
-    if not observe:
-        selected = select_runs(sorted_records, statuses, limit or len(records))
-        return selected if limit is not None or statuses else sorted_records
-    observed_at = now or datetime.now(UTC)
-    observations: dict[tuple[int, str], str | None] = {}
-    observation_deadline = monotonic() + MAX_PROCESS_OBSERVATION_SECONDS
+
     wanted = set(statuses)
+    if not observe:
+        matching = [
+            record for record in sorted_records if not wanted or record.status in wanted
+        ]
+        truncated = limit is not None and len(matching) > limit
+        selected = matching if limit is None else matching[:limit]
+        return RunQueryResult(
+            tuple(selected),
+            truncated,
+            True,
+            query_at=observed_at,
+            read_completed_at=read_completed_at,
+        )
+
+    observer = ObservationContext(
+        deadline=monotonic() + MAX_PROCESS_OBSERVATION_SECONDS,
+        probe_factory=process_start_identity,
+        clock=monotonic,
+    )
     selected: list[RunRecord] = []
+    selection_cap = None if limit is None else limit + 1
     for record in sorted_records:
         if not _could_match_without_observation(record, wanted):
             continue
-        observed = _observe_record(
-            record,
-            observed_at,
-            observations=observations,
-            observation_deadline=observation_deadline,
-            observation_report=observation_report,
-        )
+        observed = _observe_record(record, read_completed_at, observer)
         if wanted and observed.status not in wanted:
             continue
         selected.append(observed)
-        if limit is not None and len(selected) >= limit:
+        if selection_cap is not None and len(selected) >= selection_cap:
             break
-    return selected
+    truncated = limit is not None and len(selected) > limit
+    if truncated:
+        selected = selected[:limit]
+    return RunQueryResult(
+        tuple(selected),
+        truncated,
+        True,
+        observation_complete=observer.complete,
+        observation_skipped=observer.skipped,
+        query_at=observed_at,
+        read_completed_at=read_completed_at,
+    )
 
 
 def _could_match_without_observation(
@@ -983,10 +552,153 @@ def _could_match_without_observation(
     return not possible.isdisjoint(wanted)
 
 
-def select_runs(
-    runs: list[RunRecord], statuses: tuple[str, ...], limit: int
-) -> list[RunRecord]:
-    """Apply bounded status filtering to already sorted runs."""
-    wanted = set(statuses)
-    filtered = [run for run in runs if not wanted or run.status in wanted]
-    return filtered[:limit]
+def _safe_exact_name(run_id: str) -> bool:
+    """Return whether exact lookup cannot escape the runs directory."""
+    if _has_surrogate(run_id):
+        return False
+    separators = {os.sep}
+    if os.altsep is not None:
+        separators.add(os.altsep)
+    try:
+        encoded_name = (
+            run_id.encode("utf-16-le") if os.name == "nt" else os.fsencode(run_id)
+        )
+    except UnicodeError:
+        return False
+    maximum_bytes = (
+        MAX_WINDOWS_RUN_NAME_UTF16_BYTES
+        if os.name == "nt"
+        else MAX_POSIX_RUN_NAME_BYTES
+    )
+    return (
+        bool(run_id)
+        and run_id not in {".", ".."}
+        and "\0" not in run_id
+        and len(encoded_name) <= maximum_bytes
+        and not any(separator in run_id for separator in separators)
+    )
+
+
+def load_named_run(
+    run_id: str,
+    *,
+    home: Path | None = None,
+    now: datetime | None = None,
+) -> RunLookupResult:
+    """Resolve and load one run under the same verified store capability."""
+    query_at = now or datetime.now(UTC)
+    runs_directory = (home or workflow_home()) / "runs"
+    directory = runs_directory / run_id
+    valid_full = RUN_ID_PATTERN.fullmatch(run_id) is not None
+    valid_abbreviation = ABBREVIATED_RUN_ID_PATTERN.fullmatch(run_id) is not None
+    exact_candidate = _safe_exact_name(run_id)
+    if not exact_candidate and not valid_abbreviation:
+        resolution = RunResolution(RunResolutionKind.INVALID, run_id)
+        return RunLookupResult(
+            resolution,
+            None,
+            query_at,
+            datetime.now(UTC),
+        )
+    try:
+        with VerifiedDirectory.open(runs_directory) as verified_runs:
+            selected_name = run_id
+            run_directory: VerifiedDirectory | None = None
+            names: tuple[str, ...] | None = None
+            if exact_candidate:
+                try:
+                    run_directory = verified_runs.open_child(selected_name)
+                    selected_name = run_directory.path.name
+                except OSError as error:
+                    if error.errno not in {
+                        errno.ENOENT,
+                        errno.ENOTDIR,
+                        errno.ELOOP,
+                    }:
+                        raise
+            if run_directory is None:
+                if not valid_abbreviation:
+                    kind = (
+                        RunResolutionKind.NOT_FOUND
+                        if valid_full
+                        else RunResolutionKind.INVALID
+                    )
+                    resolution = RunResolution(kind, run_id)
+                    return RunLookupResult(
+                        resolution,
+                        None,
+                        query_at,
+                        datetime.now(UTC),
+                    )
+                if names is None:
+                    names = _directory_names(verified_runs, runs_directory)
+                matches = tuple(
+                    name for name in names if abbreviate_run_id(name) == run_id
+                )
+                if len(matches) != 1:
+                    kind = (
+                        RunResolutionKind.AMBIGUOUS
+                        if matches
+                        else RunResolutionKind.NOT_FOUND
+                    )
+                    resolution = RunResolution(
+                        kind,
+                        run_id,
+                        candidates=tuple(sorted(matches)),
+                    )
+                    return RunLookupResult(
+                        resolution,
+                        None,
+                        query_at,
+                        datetime.now(UTC),
+                    )
+                selected_name = matches[0]
+                try:
+                    run_directory = verified_runs.open_child(selected_name)
+                except (OSError, ValueError) as open_error:
+                    raise WorkflowStoreError(
+                        "Cannot inspect resolved workflow run "
+                        f"{selected_name!r}: {open_error}"
+                    ) from open_error
+            directory = runs_directory / selected_name
+            with run_directory:
+                record = _record_from_open_directory(
+                    directory,
+                    run_directory,
+                    query_at=query_at,
+                    observe=True,
+                    budget=ReadWorkBudget(MAX_SINGLE_RUN_JSON_BYTES),
+                    observer=None,
+                )
+    except FileNotFoundError:
+        kind = (
+            RunResolutionKind.NOT_FOUND
+            if valid_full or valid_abbreviation
+            else RunResolutionKind.INVALID
+        )
+        resolution = RunResolution(kind, run_id)
+        return RunLookupResult(
+            resolution,
+            None,
+            query_at,
+            datetime.now(UTC),
+        )
+    except ReadBudgetExceeded as error:
+        record = RunRecord(directory=directory, state_error=str(error))
+    except WorkflowStoreError:
+        raise
+    except (OSError, ValueError) as error:
+        raise WorkflowStoreError(
+            f"Cannot inspect workflow run in {runs_directory}: {error}"
+        ) from error
+    resolution = RunResolution(
+        RunResolutionKind.FOUND,
+        run_id,
+        directory=directory,
+    )
+    return RunLookupResult(
+        resolution,
+        record,
+        query_at,
+        datetime.now(UTC),
+    )

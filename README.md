@@ -77,6 +77,24 @@ nondisruptive inspection. A forced stop or restart disconnects every attached
 TUI, so exit those sessions before running `codex-server stop --force` or
 `codex-server restart --force` from an ordinary terminal.
 
+The Python package also installs `codex-workflows`, an observational dashboard
+for durable workflow runs:
+
+```bash
+codex-workflows
+codex-workflows watch --status running --limit 20
+codex-workflows show RUN_ID
+codex-workflows --json
+```
+
+The command reads durable workflow state and process metadata. It never changes
+a run, sends a signal, repairs state, or launches an agent. See the
+[codex-workflows reference][codex-workflows-reference] for filters, JSON output,
+and the complete versioned schema.
+
+[codex-workflows-reference]:
+  //pchalasani.github.io/claude-code-tools/tools/codex-dynamic/#observe-workflow-runs
+
 Server management and passive supervision add no model calls. Completion
 reporting starts a new turn only while the thread is idle; otherwise it steers
 and extends the active turn. Either reporting path consumes model tokens.

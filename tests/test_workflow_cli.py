@@ -16,7 +16,7 @@ from rich.table import Table
 from claude_code_tools import workflow_runs
 from claude_code_tools.workflow_cli import build_runs_table, cli
 from claude_code_tools.workflow_processes import ProcessProbe
-from claude_code_tools.workflow_runs import RunRecord
+from claude_code_tools.workflow_validation import parse_run_record
 
 BASE_TIME = "2026-07-14T14:00:00.000Z"
 
@@ -196,10 +196,7 @@ def test_malformed_state_and_callback_are_visible(tmp_path: Path) -> None:
     result = _invoke(tmp_path, ["--json"])
 
     assert result.exit_code == 0
-    payload = {
-        item["runId"]: item
-        for item in json.loads(result.output)["runs"]
-    }
+    payload = {item["runId"]: item for item in json.loads(result.output)["runs"]}
     assert payload["broken-run"]["status"] == "malformed"
     assert payload["broken-run"]["stateError"]
     assert payload["valid-run"]["status"] == "completed"
@@ -211,13 +208,16 @@ def test_legacy_supervisor_mismatch_is_unverifiable_without_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A locale-dependent legacy mismatch cannot prove PID reuse."""
+
     def probe_identity(
         _pid: int,
         *,
         include_legacy: bool = True,
+        remaining_seconds: float | None = None,
+        prior_probe: ProcessProbe | None = None,
     ) -> ProcessProbe:
         """Return a live legacy process identity for this test."""
-        del include_legacy
+        del include_legacy, remaining_seconds, prior_probe
         return ProcessProbe(
             status="alive",
             identity="observed process start identity",
@@ -243,12 +243,32 @@ def test_legacy_supervisor_mismatch_is_unverifiable_without_mutation(
     assert (directory / "state.json").read_bytes() == before
 
 
-def test_dead_supervisor_is_orphaned(tmp_path: Path) -> None:
+def test_dead_supervisor_is_orphaned(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A recorded supervisor that no longer exists is shown as orphaned."""
     state = _state("orphaned-run", status="running")
     state["pid"] = 999_999_999
     state["pidStartedAt"] = "Tue Jul 14 10:00:00 2026"
     _write_run(tmp_path, state)
+
+    def dead_probe(
+        _pid: int,
+        *,
+        include_legacy: bool = True,
+        remaining_seconds: float | None = None,
+        prior_probe: ProcessProbe | None = None,
+    ) -> ProcessProbe:
+        """Return a bounded observation for a process that exited."""
+        del include_legacy, remaining_seconds, prior_probe
+        return ProcessProbe("dead")
+
+    monkeypatch.setattr(
+        workflow_runs,
+        "process_start_identity",
+        dead_probe,
+    )
 
     result = _invoke(tmp_path, ["--status", "orphaned", "--json"])
 
@@ -359,7 +379,7 @@ def test_live_table_stays_within_narrow_rendering_boundary(
 ) -> None:
     """The live table combines columns and renders a spinner at narrow widths."""
     state = _state(
-        "20260714-very-long-running-identifier",
+        "run",
         status="running",
         workflow="/a/very/long/path/with/a-long-workflow-name.js",
         error="x" * 300,
@@ -376,7 +396,7 @@ def test_live_table_stays_within_narrow_rendering_boundary(
             }
         },
     )
-    run = RunRecord(directory=Path("run"), state=state)
+    run = parse_run_record(directory=Path("run"), state=state)
     now = datetime(2026, 7, 14, 15, 0, tzinfo=UTC)
     table = build_runs_table([run], width=width, live=True, now=now)
     assert isinstance(table, Table)
@@ -419,9 +439,7 @@ def test_offset_timestamps_are_sorted_chronologically(tmp_path: Path) -> None:
     result = _invoke(tmp_path, ["--json"])
 
     assert result.exit_code == 0
-    assert [
-        item["runId"] for item in json.loads(result.output)["runs"]
-    ] == [
+    assert [item["runId"] for item in json.loads(result.output)["runs"]] == [
         "newer",
         "older",
     ]

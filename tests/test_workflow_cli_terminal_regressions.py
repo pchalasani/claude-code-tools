@@ -12,11 +12,11 @@ from click.testing import CliRunner, Result
 from rich.console import Console, RenderableType
 from rich.text import Text
 
-from claude_code_tools import workflow_cli
+from claude_code_tools import workflow_cli, workflow_runs
 from claude_code_tools import workflow_cli_formatting as formatting
 from claude_code_tools import workflow_cli_rendering as rendering
 from claude_code_tools.workflow_cli import cli
-from claude_code_tools.workflow_runs import RunRecord
+from claude_code_tools.workflow_validation import parse_run_record
 
 BASE_TIME = "2026-07-14T14:00:00Z"
 NOW = datetime(2026, 7, 14, 15, 0, tzinfo=UTC)
@@ -131,6 +131,23 @@ def test_long_malformed_run_id_is_listed_in_actionable_full_form(
     assert shown.exit_code == 0
 
 
+def test_component_over_128_characters_is_listed_and_showable(
+    tmp_path: Path,
+) -> None:
+    """Every safe directory component exposed by list remains actionable."""
+    run_id = "bad id " + "x" * 122
+    assert len(run_id) == 129
+    _write_run(tmp_path, _state(run_id))
+
+    listed = _invoke(tmp_path, ["--json"])
+    shown = _invoke(tmp_path, ["show", run_id, "--json"])
+
+    assert listed.exit_code == 0
+    assert shown.exit_code == 0
+    assert run_id in listed.output
+    assert run_id in shown.output
+
+
 def test_bounded_error_limits_work_before_sanitizing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -158,27 +175,30 @@ def test_short_watch_never_builds_rows_beyond_terminal_height(
 ) -> None:
     """Height fitting avoids rendering the many rows it cannot display."""
     runs = [
-        RunRecord(
+        parse_run_record(
             directory=Path(f"run-{index}"),
             state=_state(f"run-{index}"),
         )
         for index in range(1_000)
     ]
     observed_counts: list[int] = []
-    real_build = workflow_cli.build_runs_table
+    real_build = rendering._build_runs_table_from_views
 
     def recording_build(
-        selected: list[RunRecord],
+        selected: list[rendering.RunRowView],
         *,
         width: int,
         live: bool,
-        now: datetime,
     ) -> RenderableType:
         """Record each candidate row count before delegating."""
         observed_counts.append(len(selected))
-        return real_build(selected, width=width, live=live, now=now)
+        return real_build(selected, width=width, live=live)
 
-    monkeypatch.setattr(workflow_cli, "build_runs_table", recording_build)
+    monkeypatch.setattr(
+        rendering,
+        "_build_runs_table_from_views",
+        recording_build,
+    )
     console = Console(
         color_system=None,
         force_terminal=False,
@@ -196,7 +216,7 @@ def test_short_watch_never_builds_rows_beyond_terminal_height(
 def test_short_watch_counts_footer_in_terminal_height() -> None:
     """Height fitting retains a live warning without cropping the frame."""
     runs = [
-        RunRecord(
+        parse_run_record(
             directory=Path(f"run-{index}"),
             state=_state(f"run-{index}"),
         )
@@ -310,9 +330,7 @@ def test_empty_watch_frame_fits_and_prioritizes_warning(
     )
 
     rendered = console.render_lines(renderable, pad=False)
-    text = "\n".join(
-        "".join(segment.text for segment in line) for line in rendered
-    )
+    text = "\n".join("".join(segment.text for segment in line) for line in rendered)
 
     assert len(rendered) <= height
     if incomplete:
@@ -327,23 +345,21 @@ def test_filtered_empty_json_list_loads_store_once(
     """Machine-readable empty filtering does not scan for human copy."""
     calls: list[dict[str, object]] = []
 
-    def recording_load_runs(**kwargs: object) -> list[RunRecord]:
+    def recording_load_runs(**kwargs: object) -> workflow_runs.RunQueryResult:
         """Record one simulated empty store scan."""
         calls.append(kwargs)
-        return []
+        return workflow_runs.RunQueryResult((), False, False)
 
     monkeypatch.setattr(workflow_cli, "load_runs", recording_load_runs)
-    monkeypatch.setattr(workflow_cli, "_emit_json", lambda _value: None)
-
-    workflow_cli._render_list(
+    snapshot = workflow_cli._query_list(
         statuses=("failed",),
         limit=50,
-        json_output=True,
-        no_color=True,
     )
+    monkeypatch.setattr(workflow_cli, "_emit_json", lambda _value: None)
+    workflow_cli._emit_list_json(snapshot)
 
     assert len(calls) == 1
-    assert calls[0]["limit"] == 51
+    assert calls[0]["limit"] == 50
 
 
 def test_json_list_reports_when_matching_runs_are_truncated(
@@ -414,6 +430,49 @@ def test_malformed_workflow_home_diagnostic_is_bounded() -> None:
     assert len(result.output) < 500
 
 
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--" + "x" * 20_000],
+        ["command-" + "x" * 20_000],
+        ["show", "run", "x" * 20_000],
+        ["show", "--" + "x" * 20_000, "run"],
+    ],
+)
+def test_click_parser_diagnostics_are_bounded(arguments: list[str]) -> None:
+    """Hostile options, commands, and extra arguments cannot flood stderr."""
+    result = CliRunner().invoke(cli, arguments)
+
+    assert result.exit_code == 2
+    assert "…" in result.output
+    assert len(result.output) < 500
+
+
+def test_repeated_status_filters_are_deduplicated_before_rendering(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeated finite filters cannot amplify filtered-empty human output."""
+    observed: list[tuple[str, ...]] = []
+
+    def recording_load_runs(**kwargs: object) -> workflow_runs.RunQueryResult:
+        """Record the normalized statuses and return a filtered-empty query."""
+        statuses = kwargs["statuses"]
+        assert isinstance(statuses, tuple)
+        observed.append(statuses)
+        return workflow_runs.RunQueryResult((), False, True)
+
+    monkeypatch.setattr(workflow_cli, "load_runs", recording_load_runs)
+    arguments = ["--status", "completed"] * 5_000
+
+    result = _invoke(tmp_path, arguments)
+
+    assert result.exit_code == 0
+    assert observed == [("completed",)]
+    assert result.output.count("completed") == 1
+    assert len(result.output) < 500
+
+
 def test_watch_height_probe_bounds_text_before_sanitizing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -430,7 +489,7 @@ def test_watch_height_probe_bounds_text_before_sanitizing(
     monkeypatch.setattr(rendering, "sanitize", recording_sanitize)
     huge = "x" * 1_000_000
     runs = [
-        RunRecord(
+        parse_run_record(
             directory=Path(f"run-{index}"),
             state=_state(
                 f"run-{index}",

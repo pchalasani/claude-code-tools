@@ -21,7 +21,11 @@ from claude_code_tools.workflow_cli import (
     build_show_renderable,
     cli,
 )
-from claude_code_tools.workflow_runs import ObservationReport, RunRecord
+from claude_code_tools.workflow_runs import (
+    RunQueryResult,
+    RunRecord,
+)
+from claude_code_tools.workflow_validation import parse_run_record
 
 NOW = datetime(2026, 7, 14, 15, 0, tzinfo=UTC)
 BASE_TIME = "2026-07-14T14:00:00Z"
@@ -154,7 +158,11 @@ def test_narrow_show_stacks_values_and_steps(
         "updatedAt": BASE_TIME,
         "version": 1,
     }
-    run = RunRecord(directory=Path("narrow"), state=state, callback=callback)
+    run = parse_run_record(
+        directory=Path("narrow"),
+        state=state,
+        callback=callback,
+    )
 
     rendered = _render(
         build_show_renderable(run, width=width, now=NOW),
@@ -216,7 +224,7 @@ def test_dumb_tty_watch_is_rejected_with_static_guidance(
 
     assert result.exit_code != 0
     assert "live-display support" in result.output
-    assert "default command" in result.output
+    assert "codex-workflows --json (without watch)" in result.output
     assert "--json" in result.output
 
 
@@ -323,8 +331,9 @@ def test_output_safely_handles_persisted_lone_surrogates(tmp_path: Path) -> None
     assert "�" in listed.output
     assert "�" in shown.output
     assert json_result.exit_code == 0
-    assert "\\ud800" in json_result.output
-    assert "\\udfff" in json_result.output
+    payload = json.loads(json_result.output)["runs"][0]
+    assert payload["workflowPath"] == "/work/unsafe-�.js"
+    assert payload["error"] == "failure-�"
 
 
 def test_human_output_sanitizes_unicode_format_and_separators(
@@ -416,7 +425,7 @@ def test_show_bounds_errors_and_step_rows_by_default() -> None:
         }
         for index in range(MAX_SHOW_STEPS + 5)
     }
-    run = RunRecord(
+    run = parse_run_record(
         directory=Path("bounded"),
         state=_state(
             "bounded",
@@ -458,7 +467,7 @@ def test_default_narrow_show_has_a_width_aware_step_budget() -> None:
         }
         for index in range(MAX_SHOW_STEPS)
     }
-    run = RunRecord(
+    run = parse_run_record(
         directory=Path("narrow-budget"),
         state=_state("narrow-budget", status="failed", steps=steps),
     )
@@ -492,7 +501,7 @@ def test_detail_step_budget_is_stable_across_layout_threshold() -> None:
         }
         for index in range(100)
     }
-    run = RunRecord(
+    run = parse_run_record(
         directory=Path("threshold-budget"),
         state=_state("threshold-budget", status="failed", steps=steps),
     )
@@ -524,7 +533,7 @@ def test_wide_steps_include_ids_when_labels_are_duplicated() -> None:
         }
         for step_id in ("root/backend", "root/frontend")
     }
-    run = RunRecord(
+    run = parse_run_record(
         directory=Path("duplicate-labels"),
         state=_state("duplicate-labels", steps=steps),
     )
@@ -542,7 +551,7 @@ def test_wide_steps_include_ids_when_labels_are_duplicated() -> None:
 def test_show_bounds_persisted_step_metadata(width: int) -> None:
     """Huge step labels, IDs, and thread IDs obey default detail limits."""
     huge = "x" * 10_000
-    run = RunRecord(
+    run = parse_run_record(
         directory=Path("huge-step"),
         state=_state(
             "huge-step",
@@ -574,7 +583,7 @@ def test_show_bounds_persisted_step_metadata(width: int) -> None:
 def test_show_bounds_numeric_step_metadata(width: int) -> None:
     """Huge attempt and worker integers are bounded unless full is requested."""
     huge = int("9" * 4_001)
-    run = RunRecord(
+    run = parse_run_record(
         directory=Path("huge-numbers"),
         state=_state(
             "huge-numbers",
@@ -609,7 +618,7 @@ def test_show_bounds_numeric_step_metadata(width: int) -> None:
 
 def test_narrow_list_bounds_malformed_workflow_name() -> None:
     """A huge workflow name cannot expand a narrow row without bound."""
-    run = RunRecord(
+    run = parse_run_record(
         directory=Path("long-name"),
         state=_state("long-name", workflow=f"/work/{'x' * 10_000}.js"),
     )
@@ -649,8 +658,7 @@ def test_watch_refreshes_filtered_state_and_exits_130(
         limit: int | None = None,
         now: datetime | None = None,
         observe: bool = True,
-        observation_report: ObservationReport | None = None,
-    ) -> list[RunRecord]:
+    ) -> RunQueryResult:
         """Count real durable-state reads."""
         nonlocal reads
         reads += 1
@@ -659,7 +667,6 @@ def test_watch_refreshes_filtered_state_and_exits_130(
             limit=limit,
             now=now,
             observe=observe,
-            observation_report=observation_report,
         )
 
     sleeps = 0
@@ -783,15 +790,15 @@ def test_watch_omits_complete_rows_beyond_terminal_height(
         width=80,
     )
 
-    renderable = workflow_cli._render_list(
+    snapshot = workflow_cli._query_list(
         statuses=(),
         limit=10,
-        json_output=False,
-        no_color=True,
-        live=True,
-        console=console,
     )
-    assert renderable is not None
+    renderable = workflow_cli._list_renderable(
+        snapshot,
+        console=console,
+        live=True,
+    )
     rendered = _render(renderable, width=80)
 
     assert len(rendered.splitlines()) <= height
@@ -943,6 +950,32 @@ def test_invalid_run_id_diagnostic_is_bounded() -> None:
     assert "Invalid workflow run ID" in result.output
     assert "…" in result.output
     assert len(result.output) < 500
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        (["--status"], "completed"),
+        (["--limit"], "integer from 1 through 1000"),
+        (["watch", "--status"], "completed"),
+        (["watch", "--limit"], "integer from 1 through 1000"),
+        (["watch", "--refresh"], "number from 0.2 through 60"),
+    ],
+)
+def test_invalid_filter_diagnostics_bound_echoed_values(
+    arguments: list[str],
+    expected: str,
+) -> None:
+    """Hostile filter values cannot produce unbounded Click diagnostics."""
+    hostile = "!" + "x" * 20_000
+
+    result = CliRunner().invoke(cli, [*arguments, hostile])
+
+    assert result.exit_code != 0
+    assert "Invalid value" in result.stderr
+    assert "…" in result.stderr
+    assert expected in result.stderr
+    assert len(result.stderr) < 1_000
 
 
 @pytest.mark.parametrize("state_kind", ["missing", "directory"])

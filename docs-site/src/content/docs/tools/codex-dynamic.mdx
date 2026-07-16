@@ -146,7 +146,13 @@ callback, error, and agent-step details.
 codex-workflows
 codex-workflows watch --status running --limit 20
 codex-workflows show RUN_ID
+codex-workflows show RUN_ID --full
 ```
+
+By default, human `show` output truncates field values to the terminal width
+and limits displayed steps according to that width. Use `show RUN_ID --full`
+for complete human-readable details or `show RUN_ID --json` for complete
+normalized output.
 
 Filter the static view by repeating `--status`, or use JSON for scripts:
 
@@ -156,17 +162,110 @@ codex-workflows --json
 codex-workflows show RUN_ID --json
 ```
 
-List-mode JSON is a versioned envelope with `complete`, `limit`,
-`observationComplete`, `observationSkipped`, `runs`, and `truncated` fields.
+List-mode JSON uses this version-1 envelope:
+
+```text
+{
+  schemaVersion: 1,
+  complete: boolean,
+  limit: integer,
+  observationComplete: boolean,
+  observationSkipped: integer,
+  truncated: boolean,
+  runs: Run[]
+}
+```
+
 The `runs` array contains at most `limit` records. `truncated` is `true` only
 when the row limit omitted matching records. `observationComplete` is `false`
 when the shared process-probe deadline prevented classification of one or more
-runs. `observationSkipped` counts unique process-identity observations skipped
-by that deadline; one cached observation can affect multiple runs. `complete`
-is `true` only when neither condition made the result incomplete. Pass a larger
-`--limit`, up to 1,000, when truncation is the only issue. Human-readable output
-prints an incompleteness warning when process-derived filtering may have omitted
-a match. `show RUN_ID --json` returns the selected run directly.
+runs. `observationSkipped` counts skipped process observations. A cached
+observation can affect several runs. `complete` is `true` only when neither
+condition made the result incomplete. Pass a larger `--limit`, up to 1,000,
+when truncation is the only issue. Human-readable output warns when incomplete
+process observation may have omitted a match.
+
+Each list item has the following shape. A `null` type marks a field that can be
+unavailable, invalid, or absent from durable state.
+
+```text
+Run = {
+  schemaVersion: 1,
+  runId: string,
+  abbreviatedRunId: string,
+  workflowName: string,
+  workflowPath: string | null,
+  recordedStatus: string,
+  status: string,
+  agentProgress: {
+    total: integer,
+    completed: integer,
+    failed: integer,
+    canceled: integer,
+    running: integer
+  },
+  activeWorkers: integer,
+  createdAt: string | null,
+  startedAt: string | null,
+  completedAt: string | null,
+  updatedAt: string | null,
+  durationSeconds: number | null,
+  callback: Callback | null,
+  activity: string,
+  error: string | null,
+  stateError: string | null,
+  callbackError: string | null
+}
+```
+
+Callback metadata has one stable shape, including invalid metadata. An invalid
+callback has `status: "invalid"`, its diagnostic in `error`, and `null` for
+fields that could not be read.
+
+```text
+Callback = {
+  status: string,
+  attempts: integer | null,
+  createdAt: string | null,
+  updatedAt: string | null,
+  deliveredAt: string | null,
+  deadlineAt: string | null,
+  lastAttemptAt: string | null,
+  terminalCompletedAt: string | null,
+  terminalStatus: string | null,
+  clientUserMessageId: string | null,
+  endpoint: string | null,
+  threadId: string | null,
+  timeoutMs: integer | null,
+  turnId: string | null,
+  notifierPid: integer | null,
+  notifierStartedAt: string | null,
+  notifierProcessStatus: string | null,
+  error: string | null
+}
+```
+
+`show RUN_ID --json` returns one `Run` directly and adds a `steps` field. List
+items omit `steps`, even when steps exist.
+
+```text
+steps: Array<{
+  id: string,
+  label: string,
+  status: string,
+  attempt: integer | null,
+  startedAt: string | null,
+  completedAt: string | null,
+  durationSeconds: number | null,
+  workerPid: integer | null,
+  threadId: string | null,
+  error: string | null
+}>
+```
+
+Within schema version 1, field names, meanings, types, and nullability remain
+stable. Consumers should ignore unknown fields so compatible additions do not
+break them. An incompatible contract change increments `schemaVersion`.
 
 The command reads version-1 JSON under
 `$CODEX_WORKFLOW_HOME/runs/*/state.json` and its optional

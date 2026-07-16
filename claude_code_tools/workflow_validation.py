@@ -4,25 +4,39 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
-TERMINAL_STATUSES = frozenset({"canceled", "completed", "failed"})
-NONTERMINAL_STATUSES = frozenset(
-    {"canceling", "paused", "pausing", "running", "starting"}
+from claude_code_tools.workflow_cli_manifest import (
+    CALLBACK_V1_MANIFEST,
+    STATE_V1_MANIFEST,
+    STEP_V1_MANIFEST,
 )
-CALLBACK_STATUSES = frozenset(
-    {"armed", "delivered", "failed", "sending", "unknown"}
+from claude_code_tools.workflow_cli_snapshots import (
+    CallbackRecord,
+    NONTERMINAL_STATUSES,
+    RunRecord,
+    RunState,
+    StepRecord,
+    TERMINAL_STATUSES,
+    parse_timestamp,
 )
+
+CALLBACK_STATUSES = frozenset({"armed", "delivered", "failed", "sending", "unknown"})
 MAX_STATE_STEPS = 1_000
 MAX_CALLBACK_DELIVERY_SUBMISSIONS = 5
 MAX_CALLBACK_TIMEOUT_MS = 604_800_000
+MAX_RUN_CONCURRENCY = 64
+MAX_RUN_AGENT_INVOCATIONS = 1_000
 MAX_VALIDATION_DIAGNOSTICS = 100
 MAX_VALIDATION_DIAGNOSTIC_BYTES = 16 * 1024
+_MAX_DIAGNOSTIC_FRAGMENT_CHARS = 1_024
 
 
 def _truncate_utf8(value: str, maximum_bytes: int) -> str:
     """Truncate text without splitting a UTF-8 code point."""
-    encoded = value.encode("utf-8")
-    if len(encoded) <= maximum_bytes:
+    candidate = value[:maximum_bytes]
+    encoded = candidate.encode("utf-8")
+    if len(candidate) == len(value) and len(encoded) <= maximum_bytes:
         return value
     suffix = " [truncated]"
     suffix_bytes = suffix.encode("utf-8")
@@ -31,6 +45,17 @@ def _truncate_utf8(value: str, maximum_bytes: int) -> str:
     prefix_bytes = encoded[: maximum_bytes - len(suffix_bytes)]
     prefix = prefix_bytes.decode("utf-8", errors="ignore")
     return f"{prefix}{suffix}"
+
+
+def bounded_repr(value: object) -> str:
+    """Return a representation with allocation bounded before formatting."""
+    if isinstance(value, str):
+        prefix = value[:_MAX_DIAGNOSTIC_FRAGMENT_CHARS]
+        rendered = repr(prefix)
+        if len(prefix) != len(value):
+            rendered += " [truncated value]"
+        return rendered
+    return repr(value)
 
 
 class _Diagnostics:
@@ -54,11 +79,7 @@ class _Diagnostics:
             if self.messages:
                 self._bytes -= 2
             separator_bytes = 2 if self.messages else 0
-            remaining = (
-                MAX_VALIDATION_DIAGNOSTIC_BYTES
-                - self._bytes
-                - separator_bytes
-            )
+            remaining = MAX_VALIDATION_DIAGNOSTIC_BYTES - self._bytes - separator_bytes
             bounded = _truncate_utf8(marker, max(0, remaining))
             if bounded:
                 self.messages.append(bounded)
@@ -67,9 +88,7 @@ class _Diagnostics:
             self.sealed = True
             return
         separator_bytes = 2 if self.messages else 0
-        remaining = (
-            MAX_VALIDATION_DIAGNOSTIC_BYTES - self._bytes - separator_bytes
-        )
+        remaining = MAX_VALIDATION_DIAGNOSTIC_BYTES - self._bytes - separator_bytes
         if remaining <= 0:
             self.sealed = True
             return
@@ -79,6 +98,19 @@ class _Diagnostics:
         self._bytes += separator_bytes + len(bounded.encode("utf-8"))
         if bounded != message:
             self.sealed = True
+
+    def add_fragments(self, *fragments: object) -> None:
+        """Add a diagnostic assembled only from bounded fragments."""
+        pieces = []
+        remaining = MAX_VALIDATION_DIAGNOSTIC_BYTES
+        for fragment in fragments:
+            text = fragment if isinstance(fragment, str) else bounded_repr(fragment)
+            bounded = _truncate_utf8(text, remaining)
+            pieces.append(bounded)
+            remaining -= len(bounded.encode("utf-8"))
+            if remaining <= 0:
+                break
+        self.add("".join(pieces))
 
     def extend(self, messages: list[str]) -> None:
         """Add diagnostics until either aggregate budget is exhausted."""
@@ -90,20 +122,6 @@ class _Diagnostics:
     def error(self) -> str | None:
         """Return the bounded aggregate diagnostic."""
         return "; ".join(self.messages) or None
-
-
-def parse_timestamp(value: object) -> datetime | None:
-    """Parse ISO time, interpreting old timezone-less state as UTC."""
-    if not isinstance(value, str) or not value:
-        return None
-    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
-    try:
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed
 
 
 def as_utc(value: object) -> datetime | None:
@@ -184,10 +202,28 @@ def _timestamp_errors(
     value: Mapping[str, object], fields: tuple[str, ...]
 ) -> list[str]:
     """Validate timestamp strings present in a durable object."""
+    parsed = _timestamp_values(value, fields)
+    return _timestamp_errors_from_values(value, fields, parsed)
+
+
+def _timestamp_values(
+    value: Mapping[str, object],
+    fields: tuple[str, ...],
+) -> dict[str, datetime | None]:
+    """Normalize a bounded set of timestamp fields exactly once."""
+    return {field: as_utc(value.get(field)) for field in fields}
+
+
+def _timestamp_errors_from_values(
+    value: Mapping[str, object],
+    fields: tuple[str, ...],
+    parsed: Mapping[str, datetime | None],
+) -> list[str]:
+    """Report invalid timestamp strings from pre-normalized values."""
     return [
         f"{key} must be a valid ISO timestamp"
         for key in fields
-        if string(value, key) is not None and as_utc(value[key]) is None
+        if string(value, key) is not None and parsed[key] is None
     ]
 
 
@@ -195,8 +231,18 @@ def _ordered_timestamp_error(
     value: Mapping[str, object], earlier: str, later: str
 ) -> str | None:
     """Return an error when two present valid lifecycle times are reversed."""
-    earlier_time = as_utc(value.get(earlier))
-    later_time = as_utc(value.get(later))
+    parsed = _timestamp_values(value, (earlier, later))
+    return _ordered_timestamp_error_from_values(parsed, earlier, later)
+
+
+def _ordered_timestamp_error_from_values(
+    parsed: Mapping[str, datetime | None],
+    earlier: str,
+    later: str,
+) -> str | None:
+    """Check lifecycle ordering using pre-normalized timestamp fields."""
+    earlier_time = parsed[earlier]
+    later_time = parsed[later]
     if earlier_time is not None and later_time is not None:
         if later_time < earlier_time:
             return f"{later} cannot precede {earlier}"
@@ -209,23 +255,23 @@ def step_errors(key: str, value: Mapping[str, object]) -> list[str]:
     diagnostics.extend(
         _schema_errors(
             value,
-            required_strings=(
-                "fingerprint",
-                "id",
-                "label",
-                "startedAt",
-                "status",
-            ),
-            required_integers=("attempt",),
+            required_strings=STEP_V1_MANIFEST.required_strings,
+            required_integers=STEP_V1_MANIFEST.required_integers,
         )
     )
     embedded_id = string(value, "id")
     if embedded_id is not None and embedded_id != key:
         diagnostics.add("embedded step id does not match its owning key")
+    attempt = integer(value, "attempt")
+    if attempt is not None and attempt < 1:
+        diagnostics.add("attempt must be a positive integer")
     status = string(value, "status")
     if status not in {"canceled", "completed", "failed", "running"}:
         if status is not None:
-            diagnostics.add(f"unsupported step status {status!r}")
+            diagnostics.add_fragments(
+                "unsupported step status ",
+                bounded_repr(status),
+            )
     completed = string(value, "completedAt")
     if status in TERMINAL_STATUSES and completed is None:
         diagnostics.add("terminal step requires completedAt")
@@ -234,86 +280,129 @@ def step_errors(key: str, value: Mapping[str, object]) -> list[str]:
     diagnostics.extend(
         _optional_type_errors(
             value,
-            strings=("completedAt", "error", "threadId", "workerStartedAt"),
-            integers=("workerPid",),
+            strings=STEP_V1_MANIFEST.optional_strings,
+            integers=STEP_V1_MANIFEST.optional_integers,
         )
     )
-    diagnostics.extend(_timestamp_errors(value, ("startedAt", "completedAt")))
+    diagnostics.extend(_timestamp_errors(value, STEP_V1_MANIFEST.timestamp_fields))
     chronology = _ordered_timestamp_error(value, "startedAt", "completedAt")
     if chronology is not None:
         diagnostics.add(chronology)
     return diagnostics.messages
 
 
-def validate_state(state: Mapping[str, object], directory_name: str) -> str | None:
-    """Validate the durable version-1 run-state envelope."""
+def _normalized_step(
+    key: str,
+    value: Mapping[str, object],
+    errors: list[str],
+) -> StepRecord:
+    """Build one typed step from the same pass that validated it."""
+    return StepRecord(
+        id=key,
+        label=string(value, "label") or string(value, "id") or key,
+        status="malformed" if errors else string(value, "status") or "unknown",
+        attempt=integer(value, "attempt"),
+        started_at=string(value, "startedAt"),
+        completed_at=string(value, "completedAt"),
+        error="; ".join(errors) if errors else string(value, "error"),
+        worker_pid=integer(value, "workerPid"),
+        thread_id=string(value, "threadId"),
+    )
+
+
+def _malformed_step(key: str, value: object) -> StepRecord:
+    """Preserve a non-object step with a bounded diagnostic."""
     diagnostics = _Diagnostics()
+    diagnostics.add_fragments(
+        "step ",
+        bounded_repr(key),
+        " must be a JSON object, got ",
+        type(value).__name__,
+    )
+    return StepRecord(
+        id=key,
+        label=key,
+        status="malformed",
+        attempt=None,
+        started_at=None,
+        completed_at=None,
+        error=diagnostics.error(),
+        worker_pid=None,
+        thread_id=None,
+    )
+
+
+def parse_state(
+    state: Mapping[str, object],
+    directory_name: str,
+) -> tuple[RunState, str | None]:
+    """Validate and normalize one durable state mapping in a single pass."""
+    diagnostics = _Diagnostics()
+    normalized_steps: list[StepRecord] = []
     diagnostics.extend(
         _schema_errors(
             state,
-            required_strings=(
-                "createdAt",
-                "cwd",
-                "runId",
-                "status",
-                "updatedAt",
-                "workflowHash",
-                "workflowPath",
-            ),
-            required_integers=("concurrency", "version"),
+            required_strings=STATE_V1_MANIFEST.required_strings,
+            required_integers=STATE_V1_MANIFEST.required_integers,
         )
     )
     if integer(state, "version") != 1:
         diagnostics.add("version must equal 1")
+    concurrency = integer(state, "concurrency")
+    if concurrency is not None and not 1 <= concurrency <= MAX_RUN_CONCURRENCY:
+        diagnostics.add(
+            f"concurrency must be an integer from 1 to {MAX_RUN_CONCURRENCY}"
+        )
+    agent_invocations = integer(state, "agentInvocations")
+    if agent_invocations is not None and agent_invocations < 0:
+        diagnostics.add("agentInvocations cannot be negative")
+    max_agent_invocations = integer(state, "maxAgentInvocations")
+    if max_agent_invocations is not None and not (
+        1 <= max_agent_invocations <= MAX_RUN_AGENT_INVOCATIONS
+    ):
+        diagnostics.add(
+            "maxAgentInvocations must be an integer from 1 to "
+            f"{MAX_RUN_AGENT_INVOCATIONS}"
+        )
     run_id = string(state, "runId")
     if run_id is not None and run_id != directory_name:
-        diagnostics.add(
-            f"runId {run_id!r} does not match directory {directory_name!r}"
+        diagnostics.add_fragments(
+            "runId ",
+            bounded_repr(run_id),
+            " does not match directory ",
+            bounded_repr(directory_name),
         )
     if mapping(state.get("steps")) is None:
         diagnostics.add("steps must be a JSON object")
     diagnostics.extend(
         _optional_type_errors(
             state,
-            strings=(
-                "completedAt",
-                "engineStartedAt",
-                "error",
-                "pidStartedAt",
-                "runnerStartedAt",
-                "startedAt",
-                "terminalFingerprint",
-            ),
-            integers=(
-                "agentInvocations",
-                "defaultAgentTimeoutMs",
-                "enginePid",
-                "maxAgentInvocations",
-                "maxRuntimeMs",
-                "pid",
-            ),
-            booleans=("cleanupPending",),
+            strings=STATE_V1_MANIFEST.optional_strings,
+            integers=STATE_V1_MANIFEST.optional_integers,
+            booleans=STATE_V1_MANIFEST.optional_booleans,
         )
     )
-    timestamp_fields = (
-        "completedAt",
-        "createdAt",
-        "runnerStartedAt",
-        "startedAt",
-        "updatedAt",
+    timestamp_fields = STATE_V1_MANIFEST.timestamp_fields
+    state_times = _timestamp_values(state, timestamp_fields)
+    diagnostics.extend(
+        _timestamp_errors_from_values(state, timestamp_fields, state_times)
     )
-    diagnostics.extend(_timestamp_errors(state, timestamp_fields))
     for earlier, later in (
         ("createdAt", "completedAt"),
         ("createdAt", "runnerStartedAt"),
         ("createdAt", "startedAt"),
         ("createdAt", "updatedAt"),
+        ("runnerStartedAt", "completedAt"),
         ("runnerStartedAt", "updatedAt"),
         ("startedAt", "completedAt"),
         ("startedAt", "updatedAt"),
         ("completedAt", "updatedAt"),
     ):
-        chronology = _ordered_timestamp_error(state, earlier, later)
+        chronology = _ordered_timestamp_error_from_values(
+            state_times,
+            earlier,
+            later,
+        )
         if chronology is not None:
             diagnostics.add(chronology)
     status = string(state, "status")
@@ -330,78 +419,151 @@ def validate_state(state: Mapping[str, object], directory_name: str) -> str | No
     if steps is not None:
         if len(steps) > MAX_STATE_STEPS:
             diagnostics.add(
-                f"steps contains {len(steps)} entries; maximum is "
-                f"{MAX_STATE_STEPS}"
+                f"steps contains {len(steps)} entries; maximum is {MAX_STATE_STEPS}"
             )
         else:
             for key, raw_step in steps.items():
+                step_key = str(key)
                 step = mapping(raw_step)
                 if step is None:
-                    diagnostics.add(f"step {key!r} must be a JSON object")
+                    diagnostics.add_fragments(
+                        "step ",
+                        bounded_repr(step_key),
+                        " must be a JSON object",
+                    )
+                    normalized_steps.append(_malformed_step(step_key, raw_step))
                     continue
-                for error in step_errors(str(key), step):
-                    diagnostics.add(f"step {key!r}: {error}")
+                errors = step_errors(step_key, step)
+                normalized_steps.append(_normalized_step(step_key, step, errors))
+                for error in errors:
+                    diagnostics.add_fragments(
+                        "step ",
+                        bounded_repr(step_key),
+                        ": ",
+                        error,
+                    )
                     if diagnostics.sealed:
                         break
-                if diagnostics.sealed:
-                    break
                 for step_field in ("startedAt", "completedAt"):
                     step_time = as_utc(step.get(step_field))
                     for lower_field in ("createdAt", "startedAt"):
-                        lower_time = as_utc(state.get(lower_field))
+                        lower_time = state_times[lower_field]
                         if (
                             step_time is not None
                             and lower_time is not None
                             and step_time < lower_time
                         ):
-                            diagnostics.add(
-                                f"step {key!r}: {step_field} cannot precede "
-                                f"{lower_field}"
+                            diagnostics.add_fragments(
+                                "step ",
+                                bounded_repr(step_key),
+                                f": {step_field} cannot precede {lower_field}",
                             )
-                    updated_time = as_utc(state.get("updatedAt"))
+                    updated_time = state_times["updatedAt"]
                     if (
                         step_time is not None
                         and updated_time is not None
                         and updated_time < step_time
                     ):
-                        diagnostics.add(
-                            f"step {key!r}: {step_field} cannot follow "
-                            "updatedAt"
+                        diagnostics.add_fragments(
+                            "step ",
+                            bounded_repr(step_key),
+                            f": {step_field} cannot follow updatedAt",
                         )
-                if diagnostics.sealed:
-                    break
-                if (
-                    status in TERMINAL_STATUSES
-                    and string(step, "status") == "running"
-                ):
-                    diagnostics.add(
-                        f"terminal run cannot contain running step {key!r}"
+                if status in TERMINAL_STATUSES and string(step, "status") == "running":
+                    diagnostics.add_fragments(
+                        "terminal run cannot contain running step ",
+                        bounded_repr(step_key),
                     )
-                if diagnostics.sealed:
-                    break
+    oldest = datetime.min.replace(tzinfo=UTC)
+    typed = RunState(
+        run_id=run_id,
+        status=status,
+        workflow_path=string(state, "workflowPath"),
+        created_at=string(state, "createdAt"),
+        updated_at=string(state, "updatedAt"),
+        started_at=string(state, "startedAt"),
+        completed_at=completed,
+        error=string(state, "error"),
+        cleanup_pending=state.get("cleanupPending") is True,
+        pid=pid,
+        pid_started_at=pid_started,
+        terminal_fingerprint=string(state, "terminalFingerprint"),
+        steps=tuple(
+            sorted(
+                normalized_steps,
+                key=lambda step: (as_utc(step.started_at) or oldest, step.id),
+            )
+        ),
+    )
+    return typed, diagnostics.error()
+
+
+def validate_state(state: Mapping[str, object], directory_name: str) -> str | None:
+    """Validate the durable version-1 run-state envelope."""
+    return parse_state(state, directory_name)[1]
+
+
+def validate_state_observation(
+    state: RunState,
+    now: datetime,
+) -> str | None:
+    """Validate state timestamps relative to one captured observation time.
+
+    Structural validation is deliberately timeless.  Callers that construct an
+    observational snapshot use this companion check with the same instant used
+    for process classification, ordering, and duration calculations.
+
+    Args:
+        state: Structurally validated typed durable state.
+        now: Aware timestamp captured once for the complete observation.
+
+    Returns:
+        A bounded diagnostic, or ``None`` when ordering timestamps are not in
+        the future.
+    """
+    diagnostics = _Diagnostics()
+    observed_at = now.astimezone(UTC)
+    for field, raw_value in (
+        ("createdAt", state.created_at),
+        ("updatedAt", state.updated_at),
+    ):
+        value = as_utc(raw_value)
+        if value is not None and value > observed_at:
+            diagnostics.add(f"{field} cannot be in the future")
     return diagnostics.error()
 
 
-def validate_callback(
+def parse_callback(
     callback: Mapping[str, object],
     directory_name: str,
-    *,
-    now: datetime | None = None,
-) -> str | None:
-    """Validate the durable version-1 callback envelope and ownership."""
+) -> tuple[CallbackRecord, str | None]:
+    """Validate and normalize callback metadata in one bounded pass."""
     diagnostics = _Diagnostics()
+    typed = CallbackRecord(
+        status=string(callback, "status"),
+        attempts=integer(callback, "attempts"),
+        created_at=string(callback, "createdAt"),
+        updated_at=string(callback, "updatedAt"),
+        delivered_at=string(callback, "deliveredAt"),
+        deadline_at=string(callback, "deadlineAt"),
+        last_attempt_at=string(callback, "lastAttemptAt"),
+        terminal_completed_at=string(callback, "terminalCompletedAt"),
+        terminal_status=string(callback, "terminalStatus"),
+        terminal_fingerprint=string(callback, "terminalFingerprint"),
+        client_user_message_id=string(callback, "clientUserMessageId"),
+        endpoint=string(callback, "endpoint"),
+        thread_id=string(callback, "threadId"),
+        timeout_ms=integer(callback, "timeoutMs"),
+        turn_id=string(callback, "turnId"),
+        notifier_pid=integer(callback, "notifierPid"),
+        notifier_started_at=string(callback, "notifierStartedAt"),
+        error=string(callback, "error"),
+    )
     diagnostics.extend(
         _schema_errors(
             callback,
-            required_strings=(
-                "createdAt",
-                "endpoint",
-                "runId",
-                "status",
-                "threadId",
-                "updatedAt",
-            ),
-            required_integers=("attempts", "timeoutMs", "version"),
+            required_strings=CALLBACK_V1_MANIFEST.required_strings,
+            required_integers=CALLBACK_V1_MANIFEST.required_integers,
         )
     )
     if integer(callback, "version") != 1:
@@ -411,26 +573,30 @@ def validate_callback(
         diagnostics.add("attempts cannot be negative")
     if attempts is not None and attempts > MAX_CALLBACK_DELIVERY_SUBMISSIONS:
         diagnostics.add(
-            "attempts cannot exceed "
-            f"{MAX_CALLBACK_DELIVERY_SUBMISSIONS} submissions"
+            f"attempts cannot exceed {MAX_CALLBACK_DELIVERY_SUBMISSIONS} submissions"
         )
-    if attempts is not None and attempts > 0:
+    status = string(callback, "status")
+    if attempts is not None and attempts > 0 and status != "delivered":
         if string(callback, "lastAttemptAt") is None:
             diagnostics.add("attempts greater than zero requires lastAttemptAt")
     timeout_ms = integer(callback, "timeoutMs")
     if timeout_ms is not None and not 1 <= timeout_ms <= MAX_CALLBACK_TIMEOUT_MS:
         diagnostics.add(
-            "timeoutMs must be an integer from 1 to "
-            f"{MAX_CALLBACK_TIMEOUT_MS}"
+            f"timeoutMs must be an integer from 1 to {MAX_CALLBACK_TIMEOUT_MS}"
         )
     run_id = string(callback, "runId")
     if run_id is not None and run_id != directory_name:
-        diagnostics.add(
-            f"runId {run_id!r} does not match directory {directory_name!r}"
+        diagnostics.add_fragments(
+            "runId ",
+            bounded_repr(run_id),
+            " does not match directory ",
+            bounded_repr(directory_name),
         )
-    status = string(callback, "status")
     if status is not None and status not in CALLBACK_STATUSES:
-        diagnostics.add(f"unsupported callback status {status!r}")
+        diagnostics.add_fragments(
+            "unsupported callback status ",
+            bounded_repr(status),
+        )
     terminal_completed = string(callback, "terminalCompletedAt")
     terminal_status = string(callback, "terminalStatus")
     if (terminal_completed is None) != (terminal_status is None):
@@ -438,18 +604,23 @@ def validate_callback(
             "terminalCompletedAt and terminalStatus must be present together"
         )
     if terminal_status is not None and terminal_status not in TERMINAL_STATUSES:
-        diagnostics.add(f"unsupported terminalStatus {terminal_status!r}")
+        diagnostics.add_fragments(
+            "unsupported terminalStatus ",
+            bounded_repr(terminal_status),
+        )
     notifier_pid = integer(callback, "notifierPid")
     notifier_started = string(callback, "notifierStartedAt")
     if (notifier_pid is None) != (notifier_started is None):
-        diagnostics.add(
-            "notifierPid and notifierStartedAt must be present together"
-        )
+        diagnostics.add("notifierPid and notifierStartedAt must be present together")
     if status in {"delivered", "sending"}:
         for field in ("clientUserMessageId", "deadlineAt"):
             if string(callback, field) is None:
                 diagnostics.add(f"{status} callback requires {field}")
     if status == "delivered":
+        if attempts is not None and attempts < 1:
+            diagnostics.add("delivered callback requires at least one attempt")
+        if string(callback, "lastAttemptAt") is None:
+            diagnostics.add("delivered callback requires lastAttemptAt")
         if string(callback, "deliveredAt") is None:
             diagnostics.add("delivered callback requires deliveredAt")
         if terminal_completed is None:
@@ -468,33 +639,12 @@ def validate_callback(
     diagnostics.extend(
         _optional_type_errors(
             callback,
-            strings=(
-                "clientUserMessageId",
-                "deadlineAt",
-                "deliveredAt",
-                "error",
-                "lastAttemptAt",
-                "notifierStartedAt",
-                "terminalCompletedAt",
-                "terminalFingerprint",
-                "terminalStatus",
-                "turnId",
-            ),
-            integers=("notifierPid",),
+            strings=CALLBACK_V1_MANIFEST.optional_strings,
+            integers=CALLBACK_V1_MANIFEST.optional_integers,
         )
     )
     diagnostics.extend(
-        _timestamp_errors(
-            callback,
-            (
-                "createdAt",
-                "deadlineAt",
-                "deliveredAt",
-                "lastAttemptAt",
-                "terminalCompletedAt",
-                "updatedAt",
-            ),
-        )
+        _timestamp_errors(callback, CALLBACK_V1_MANIFEST.timestamp_fields)
     )
     for earlier, later in (
         ("createdAt", "terminalCompletedAt"),
@@ -516,9 +666,6 @@ def validate_callback(
             diagnostics.add(chronology)
     deadline = as_utc(callback.get("deadlineAt"))
     updated = as_utc(callback.get("updatedAt"))
-    observed_at = datetime.now(UTC) if now is None else now.astimezone(UTC)
-    if updated is not None and updated > observed_at:
-        diagnostics.add("updatedAt cannot be in the future")
     if (
         deadline is not None
         and updated is not None
@@ -527,6 +674,56 @@ def validate_callback(
         and deadline - updated > timedelta(milliseconds=timeout_ms)
     ):
         diagnostics.add("deadlineAt exceeds the configured timeout window")
+    return typed, diagnostics.error()
+
+
+def parse_run_record(
+    directory: Path,
+    *,
+    state: Mapping[str, object] | None = None,
+    callback: Mapping[str, object] | None = None,
+) -> RunRecord:
+    """Validate raw persistence mappings once at their typed boundary."""
+    typed_state = RunState()
+    state_error: str | None = None
+    if state is not None:
+        typed_state, state_error = parse_state(state, directory.name)
+    typed_callback: CallbackRecord | None = None
+    callback_error: str | None = None
+    if callback is not None:
+        typed_callback, callback_error = parse_callback(
+            callback,
+            directory.name,
+        )
+    return RunRecord(
+        directory=directory,
+        state=typed_state,
+        callback=typed_callback,
+        state_error=state_error,
+        callback_error=callback_error,
+    )
+
+
+def validate_callback(
+    callback: Mapping[str, object],
+    directory_name: str,
+) -> str | None:
+    """Return the diagnostic from the canonical callback parser."""
+    return parse_callback(callback, directory_name)[1]
+
+
+def validate_callback_observation(
+    callback: CallbackRecord,
+    now: datetime,
+) -> str | None:
+    """Validate callback timestamps against one required snapshot instant."""
+    diagnostics = _Diagnostics()
+    observed_at = now.astimezone(UTC)
+    updated = as_utc(callback.updated_at)
+    deadline = as_utc(callback.deadline_at)
+    if updated is not None and updated > observed_at:
+        diagnostics.add("updatedAt cannot be in the future")
+    timeout_ms = callback.timeout_ms
     if (
         deadline is not None
         and timeout_ms is not None

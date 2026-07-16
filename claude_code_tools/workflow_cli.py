@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
+import math
 import os
-import re
-import stat
 import sys
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TextIO
 
@@ -26,27 +26,44 @@ from claude_code_tools.workflow_cli_formatting import (
     sanitize as _sanitize,
 )
 from claude_code_tools.workflow_cli_rendering import (
-    ABBREVIATED_RUN_ID_PATTERN as ABBREVIATED_RUN_ID_PATTERN,
     CALLBACK_STYLES as CALLBACK_STYLES,
     MAX_SHOW_STEPS as MAX_SHOW_STEPS,
     STATUS_STYLES as STATUS_STYLES,
     build_runs_table,
     build_show_renderable,
+    fit_live_runs,
 )
+from claude_code_tools.workflow_cli_contract import list_payload, show_payload
 from claude_code_tools.workflow_runs import (
     FILTER_STATUSES,
-    ObservationReport,
-    RunRecord,
+    RunLookupResult,
+    RunQueryResult,
+    RunResolutionKind,
     WorkflowStoreError,
-    load_run,
+    load_named_run,
     load_runs,
     workflow_home,
 )
 
-RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 MAX_DIAGNOSTIC_CHARS = 160
+MAX_USAGE_ERROR_CHARS = 360
 MAX_OUTPUT_WIDTH = 240
 MAX_OUTPUT_HEIGHT = 1_000
+MIN_RUN_LIMIT = 1
+MAX_RUN_LIMIT = 1_000
+MIN_WATCH_REFRESH = 0.2
+MAX_WATCH_REFRESH = 60.0
+_fit_live_runs = fit_live_runs
+
+
+@dataclass(frozen=True)
+class ListSnapshot:
+    """One list query and the clock used by every output adapter."""
+
+    query: RunQueryResult
+    observed_at: datetime
+    statuses: tuple[str, ...]
+    limit: int
 
 
 def _terminal_dimension(name: str, fallback: int, maximum: int) -> int:
@@ -60,10 +77,13 @@ def _terminal_dimension(name: str, fallback: int, maximum: int) -> int:
 
 
 def _terminal_size() -> tuple[int, int]:
-    """Return bounded terminal dimensions without parsing hostile integers."""
+    """Prefer live TTY geometry, using bounded environment fallbacks."""
     try:
         detected = os.get_terminal_size()
-        fallback = (detected.columns, detected.lines)
+        return (
+            min(MAX_OUTPUT_WIDTH, max(1, detected.columns)),
+            min(MAX_OUTPUT_HEIGHT, max(1, detected.lines)),
+        )
     except OSError:
         fallback = (80, 24)
     return (
@@ -82,11 +102,15 @@ def _configure_output_encoding(stream: TextIO) -> None:
             pass
 
 
-def _diagnostic_text(value: object) -> str:
+def _diagnostic_text(
+    value: object,
+    *,
+    maximum: int = MAX_DIAGNOSTIC_CHARS,
+) -> str:
     """Bound text and make it representable in stderr's encoding."""
     rendered = _bounded_text(
         value,
-        maximum=MAX_DIAGNOSTIC_CHARS,
+        maximum=maximum,
         full=False,
     )[0]
     encoding = getattr(sys.stderr, "encoding", None)
@@ -123,6 +147,11 @@ def _console(no_color: bool, width: int | None = None) -> Console:
     )
 
 
+def _refresh_console_size(console: Console) -> None:
+    """Re-probe bounded terminal dimensions for the next watch frame."""
+    console.width, console.height = _terminal_size()
+
+
 def _stdout_is_tty() -> bool:
     """Return whether stdout supports an interactive live display."""
     return bool(sys.stdout.isatty())
@@ -134,7 +163,15 @@ def _emit_json(value: object) -> None:
     Args:
         value: JSON-compatible value to emit.
     """
-    click.echo(json.dumps(value, indent=2, sort_keys=True, ensure_ascii=True))
+    rendered = json.dumps(
+        value,
+        indent=2,
+        sort_keys=True,
+        ensure_ascii=True,
+    )
+    output = click.get_binary_stream("stdout")
+    output.write(f"{rendered}\n".encode("utf-8"))
+    output.flush()
 
 
 def _empty_message(
@@ -159,19 +196,18 @@ def _empty_message(
         return f"{prefix} status filter: {selected}."
     if live:
         return "Waiting for workflow runs…"
-    path = _bounded_text(
-        workflow_home() / "runs",
-        maximum=MAX_DIAGNOSTIC_CHARS,
-        full=False,
-    )[0]
+    path = _sanitize(workflow_home() / "runs")
+    if len(path) > MAX_DIAGNOSTIC_CHARS:
+        side = (MAX_DIAGNOSTIC_CHARS - 1) // 2
+        path = f"{path[:side]}…{path[-side:]}"
     return f"No workflow runs found in {path}."
 
 
-def _observation_warning(report: ObservationReport) -> Text:
+def _observation_warning(skipped: int) -> Text:
     """Explain that process-derived filtering could not inspect every run."""
-    noun = "observation" if report.skipped == 1 else "observations"
+    noun = "observation" if skipped == 1 else "observations"
     return Text(
-        f"Incomplete: process-observation budget skipped {report.skipped} "
+        f"Incomplete: process-observation budget skipped {skipped} "
         f"{noun}; filtered results may omit matching runs.",
         style="yellow",
         overflow="ellipsis",
@@ -179,188 +215,109 @@ def _observation_warning(report: ObservationReport) -> Text:
     )
 
 
-def _render_list(
+def _limit_warning(limit: int) -> Text:
+    """Explain that matching rows were omitted by the requested row limit."""
+    return Text(
+        f"Showing {limit} matching runs; additional runs omitted (--limit).",
+        style="yellow",
+        overflow="ellipsis",
+        no_wrap=True,
+    )
+
+
+def _query_list(
     *,
     statuses: tuple[str, ...],
     limit: int,
-    json_output: bool,
-    no_color: bool,
-    live: bool = False,
-    console: Console | None = None,
-) -> RenderableType | None:
-    """Load, filter, and render a workflow-run list.
-
-    Args:
-        statuses: Effective status filters.
-        limit: Maximum number of rows.
-        json_output: Whether to emit structured JSON.
-        no_color: Whether to disable ANSI styles.
-        live: Whether the result is for a live dashboard.
-        console: Existing live console, when applicable.
-
-    Returns:
-        A live renderable, or ``None`` after direct output.
-    """
-    now = _now()
-    observation_report = ObservationReport()
+) -> ListSnapshot:
+    """Query one immutable list snapshot without producing output."""
+    observed_at = _now()
     try:
-        load_limit = limit + 1 if json_output else limit
-        runs = load_runs(
+        query = load_runs(
             statuses=statuses,
-            limit=load_limit,
-            now=now,
-            observation_report=observation_report,
+            limit=limit,
+            now=observed_at,
         )
-        truncated = len(runs) > limit
-        if truncated:
-            runs = runs[:limit]
     except WorkflowStoreError as error:
         raise click.ClickException(_diagnostic_text(error)) from error
-    if json_output:
-        _emit_json(
-            {
-                "complete": not truncated and observation_report.complete,
-                "limit": limit,
-                "observationComplete": observation_report.complete,
-                "observationSkipped": observation_report.skipped,
-                "runs": [run.to_json(now) for run in runs],
-                "schemaVersion": 1,
-                "truncated": truncated,
-            }
-        )
-        return None
-    has_runs = bool(runs)
-    if not runs and statuses:
-        try:
-            has_runs = bool(load_runs(limit=1, observe=False))
-        except WorkflowStoreError as error:
-            raise click.ClickException(_diagnostic_text(error)) from error
-    output = console or _console(no_color)
-    if not runs:
-        message = _empty_message(
-            has_runs=has_runs,
-            statuses=statuses,
-            live=console is not None,
-        )
-        if console is not None:
-            empty = Text(
-                message,
-                style="bright_black",
-                overflow="ellipsis",
-                no_wrap=True,
-            )
-            warning = (
-                None
-                if observation_report.complete
-                else _observation_warning(observation_report)
-            )
-            return _fit_live_runs(
-                [],
-                console=output,
-                now=now,
-                footer=warning,
-                empty=empty,
-            )
-        output.print(Text(message, style="bright_black"))
-        if not observation_report.complete:
-            output.print(_observation_warning(observation_report))
-        return None
-    if console is None:
-        table = build_runs_table(runs, width=output.width, live=live, now=now)
-        output.print(table)
-        if not observation_report.complete:
-            output.print(_observation_warning(observation_report))
-        return None
-    footer = (
-        _observation_warning(observation_report)
-        if not observation_report.complete
-        else None
+    return ListSnapshot(
+        query=query,
+        observed_at=query.read_completed_at or query.query_at or observed_at,
+        statuses=statuses,
+        limit=limit,
     )
-    return _fit_live_runs(runs, console=output, now=now, footer=footer)
 
 
-def _fit_live_runs(
-    runs: list[RunRecord],
+def _list_renderable(
+    snapshot: ListSnapshot,
     *,
     console: Console,
-    now: datetime,
-    footer: RenderableType | None = None,
-    empty: RenderableType | None = None,
+    live: bool,
 ) -> RenderableType:
-    """Fit complete run rows and optional empty/footer content to the height."""
-    options = console.options.update(height=None)
+    """Adapt one list snapshot to static or live terminal output."""
+    query = snapshot.query
+    runs = list(query.records)
+    warnings: list[RenderableType] = []
+    if query.truncated:
+        warnings.append(_limit_warning(snapshot.limit))
+    if not query.observation_complete:
+        warnings.append(_observation_warning(query.observation_skipped))
+    footer = Group(*warnings) if warnings else None
     if not runs:
-        empty_renderable = empty or Text(
-            "Waiting for workflow runs…",
-            style="bright_black",
-            overflow="ellipsis",
-            no_wrap=True,
+        message = _empty_message(
+            has_runs=query.store_has_runs,
+            statuses=snapshot.statuses,
+            live=live,
         )
-        if footer is None:
-            return empty_renderable
-        candidate = Group(empty_renderable, footer)
-        if (
-            len(console.render_lines(candidate, options, pad=False))
-            <= console.height
-        ):
-            return candidate
-        return footer
-
-    def build(visible: int) -> RenderableType:
-        omitted = len(runs) - visible
-        marker = Text(
-            f"Showing {visible} of {len(runs)} selected runs; "
-            f"{omitted} omitted (terminal height).",
+        empty = Text(
+            message,
             style="bright_black",
-            overflow="ellipsis",
-            no_wrap=True,
+            overflow="ellipsis" if live else "fold",
+            no_wrap=live,
         )
-        parts: list[RenderableType] = []
-        if visible:
-            parts.append(
-                build_runs_table(
-                    runs[:visible],
-                    width=console.width,
-                    live=True,
-                    now=now,
-                )
+        if live:
+            return fit_live_runs(
+                [],
+                console=console,
+                now=snapshot.observed_at,
+                footer=footer,
+                empty=empty,
             )
-        if omitted:
-            parts.append(marker)
-        if footer is not None:
-            parts.append(footer)
-        return Group(*parts)
-
-    maximum_visible = min(len(runs), max(0, console.height))
-    largest_candidate = build(maximum_visible)
-    if (
-        maximum_visible == len(runs)
-        and len(console.render_lines(largest_candidate, options, pad=False))
-        <= console.height
-    ):
-        return largest_candidate
-
-    low = 0
-    high = maximum_visible
-    while low < high:
-        middle = (low + high + 1) // 2
-        candidate = build(middle)
-        if len(console.render_lines(candidate, options, pad=False)) <= console.height:
-            low = middle
-        else:
-            high = middle - 1
-    smallest_candidate = build(low)
-    if (
-        len(console.render_lines(smallest_candidate, options, pad=False))
-        <= console.height
-    ):
-        return smallest_candidate
-    if footer is not None:
-        return footer
-    return smallest_candidate
+        return Group(empty, *warnings)
+    if live:
+        return fit_live_runs(
+            runs,
+            console=console,
+            now=snapshot.observed_at,
+            footer=footer,
+        )
+    table = build_runs_table(
+        runs,
+        width=console.width,
+        live=False,
+        now=snapshot.observed_at,
+    )
+    return Group(table, *warnings)
 
 
-def _load_named_run(run_id: str, now: datetime) -> RunRecord:
+def _emit_list_json(snapshot: ListSnapshot) -> None:
+    """Adapt one list snapshot to the stable versioned JSON contract."""
+    _emit_json(
+        list_payload(
+            snapshot.query,
+            snapshot.observed_at,
+            limit=snapshot.limit,
+        )
+    )
+
+
+def _print_list(snapshot: ListSnapshot, *, no_color: bool) -> None:
+    """Print one static terminal snapshot."""
+    console = _console(no_color)
+    console.print(_list_renderable(snapshot, console=console, live=False))
+
+
+def _load_named_run(run_id: str, now: datetime) -> RunLookupResult:
     """Load one validated run ID or raise a user-facing error.
 
     Args:
@@ -368,55 +325,44 @@ def _load_named_run(run_id: str, now: datetime) -> RunRecord:
         now: Shared observation time for classification and rendering.
 
     Returns:
-        The loaded run record.
+        The capability-bound lookup and loaded record.
 
     Raises:
         click.ClickException: If the ID is invalid or the run is absent.
     """
     rendered_id = _diagnostic_text(run_id)
-    if not RUN_ID_PATTERN.fullmatch(run_id):
-        try:
-            scanned = load_runs(observe=False)
-        except WorkflowStoreError as error:
-            raise click.ClickException(_diagnostic_text(error)) from error
-        exact = next(
-            (run for run in scanned if run.directory.name == run_id),
-            None,
-        )
-        if exact is not None:
-            return load_run(exact.directory, now=now)
-        if not ABBREVIATED_RUN_ID_PATTERN.fullmatch(run_id):
-            raise click.ClickException(f"Invalid workflow run ID: {rendered_id}")
-        matches = [run for run in scanned if run.abbreviated_id == run_id]
-        if len(matches) == 1:
-            return load_run(matches[0].directory, now=now)
-        if len(matches) > 1:
-            choices = ", ".join(
-                _sanitize(run.run_id) for run in matches[:5]
-            )
-            omitted = len(matches) - 5
-            suffix = f"; {omitted} more omitted" if omitted > 0 else ""
-            raise click.ClickException(
-                "Workflow run ID abbreviation is ambiguous: "
-                f"{rendered_id}. Use a full run ID: {choices}{suffix}"
-            )
-        raise click.ClickException(f"Workflow run not found: {rendered_id}")
-    directory = workflow_home() / "runs" / run_id
     try:
-        is_directory = stat.S_ISDIR(directory.lstat().st_mode)
-    except FileNotFoundError:
-        raise click.ClickException(f"Workflow run not found: {rendered_id}") from None
-    except OSError as error:
-        rendered_error = _diagnostic_text(error)
-        raise click.ClickException(
-            f"Cannot inspect workflow run {rendered_id}: {rendered_error}"
-        ) from error
-    if not is_directory:
-        raise click.ClickException(f"Workflow run not found: {rendered_id}")
-    try:
-        return load_run(directory, now=now)
+        lookup = load_named_run(run_id, now=now)
     except WorkflowStoreError as error:
         raise click.ClickException(_diagnostic_text(error)) from error
+    resolution = lookup.resolution
+    if resolution.kind is RunResolutionKind.INVALID:
+        raise click.ClickException(f"Invalid workflow run ID: {rendered_id}")
+    if resolution.kind is RunResolutionKind.NOT_FOUND:
+        raise click.ClickException(f"Workflow run not found: {rendered_id}")
+    if resolution.kind is RunResolutionKind.AMBIGUOUS:
+        choices = ", ".join(
+            _sanitize(candidate) for candidate in resolution.candidates[:5]
+        )
+        omitted = len(resolution.candidates) - 5
+        suffix = f"; {omitted} more omitted" if omitted > 0 else ""
+        raise click.ClickException(
+            "Workflow run ID abbreviation is ambiguous: "
+            f"{rendered_id}. Use a full run ID: {choices}{suffix}"
+        )
+    if resolution.directory is None or lookup.record is None:
+        raise click.ClickException(f"Workflow run not found: {rendered_id}")
+    return lookup
+
+
+def _unique_statuses(
+    _context: click.Context,
+    _parameter: click.Parameter,
+    statuses: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Retain each validated status once, in command-line order."""
+    unique = tuple(dict.fromkeys(statuses))
+    return unique[: len(FILTER_STATUSES)]
 
 
 def _status_option(function: Callable[..., object]) -> Callable[..., object]:
@@ -432,8 +378,9 @@ def _status_option(function: Callable[..., object]) -> Callable[..., object]:
     return click.option(
         "--status",
         "statuses",
-        type=click.Choice(FILTER_STATUSES, case_sensitive=False),
+        type=_BoundedChoice(FILTER_STATUSES, case_sensitive=False),
         multiple=True,
+        callback=_unique_statuses,
         metavar="STATUS",
         help=(
             "Include only this effective status; repeat for more. "
@@ -453,14 +400,140 @@ def _limit_option(function: Callable[..., object]) -> Callable[..., object]:
     """
     return click.option(
         "--limit",
-        type=click.IntRange(1, 1_000),
+        type=_BoundedIntRange(MIN_RUN_LIMIT, MAX_RUN_LIMIT),
         default=50,
         show_default=True,
         help="Maximum number of runs to display.",
     )(function)
 
 
+class _BoundedChoice(click.Choice):
+    """A Click choice whose invalid-value diagnostic has a fixed size."""
+
+    def convert(
+        self,
+        value: object,
+        param: click.Parameter | None,
+        ctx: click.Context | None,
+    ) -> object:
+        """Convert a choice while bounding hostile values in failures."""
+        try:
+            return super().convert(value, param, ctx)
+        except click.BadParameter:
+            rendered = _diagnostic_text(value)
+            choices = ", ".join(str(choice) for choice in self.choices)
+            self.fail(
+                f"{rendered!r} is not one of: {choices}.",
+                param=param,
+                ctx=ctx,
+            )
+
+
+class _BoundedIntRange(click.IntRange):
+    """A Click integer range with bounded invalid-value diagnostics."""
+
+    def convert(
+        self,
+        value: object,
+        param: click.Parameter | None,
+        ctx: click.Context | None,
+    ) -> int:
+        """Convert a bounded integer while safely reporting failures."""
+        try:
+            converted = super().convert(value, param, ctx)
+        except click.BadParameter:
+            rendered = _diagnostic_text(value)
+            self.fail(
+                f"{rendered!r} is not an integer from {MIN_RUN_LIMIT} "
+                f"through {MAX_RUN_LIMIT}.",
+                param=param,
+                ctx=ctx,
+            )
+        return int(converted)
+
+
+class _BoundedFloatRange(click.FloatRange):
+    """A Click float range with bounded invalid-value diagnostics."""
+
+    def convert(
+        self,
+        value: object,
+        param: click.Parameter | None,
+        ctx: click.Context | None,
+    ) -> float:
+        """Convert a bounded float while safely reporting failures."""
+        try:
+            converted = super().convert(value, param, ctx)
+        except click.BadParameter:
+            rendered = _diagnostic_text(value)
+            self.fail(
+                f"{rendered!r} is not a number from {MIN_WATCH_REFRESH:g} "
+                f"through {MAX_WATCH_REFRESH:g}.",
+                param=param,
+                ctx=ctx,
+            )
+        return float(converted)
+
+
+def _bounded_usage_error(error: click.UsageError) -> click.UsageError:
+    """Replace a parser error with a bounded, context-preserving error."""
+    return click.UsageError(
+        _diagnostic_text(
+            error.format_message(),
+            maximum=MAX_USAGE_ERROR_CHARS,
+        ),
+        ctx=error.ctx,
+    )
+
+
+class _BoundedCommand(click.Command):
+    """A Click command whose parser diagnostics have a fixed size."""
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        """Parse arguments while bounding every usage-error diagnostic."""
+        try:
+            return super().parse_args(ctx, args)
+        except click.UsageError as error:
+            raise _bounded_usage_error(error) from None
+
+
+class _BoundedGroup(click.Group):
+    """A Click group with bounded root and command-resolution errors."""
+
+    command_class = _BoundedCommand
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        """Parse group arguments while bounding usage-error diagnostics."""
+        try:
+            return super().parse_args(ctx, args)
+        except click.UsageError as error:
+            raise _bounded_usage_error(error) from None
+
+    def resolve_command(
+        self,
+        ctx: click.Context,
+        args: list[str],
+    ) -> tuple[str | None, click.Command | None, list[str]]:
+        """Resolve a subcommand while bounding unknown-command input."""
+        try:
+            return super().resolve_command(ctx, args)
+        except click.UsageError as error:
+            raise _bounded_usage_error(error) from None
+
+
+def _finite_refresh(
+    _context: click.Context,
+    parameter: click.Parameter,
+    value: float,
+) -> float:
+    """Reject non-finite refresh values Click's range comparison admits."""
+    if not math.isfinite(value):
+        raise click.BadParameter("must be finite", param=parameter)
+    return value
+
+
 @click.group(
+    cls=_BoundedGroup,
     invoke_without_command=True,
     help="Observe local durable dynamic-workflow runs without changing them.",
 )
@@ -501,6 +574,22 @@ def cli(
             if context.get_parameter_source(option) is ParameterSource.COMMANDLINE
         ]
         if misplaced:
+            if "json_output" in misplaced and context.invoked_subcommand == "watch":
+                raise click.UsageError(
+                    "--json is not supported by watch; use "
+                    "codex-workflows --json (without watch)."
+                )
+            show_only_list_options = [
+                option for option in misplaced if option in {"statuses", "limit"}
+            ]
+            if show_only_list_options and context.invoked_subcommand == "show":
+                rendered = ", ".join(
+                    "--status" if option == "statuses" else "--limit"
+                    for option in show_only_list_options
+                )
+                raise click.UsageError(
+                    f"{rendered} may be used only with list or watch."
+                )
             rendered = ", ".join(
                 "--status"
                 if option == "statuses"
@@ -511,12 +600,14 @@ def cli(
             )
             raise click.UsageError(f"{rendered} must appear after the subcommand.")
     if context.invoked_subcommand is None:
-        _render_list(
+        snapshot = _query_list(
             statuses=statuses,
             limit=limit,
-            json_output=json_output,
-            no_color=no_color,
         )
+        if json_output:
+            _emit_list_json(snapshot)
+        else:
+            _print_list(snapshot, no_color=no_color)
 
 
 @cli.command(help="Watch a live dashboard until Ctrl-C.")
@@ -524,7 +615,11 @@ def cli(
 @_limit_option
 @click.option(
     "--refresh",
-    type=click.FloatRange(min=0.2, max=60.0),
+    type=_BoundedFloatRange(
+        min=MIN_WATCH_REFRESH,
+        max=MAX_WATCH_REFRESH,
+    ),
+    callback=_finite_refresh,
     default=1.0,
     show_default=True,
     help="Seconds between state-file reads.",
@@ -551,20 +646,22 @@ def watch(
     no_color = bool(context.obj.get("no_color"))
     console = _console(no_color)
     term = os.environ.get("TERM", "").strip().lower()
-    if not _stdout_is_tty() or term in {"dumb", "unknown"}:
+    if not _stdout_is_tty() or console.is_dumb_terminal or term in {"dumb", "unknown"}:
         raise click.ClickException(
             "watch requires an interactive terminal with live-display support; "
-            "use the default command or --json instead."
+            "use codex-workflows --json (without watch) instead."
         )
     try:
-        initial = _render_list(
+        _refresh_console_size(console)
+        initial_snapshot = _query_list(
             statuses=statuses,
             limit=limit,
-            json_output=False,
-            no_color=no_color,
-            live=True,
+        )
+        initial = _list_renderable(
+            initial_snapshot,
             console=console,
-        ) or Text("Waiting for workflow runs…", style="bright_black")
+            live=True,
+        )
         with Live(
             initial,
             console=console,
@@ -574,17 +671,18 @@ def watch(
         ) as live_display:
             while True:
                 time.sleep(refresh)
-                rendered = _render_list(
+                _refresh_console_size(console)
+                snapshot = _query_list(
                     statuses=statuses,
                     limit=limit,
-                    json_output=False,
-                    no_color=no_color,
-                    live=True,
+                )
+                rendered = _list_renderable(
+                    snapshot,
                     console=console,
+                    live=True,
                 )
                 live_display.update(
-                    rendered
-                    or Text("Waiting for workflow runs…", style="bright_black"),
+                    rendered,
                     refresh=True,
                 )
     except KeyboardInterrupt:
@@ -615,10 +713,15 @@ def show(
         json_output: Whether to emit complete structured JSON.
         full: Whether to disable human-output limits.
     """
-    now = _now()
-    run = _load_named_run(run_id, now)
+    lookup = _load_named_run(run_id, _now())
+    run = lookup.record
+    if run is None:
+        raise click.ClickException(
+            f"Workflow run not found: {_diagnostic_text(run_id)}"
+        )
+    now = lookup.read_completed_at
     if json_output:
-        _emit_json(run.to_json(now, include_steps=True))
+        _emit_json(show_payload(run, now))
         return
     console = _console(bool(context.obj.get("no_color")))
     console.print(build_show_renderable(run, width=console.width, now=now, full=full))
