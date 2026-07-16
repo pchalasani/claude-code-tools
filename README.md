@@ -89,10 +89,11 @@ codex-workflows show RUN_ID
 codex-workflows --all
 ```
 
-The default list contains only active workflows. Use `--all` to include
-completed and diagnostic history. The command reads durable workflow state and
-process metadata. It never changes a run, sends a signal, repairs state, or
-launches an agent. See the
+The default list contains only active workflows and identifies the project
+folder from which each workflow was launched. Use `show RUN_ID` for its full
+working directory, or `--all` to include completed and diagnostic history. The
+command reads durable workflow state and process metadata. It never changes a
+run, sends a signal, repairs state, or launches an agent. See the
 [codex-workflows reference][codex-workflows-reference] for filters, JSON output,
 and the complete versioned schema.
 

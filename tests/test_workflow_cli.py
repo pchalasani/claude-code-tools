@@ -26,6 +26,7 @@ def _state(
     *,
     status: str = "completed",
     workflow: str = "/work/audit-routes.js",
+    cwd: str = "/work",
     created_at: str = BASE_TIME,
     error: str | None = None,
     steps: Mapping[str, object] | None = None,
@@ -43,7 +44,7 @@ def _state(
     value: dict[str, object] = {
         "concurrency": 4,
         "createdAt": created_at,
-        "cwd": "/work",
+        "cwd": cwd,
         "runId": run_id,
         "status": status,
         "steps": normalized_steps,
@@ -98,6 +99,7 @@ def test_static_output_lists_local_runs_cleanly(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert "audit-routes" in result.output
+    assert "work" in result.output
     assert "20260714-one" in result.output
     assert "completed" in result.output
     assert "\x1b[" not in result.output
@@ -190,6 +192,7 @@ def test_json_output_has_stable_normalized_fields(tmp_path: Path) -> None:
     run = payload["runs"][0]
     assert run["schemaVersion"] == 1
     assert run["runId"] == "json-run"
+    assert run["cwd"] == "/work"
     assert run["status"] == "completed"
     assert run["callback"] is None
     assert run["agentProgress"] == {
@@ -436,12 +439,29 @@ def test_show_json_includes_detailed_steps(tmp_path: Path) -> None:
 
     payload = json.loads(result.output)
     assert payload["runId"] == "show-json"
+    assert payload["cwd"] == "/work"
     assert payload["steps"][0]["id"] == "root/work"
+
+
+def test_project_is_visible_in_list_and_full_directory_in_show(tmp_path: Path) -> None:
+    """Human output identifies both the project and its complete launch path."""
+    cwd = "/Users/example/Git/observability.fix-paper-style"
+    _write_run(tmp_path, _state("project-run", cwd=cwd))
+
+    listed = _invoke(tmp_path, ["--all"])
+    shown = _invoke(tmp_path, ["show", "project-run"])
+
+    assert listed.exit_code == 0
+    assert "observability.fix-paper-style" in listed.output
+    assert shown.exit_code == 0
+    assert "Project" in shown.output
+    assert "Working directory" in shown.output
+    assert cwd in shown.output
 
 
 @pytest.mark.parametrize(
     ("width", "column_count"),
-    [(24, 1), (64, 2), (88, 2), (100, 2), (117, 2), (118, 9)],
+    [(24, 1), (64, 2), (88, 2), (118, 2), (139, 2), (140, 9)],
 )
 def test_live_table_stays_within_narrow_rendering_boundary(
     width: int,
@@ -481,16 +501,13 @@ def test_live_table_stays_within_narrow_rendering_boundary(
     rendered = console.export_text()
 
     assert len(table.columns) == column_count
-    if width < 40:
-        assert "a-long-workflow-name" in rendered
-    elif width < 118:
-        assert "a-long-workflow-n…" in rendered
-    else:
-        assert "a-long-wor" in rendered
+    assert "a-long-workfl" in rendered
+    assert "work" in rendered
     assert "running" in rendered
-    if width < 118:
+    if width < 140:
         assert "1 worker" in rendered
     else:
+        assert "Workflow / Project" in rendered
         assert "Active" in rendered
     assert max(len(line) for line in rendered.splitlines()) <= width
 

@@ -478,6 +478,7 @@ def parse_state(
     typed = RunState(
         run_id=run_id,
         status=status,
+        cwd=string(state, "cwd"),
         workflow_path=string(state, "workflowPath"),
         created_at=string(state, "createdAt"),
         updated_at=string(state, "updatedAt"),
