@@ -1,10 +1,12 @@
-# agent-tunnel: let teammates talk to your local Claude sessions
+# agent-tunnel: let teammates talk to your local agent sessions
 
-`agent-tunnel` exposes long-lived, context-rich local Claude Code sessions
-("experts") to teammates over Discord, so they can ask questions directly
-instead of relaying through you. You publish *a specific session* at runtime
-with `>share`; colleagues address it by its **handle**; each conversation is
-answered against a read-only **fork** of that session.
+`agent-tunnel` exposes long-lived, context-rich local Claude Code (and Codex
+CLI) sessions ("experts") to teammates over Discord, so they can ask
+questions directly instead of relaying through you. You publish *a specific
+session* at runtime with `>share` (Claude) or `agent-tunnel share --agent
+codex` (Codex — see "Codex CLI sessions"); colleagues address it by its
+**handle**; each conversation is answered against a read-only **fork** of
+that session.
 
 ## Motivation
 
@@ -258,12 +260,82 @@ dir is propagated end to end:
   thread replays the expert session's full context (~its token count per cold
   question) — fine for Q&A.
 
+## Codex CLI sessions
+
+The same tunnel publishes **Codex CLI** (OpenAI) sessions; colleagues see
+identical handles/threads. Every record (registry + store) carries an
+`agent` field ("claude" default, so pre-field records load correctly), and
+backend dispatch keys on `(agent, backend)`.
+
+- **Publish** — two paths: (1) in-session `>share`, since codex supports the
+  same `UserPromptSubmit` hook + block/reply protocol and the same
+  `${CLAUDE_PLUGIN_ROOT}` env var (install the plugin via `codex plugin add
+  agent-tunnel@cctools-codex-plugins`); the hook reads codex's
+  `agent_transcript_path`/`transcript_path`, detects the rollout, and records
+  `agent=codex`. (2) `agent-tunnel share --agent codex <name>` from the
+  project dir (the CLI finds the newest rollout whose recorded `cwd` matches)
+  — no plugin needed. Verified live end-to-end: `>share` inside a `codex exec`
+  session fired the hook, codex returned `UserPromptSubmit Blocked`, and the
+  registry recorded the codex session.
+- **Fork = file copy**. Verified live (codex-cli 0.144): `codex exec resume
+  <id>` APPENDS to the resumed session's own rollout (same id, same file),
+  and `codex fork` is TUI-only. So `CodexHeadlessBackend` forks by copying
+  the expert rollout under a fresh uuid7 — rewriting the meta id and
+  stamping `forked_from_id`/`parent_thread_id` like codex's own fork — then
+  every turn runs `codex exec resume <fork-id> - --json` (prompt on stdin).
+  The owner's file is never touched; the fork id is STABLE across turns
+  (claude's headless fork mints a new id per turn).
+- **Access → sandbox**, not tool lists: read → `-c sandbox_mode=read-only`,
+  write → `workspace-write` (codex can also run *sandboxed* commands at
+  this level), bash → `workspace-write` + `network_access=true`, all →
+  `--dangerously-bypass-approvals-and-sandbox` gated by `[codex]
+  allow_skip_permissions` (same double opt-in as claude). Non-interactive
+  turns also set `-c approval_policy=never`. The enforced per-handle flags
+  are appended LAST and sandbox/approval overrides are stripped from
+  `[codex] headless_extra_args`, so extra args can never weaken a handle's
+  access. Note: like claude's read preset (`Read`/`Grep`/`Glob` are not
+  path-scoped), the codex `read-only` sandbox permits **host-wide reads** —
+  a colleague can surface any file the owner's user can read; publish
+  accordingly.
+- **Non-shell tool surfaces**: codex's OS sandbox governs only shell
+  commands, so for every non-`all` handle the tunnel also disables the tool
+  surfaces that act outside it — MCP servers (`-c mcp_servers={}`), web
+  search (`-c tools.web_search=false`), and codex's default-on action
+  features via `--disable` (`apps`, `browser_use*`, `computer_use`,
+  `in_app_browser`, `image_generation`, `code_mode_host`, `hooks`) — giving
+  parity with claude read's tool allowlist. `all` keeps them. Caveat: this
+  `--disable` set is **codex-version-specific** (from `codex features list`
+  on codex-cli 0.144); a newer codex could add an action feature not on the
+  list. Before publishing a codex session to less-trusted colleagues, audit
+  `codex features list` and your `~/.codex/config.toml`. Exhaustive,
+  version-tracking feature lockdown is a follow-up.
+- **Persona rides the fork prompt**: codex has no `--append-system-prompt`,
+  so the persona (and outbox instruction) is prepended to the first prompt
+  of each fork and persists in the fork's context; a live access change
+  re-sends the outbox note once.
+- **Auth/env**: `CODEX_HOME` pinned from the record's `config_dir`;
+  `OPENAI_API_KEY` stripped by default (`[codex] unset_api_key`) so forks
+  use the owner's ChatGPT login — mirroring the claude behavior.
+- **Headless-only**: codex records always bind `backend=headless`
+  (`backend_name_for`); the answer text is the last `agent_message` item of
+  the `--json` event stream (equivalent to `--output-last-message`), and
+  the tmux reaper skips codex records. `agent-tunnel resume` execs
+  `codex resume <fork-id>`.
+
 ## Security model
 
-- Read-only tools by default, hard-enforced by the CLI permission layer.
-  `>share --write` adds file edits (still no Bash); `>share
-  --dangerously-allow-bash` additionally permits command execution and so
-  drops the sandbox — reserve it for fully trusted colleagues.
+- Read-only by default. The access levels mean DIFFERENT things per agent
+  because the enforcement mechanism differs — read < write < bash < all:
+    - **Claude** (tool allowlist): `>share --write` adds file edits (still
+      **no Bash**); `>share --dangerously-allow-bash` additionally permits
+      command execution and drops the tool sandbox.
+    - **Codex** (OS sandbox): read = `read-only`; **write = `workspace-write`,
+      which also permits *sandboxed* command execution** (confined by
+      filesystem/network, not by tool name) — it is NOT "no shell"; bash =
+      `workspace-write` + network; all = no sandbox. See "Codex CLI sessions"
+      for the full mapping. Grant codex `--write` knowing it can run confined
+      commands.
+  Both reserve bash/all for fully trusted colleagues.
 - Access = Discord channel membership + optional user/role allowlists. Anyone
   who can ask can surface anything in the session context or readable project
   tree — publish accordingly; the persona discourages leaking secrets but is a
@@ -292,6 +364,10 @@ dir is propagated end to end:
   auto-submitted, answer captured from the transcript and posted back;
   follow-ups and `!done` exercised. Confirmed against a private `-L` tmux
   server while the main server was fd-saturated.
+- Live end-to-end (codex, headless): `agent-tunnel share --agent codex` →
+  auto-detected the newest rollout by cwd → `ask --handle` forked it at the
+  file level and the fork recalled the full session context; follow-up
+  reused the same fork id; original rollout byte-identical throughout.
 
 ## Roadmap
 

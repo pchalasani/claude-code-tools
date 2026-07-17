@@ -34,6 +34,7 @@ from .backends import (
     BackendError,
     backend_by_name,
     backend_for_record,
+    backend_name_for,
     effective_backend,
 )
 from .config import TunnelConfig
@@ -216,12 +217,14 @@ def run_bot(
             """
             cache: dict[str, Backend] = {}
             total = 0
-            names = {
-                effective_backend(r, cfg.backend)
+            pairs = {
+                (r.agent or "claude", effective_backend(r, cfg.backend))
                 for r in store.all_records()
             }
-            for name in names:
-                total += backend_by_name(cfg, store, name, cache).reap_idle()
+            for agent, name in pairs:
+                total += backend_by_name(
+                    cfg, store, name, cache, agent=agent
+                ).reap_idle()
             return total
 
         async def on_ready(self) -> None:
@@ -309,8 +312,9 @@ def run_bot(
                 project_dir=rec.cwd,
                 config_dir=rec.config_dir,
                 access=rec.access,
-                backend=cfg.backend,
+                backend=backend_name_for(cfg, rec.agent),
                 asker=message.author.display_name,
+                agent=rec.agent,
             )
             if question or message.attachments:
                 await self._answer(
@@ -405,8 +409,9 @@ def run_bot(
                         project_dir=rec.cwd,
                         config_dir=rec.config_dir,
                         access=rec.access,
-                        backend=cfg.backend,
+                        backend=backend_name_for(cfg, rec.agent),
                         asker=message.author.display_name,
+                        agent=rec.agent,
                     )
                 content = remainder.strip()
                 if not content and not message.attachments:
@@ -446,7 +451,8 @@ def run_bot(
                     if rec.label and rec.label != rec.handle
                     else ""
                 )
-                lines.append(f"• `{rec.handle}`{label} — {proj}")
+                agent = f" [{rec.agent}]" if rec.agent != "claude" else ""
+                lines.append(f"• `{rec.handle}`{label} — {proj}{agent}")
             await dest.send("\n".join(lines)[:1900])
 
         async def _close(self, dest: Any, thread_key: str) -> None:

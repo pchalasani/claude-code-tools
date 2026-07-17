@@ -62,8 +62,11 @@ def test_backend_for_record_dispatches_by_record_backend(
     assert isinstance(
         backend_for_record(cfg, store, legacy, cache), TmuxBackend
     )
-    # The cache reuses one instance per backend name.
-    assert backend_for_record(cfg, store, tmux_rec, cache) is cache["tmux"]
+    # The cache reuses one instance per (agent, backend name).
+    assert (
+        backend_for_record(cfg, store, tmux_rec, cache)
+        is cache["claude:tmux"]
+    )
 
 
 def test_backend_by_name_builds_and_caches(tmp_path: Path) -> None:
@@ -76,7 +79,7 @@ def test_backend_by_name_builds_and_caches(tmp_path: Path) -> None:
     assert isinstance(
         backend_by_name(cfg, store, "headless", cache), HeadlessBackend
     )
-    assert backend_by_name(cfg, store, "tmux", cache) is cache["tmux"]
+    assert backend_by_name(cfg, store, "tmux", cache) is cache["claude:tmux"]
 
 
 def test_forget_removes_upload_dir(tmp_path: Path) -> None:

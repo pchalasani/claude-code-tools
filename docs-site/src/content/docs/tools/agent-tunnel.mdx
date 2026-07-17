@@ -93,13 +93,14 @@ command group (like `aichat`) whose subcommands are:
 | Subcommand | What it does |
 | --- | --- |
 | `agent-tunnel serve` | Run the Discord daemon — the long-lived bridge that answers questions |
+| `agent-tunnel share [<name>]` | Publish a session from the terminal (the out-of-session `>share`); with `--agent codex` it's how you share a Codex CLI session |
 | `agent-tunnel published` | List the sessions you've shared (handles in the registry) |
 | `agent-tunnel status` | Show active conversation threads and their forks |
 | `agent-tunnel forks [<handle>]` | Table of fork sessions (handle, access, asker, last active, turns, live/idle, fork id); `--json` to script, `--manage` to select-and-clear |
-| `agent-tunnel resume <handle>` | Resume a colleague-accumulated fork in Claude Code (most recent, or `--fork <id>`) |
+| `agent-tunnel resume <handle>` | Resume a colleague-accumulated fork in Claude Code / Codex (most recent, or `--fork <id>`) |
 | `agent-tunnel rename <old> <new>` | Rename a shared handle (registry + bound forks + live tmux windows) |
 | `agent-tunnel watch` | Attach to the private tmux server to watch live forks |
-| `agent-tunnel doctor` | Readiness check (token found, channel set, `claude`/`tmux` on PATH) |
+| `agent-tunnel doctor` | Readiness check (token found, channel set, `claude`/`codex`/`tmux` on PATH) |
 | `agent-tunnel ask "Q" --handle H` | Ask one question through the full pipeline, no Discord (local test) |
 | `agent-tunnel forget --thread T \| --all` | Drop thread bindings and kill their tmux windows |
 | `agent-tunnel init` | Write a commented sample config |
@@ -160,6 +161,130 @@ rather than silently granted.
 A labeled handle also makes the Discord thread and the tmux window readable
 (`payments-…` instead of a cryptic id). Colleagues end a conversation with
 `!done` in their thread; that tears the fork down immediately.
+
+## Sharing Codex CLI sessions
+
+The tunnel isn't Claude-only: a **Codex CLI** (OpenAI) session can be
+published the same way and colleagues can't tell the difference — same
+handles, threads, access levels, and attachments.
+
+### Publishing — two ways
+
+**A. In-session `>share` (same as Claude).** The agent-tunnel plugin's
+`UserPromptSubmit` hook works in **both** Claude Code and Codex CLI — codex
+supports the same hook event and block/reply protocol, and the plugin's hook
+command (`${CLAUDE_PLUGIN_ROOT}/hooks/share_hook.py`) resolves under codex
+unchanged. Once the plugin is installed in codex (see below), just type it
+inside the session:
+
+```
+>share payments-gpt
+>share --write payments-gpt
+>share --dangerously-skip-permissions payments-gpt
+```
+
+The hook auto-detects that it's a codex session (from the rollout path) and
+records `agent=codex`, so colleagues address it exactly like a Claude handle.
+
+To install the plugin into codex (one-time), point codex at this repo's
+codex marketplace and add the plugin:
+
+```bash
+codex plugin marketplace add pchalasani/claude-code-tools   # or a local path / Git URL
+codex plugin add agent-tunnel@cctools-codex-plugins
+# codex records a per-hook trust hash in ~/.codex/config.toml the first time it runs.
+```
+
+(The plugin is already registered for Claude Code via the `cctools-plugins`
+marketplace; this is the codex-side equivalent.)
+
+**B. From the terminal — `agent-tunnel share`.** No plugin needed; handy for
+scripting or when you haven't installed the codex plugin. Run it in the
+session's project directory:
+
+```bash
+cd ~/work/payments                              # where the codex session ran
+
+# read-only (default) — look, don't touch:
+agent-tunnel share --agent codex payments-gpt
+# → Sharing session 019f6c23… [codex] as: payments-gpt
+
+# other access levels (same flags as >share):
+agent-tunnel share --agent codex --write payments-gpt              # edit files (+ sandboxed commands, see below)
+agent-tunnel share --agent codex --dangerously-allow-bash payments-gpt   # + network
+agent-tunnel share --agent codex --dangerously-skip-permissions payments-gpt   # FULL (no sandbox) — needs the gate below
+```
+
+It publishes the **newest codex session recorded in that directory** unless
+you pass `--session <id>`. Re-running `share` (or `>share`) for the same
+session updates its access; omit an access flag to keep the current level.
+`agent-tunnel published`, `agent-tunnel status`, and Discord's `!list` all
+show codex handles tagged `[codex]`.
+
+Either way, the full-access (`--dangerously-skip-permissions`) level is
+**double opt-in**: besides the per-share flag, the daemon's config must enable
+it —
+
+```toml
+[codex]
+allow_skip_permissions = true   # off by default; the daemon refuses "all" otherwise
+```
+
+### How it works (codex-specific mechanics)
+
+- **Forking is file-level.** `codex exec resume` *continues* a session
+  in-place (unlike `claude --resume --fork-session`), so the tunnel copies
+  the session's rollout file under a fresh id — recording `forked_from_id`
+  like codex's own `fork` command — and every remote turn resumes the copy.
+  Your original session is never touched, and the fork id stays **stable**
+  across the whole thread (`agent-tunnel resume <handle>` drops you into it
+  with `codex resume`).
+- **Access maps to codex's sandbox, not tool lists.** read →
+  `read-only` sandbox, write → `workspace-write` (codex may also run
+  *sandboxed* commands at this level — its sandbox confines by
+  filesystem/network, not tool name, so codex `--write` is **not** "no
+  shell" the way claude `--write` is), bash → `workspace-write` + network,
+  and all → `--dangerously-bypass-approvals-and-sandbox`, gated behind
+  `[codex] allow_skip_permissions = true` exactly like the Claude gate.
+- **Non-shell tool surfaces are disabled for non-`all` handles.** Codex's
+  sandbox only governs *shell* commands, so the tunnel also switches off the
+  tool surfaces that act outside it — MCP servers, web search, and codex's
+  default-on action features (`apps`, browser/computer use, image
+  generation, host code mode, hooks) — giving parity with claude read's
+  tool allowlist. Two caveats to know before sharing codex to less-trusted
+  colleagues: the `read-only` sandbox still permits **host-wide file reads**
+  (like claude's `Read`/`Grep`/`Glob`), and the disabled-feature list is
+  **codex-version-specific** — audit `codex features list` and your
+  `~/.codex/config.toml`. (Tracked for a version-proof fix in issue #106.)
+
+Codex sessions always run on the headless backend (codex's fork/resume has
+no scriptable interactive mode), so they work under `serve` in either server
+mode. Config lives in the `[codex]` table (`binary`, `model`, `persona`,
+`unset_api_key` — which strips `OPENAI_API_KEY` so forks bill to your
+ChatGPT login, mirroring the Claude behavior).
+
+### Test it end-to-end
+
+Start cheap, before wiring up Discord — this proves the fork/resume/answer
+pipeline against the real `codex` binary:
+
+```bash
+# 1. Publish read-only, then ask through the full pipeline (no Discord):
+agent-tunnel share --agent codex my-cool-session
+agent-tunnel ask --handle my-cool-session "what is this session about?"
+#    A sensible answer means the codex fork path works.
+
+# 2. Then the real Discord round-trip:
+agent-tunnel doctor                # confirms token, channel, and the codex binary
+agent-tunnel serve                 # add --backend tmux only for claude; codex is headless
+#    In the watched channel, a colleague posts:
+#        my-cool-session <their question>
+#    A thread opens and the codex fork answers. `!list` shows it tagged [codex].
+```
+
+Once read-only works over Discord, re-run `share` with a higher access flag
+(and, for `--dangerously-skip-permissions`, the `[codex]
+allow_skip_permissions = true` gate) to test write/bash/full paths.
 
 ## Sharing files both ways (attachments)
 
@@ -421,6 +546,12 @@ injection in your channel — can also *edit files* in that folder (it still
 never runs shell commands). `>share --dangerously-allow-bash` goes further and
 lets the fork **run shell commands** — that removes the sandbox entirely, so
 use it only for folders and people you fully trust.
+
+The exact meaning of each level above is for **Claude** (a tool allowlist).
+**Codex** enforces the same levels through its OS sandbox instead, so they
+behave differently — notably, codex `--write` **can run sandboxed commands**,
+and codex `bash` stays sandboxed (adds network) rather than removing the
+sandbox. See [Sharing Codex CLI sessions](#sharing-codex-cli-sessions).
 </Aside>
 
 <Aside type="note">

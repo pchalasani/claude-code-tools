@@ -166,6 +166,8 @@ class _BaseBackend:
     """Shared store handling and binding lookup."""
 
     name = "base"
+    # Agent CLI this backend drives; the codex backends override this.
+    agent = "claude"
 
     def __init__(self, cfg: TunnelConfig, store: TunnelStore) -> None:
         """Keep config and store references."""
@@ -192,6 +194,11 @@ class _BaseBackend:
             reg is not None
             and reg.access
             and reg.session_id == rec.expert_session_id
+            # Identity is (agent, session_id): a same-name handle republished
+            # for the OTHER agent with the same id (e.g. the sentinel "cli"
+            # handle, or a reclaimed revoked name) must not sync its access
+            # onto this thread.
+            and (reg.agent or "claude") == (rec.agent or "claude")
         ):
             return reg.access
         return rec.access
@@ -224,13 +231,21 @@ class _BaseBackend:
             rec.access = cur
             self.store.set_access(thread_key, cur)
             self._on_access_changed(rec, old, cur)
-        if rec.access == "all" and not self.cfg.claude.allow_skip_permissions:
-            raise BackendError(
-                "This handle was shared with full "
-                "(--dangerously-skip-permissions) access, but the owner has "
-                "not enabled it. Set [claude] allow_skip_permissions = true in "
-                "the agent-tunnel config and restart serve."
-            )
+        if rec.access == "all":
+            # Each agent has its own double-opt-in gate for full access.
+            if rec.agent == "codex":
+                gated = self.cfg.codex.allow_skip_permissions
+                key = "[codex]"
+            else:
+                gated = self.cfg.claude.allow_skip_permissions
+                key = "[claude]"
+            if not gated:
+                raise BackendError(
+                    "This handle was shared with full "
+                    "(skip-permissions) access, but the owner has not "
+                    f"enabled it. Set {key} allow_skip_permissions = true "
+                    "in the agent-tunnel config and restart serve."
+                )
         return rec
 
     def _home(self, rec: ThreadRecord) -> Optional[Path]:
@@ -655,6 +670,11 @@ class TmuxBackend(_BaseBackend):
             return 0
         reaped = 0
         for rec in self.store.all_records():
+            # Codex records never own tmux windows (codex runs headless
+            # only); guard explicitly so a corrupted/hand-edited record can
+            # never route a codex thread through the tmux reaper.
+            if (rec.agent or "claude") == "codex":
+                continue
             # A legacy blank-backend record with a live window belongs to tmux.
             if (
                 not rec.tmux_window
@@ -671,8 +691,24 @@ class TmuxBackend(_BaseBackend):
         return reaped
 
 
-def make_backend(cfg: TunnelConfig, store: TunnelStore) -> Backend:
-    """Instantiate the configured backend."""
+def backend_name_for(cfg: TunnelConfig, agent: str) -> str:
+    """The execution-backend name to bind an agent's threads under.
+
+    Codex sessions always run headless: codex's interactive fork is
+    TUI-only, so there is no codex tmux backend (yet).
+    """
+    return "headless" if agent == "codex" else cfg.backend
+
+
+def make_backend(
+    cfg: TunnelConfig, store: TunnelStore, agent: str = "claude"
+) -> Backend:
+    """Instantiate the configured backend for an agent CLI."""
+    if agent == "codex":
+        # Deferred import: codex_backend imports from this module.
+        from .codex_backend import CodexHeadlessBackend
+
+        return CodexHeadlessBackend(cfg, store)
     if cfg.backend == "headless":
         return HeadlessBackend(cfg, store)
     return TmuxBackend(cfg, store)
@@ -701,19 +737,22 @@ def backend_by_name(
     store: TunnelStore,
     name: str,
     cache: Optional[dict[str, Backend]] = None,
+    agent: str = "claude",
 ) -> Backend:
     """Build (and optionally cache) the backend for an explicit name.
 
     Lets cleanup/reaping target a record by its *stored* backend even when the
     daemon or CLI now defaults to a different one. Pass a shared ``cache`` to
-    reuse instances across many records.
+    reuse instances across many records (keyed by agent AND name, so claude
+    and codex records never share an instance).
     """
     if cache is None:
         cache = {}
-    backend = cache.get(name)
+    key = f"{agent}:{name}"
+    backend = cache.get(key)
     if backend is None:
-        backend = make_backend(replace(cfg, backend=name), store)
-        cache[name] = backend
+        backend = make_backend(replace(cfg, backend=name), store, agent)
+        cache[key] = backend
     return backend
 
 
@@ -723,7 +762,7 @@ def backend_for_record(
     rec: Optional[ThreadRecord],
     cache: Optional[dict[str, Backend]] = None,
 ) -> Backend:
-    """Backend matching a record's *own* backend, not the current config.
+    """Backend matching a record's *own* agent and backend, not the config.
 
     One-off management commands (``forget``, ``forks``/``--manage``) and the
     daemon's close/reap paths load the config's default backend — now
@@ -731,6 +770,12 @@ def backend_for_record(
     with the headless backend would drop the JSON state while leaving the tmux
     window and its Claude process alive, so dispatch by ``rec.backend``
     (falling back to the config when a record has no recorded backend).
+    A codex record always dispatches to the codex backend regardless of the
+    configured server mode.
     """
-    name = effective_backend(rec, cfg.backend)
-    return backend_by_name(cfg, store, name, cache)
+    agent = (rec.agent if rec else "") or "claude"
+    if agent == "codex":
+        name = "headless"  # codex runs headless-only
+    else:
+        name = effective_backend(rec, cfg.backend)
+    return backend_by_name(cfg, store, name, cache, agent=agent)

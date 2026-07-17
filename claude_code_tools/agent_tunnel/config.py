@@ -119,6 +119,33 @@ class ClaudeConfig:
     allow_skip_permissions: bool = False
 
 
+@dataclass
+class CodexConfig:
+    """How forked Codex CLI invocations are constructed.
+
+    Codex has no per-tool allow/deny lists; access levels map onto its OS
+    sandbox instead (see build_codex_flags): read -> read-only sandbox,
+    write -> workspace-write, bash -> workspace-write + network. Unlike
+    Claude's, codex's "write" level can also RUN sandboxed commands — its
+    sandbox confines effects by filesystem/network, not by tool name.
+    """
+
+    binary: str = "codex"
+    model: str = ""
+    # Codex has no append-system-prompt flag, so the persona is prepended to
+    # the FIRST prompt of each fork (it persists in the fork's own context).
+    persona: str = DEFAULT_PERSONA
+    # Extra CLI args appended to every `codex exec resume` turn.
+    headless_extra_args: list[str] = field(default_factory=list)
+    # Strip OPENAI_API_KEY from the fork's env so it authenticates with the
+    # owner's ChatGPT login (subscription), not an API key.
+    unset_api_key: bool = True
+    # Opt-in gate for the "all" access level: only when true do those forks
+    # launch with --dangerously-bypass-approvals-and-sandbox (no sandbox, no
+    # prompts). Mirrors [claude] allow_skip_permissions.
+    allow_skip_permissions: bool = False
+
+
 def resolve_tools(
     claude: "ClaudeConfig", access: str = "read"
 ) -> tuple[list[str], list[str]]:
@@ -185,6 +212,7 @@ class TunnelConfig:
     project_dir: Optional[Path] = None
     discord: DiscordConfig = field(default_factory=DiscordConfig)
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
+    codex: CodexConfig = field(default_factory=CodexConfig)
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     attachments: AttachmentsConfig = field(default_factory=AttachmentsConfig)
 
@@ -239,6 +267,7 @@ def load_config(
 
     _apply(cfg.discord, data.get("discord", {}))
     _apply(cfg.claude, data.get("claude", {}))
+    _apply(cfg.codex, data.get("codex", {}))
     _apply(cfg.limits, data.get("limits", {}))
     _apply(cfg.attachments, data.get("attachments", {}))
 
@@ -341,6 +370,24 @@ unset_api_key = true
 # --dangerously-skip-permissions — a colleague's agent can then use ANY tool
 # or MCP server (web, your browser, shell, file edits) with no prompts. Off
 # unless you fully trust everyone who can reach that handle.
+# allow_skip_permissions = false
+
+[codex]
+# Publishing Codex CLI sessions: run `agent-tunnel share --agent codex` in the
+# project (or type >share inside codex, if your codex loads the plugin hook).
+# Remote turns run `codex exec resume` on a FILE-LEVEL FORK of the session, so
+# the original is never touched. Access maps to codex's sandbox: read =
+# read-only, write = workspace-write (can also run sandboxed commands), bash =
+# workspace-write + network.
+binary = "codex"
+# Empty string = the published session's default model.
+model = ""
+# Extra CLI args appended to every remote codex turn.
+headless_extra_args = []
+# Strip OPENAI_API_KEY from forks so they use your ChatGPT subscription login.
+unset_api_key = true
+# DANGEROUS: enable the "all" access level for codex sessions. Those forks run
+# with --dangerously-bypass-approvals-and-sandbox (no sandbox at all).
 # allow_skip_permissions = false
 
 [limits]
