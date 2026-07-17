@@ -24,10 +24,13 @@ agent-tunnel Discord channel, and the `agent-tunnel serve` daemon answers
 from a read-only fork of that session. See the `agent-tunnel` tool docs for
 the daemon side and Discord setup.
 
-Sharing a **Codex CLI** session instead? Codex has no in-session hook — use
-`agent-tunnel share --agent codex <name>` from the project directory. (If
-your codex build loads Claude-plugin hooks, `>share` typed inside codex is
-detected and labeled correctly too.)
+Sharing a **Codex CLI** session? This same plugin works there too — codex
+supports the same `UserPromptSubmit` hook, so once the plugin is installed in
+codex (`codex plugin marketplace add <this repo>` + `codex plugin add
+agent-tunnel@cctools-codex-plugins`), `>share` works in-session exactly as in
+Claude Code (the hook auto-detects the codex session and records
+`agent=codex`). No plugin? Publish from the terminal instead with
+`agent-tunnel share --agent codex <name>` in the project directory.
 
 ## Why a hook (not a CLI command)
 

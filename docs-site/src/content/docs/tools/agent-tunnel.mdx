@@ -168,12 +168,39 @@ The tunnel isn't Claude-only: a **Codex CLI** (OpenAI) session can be
 published the same way and colleagues can't tell the difference — same
 handles, threads, access levels, and attachments.
 
-### Publishing (there is no in-session `>share` for codex)
+### Publishing — two ways
 
-Claude sessions are published by typing `>share` **inside** the session (a
-Claude Code `UserPromptSubmit` plugin hook). Codex has no such hook wired in,
-so publish a codex session **from the terminal** with `agent-tunnel share`,
-run in the session's project directory:
+**A. In-session `>share` (same as Claude).** The agent-tunnel plugin's
+`UserPromptSubmit` hook works in **both** Claude Code and Codex CLI — codex
+supports the same hook event and block/reply protocol, and the plugin's hook
+command (`${CLAUDE_PLUGIN_ROOT}/hooks/share_hook.py`) resolves under codex
+unchanged. Once the plugin is installed in codex (see below), just type it
+inside the session:
+
+```
+>share payments-gpt
+>share --write payments-gpt
+>share --dangerously-skip-permissions payments-gpt
+```
+
+The hook auto-detects that it's a codex session (from the rollout path) and
+records `agent=codex`, so colleagues address it exactly like a Claude handle.
+
+To install the plugin into codex (one-time), point codex at this repo's
+codex marketplace and add the plugin:
+
+```bash
+codex plugin marketplace add pchalasani/claude-code-tools   # or a local path / Git URL
+codex plugin add agent-tunnel@cctools-codex-plugins
+# codex records a per-hook trust hash in ~/.codex/config.toml the first time it runs.
+```
+
+(The plugin is already registered for Claude Code via the `cctools-plugins`
+marketplace; this is the codex-side equivalent.)
+
+**B. From the terminal — `agent-tunnel share`.** No plugin needed; handy for
+scripting or when you haven't installed the codex plugin. Run it in the
+session's project directory:
 
 ```bash
 cd ~/work/payments                              # where the codex session ran
@@ -182,32 +209,26 @@ cd ~/work/payments                              # where the codex session ran
 agent-tunnel share --agent codex payments-gpt
 # → Sharing session 019f6c23… [codex] as: payments-gpt
 
-# other access levels (same flags as claude's >share):
+# other access levels (same flags as >share):
 agent-tunnel share --agent codex --write payments-gpt              # edit files (+ sandboxed commands, see below)
 agent-tunnel share --agent codex --dangerously-allow-bash payments-gpt   # + network
 agent-tunnel share --agent codex --dangerously-skip-permissions payments-gpt   # FULL (no sandbox) — needs the gate below
 ```
 
 It publishes the **newest codex session recorded in that directory** unless
-you pass `--session <id>`. Re-running `share` for the same session updates its
-access; omit an access flag to keep the current level. `agent-tunnel
-published`, `agent-tunnel status`, and Discord's `!list` all show codex
-handles tagged `[codex]`.
+you pass `--session <id>`. Re-running `share` (or `>share`) for the same
+session updates its access; omit an access flag to keep the current level.
+`agent-tunnel published`, `agent-tunnel status`, and Discord's `!list` all
+show codex handles tagged `[codex]`.
 
-The full-access (`--dangerously-skip-permissions`) level is **double
-opt-in**: besides the per-share flag, the daemon's config must enable it —
+Either way, the full-access (`--dangerously-skip-permissions`) level is
+**double opt-in**: besides the per-share flag, the daemon's config must enable
+it —
 
 ```toml
 [codex]
 allow_skip_permissions = true   # off by default; the daemon refuses "all" otherwise
 ```
-
-An in-session `>share` **is** feasible for codex — its binary supports the
-same `UserPromptSubmit` hook and block/reason protocol Claude's `>share`
-uses; it just isn't wired into codex's plugin system yet. Bringing it over is
-tracked in
-[issue #107](https://github.com/pchalasani/claude-code-tools/issues/107).
-Until then, use `agent-tunnel share` above.
 
 ### How it works (codex-specific mechanics)
 

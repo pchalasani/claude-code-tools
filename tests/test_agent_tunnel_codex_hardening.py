@@ -973,6 +973,40 @@ def test_published_skips_unusable_records(tmp_path: Path) -> None:
     assert "bad" not in result.output
 
 
+def test_share_hook_uses_agent_transcript_path_for_codex(
+    tmp_path: Path,
+) -> None:
+    # In-session `>share` from CODEX: codex's UserPromptSubmit payload puts
+    # the rollout in `agent_transcript_path` (transcript_path may be blank or
+    # non-rollout). The hook must fall back to it, detect agent=codex, and
+    # resolve the codex home as config_dir.
+    registry = tmp_path / "registry.json"
+    codex_home = f"{tmp_path}/.codex"
+    rollout = (
+        f"{codex_home}/sessions/2026/07/16/"
+        "rollout-2026-07-16T10-00-00-019f6d74-e2f2-7f71-81e7-32620620f8c2.jsonl"
+    )
+    env = {**os.environ, "AGENT_TUNNEL_REGISTRY": str(registry)}
+    payload = json.dumps(
+        {
+            "session_id": "019f6d74-e2f2-7f71-81e7-32620620f8c2",
+            "prompt": ">share codexlive",
+            "cwd": str(tmp_path),
+            "transcript_path": "",              # codex leaves this blank/other
+            "agent_transcript_path": rollout,   # rollout lives here
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, str(HOOK)],
+        input=payload, capture_output=True, text=True, env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    rec = json.loads(registry.read_text())["records"]["codexlive"]
+    assert rec["agent"] == "codex"
+    assert rec["config_dir"] == codex_home
+    assert rec["transcript_path"] == rollout
+
+
 def test_share_hook_codex_home_with_sessions_segment(tmp_path: Path) -> None:
     # The hook's CODEX_HOME derivation must be structural: a home path that
     # itself contains a `sessions` segment must not be truncated, or the

@@ -264,7 +264,13 @@ def main():
         # project dir and exposes upload/outbox paths via --add-dir) never has
         # to resolve a relative project path against the wrong directory.
         cwd = os.path.abspath(data.get("cwd") or os.getcwd())
-        transcript_path = data.get("transcript_path", "")
+        transcript_path = data.get("transcript_path", "") or ""
+        # Codex's UserPromptSubmit payload carries the rollout path in
+        # `agent_transcript_path`; prefer it when it looks like a codex
+        # rollout so agent detection + config-dir resolution work in-session.
+        agent_transcript = data.get("agent_transcript_path", "") or ""
+        if _CODEX_ROLLOUT_RE.search(agent_transcript):
+            transcript_path = agent_transcript
 
         if not isinstance(prompt, str) or not prompt.strip():
             sys.exit(0)

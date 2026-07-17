@@ -267,11 +267,16 @@ identical handles/threads. Every record (registry + store) carries an
 `agent` field ("claude" default, so pre-field records load correctly), and
 backend dispatch keys on `(agent, backend)`.
 
-- **Publish**: `agent-tunnel share --agent codex <name>` from the project
-  dir (codex has no `UserPromptSubmit`-style hook; the CLI finds the newest
-  rollout whose recorded `cwd` matches). The plugin hook also detects a
-  codex-shaped `transcript_path` defensively, since codex can load
-  Claude-plugin hooks.
+- **Publish** — two paths: (1) in-session `>share`, since codex supports the
+  same `UserPromptSubmit` hook + block/reply protocol and the same
+  `${CLAUDE_PLUGIN_ROOT}` env var (install the plugin via `codex plugin add
+  agent-tunnel@cctools-codex-plugins`); the hook reads codex's
+  `agent_transcript_path`/`transcript_path`, detects the rollout, and records
+  `agent=codex`. (2) `agent-tunnel share --agent codex <name>` from the
+  project dir (the CLI finds the newest rollout whose recorded `cwd` matches)
+  — no plugin needed. Verified live end-to-end: `>share` inside a `codex exec`
+  session fired the hook, codex returned `UserPromptSubmit Blocked`, and the
+  registry recorded the codex session.
 - **Fork = file copy**. Verified live (codex-cli 0.144): `codex exec resume
   <id>` APPENDS to the resumed session's own rollout (same id, same file),
   and `codex fork` is TUI-only. So `CodexHeadlessBackend` forks by copying

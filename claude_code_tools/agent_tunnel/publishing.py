@@ -1,9 +1,10 @@
 """The `agent-tunnel share` command: publish a session from the terminal.
 
-The out-of-session `>share`. Claude sessions are normally published by typing
-``>share`` INSIDE the session (the plugin's UserPromptSubmit hook); Codex CLI
-has no such hook, so this command is the way to share a codex session. Kept
-out of cli.py to hold both files under the repo's file-length guideline.
+The out-of-session `>share`. Sessions are normally published by typing
+``>share`` INSIDE the session (the plugin's UserPromptSubmit hook, which works
+in both Claude Code and Codex CLI). This command is the plugin-free
+equivalent — handy for scripting, or when the codex plugin isn't installed.
+Kept out of cli.py to hold both files under the repo's file-length guideline.
 """
 
 from __future__ import annotations
