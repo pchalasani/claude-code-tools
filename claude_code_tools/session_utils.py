@@ -202,8 +202,7 @@ def get_claude_home(cli_arg: Optional[str] = None) -> Path:
 
 
 def get_codex_home(cli_arg: Optional[str] = None) -> Path:
-    """
-    Get Codex home directory.
+    """Get Codex home directory with proper precedence.
 
     Args:
         cli_arg: Optional CLI argument value for --codex-home
@@ -213,6 +212,11 @@ def get_codex_home(cli_arg: Optional[str] = None) -> Path:
     """
     if cli_arg:
         return Path(cli_arg).expanduser()
+
+    env_var = os.environ.get("CODEX_HOME")
+    if env_var:
+        return Path(env_var).expanduser()
+
     return Path.home() / ".codex"
 
 
@@ -588,16 +592,17 @@ def is_valid_session(filepath: Path) -> bool:
 
     Supports both Claude Code and Codex session formats:
     - Claude: user, assistant, tool_result, tool_use (with sessionId)
-    - Codex: event_msg, response_item, turn_context (with session_meta)
+    - Codex: a well-formed session_meta record
 
-    Sessions containing ONLY metadata types (file-history-snapshot, queue-operation,
-    session_meta alone) are invalid.
+    Claude sessions containing ONLY metadata types (file-history-snapshot,
+    queue-operation) are invalid. A Codex session_meta record is itself sufficient
+    because metadata-only rollouts are valid Codex sessions.
 
     Args:
         filepath: Path to session JSONL file.
 
     Returns:
-        True if session contains at least one resumable message, False otherwise.
+        True if the file contains a valid session record, False otherwise.
     """
     if not filepath.exists():
         return False
@@ -605,42 +610,71 @@ def is_valid_session(filepath: Path) -> bool:
     # Whitelist of resumable message types
     # Claude Code types (require sessionId)
     claude_valid_types = {"user", "assistant", "tool_result", "tool_use", "system"}
-    # Codex types (conversation content types)
-    codex_valid_types = {"event_msg", "response_item", "turn_context"}
-
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
-            has_any_content = False
+            has_valid_claude_content = False
+            has_valid_codex_metadata = False
 
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
 
-                has_any_content = True
-
                 try:
                     data = json.loads(line)
-                    entry_type = data.get("type", "")
+                    raw_entry_type = (
+                        data.get("type", "")
+                        if isinstance(data, dict)
+                        else ""
+                    )
+                    entry_type = (
+                        raw_entry_type
+                        if isinstance(raw_entry_type, str)
+                        else ""
+                    )
 
-                    # Claude Code: valid type with non-null sessionId
-                    session_id = data.get("sessionId")
-                    if entry_type in claude_valid_types and session_id is not None:
-                        return True
+                    # Claude Code: valid type with a non-empty string sessionId
+                    session_id = (
+                        data.get("sessionId")
+                        if isinstance(data, dict)
+                        else None
+                    )
+                    if (
+                        entry_type in claude_valid_types
+                        and isinstance(session_id, str)
+                        and bool(session_id.strip())
+                    ):
+                        has_valid_claude_content = True
 
-                    # Codex: valid conversation content type
-                    if entry_type in codex_valid_types:
-                        return True
+                    # Codex: session_meta is the identifying record for a
+                    # rollout. It is sufficient even when no conversation
+                    # records have been written yet.
+                    payload = (
+                        data.get("payload")
+                        if isinstance(data, dict)
+                        else None
+                    )
+                    if (
+                        entry_type == "session_meta"
+                        and isinstance(payload, dict)
+                        and any(
+                            isinstance(value, str) and bool(value.strip())
+                            for value in (
+                                payload.get("id"),
+                                payload.get("cwd"),
+                                payload.get("timestamp"),
+                            )
+                        )
+                    ):
+                        has_valid_codex_metadata = True
 
                 except json.JSONDecodeError:
                     # Skip malformed JSON lines, continue checking other lines
                     continue
 
-            # If we scanned entire file and found no valid message types
-            # (only metadata or empty), session is invalid
-            return False if has_any_content else False  # Empty file is invalid
+            return has_valid_claude_content or has_valid_codex_metadata
 
-    except (OSError, IOError):
+    except (OSError, IOError, UnicodeError):
         return False  # File read errors indicate invalid file
 
 
@@ -655,7 +689,10 @@ def is_malformed_session(filepath: Path) -> bool:
     return not is_valid_session(filepath)
 
 
-def extract_cwd_from_session(session_file: Path) -> Optional[str]:
+def extract_cwd_from_session(
+    session_file: Path,
+    agent: Optional[str] = None,
+) -> Optional[str]:
     """
     Extract the working directory (cwd) from a session file.
 
@@ -665,6 +702,9 @@ def extract_cwd_from_session(session_file: Path) -> Optional[str]:
 
     Args:
         session_file: Path to the session JSONL file
+        agent: Explicit agent type (``"claude"`` or ``"codex"``). When
+            omitted, the agent is inferred from the session path for backward
+            compatibility.
 
     Returns:
         The cwd string if found, None otherwise
@@ -672,12 +712,13 @@ def extract_cwd_from_session(session_file: Path) -> Optional[str]:
     try:
         from claude_code_tools.export_session import extract_session_metadata
 
-        # Detect agent from path
-        path_str = str(session_file)
-        agent = "codex" if ".codex" in path_str else "claude"
+        if agent is None:
+            path_str = str(session_file)
+            agent = "codex" if ".codex" in path_str else "claude"
 
         metadata = extract_session_metadata(session_file, agent)
-        return metadata.get("cwd")
+        cwd = metadata.get("cwd")
+        return cwd if isinstance(cwd, str) and cwd else None
     except Exception:
         return None
 
@@ -746,7 +787,10 @@ def find_session_file(
                         if is_malformed_session(session_file):
                             continue
                         # Extract actual cwd from session file
-                        actual_cwd = extract_cwd_from_session(session_file)
+                        actual_cwd = extract_cwd_from_session(
+                            session_file,
+                            agent="claude",
+                        )
                         if not actual_cwd:
                             # Skip sessions without cwd
                             continue
@@ -900,7 +944,7 @@ def default_export_path(
             if metadata and metadata.get("cwd"):
                 base_dir = Path(metadata["cwd"])
         else:  # claude
-            cwd = extract_cwd_from_session(session_file)
+            cwd = extract_cwd_from_session(session_file, agent="claude")
             if cwd:
                 base_dir = Path(cwd)
 
