@@ -32,6 +32,33 @@ import time
 _CODEX_ROLLOUT_RE = re.compile(
     r"/sessions/\d{4}/\d{2}/\d{2}/rollout-[^/]*\.jsonl$"
 )
+# The session id embedded in a rollout filename (rollout-<ts>-<uuid>.jsonl).
+_ROLLOUT_UUID_RE = re.compile(
+    r"-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$",
+    re.IGNORECASE,
+)
+
+
+def _codex_rollout_for(session_id, agent_transcript_path):
+    """The trusted codex rollout path for THIS session, or "".
+
+    Codex's UserPromptSubmit payload carries the rollout in
+    `agent_transcript_path`. Only honor it when it is a **string**, an
+    **absolute** path, matches the codex rollout layout, AND its filename
+    UUID equals `session_id` — so a non-string (TypeError), a relative or
+    fabricated path (wrong config-dir), or another session's rollout can
+    never drive agent detection / config-dir resolution.
+    """
+    if not isinstance(agent_transcript_path, str):
+        return ""
+    if not os.path.isabs(agent_transcript_path):
+        return ""
+    if not _CODEX_ROLLOUT_RE.search(agent_transcript_path):
+        return ""
+    match = _ROLLOUT_UUID_RE.search(agent_transcript_path)
+    if not match or match.group(1).lower() != str(session_id).lower():
+        return ""
+    return agent_transcript_path
 
 TRIGGER = ">share"
 # expanduser + abspath so a ~/... AGENT_TUNNEL_REGISTRY resolves to the same
@@ -264,13 +291,17 @@ def main():
         # project dir and exposes upload/outbox paths via --add-dir) never has
         # to resolve a relative project path against the wrong directory.
         cwd = os.path.abspath(data.get("cwd") or os.getcwd())
-        transcript_path = data.get("transcript_path", "") or ""
+        tp = data.get("transcript_path")
+        transcript_path = tp if isinstance(tp, str) else ""
         # Codex's UserPromptSubmit payload carries the rollout path in
-        # `agent_transcript_path`; prefer it when it looks like a codex
-        # rollout so agent detection + config-dir resolution work in-session.
-        agent_transcript = data.get("agent_transcript_path", "") or ""
-        if _CODEX_ROLLOUT_RE.search(agent_transcript):
-            transcript_path = agent_transcript
+        # `agent_transcript_path`; use it only when it is THIS session's real
+        # absolute rollout (validated), so in-session detection works without
+        # a non-string crash or a spoofed/relative path skewing config-dir.
+        codex_rollout = _codex_rollout_for(
+            data.get("session_id", ""), data.get("agent_transcript_path")
+        )
+        if codex_rollout:
+            transcript_path = codex_rollout
 
         if not isinstance(prompt, str) or not prompt.strip():
             sys.exit(0)

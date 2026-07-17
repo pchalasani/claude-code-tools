@@ -1007,6 +1007,42 @@ def test_share_hook_uses_agent_transcript_path_for_codex(
     assert rec["transcript_path"] == rollout
 
 
+def test_share_hook_agent_transcript_path_hostile(tmp_path: Path) -> None:
+    # A non-string, relative, or UUID-mismatched agent_transcript_path must
+    # NOT crash the hook (which would silently disable >share) and must NOT
+    # be trusted for agent/config-dir. It falls back to transcript_path.
+    sid = "019f6d74-e2f2-7f71-81e7-32620620f8c2"
+    other = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    hostile_values = [
+        42,                                                    # non-string
+        ["/x/sessions/2026/07/16/rollout-a.jsonl"],            # list
+        {"path": "x"},                                          # object
+        f"rel/sessions/2026/07/16/rollout-2026-07-16T10-00-00-{sid}.jsonl",  # relative
+        f"/abs/sessions/2026/07/16/rollout-2026-07-16T10-00-00-{other}.jsonl",  # wrong uuid
+    ]
+    for i, bad in enumerate(hostile_values):
+        registry = tmp_path / f"reg{i}.json"
+        env = {**os.environ, "AGENT_TUNNEL_REGISTRY": str(registry)}
+        payload = json.dumps(
+            {
+                "session_id": sid,
+                "prompt": f">share h{i}",
+                "cwd": str(tmp_path),
+                "transcript_path": f"{tmp_path}/.claude/projects/-x/{sid}.jsonl",
+                "agent_transcript_path": bad,
+            }
+        )
+        result = subprocess.run(
+            [sys.executable, str(HOOK)],
+            input=payload, capture_output=True, text=True, env=env,
+        )
+        # Never crashes, always publishes, and never mislabels as codex from
+        # the untrusted secondary path (the claude transcript_path wins).
+        assert result.returncode == 0, f"crashed on {bad!r}: {result.stderr}"
+        rec = json.loads(registry.read_text())["records"][f"h{i}"]
+        assert rec["agent"] == "claude", f"mislabeled for {bad!r}"
+
+
 def test_share_hook_codex_home_with_sessions_segment(tmp_path: Path) -> None:
     # The hook's CODEX_HOME derivation must be structural: a home path that
     # itself contains a `sessions` segment must not be truncated, or the
