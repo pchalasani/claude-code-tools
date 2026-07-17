@@ -166,22 +166,50 @@ A labeled handle also makes the Discord thread and the tmux window readable
 
 The tunnel isn't Claude-only: a **Codex CLI** (OpenAI) session can be
 published the same way and colleagues can't tell the difference — same
-handles, threads, access levels, and attachments. Codex has no in-session
-`>share` hook, so you publish from the terminal instead:
+handles, threads, access levels, and attachments.
+
+### Publishing (there is no in-session `>share` for codex)
+
+Claude sessions are published by typing `>share` **inside** the session (a
+Claude Code `UserPromptSubmit` plugin hook). Codex has no such hook wired in,
+so publish a codex session **from the terminal** with `agent-tunnel share`,
+run in the session's project directory:
 
 ```bash
-cd ~/work/payments        # the project the codex session ran in
+cd ~/work/payments                              # where the codex session ran
+
+# read-only (default) — look, don't touch:
 agent-tunnel share --agent codex payments-gpt
-# Sharing session 019f6c23… [codex] as: payments-gpt
+# → Sharing session 019f6c23… [codex] as: payments-gpt
+
+# other access levels (same flags as claude's >share):
+agent-tunnel share --agent codex --write payments-gpt              # edit files (+ sandboxed commands, see below)
+agent-tunnel share --agent codex --dangerously-allow-bash payments-gpt   # + network
+agent-tunnel share --agent codex --dangerously-skip-permissions payments-gpt   # FULL (no sandbox) — needs the gate below
 ```
 
-By default it publishes the **newest codex session recorded in that
-directory** (pass `--session <id>` to pick another, and the same
-`--write` / `--dangerously-allow-bash` / `--dangerously-skip-permissions`
-flags to set access). `agent-tunnel published` and Discord's `!list` tag
-codex handles with `[codex]`.
+It publishes the **newest codex session recorded in that directory** unless
+you pass `--session <id>`. Re-running `share` for the same session updates its
+access; omit an access flag to keep the current level. `agent-tunnel
+published`, `agent-tunnel status`, and Discord's `!list` all show codex
+handles tagged `[codex]`.
 
-Two codex-specific mechanics worth knowing:
+The full-access (`--dangerously-skip-permissions`) level is **double
+opt-in**: besides the per-share flag, the daemon's config must enable it —
+
+```toml
+[codex]
+allow_skip_permissions = true   # off by default; the daemon refuses "all" otherwise
+```
+
+An in-session `>share` **is** feasible for codex — its binary supports the
+same `UserPromptSubmit` hook and block/reason protocol Claude's `>share`
+uses; it just isn't wired into codex's plugin system yet. Bringing it over is
+tracked in
+[issue #107](https://github.com/pchalasani/claude-code-tools/issues/107).
+Until then, use `agent-tunnel share` above.
+
+### How it works (codex-specific mechanics)
 
 - **Forking is file-level.** `codex exec resume` *continues* a session
   in-place (unlike `claude --resume --fork-session`), so the tunnel copies
@@ -213,6 +241,29 @@ no scriptable interactive mode), so they work under `serve` in either server
 mode. Config lives in the `[codex]` table (`binary`, `model`, `persona`,
 `unset_api_key` — which strips `OPENAI_API_KEY` so forks bill to your
 ChatGPT login, mirroring the Claude behavior).
+
+### Test it end-to-end
+
+Start cheap, before wiring up Discord — this proves the fork/resume/answer
+pipeline against the real `codex` binary:
+
+```bash
+# 1. Publish read-only, then ask through the full pipeline (no Discord):
+agent-tunnel share --agent codex my-cool-session
+agent-tunnel ask --handle my-cool-session "what is this session about?"
+#    A sensible answer means the codex fork path works.
+
+# 2. Then the real Discord round-trip:
+agent-tunnel doctor                # confirms token, channel, and the codex binary
+agent-tunnel serve                 # add --backend tmux only for claude; codex is headless
+#    In the watched channel, a colleague posts:
+#        my-cool-session <their question>
+#    A thread opens and the codex fork answers. `!list` shows it tagged [codex].
+```
+
+Once read-only works over Discord, re-run `share` with a higher access flag
+(and, for `--dangerously-skip-permissions`, the `[codex]
+allow_skip_permissions = true` gate) to test write/bash/full paths.
 
 ## Sharing files both ways (attachments)
 
