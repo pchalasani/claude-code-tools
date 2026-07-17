@@ -225,12 +225,30 @@ def _join_truncated(parts: list[str], sep: str, cap: int) -> str:
     return text + f"... [truncated {stripped_total - cap} chars]"
 
 
+def _too_deep_repr(pieces: list[str]) -> str:
+    """Render the capped fallback for un-encodable deep nesting.
+
+    Args:
+        pieces: Serialized chunks accumulated before the failure
+            (already capped by the caller).
+
+    Returns:
+        The accumulated prefix with an explicit marker appended.
+    """
+    return "".join(pieces) + "... [unserializable: nesting too deep]"
+
+
 def _dumps_truncated(value: Any, cap: int) -> str:
     """Serialize a structured value to JSON, capped at ``cap`` chars.
 
     Uses :meth:`json.JSONEncoder.iterencode` so at most ``cap``
     serialized characters are accumulated; a full ``json.dumps`` copy
-    of an enormous value is never materialized.
+    of an enormous value is never materialized. Hostile but parseable
+    input can nest deeper than the encoder's recursion budget
+    (``json.loads`` accepts depths ``iterencode`` cannot re-emit), so
+    ``RecursionError`` is caught and rendered as the capped prefix
+    serialized so far plus an explicit marker -- ``str(value)`` is no
+    fallback there, since ``repr`` recurses just as deep.
 
     Args:
         value: JSON-compatible structure (dict, list, scalar).
@@ -239,7 +257,8 @@ def _dumps_truncated(value: Any, cap: int) -> str:
     Returns:
         The (possibly truncated) deterministic JSON text, with an
         explicit ``"... [truncated N chars]"`` suffix when over the
-        cap.
+        cap, or a capped best-effort rendering with an explicit
+        marker when the value cannot be serialized.
     """
     encoder = json.JSONEncoder(
         ensure_ascii=False, sort_keys=True, default=str
@@ -257,7 +276,12 @@ def _dumps_truncated(value: Any, cap: int) -> str:
                 )
                 kept += min(len(chunk), room)
     except (TypeError, ValueError):
-        return _truncate_text(str(value), cap)
+        try:
+            return _truncate_text(str(value), cap)
+        except RecursionError:
+            return _too_deep_repr(pieces)
+    except RecursionError:
+        return _too_deep_repr(pieces)
     if total <= cap:
         return "".join(pieces)
     return "".join(pieces) + f"... [truncated {total - cap} chars]"

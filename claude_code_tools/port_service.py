@@ -55,11 +55,11 @@ class ResolvedSession:
 
 @dataclass
 class PortResult:
-    """Outcome of porting a Codex session to Claude Code.
+    """Outcome of porting a session to the other agent.
 
     Attributes:
-        new_session_id: The freshly generated Claude session id.
-        output_file: Path of the synthesized Claude session file.
+        new_session_id: The freshly generated target session id.
+        output_file: Path of the synthesized target session file.
         cwd: The ported session's working directory ("" if unknown).
         resume_hint: Exact shell command to resume the new session.
     """
@@ -180,8 +180,12 @@ def resolve_port_session(
 def _read_output_cwd(output_file: Path) -> str:
     """Read the session cwd recorded on the first output line.
 
+    Claude session lines carry ``cwd`` at the top level; Codex
+    rollouts carry it inside the session_meta ``payload``. Both
+    placements are checked (top level first).
+
     Args:
-        output_file: Path of the freshly written Claude session file.
+        output_file: Path of the freshly written session file.
 
     Returns:
         The cwd string, or "" when unavailable.
@@ -194,7 +198,14 @@ def _read_output_cwd(output_file: Path) -> str:
     if not isinstance(first_line, dict):
         return ""
     cwd = first_line.get("cwd")
-    return cwd if isinstance(cwd, str) else ""
+    if isinstance(cwd, str):
+        return cwd
+    payload = first_line.get("payload")
+    if isinstance(payload, dict):
+        cwd = payload.get("cwd")
+        if isinstance(cwd, str):
+            return cwd
+    return ""
 
 
 def port_codex_session(
@@ -227,6 +238,44 @@ def port_codex_session(
 
     cwd = _read_output_cwd(out_path)
     resume_hint = f"cd {shlex.quote(cwd)} && claude --resume {new_id}"
+    return PortResult(
+        new_session_id=new_id,
+        output_file=out_path,
+        cwd=cwd,
+        resume_hint=resume_hint,
+    )
+
+
+def port_claude_session(
+    session_file: Union[str, Path],
+    codex_home: Optional[str] = None,
+) -> PortResult:
+    """Port a resolved Claude session and build the CLI-facing result.
+
+    Args:
+        session_file: Path to the Claude session JSONL file.
+        codex_home: Optional custom Codex home directory.
+
+    Returns:
+        The port outcome, including the exact resume hint.
+
+    Raises:
+        PortSessionError: On any expected conversion failure
+            (missing/empty session, filesystem or encoding errors).
+    """
+    from claude_code_tools.port_claude_to_codex import (
+        port_claude_session_to_codex,
+    )
+
+    try:
+        new_id, out_path = port_claude_session_to_codex(
+            session_file, codex_home=codex_home
+        )
+    except (ValueError, OSError, UnicodeError) as e:
+        raise PortSessionError(str(e)) from e
+
+    cwd = _read_output_cwd(out_path)
+    resume_hint = f"cd {shlex.quote(cwd)} && codex resume {new_id}"
     return PortResult(
         new_session_id=new_id,
         output_file=out_path,

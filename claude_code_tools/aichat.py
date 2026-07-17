@@ -1387,12 +1387,12 @@ def port_session(
     claude_home: "str | None",
     codex_home: "str | None",
 ) -> None:
-    """Port a session to the OTHER agent (codex -> claude).
+    """Port a session to the OTHER agent (codex <-> claude).
 
     Auto-detects which agent the session belongs to. Codex sessions
-    are converted into a flattened, resumable Claude Code session.
-    Claude sessions need no conversion: Codex imports them natively
-    via its /import slash command.
+    are converted into a flattened, resumable Claude Code session;
+    Claude sessions are converted into a flattened, resumable Codex
+    rollout.
 
     \b
     Examples:
@@ -1403,6 +1403,7 @@ def port_session(
 
     from claude_code_tools.port_service import (
         PortSessionError,
+        port_claude_session,
         port_codex_session,
         resolve_port_session,
     )
@@ -1424,14 +1425,25 @@ def port_session(
 
     if resolved.agent == "claude":
         print("Detected source agent: claude — porting to Codex")
+        try:
+            result = port_claude_session(
+                resolved.session_file, codex_home=codex_home
+            )
+        except PortSessionError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        print()
+        print(f"New Codex session id:  {result.new_session_id}")
+        print(f"Output file:           {result.output_file}")
+        print(f"Session cwd:           {result.cwd}")
+        print()
+        print("To resume:")
+        print(f"  {result.resume_hint}")
         print()
         print(
-            "No conversion needed: Codex supports importing Claude "
-            "Code sessions natively."
-        )
-        print(
-            "Just start `codex` and type /import to pick this "
-            "Claude session."
+            "Tip: codex's /import can also import Claude sessions "
+            "natively (interactive alternative)."
         )
         return
 

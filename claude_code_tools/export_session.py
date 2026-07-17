@@ -26,30 +26,50 @@ def _nonempty_str(value: Any) -> bool:
     return isinstance(value, str) and bool(value)
 
 
+# Claude-internal wrapper tags (local command execution wrappers,
+# caveat banners, background-task completion notifications) recorded
+# as plain type=user lines that were not typed by the user. This is
+# the single shared source of truth for Claude wrapper-tag knowledge:
+# the claude -> codex porter (port_claude_noise) consumes it too, so
+# the two classifiers can never diverge.
+CLAUDE_INTERNAL_WRAPPER_TAGS = frozenset(
+    {
+        "command-name",
+        "command-message",
+        "command-args",
+        "command-contents",
+        "local-command-caveat",
+        "local-command-stdout",
+        "local-command-stderr",
+        "bash-input",
+        "bash-stdout",
+        "bash-stderr",
+        "bash-notification",
+        "task-notification",
+    }
+)
+
+# Codex system tags (environment/context injection).
+CODEX_INTERNAL_WRAPPER_TAGS = frozenset(
+    {
+        "environment_context",
+        "user_instructions",
+        "user_shell_command",
+        "recommended_plugins",
+        "skills_instructions",
+        "apps_instructions",
+        "plugins_instructions",
+        "multi_agent_mode",
+        "turn_aborted",
+    }
+)
+
 # Known system-injected XML tags that appear at the start of messages.
 # Using a whitelist of specific tags avoids filtering legitimate user
 # messages that start with HTML/XML like <div> or <svg>.
-NON_GENUINE_XML_TAGS = {
-    # Claude system tags (local command execution)
-    "command-name",
-    "command-message",
-    "command-args",
-    "local-command-stdout",
-    "bash-input",
-    "bash-stdout",
-    "bash-stderr",
-    "bash-notification",
-    # Codex system tags (environment/context injection)
-    "environment_context",
-    "user_instructions",
-    "user_shell_command",
-    "recommended_plugins",
-    "skills_instructions",
-    "apps_instructions",
-    "plugins_instructions",
-    "multi_agent_mode",
-    "turn_aborted",
-}
+NON_GENUINE_XML_TAGS = CLAUDE_INTERNAL_WRAPPER_TAGS | (
+    CODEX_INTERNAL_WRAPPER_TAGS
+)
 
 # Codex-internal wrapper prefixes: message text starting with one of
 # these is system-injected noise, not genuine user input. Complements

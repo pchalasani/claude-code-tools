@@ -419,7 +419,7 @@ class TestCLIDirectPathContentFirst:
         assert "New Claude session id:" in result.output
         assert "/import" not in result.output
 
-    def test_claude_session_direct_path_still_prints_import(
+    def test_claude_session_direct_path_converts_to_codex(
         self, runner, codex_home, claude_home, project_dir
     ):
         sid = str(uuid.uuid4())
@@ -443,7 +443,13 @@ class TestCLIDirectPathContentFirst:
             "Detected source agent: claude — porting to Codex"
             in result.output
         )
+        # converts for real, with the resume hint and /import tip
+        assert "New Codex session id:" in result.output
+        assert f"cd {project_dir} && codex resume " in result.output
         assert "/import" in result.output
+        assert list(
+            (codex_home / "sessions").rglob("rollout-*.jsonl")
+        )
 
 
 class TestExportSessionHardening:

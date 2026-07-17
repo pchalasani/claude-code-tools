@@ -45,6 +45,10 @@ export default defineConfig({
                   slug: "tools/aichat/resume",
                 },
                 {
+                  label: "Port (Codex ↔ Claude)",
+                  slug: "tools/aichat/port",
+                },
+                {
                   label: "Search",
                   slug: "tools/aichat/search",
                 },

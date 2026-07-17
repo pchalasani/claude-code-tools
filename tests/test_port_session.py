@@ -686,7 +686,7 @@ class TestPortCLI:
         assert result.exit_code == 0, result.output
         assert f"cd '{spaced_dir}' && claude --resume " in result.output
 
-    def test_claude_source_prints_import_guidance(
+    def test_claude_source_converts_to_codex(
         self, runner, codex_home, claude_home, project_dir
     ):
         sid = str(uuid.uuid4())
@@ -717,8 +717,16 @@ class TestPortCLI:
             "Detected source agent: claude — porting to Codex"
             in result.output
         )
+        # actually converts now: prints the new codex session id and
+        # the resume hint, plus the interactive /import tip
+        assert "New Codex session id:" in result.output
+        assert f"cd {project_dir} && codex resume " in result.output
         assert "/import" in result.output
-        # no conversion output
+        # the rollout was created under the tmp codex home
+        assert list(
+            (codex_home / "sessions").rglob("rollout-*.jsonl")
+        )
+        # it is a claude->codex port, not the other direction
         assert "New Claude session id:" not in result.output
 
     def test_group_level_home_options_before_subcommand(

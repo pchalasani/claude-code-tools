@@ -741,7 +741,7 @@ class TestNonDictJsonLinesInClaudeSessions:
         assert result[0] == "claude"
         assert result[1] == path
 
-    def test_cli_port_prints_import_guidance_and_exits_zero(
+    def test_cli_port_converts_and_exits_zero(
         self, runner, claude_home, codex_home
     ):
         sid = str(uuid.uuid4())
@@ -752,7 +752,14 @@ class TestNonDictJsonLinesInClaudeSessions:
             "Detected source agent: claude — porting to Codex"
             in result.output
         )
+        # the leading non-dict records are tolerated and the session
+        # converts for real under the new contract
+        assert "New Codex session id:" in result.output
+        assert "codex resume " in result.output
         assert "/import" in result.output
+        assert list(
+            (codex_home / "sessions").rglob("rollout-*.jsonl")
+        )
 
 
 class TestCodexFirstUserDetection:

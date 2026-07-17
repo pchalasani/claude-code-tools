@@ -205,14 +205,24 @@ def get_codex_home(cli_arg: Optional[str] = None) -> Path:
     """
     Get Codex home directory.
 
+    Precedence order:
+    1. CLI argument (if provided)
+    2. CODEX_HOME environment variable (if set)
+    3. Default ~/.codex
+
     Args:
         cli_arg: Optional CLI argument value for --codex-home
 
     Returns:
-        Path to Codex home directory (default: ~/.codex)
+        Path to Codex home directory
     """
     if cli_arg:
         return Path(cli_arg).expanduser()
+
+    env_var = os.environ.get('CODEX_HOME')
+    if env_var:
+        return Path(env_var).expanduser()
+
     return Path.home() / ".codex"
 
 
