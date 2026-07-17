@@ -23,10 +23,8 @@ from claude_code_tools.port_codex_to_claude import (
     TOOL_TEXT_CAP,
     port_codex_session_to_claude,
 )
-from claude_code_tools.session_utils import (
-    detect_agent_from_content,
-    find_matching_session_files,
-)
+from claude_code_tools.port_service import resolve_port_session
+from claude_code_tools.session_utils import detect_agent_from_content
 from tests.test_port_session import (
     MODERN_UUID,
     _msg,
@@ -209,12 +207,13 @@ class TestIdLookupStreamsWholeFile:
             _resp(43, _msg("assistant", "A late", "output_text")),
         ]
         rollout = write_rollout_lines(codex_home, MODERN_UUID, lines)
-        matches = find_matching_session_files(
+        resolved = resolve_port_session(
             MODERN_UUID,
             claude_home=str(claude_home),
             codex_home=str(codex_home),
         )
-        assert matches == [("codex", rollout)]
+        assert resolved.agent == "codex"
+        assert resolved.session_file == rollout.resolve()
 
     def test_rollout_with_oversized_leading_lines_found(
         self, codex_home, claude_home, project_dir
@@ -226,9 +225,10 @@ class TestIdLookupStreamsWholeFile:
             _resp(1, _msg("user", "Q")),
         ]
         rollout = write_rollout_lines(codex_home, MODERN_UUID, lines)
-        matches = find_matching_session_files(
+        resolved = resolve_port_session(
             MODERN_UUID,
             claude_home=str(claude_home),
             codex_home=str(codex_home),
         )
-        assert matches == [("codex", rollout)]
+        assert resolved.agent == "codex"
+        assert resolved.session_file == rollout.resolve()

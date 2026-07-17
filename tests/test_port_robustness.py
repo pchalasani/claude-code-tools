@@ -19,9 +19,12 @@ from claude_code_tools.export_session import extract_session_metadata
 from claude_code_tools.port_codex_to_claude import (
     port_codex_session_to_claude,
 )
+from claude_code_tools.port_service import (
+    PortSessionError,
+    resolve_port_session,
+)
 from claude_code_tools.session_utils import (
     detect_agent_from_content,
-    find_matching_session_files,
     find_session_file,
     is_valid_session,
 )
@@ -128,12 +131,12 @@ class TestPathSeparatorIdentifiers:
         self, codex_home, claude_home
     ):
         self._nested_decoy(codex_home)
-        matches = find_matching_session_files(
-            "a/b",
-            claude_home=str(claude_home),
-            codex_home=str(codex_home),
-        )
-        assert matches == []
+        with pytest.raises(PortSessionError, match="not found"):
+            resolve_port_session(
+                "a/b",
+                claude_home=str(claude_home),
+                codex_home=str(codex_home),
+            )
         assert (
             find_session_file(
                 "a/b",
@@ -146,12 +149,12 @@ class TestPathSeparatorIdentifiers:
     def test_backslash_identifier_matches_nothing(
         self, codex_home, claude_home
     ):
-        matches = find_matching_session_files(
-            "a\\b",
-            claude_home=str(claude_home),
-            codex_home=str(codex_home),
-        )
-        assert matches == []
+        with pytest.raises(PortSessionError, match="not found"):
+            resolve_port_session(
+                "a\\b",
+                claude_home=str(claude_home),
+                codex_home=str(codex_home),
+            )
 
     def test_plain_identifier_still_matches(
         self, codex_home, claude_home, project_dir
@@ -162,12 +165,13 @@ class TestPathSeparatorIdentifiers:
             _resp(2, _msg("assistant", "A", "output_text")),
         ]
         rollout = write_rollout_lines(codex_home, MODERN_UUID, lines)
-        matches = find_matching_session_files(
+        resolved = resolve_port_session(
             MODERN_UUID,
             claude_home=str(claude_home),
             codex_home=str(codex_home),
         )
-        assert matches == [("codex", rollout)]
+        assert resolved.agent == "codex"
+        assert resolved.session_file == rollout.resolve()
 
 
 class TestMetadataShapeHardening:

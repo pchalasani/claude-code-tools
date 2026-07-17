@@ -37,7 +37,7 @@ class ResolveCommand(click.Command):
         """Parse arguments, converting Click usage failures to resolver errors."""
         import sys
 
-        from claude_code_tools.resolve_session import _render_error
+        from claude_code_tools.resolve_session_render import _render_error
 
         raw_args = tuple(args)
         try:
@@ -185,10 +185,16 @@ def resolve_session_cmd(
     json_output: bool,
     pretty_output: bool,
 ) -> None:
-    """Resolve a name, full session ID, or partial session ID."""
+    """Resolve a session name, full ID, ID fragment, or filename fragment.
+
+    Ordered tiers (first non-empty wins): exact ID, exact name, ID
+    prefix, ID substring, name substring, session-file name
+    substring (e.g. a codex rollout timestamp like
+    2026-03-25T14-50).
+    """
     import sys
 
-    from claude_code_tools.resolve_session import run
+    from claude_code_tools.resolve_session_render import run
 
     if json_output and pretty_output:
         click.echo(
@@ -1463,10 +1469,17 @@ def port_session(
     Claude sessions are converted into a flattened, resumable Codex
     rollout.
 
+    SESSION may be a full session id, a partial id (prefix, middle,
+    or suffix fragment), a session name (set with /rename), a
+    rollout filename fragment (e.g. 2026-03-25T14-50), or a session
+    file path. Lookup is global across all projects in both homes.
+
     \b
     Examples:
         aichat port 019f6d85-df3c-7c83-84f6-b97e73305fcf
         aichat port abc123 --claude-home ~/.claude-alt
+        aichat port my-session-name
+        aichat port 2026-03-25T14-50
     """
     import sys
 

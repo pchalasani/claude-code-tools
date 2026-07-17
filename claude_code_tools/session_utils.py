@@ -706,7 +706,10 @@ def is_valid_session(filepath: Path) -> bool:
     Supports both Claude Code and Codex session formats:
     - Claude: user, assistant, tool_result, tool_use (with sessionId)
     - Codex: a well-formed session_meta record, or a conversation
-      content record (event_msg, response_item, turn_context)
+      content record. event_msg/response_item payloads carry a string
+      "type" discriminator; turn_context payloads instead carry turn
+      environment fields (cwd, model, approval_policy, sandbox_policy)
+      and are validated against that schema.
 
     Claude sessions containing ONLY metadata types (file-history-snapshot,
     queue-operation) are invalid. A Codex session_meta record is itself sufficient
@@ -724,8 +727,11 @@ def is_valid_session(filepath: Path) -> bool:
     # Whitelist of resumable message types
     # Claude Code types (require sessionId)
     claude_valid_types = {"user", "assistant", "tool_result", "tool_use", "system"}
-    # Codex types (conversation content types)
-    codex_valid_types = {"event_msg", "response_item", "turn_context"}
+    # Codex types whose payloads carry a string "type" discriminator
+    codex_typed_payload_types = {"event_msg", "response_item"}
+    # Real turn_context payloads have no "type": they carry the turn's
+    # environment context fields instead.
+    turn_context_string_fields = ("cwd", "model", "approval_policy")
 
     try:
         with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
@@ -765,18 +771,34 @@ def is_valid_session(filepath: Path) -> bool:
                 ):
                     return True
 
-                # Codex: valid conversation content type. The payload
-                # must be a dict with a non-empty string "type" (e.g.
-                # a response_item "message"): garbage payloads (null,
+                # Codex: event_msg/response_item payloads must be a
+                # dict with a non-empty string "type" (e.g. a
+                # response_item "message"): garbage payloads (null,
                 # arrays, type-less dicts) must not validate a rollout.
                 payload = data.get("payload")
                 if (
-                    entry_type in codex_valid_types
+                    entry_type in codex_typed_payload_types
                     and isinstance(payload, dict)
                     and isinstance(payload.get("type"), str)
                     and bool(payload["type"].strip())
                 ):
                     return True
+
+                # Codex: turn_context payloads are validated by their
+                # genuine schema — turn environment fields rather than
+                # a "type" discriminator. Require at least one
+                # recognizable context field so garbage payloads still
+                # never validate a rollout.
+                if entry_type == "turn_context" and isinstance(payload, dict):
+                    has_context_string = any(
+                        isinstance(payload.get(field), str)
+                        and bool(payload[field].strip())
+                        for field in turn_context_string_fields
+                    )
+                    if has_context_string or isinstance(
+                        payload.get("sandbox_policy"), (str, dict)
+                    ):
+                        return True
 
                 # Codex: session_meta is the identifying record for a
                 # rollout. It is sufficient even when no conversation
@@ -888,9 +910,8 @@ def _iter_named_session_files(
 ) -> Iterator[Tuple[str, Path]]:
     """Yield session files whose NAME contains ``session_id``.
 
-    Single shared implementation of the Claude/Codex home traversal
-    used by every session-id lookup (:func:`find_session_file` and
-    :func:`find_matching_session_files`), so the two cannot diverge.
+    Shared implementation of the Claude/Codex home traversal behind
+    the first-match session-id lookup (:func:`find_session_file`).
 
     The identifier is treated as a LITERAL string: glob
     metacharacters (``* ? [``) are escaped, and an empty or
@@ -983,55 +1004,6 @@ def find_session_file(
                 return ("codex", session_file, project_path, git_branch)
 
     return None
-
-
-def find_matching_session_files(
-    session_id: str,
-    claude_home: Optional[str] = None,
-    codex_home: Optional[str] = None,
-) -> list:
-    """Find every VALID session file whose name contains ``session_id``.
-
-    Consumes the SAME shared traversal as :func:`find_session_file`
-    (:func:`_iter_named_session_files`: literal matching, escaped glob
-    metacharacters, deterministic sorted order) but collects ALL
-    matches, so callers can reject ambiguous partial IDs with a clear
-    error instead of silently acting on whichever file filesystem
-    iteration happened to yield first.
-
-    Every filename match is validated before it is returned
-    (mirroring the existing info/copy lookup behavior in
-    :func:`find_session_file`): a Claude-home candidate must be a
-    valid resumable session per :func:`is_valid_session`, and a
-    Codex-home candidate must be recognized as a Codex rollout by
-    :func:`detect_agent_from_content` (which also covers the legacy
-    2025 format) run as a STREAMING FULL-FILE check
-    (``max_lines=None``), so a valid rollout whose leading records
-    are unrecognized or oversized is still found via its later
-    ``session_meta``/``response_item`` records. Malformed/garbage
-    files that merely share a filename fragment therefore never
-    produce a false "found" result nor make an otherwise unique
-    valid session appear ambiguous.
-
-    Args:
-        session_id: Session identifier (full or partial), matched
-            literally against file names.
-        claude_home: Optional custom Claude home directory.
-        codex_home: Optional custom Codex home directory.
-
-    Returns:
-        List of ``(agent, file_path)`` tuples, possibly empty.
-    """
-    matches: list = []
-    for agent, f in _iter_named_session_files(
-        session_id, claude_home=claude_home, codex_home=codex_home
-    ):
-        if agent == "claude":
-            if is_valid_session(f):
-                matches.append(("claude", f))
-        elif detect_agent_from_content(f, max_lines=None) == "codex":
-            matches.append(("codex", f))
-    return matches
 
 
 def format_session_id_display(

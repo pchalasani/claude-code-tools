@@ -1,9 +1,11 @@
 """Resolution and conversion service behind the ``aichat port`` CLI.
 
 Keeps the Click command in :mod:`claude_code_tools.aichat` as thin
-wiring: session lookup (by id or direct path), source-agent
-detection, ambiguity handling, conversion-error mapping, and
-port-result construction all live here.
+wiring: session lookup (by id, name, filename fragment, or direct
+path), source-agent detection, ambiguity handling, conversion-error
+mapping, and port-result construction all live here. Non-path
+lookups are delegated to the shared resolver in
+:mod:`claude_code_tools.resolve_session` for both agents.
 
 Direct file paths are classified CONTENT-FIRST: the file's JSONL
 records decide which agent it belongs to, and the configured home
@@ -20,16 +22,21 @@ import json
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Optional, Union
+
+if TYPE_CHECKING:
+    from claude_code_tools.resolve_session import ResolveResult
 
 from claude_code_tools.session_utils import (
     detect_agent_from_content,
     detect_agent_from_path,
-    find_matching_session_files,
     get_claude_home,
     get_codex_home,
     is_valid_session,
 )
+
+_MAX_AMBIGUITY_LINES = 25
+_MAX_AMBIGUITY_NAME_CHARS = 60
 
 
 class PortSessionError(Exception):
@@ -120,22 +127,108 @@ def _detect_direct_path_agent(
     return located
 
 
+def _resolve_query_for_agent(
+    query: str, agent: str, home: Optional[str]
+) -> "Optional[ResolveResult]":
+    """Resolve a query through the shared resolver for one agent.
+
+    Expected resolver errors (empty query, missing or unreadable
+    home) are treated as "no match for this agent" so a broken codex
+    home never blocks a valid claude lookup, mirroring the tolerant
+    behavior of the old glob path. A corrupt or incomplete Codex
+    state database additionally degrades to direct on-disk rollout
+    enumeration (``fallback_on_database_error``), so valid rollouts
+    still port during database damage or migration.
+
+    Args:
+        query: Session id, name, or filename fragment.
+        agent: ``"claude"`` or ``"codex"``.
+        home: Optional custom home directory for the agent.
+
+    Returns:
+        A ``ResolveResult`` or None when resolution failed outright.
+    """
+    from typing import cast
+
+    from claude_code_tools.resolve_session import (
+        Agent,
+        ResolverError,
+        resolve,
+    )
+
+    try:
+        return resolve(
+            query,
+            cast(Agent, agent),
+            home,
+            fallback_on_database_error=True,
+        )
+    except ResolverError:
+        return None
+
+
+def _ambiguity_error(
+    session: str, results: "list[ResolveResult]"
+) -> PortSessionError:
+    """Build the multi-candidate rejection error for a port lookup.
+
+    Args:
+        session: The original session query.
+        results: Non-empty resolver results (single or ambiguous).
+
+    Returns:
+        A user-facing error listing every candidate from both agents.
+    """
+    records = [record for result in results for record in result.records]
+    records.sort(key=lambda record: record._modified_timestamp, reverse=True)
+    total = sum(
+        1 if result.kind == "single" else result.match_count
+        for result in results
+    )
+    lines = []
+    for record in records[:_MAX_AMBIGUITY_LINES]:
+        name = record.name or ""
+        # Codex auto-titles can be entire prompts: keep lines readable.
+        name = " ".join(name.split())
+        if len(name) > _MAX_AMBIGUITY_NAME_CHARS:
+            name = name[: _MAX_AMBIGUITY_NAME_CHARS - 3] + "..."
+        name_part = f" ({name})" if name else ""
+        lines.append(
+            f"  [{record.agent}] {record.session_id}{name_part}"
+            f"  modified {record.modified}"
+        )
+    remaining = total - len(records[:_MAX_AMBIGUITY_LINES])
+    if remaining > 0:
+        lines.append(f"  ... and {remaining} more")
+    listing = "\n".join(lines)
+    return PortSessionError(
+        f"Ambiguous session '{session}' matches {total} sessions:\n"
+        f"{listing}\n"
+        "Use a longer unique id, the exact session name, or the "
+        "full file path."
+    )
+
+
 def resolve_port_session(
     session: str,
     claude_home: Optional[str] = None,
     codex_home: Optional[str] = None,
 ) -> ResolvedSession:
-    """Resolve a session id or file path to a file + source agent.
+    """Resolve a session query to a session file + source agent.
 
     An existing file path is classified content-first (see
-    :func:`_detect_direct_path_agent`). Otherwise the identifier is
-    matched LITERALLY (glob metacharacters escaped) against both
-    homes and must match exactly one validated session; ambiguous
-    partial ids are rejected with the full match list instead of
-    silently porting an arbitrary file.
+    :func:`_detect_direct_path_agent`). Any other query goes through
+    the shared resolver (:mod:`claude_code_tools.resolve_session`)
+    against BOTH agent homes, so full ids, id prefixes and
+    substrings, session names, and rollout filename fragments all
+    work. The query must resolve to exactly one session overall;
+    anything ambiguous — within one agent or across the two — is
+    rejected with the full candidate list instead of silently
+    porting an arbitrary file.
 
     Args:
-        session: Session id (full or partial) or session file path.
+        session: Session id (full or partial), session name,
+            filename fragment, or session file path.
         claude_home: Optional custom Claude home directory.
         codex_home: Optional custom Codex home directory.
 
@@ -146,8 +239,17 @@ def resolve_port_session(
         PortSessionError: When the session cannot be found, is
             ambiguous, or its agent cannot be detected.
     """
-    input_path = Path(session).expanduser()
-    if input_path.is_file():
+    # Arbitrary session names are legitimate queries here, and some
+    # (e.g. "~nonexistent-user" or names with NUL bytes) make path
+    # probing itself raise. Treat any such input as a non-path query
+    # and fall through to resolver lookup instead of crashing.
+    try:
+        input_path: Optional[Path] = Path(session).expanduser()
+        is_direct_file = input_path.is_file()
+    except (OSError, RuntimeError, ValueError):
+        input_path = None
+        is_direct_file = False
+    if is_direct_file and input_path is not None:
         agent = _detect_direct_path_agent(
             input_path, claude_home, codex_home
         )
@@ -157,24 +259,22 @@ def resolve_port_session(
             )
         return ResolvedSession(agent=agent, session_file=input_path)
 
-    matches = find_matching_session_files(
-        session, claude_home=claude_home, codex_home=codex_home
-    )
-    if not matches:
+    results: "list[ResolveResult]" = []
+    for agent_name, home in (("claude", claude_home), ("codex", codex_home)):
+        result = _resolve_query_for_agent(session, agent_name, home)
+        if result is not None and result.kind != "not_found":
+            results.append(result)
+
+    if not results:
         raise PortSessionError(
             f"Session not found in Claude or Codex homes: {session}"
         )
-    if len(matches) > 1:
-        listing = "\n".join(
-            f"  [{agent}] {path}" for agent, path in matches
+    if len(results) == 1 and results[0].kind == "single":
+        record = results[0].records[0]
+        return ResolvedSession(
+            agent=record.agent, session_file=Path(record.session_file)
         )
-        raise PortSessionError(
-            f"Ambiguous session id '{session}' matches "
-            f"{len(matches)} session files:\n{listing}\n"
-            "Use a longer unique id or the full file path."
-        )
-    agent, session_file = matches[0]
-    return ResolvedSession(agent=agent, session_file=session_file)
+    raise _ambiguity_error(session, results)
 
 
 def _read_output_cwd(output_file: Path) -> str:

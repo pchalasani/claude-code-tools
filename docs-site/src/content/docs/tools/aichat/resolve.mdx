@@ -3,7 +3,9 @@ title: "Resolve"
 ---
 
 `aichat resolve` turns a session **name**, a **full
-ID**, or a **partial ID** into one canonical session
+ID**, a **partial ID** (prefix, middle, or suffix
+fragment), or a **session-file name fragment** (e.g.
+a codex rollout timestamp) into one canonical session
 record — for both Claude Code and Codex. It is built
 so an agent can resolve a session non-interactively,
 but it prints a readable panel for humans too.
@@ -28,9 +30,9 @@ aichat resolve <query> [--agent claude|codex] \
 
 | Option | Description |
 |--------|-------------|
-| `<query>` | Session name (`/rename`), full UUID, or partial id. Required. |
+| `<query>` | Session name (`/rename`), full or partial id, or a filename fragment. |
 | `--agent` | `claude` (default) or `codex`. |
-| `--home` | Claude/Codex home to search. Falls back to `$CLAUDE_CONFIG_DIR` / `$CODEX_HOME`, then `~/.claude` / `~/.codex`. |
+| `--home` | Overrides `$CLAUDE_CONFIG_DIR` / `$CODEX_HOME` and the default homes. |
 | `--json` | Force JSON output. |
 | `--pretty` | Force the human-readable panel. |
 
@@ -53,13 +55,37 @@ session:
 The query is resolved through ordered tiers; the
 first non-empty tier wins:
 
-1. exact full ID
-2. exact name
-3. ID prefix (partial id)
-4. name substring
+| Tier | Match | `matched_by` |
+|------|-------|--------------|
+| 1 | exact full ID | `id` |
+| 2 | exact name | `name` |
+| 3 | ID prefix | `partial-id` |
+| 4 | ID substring (middle or suffix) | `id-substring` |
+| 5 | session-file name substring | `filename` |
+| 6 | name substring | `name` |
 
 So an exact ID or name is never shadowed by an
-incidental substring match.
+incidental substring match, and an ID **prefix**
+match always beats a mid-ID substring match. The
+filename tier ranks above name substrings because
+filename fragments are structural: a timestamp
+fragment identifies one rollout file, while session
+names are free text that may incidentally quote the
+same fragment (dozens of sessions can mention a
+timestamp in their first message) and would
+otherwise drown the precise match.
+
+ID tiers (3–4) require at least 4 characters from
+the hex/dash id charset; the filename tier (5)
+requires at least 4 characters. The filename tier is
+what makes codex rollout fragments like
+`2026-03-25T14-50` (the timestamp in the rollout
+file name) or a `rollout-2026-03-25...` prefix
+resolvable. Queries are always matched as literal
+substrings — never as glob patterns — and a query
+containing a path separator (`/`, `\`) or a glob
+metacharacter (`*`, `?`, `[`, `]`) matches nothing
+in any tier.
 
 ## Result
 
@@ -88,7 +114,7 @@ and exits `0`:
 | `directory` | Session working directory |
 | `home` | Resolved home that was searched |
 | `session_file` | Absolute path to the session file |
-| `matched_by` | `id`, `partial-id`, or `name` |
+| `matched_by` | `id`, `partial-id`, `id-substring`, `name`, or `filename` |
 | `modified` | Session file mtime (ISO-8601) |
 | `archived` | Codex archived flag (`false` for Claude) |
 
@@ -124,6 +150,13 @@ aichat resolve session-finder
 
 # By partial id, as JSON for an agent
 aichat resolve a15f9ced --json
+
+# By a MID-ID fragment (id-substring tier)
+aichat resolve 88e9-43d7 --json
+
+# A Codex session by its rollout timestamp fragment
+# (filename tier)
+aichat resolve 2026-03-25T14-50 --agent codex --json
 
 # A Codex session by name
 aichat resolve "my codex thread" --agent codex --json

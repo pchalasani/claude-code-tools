@@ -803,9 +803,12 @@ class TestPortCLI:
         except ValueError:
             stderr = ""
         combined = result.output + stderr
-        assert "Ambiguous session id" in combined
+        assert "Ambiguous session" in combined
         assert MODERN_UUID in combined
         assert other_uuid in combined
+        # each candidate line names its agent and modification time
+        assert "[codex]" in combined
+        assert "modified" in combined
         # nothing was ported
         assert not (claude_home / "projects").exists()
 
@@ -875,4 +878,10 @@ class TestPortCLI:
 # about roles/blocks) and replied. The ported session file was then
 # deleted from ~/.claude/projects:
 #   $ rm .../86e76523-e1dc-4927-b7f8-85246b56c7ec.jsonl   # deleted
+# ---------------------------------------------------------------------
+#
+# RESOLVER-INTEGRATION E2E EVIDENCE (name-based claude->codex port +
+# codex resume, and partial-codex-id port + claude resume, both run
+# 2026-07-17 with cleanup) is recorded at the bottom of
+# tests/test_port_resolver_integration.py.
 # ---------------------------------------------------------------------

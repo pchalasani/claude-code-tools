@@ -15,12 +15,32 @@ See [Quick Start](../../../getting-started/) for installation.
 ## Usage
 
 ```bash
-aichat port <session-id>
+aichat port <session>
 ```
 
-The source agent is auto-detected from the session ID (or file path), and the
-session is ported to the *other* agent. The detected direction is always
-printed first:
+`<session>` accepts every lookup form of the shared
+[resolver](../resolve/):
+
+- a **full session id** (Claude UUID or Codex thread id)
+- a **partial id** — prefix, middle, or suffix fragment (at least 4
+  hex/dash characters)
+- a **session name** — the title set with `/rename` (Claude
+  custom-title, or the Codex thread title)
+- a **timestamp fragment** of a codex rollout file name, e.g.
+  `2026-03-25T14-50` or a `rollout-2026-03-25...` prefix
+- a **session file path** (inside or outside the agent homes)
+
+Lookup is global across **all projects** in both the Claude and Codex
+homes. The query must resolve to exactly one session; if several
+match (in one agent or across both), the command errors with the
+candidate list — one line per candidate showing the agent, session
+id, name (when known), and modification time. The listing shows at
+most 25 candidates and ends with a `... and N more` tail when the
+match set is larger.
+
+The source agent is auto-detected from the resolved session (or file
+path content), and the session is ported to the *other* agent. The
+detected direction is always printed first:
 
 ```text
 Detected source agent: codex — porting to Claude Code

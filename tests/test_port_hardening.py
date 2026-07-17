@@ -29,9 +29,12 @@ from claude_code_tools.port_codex_to_claude import (
     _write_transcript_atomic,
     port_codex_session_to_claude,
 )
+from claude_code_tools.port_service import (
+    PortSessionError,
+    resolve_port_session,
+)
 from claude_code_tools.session_utils import (
     encode_claude_project_path,
-    find_matching_session_files,
     find_session_file,
     is_valid_session,
 )
@@ -485,12 +488,13 @@ class TestValidatedSessionIdMatching:
     ):
         rollout = write_modern_rollout(codex_home, project_dir)
         self._write_malformed_claude(claude_home, MODERN_UUID)
-        matches = find_matching_session_files(
+        resolved = resolve_port_session(
             MODERN_UUID,
             claude_home=str(claude_home),
             codex_home=str(codex_home),
         )
-        assert matches == [("codex", rollout)]
+        assert resolved.agent == "codex"
+        assert resolved.session_file == rollout.resolve()
 
 
 class TestAtomicWrite:
@@ -725,12 +729,13 @@ class TestNonDictJsonLinesInClaudeSessions:
     ):
         sid = str(uuid.uuid4())
         path = self._write_claude_session(claude_home, sid, ["null"])
-        matches = find_matching_session_files(
+        resolved = resolve_port_session(
             sid,
             claude_home=str(claude_home),
             codex_home=str(codex_home),
         )
-        assert matches == [("claude", path)]
+        assert resolved.agent == "claude"
+        assert resolved.session_file == path.resolve()
         # the shared lookup used by info/clone agrees
         result = find_session_file(
             sid,
@@ -919,3 +924,22 @@ class TestHostileCwdFallback:
         # the hostile value never reaches the transcript
         raw = out_path.read_text(encoding="utf-8")
         assert "a" * 300 not in raw
+
+
+class TestTildeUserQueries:
+    """Session names that look like ``~user`` paths must not crash."""
+
+    def test_unknown_tilde_user_query_reports_not_found(
+        self, claude_home, codex_home
+    ):
+        """``Path.expanduser`` raises RuntimeError for an unknown
+        ``~user``; such input is a legitimate session-name query and
+        must fall through to resolver lookup, then report not-found
+        via the CLI's expected error type."""
+        with pytest.raises(PortSessionError) as excinfo:
+            resolve_port_session(
+                "~no-such-user-aichat-port",
+                claude_home=str(claude_home),
+                codex_home=str(codex_home),
+            )
+        assert "not found" in str(excinfo.value).lower()
