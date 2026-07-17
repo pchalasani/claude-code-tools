@@ -49,6 +49,10 @@ export default defineConfig({
                   slug: "tools/aichat/search",
                 },
                 {
+                  label: "Resolve",
+                  slug: "tools/aichat/resolve",
+                },
+                {
                   label: "Session Actions",
                   slug: "tools/aichat/actions",
                 },

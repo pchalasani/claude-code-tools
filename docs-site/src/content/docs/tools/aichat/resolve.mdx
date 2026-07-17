@@ -1,0 +1,145 @@
+---
+title: "Resolve"
+---
+
+`aichat resolve` turns a session **name**, a **full
+ID**, or a **partial ID** into one canonical session
+record — for both Claude Code and Codex. It is built
+so an agent can resolve a session non-interactively,
+but it prints a readable panel for humans too.
+
+This is distinct from the interactive
+[Search](./search/) TUI and the legacy `find`
+commands: it does not browse, it resolves a single
+identifier to a single answer.
+
+:::note[Installation]
+Part of the `claude-code-tools` package.
+See [Quick Start](../../../getting-started/) for
+installation.
+:::
+
+## Usage
+
+```bash
+aichat resolve <query> [--agent claude|codex] \
+  [--home PATH] [--json | --pretty]
+```
+
+| Option | Description |
+|--------|-------------|
+| `<query>` | Session name (`/rename`), full UUID, or partial id. Required. |
+| `--agent` | `claude` (default) or `codex`. |
+| `--home` | Claude/Codex home to search. Falls back to `$CLAUDE_CONFIG_DIR` / `$CODEX_HOME`, then `~/.claude` / `~/.codex`. |
+| `--json` | Force JSON output. |
+| `--pretty` | Force the human-readable panel. |
+
+Output **auto-detects** its destination: JSON when
+piped or captured (agent-facing), a Rich panel on a
+terminal. Pass `--json` / `--pretty` to override.
+
+## What a "name" is
+
+The name is the title you set with `/rename` inside a
+session:
+
+- **Claude:** the `custom-title` recorded in the
+  transcript — not the auto-generated `ai-title`.
+- **Codex:** the `title` column in the Codex
+  `threads` database.
+
+## Match precedence
+
+The query is resolved through ordered tiers; the
+first non-empty tier wins:
+
+1. exact full ID
+2. exact name
+3. ID prefix (partial id)
+4. name substring
+
+So an exact ID or name is never shadowed by an
+incidental substring match.
+
+## Result
+
+On a unique match, `resolve` prints one JSON object
+and exits `0`:
+
+```json
+{
+  "agent": "claude",
+  "session_id": "a15f9ced-88e9-43d7-9e2c-4a10d01f1644",
+  "name": "session-finder",
+  "directory": "/Users/you/Git/claude-code-tools",
+  "home": "/Users/you/.claude",
+  "session_file": ".../a15f9ced-....jsonl",
+  "matched_by": "name",
+  "modified": "2026-07-14T11:00:08-04:00",
+  "archived": false
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `agent` | `claude` or `codex` |
+| `session_id` | The resolved session UUID |
+| `name` | `/rename` title, or `null` |
+| `directory` | Session working directory |
+| `home` | Resolved home that was searched |
+| `session_file` | Absolute path to the session file |
+| `matched_by` | `id`, `partial-id`, or `name` |
+| `modified` | Session file mtime (ISO-8601) |
+| `archived` | Codex archived flag (`false` for Claude) |
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Resolved — one match, record printed |
+| `1` | Not found, or an input/home error |
+| `2` | Ambiguous — multiple matches |
+
+On an **ambiguous** query, `resolve` exits `2` and
+prints the candidates (newest first) so the caller
+can disambiguate:
+
+```json
+{"error": "ambiguous", "query": "tmux-fix",
+ "agent": "claude", "match_count": 2,
+ "candidates": [ /* full records */ ]}
+```
+
+Expected input errors — an empty or missing query, an
+unsupported `--agent`, or a `--home` that is not a
+directory — exit `1` with a structured
+`{"error": ..., "detail": ...}` object, never a
+traceback.
+
+## Examples
+
+```bash
+# By /rename name (pretty panel in a terminal)
+aichat resolve session-finder
+
+# By partial id, as JSON for an agent
+aichat resolve a15f9ced --json
+
+# A Codex session by name
+aichat resolve "my codex thread" --agent codex --json
+
+# Search a non-default home
+aichat resolve <id> --home ~/.claude-rja --json
+
+# Agent-facing: captured output is JSON automatically
+aichat resolve session-finder | jq .session_file
+```
+
+:::tip[For agents]
+Because the output is JSON whenever it is captured,
+an agent can run `aichat resolve <id> --agent codex`
+and parse the record directly — no `--json` flag
+needed when the stream is not a terminal. Use the
+exit code to branch: `0` resolved, `2` ambiguous
+(read `candidates`), `1` not found.
+:::
