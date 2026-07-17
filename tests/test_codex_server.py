@@ -10,6 +10,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -437,6 +438,74 @@ def test_empty_existing_target_does_not_bypass_live_generation_cap(
 
     with pytest.raises(CodexServerError, match="generation limit"):
         server_models.require_generation_capacity(base, target.generation or "")
+
+
+def test_concurrent_generation_reservation_enforces_capacity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two launchers cannot both consume the final retained-server slot."""
+    environment = {"CODEX_HOME": str(tmp_path / "home")}
+    base = server_models.base_paths_from_env(environment)
+    retained = server_models.paths_for_generation(base, "a" * 24)
+    reserved = server_models.paths_for_generation(base, "b" * 24)
+    candidate = server_models.paths_for_generation(base, "c" * 24)
+    retained.runtime_dir.mkdir(mode=0o700, parents=True)
+    retained.state_path.write_text("{}", encoding="utf-8")
+    ready = tmp_path / "reservation-ready"
+    release = tmp_path / "reservation-release"
+    program = textwrap.dedent(
+        f"""
+        import time
+        from pathlib import Path
+
+        import claude_code_tools.codex_server as server
+        import claude_code_tools.codex_server_models as models
+
+        environment = {environment!r}
+        base = models.base_paths_from_env(environment)
+        paths = models.paths_for_generation(base, {reserved.generation!r})
+        models.MAX_SERVER_GENERATIONS = 2
+        with server._reserved_generation_lifecycle(
+            base,
+            paths,
+            {reserved.generation!r},
+        ):
+            Path({str(ready)!r}).write_text("ready", encoding="utf-8")
+            deadline = time.monotonic() + 10
+            while not Path({str(release)!r}).exists():
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("parent did not release reservation")
+                time.sleep(0.01)
+        """
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", program],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    deadline = time.monotonic() + 5
+    try:
+        while not ready.exists():
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                pytest.fail(f"reservation helper exited: {stdout}{stderr}")
+            if time.monotonic() >= deadline:
+                pytest.fail("reservation helper did not become ready")
+            time.sleep(0.01)
+        monkeypatch.setattr(server_models, "MAX_SERVER_GENERATIONS", 2)
+        with pytest.raises(CodexServerError, match="generation limit"):
+            with codex_server._reserved_generation_lifecycle(
+                base,
+                candidate,
+                candidate.generation or "",
+            ):
+                pytest.fail("over-capacity generation acquired a reservation")
+    finally:
+        release.write_text("release", encoding="utf-8")
+        stdout, stderr = process.communicate(timeout=5)
+    assert process.returncode == 0, stdout + stderr
 
 
 def test_generation_scan_still_bounds_unrecognized_runtime_entries(

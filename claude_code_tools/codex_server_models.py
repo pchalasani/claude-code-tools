@@ -444,7 +444,11 @@ def clear_current_generation(base: ServerPaths) -> None:
 
 
 def all_server_paths(base: ServerPaths) -> list[ServerPaths]:
-    """Return bounded helper generations retaining state or a socket."""
+    """Return bounded helper generations retaining state, a socket, or a lock."""
+    from claude_code_tools.codex_server_reservation import (
+        generation_has_active_reservation,
+    )
+
     info = _lstat(base.runtime_dir)
     if info is None:
         return [base]
@@ -501,6 +505,7 @@ def all_server_paths(base: ServerPaths) -> list[ServerPaths]:
                 if (
                     _lstat(paths.state_path) is None
                     and _lstat(paths.socket_path) is None
+                    and not generation_has_active_reservation(paths)
                 ):
                     continue
                 scanned += 1
@@ -588,37 +593,10 @@ def prepare_runtime(paths: ServerPaths) -> None:
 
 
 def read_state(paths: ServerPaths) -> OwnedServer | None:
-    """Read and validate owned-process state."""
-    info = _lstat(paths.state_path)
-    if info is None:
-        return None
-    _require_regular_owned(info, paths.state_path, "state")
-    try:
-        no_follow = getattr(os, "O_NOFOLLOW", None)
-        if no_follow is None:
-            raise StateFileError("safe state parsing requires O_NOFOLLOW support")
-        flags = os.O_RDONLY | os.O_NONBLOCK | no_follow
-        fd = os.open(paths.state_path, flags)
-        try:
-            initial_info = os.fstat(fd)
-            _require_regular_owned(initial_info, paths.state_path, "state")
-            data = _read_bounded_fd(fd, STATE_MAX_BYTES)
-            if _file_generation(os.fstat(fd)) != _file_generation(initial_info):
-                raise StateFileError(
-                    "codex-server ownership state changed while being read"
-                )
-        finally:
-            os.close(fd)
-        value = json.loads(data.decode("utf-8"))
-        _require_bounded_state(value)
-    except (
-        OSError,
-        UnicodeDecodeError,
-        ValueError,
-        RecursionError,
-    ) as exc:
-        raise StateFileError(f"cannot read {paths.state_path}: {exc}") from exc
-    return OwnedServer.from_json(value)
+    """Read and validate owned-process state without returning read evidence."""
+    from claude_code_tools.codex_server_state import read_state_with_evidence
+
+    return read_state_with_evidence(paths)[0]
 
 
 def write_state(paths: ServerPaths, state: OwnedServer) -> None:

@@ -14,11 +14,13 @@ import struct
 import subprocess
 import sys
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Iterator, Mapping, Sequence
 
+from claude_code_tools import codex_server_retry
+from claude_code_tools.codex_server_legacy import reauthenticate_legacy_state
 from claude_code_tools.codex_server_fingerprint import (
     PluginSnapshot as _PluginSnapshot,
     hash_plugin_tree as _hash_plugin_tree,  # noqa: F401
@@ -78,6 +80,7 @@ from claude_code_tools.codex_server_reuse import (
     disconnect_refusal as _disconnect_refusal,
     helper_restart_reason as _reuse_restart_reason,
     require_external_compatible as _external_compatible,
+    same_server_launch as _same_server_launch,
 )
 
 
@@ -148,6 +151,22 @@ def _lifecycle_lock(paths: ServerPaths) -> Iterator[None]:
         except OSError:
             pass
         os.close(fd)
+
+
+@contextmanager
+def _reserved_generation_lifecycle(
+    base: ServerPaths,
+    paths: ServerPaths,
+    generation: str,
+) -> Iterator[None]:
+    """Reserve capacity before releasing the base lifecycle lock."""
+    generation_lock = ExitStack()
+    with _lifecycle_lock(base):
+        require_generation_capacity(base, generation)
+        prepare_runtime(paths)
+        generation_lock.enter_context(_lifecycle_lock(paths))
+    with generation_lock:
+        yield
 
 
 def _resolve_codex(env: Mapping[str, str]) -> str:
@@ -519,6 +538,7 @@ def get_status(env: Mapping[str, str] | None = None) -> ServerStatus:
     except StateFileError as exc:
         state = None
         state_error = str(exc)
+    state = reauthenticate_legacy_state(paths, state, _socket_peer_pid)
     probe = _probe_server(codex_path, child_env, paths)
     return _status_from(paths, state, probe, state_error)
 
@@ -557,31 +577,10 @@ def _require_unchanged_plugin_snapshot(
 ) -> None:
     """Reject a lifecycle decision made across a plugin input change."""
     if _plugin_configuration_snapshot(paths, codex_options) != expected:
-        raise CodexServerError(
+        raise codex_server_retry.PluginSnapshotChangedError(
             "the Codex plugin or marketplace snapshot changed during "
             f"{operation}; retry after plugin updates finish"
         )
-
-
-def _same_server_launch(expected: OwnedServer, current: OwnedServer) -> bool:
-    """Return whether two states name the same exact supervised launch."""
-    return (
-        current.pid,
-        current.pgid,
-        current.process_started_at,
-        current.launch_token,
-        current.worker_pid,
-        current.worker_pgid,
-        current.worker_started_at,
-    ) == (
-        expected.pid,
-        expected.pgid,
-        expected.process_started_at,
-        expected.launch_token,
-        expected.worker_pid,
-        expected.worker_pgid,
-        expected.worker_started_at,
-    )
 
 
 def _certify_helper_boundary(
@@ -724,6 +723,7 @@ def _wait_for_process_group_exit(
     )
 
 
+@codex_server_retry.retry_plugin_snapshot_changes
 def ensure_server(
     env: Mapping[str, str] | None = None,
     *,
@@ -745,16 +745,15 @@ def ensure_server(
         codex_options,
     )
     paths = paths_for_generation(base_paths, generation)
-    require_generation_capacity(base_paths, generation)
-    child_env = _command_env(active_env, paths)
-    child_env[CODEX_SERVER_OPTIONS_ENV] = json.dumps(
-        list(codex_options),
-        separators=(",", ":"),
-    )
-    with _lifecycle_lock(paths):
+    with _reserved_generation_lifecycle(base_paths, paths, generation):
+        child_env = _command_env(active_env, paths)
+        child_env[CODEX_SERVER_OPTIONS_ENV] = json.dumps(
+            list(codex_options),
+            separators=(",", ":"),
+        )
         locked_snapshot = _plugin_configuration_snapshot(paths, codex_options)
         if locked_snapshot.fingerprint != plugin_snapshot.fingerprint:
-            raise CodexServerError(
+            raise codex_server_retry.PluginSnapshotChangedError(
                 "the Codex plugin or marketplace snapshot changed during "
                 "app-server generation selection; retry after updates finish"
             )
@@ -766,6 +765,7 @@ def ensure_server(
         except StateFileError as exc:
             state = None
             state_error = str(exc)
+        state = reauthenticate_legacy_state(paths, state, _socket_peer_pid)
 
         probe = _probe_server(codex_path, child_env, paths)
         status = _status_from(paths, state, probe, state_error)
@@ -938,6 +938,7 @@ def _stop_server_at(
                 ) from exc
             _quarantine_invalid_state(paths)
             state = None
+        state = reauthenticate_legacy_state(paths, state, _socket_peer_pid)
 
         if state is not None and _state_is_owned(state):
             if not allow_disconnect:
