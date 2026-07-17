@@ -1,0 +1,21 @@
+{
+  "name": "agent-tunnel",
+  "version": "1.14.2",
+  "description": "Publish the current Claude or Codex session via >share so teammates can ask it questions through the agent-tunnel Discord bot",
+  "author": {
+    "name": "Prasad Chalasani"
+  },
+  "interface": {
+    "displayName": "agent-tunnel",
+    "shortDescription": "Share this session so teammates can ask it questions over Discord",
+    "longDescription": "Type >share inside a Claude Code or Codex CLI session to publish it under a short handle. Teammates address that handle in the agent-tunnel Discord channel and each question is answered by a read-only fork of your session. Access is per-handle (read / write / bash / full).",
+    "developerName": "Prasad Chalasani",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Publish a session with >share",
+      "Read-only forked answers over Discord",
+      "Per-handle access levels"
+    ],
+    "defaultPrompt": ">share my-session"
+  }
+}
