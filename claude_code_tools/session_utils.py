@@ -7,7 +7,7 @@ import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Iterator, Optional, List, Tuple
 
 
 def parse_flexible_timestamp(ts_str: str, is_upper_bound: bool = False) -> float:
@@ -582,6 +582,114 @@ def detect_agent_from_path(file_path: Path) -> Optional[str]:
     return None
 
 
+def detect_agent_from_content(
+    file_path: Path,
+    max_lines: Optional[int] = 25,
+    max_line_chars: int = 1_000_000,
+) -> Optional[str]:
+    """Detect agent type by sniffing a session file's JSONL content.
+
+    Used as a fallback when the file path lies outside the default
+    agent home directories (e.g. a custom --codex-home or a copied
+    rollout file).
+
+    Reads with a bounded ``readline`` loop so a file with one enormous
+    unterminated line never materializes more than ``max_line_chars``
+    characters at a time; oversized lines are discarded in chunks and
+    treated as unrecognized. Pathologically nested JSON (RecursionError
+    from the parser) is likewise skipped.
+
+    Args:
+        file_path: Path to a session JSONL file.
+        max_lines: Number of leading non-empty lines to inspect, or
+            None to stream through the ENTIRE file (still memory
+            bounded) until a verdict is reached.
+        max_line_chars: Maximum characters held for any single line.
+
+    Returns:
+        'claude', 'codex', or None if the format is not recognized.
+    """
+    codex_line_types = {
+        "session_meta",
+        "response_item",
+        "event_msg",
+        "turn_context",
+        "world_state",
+        "compacted",
+    }
+    # Known values of the legacy 2025 rollout ``record_type`` field.
+    # Only these mark a line as Codex: presence of the key alone must
+    # NOT (e.g. a Claude record carrying ``record_type: null`` is
+    # still a Claude record).
+    codex_record_types = {"state"}
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            checked = 0
+            while max_lines is None or checked < max_lines:
+                line = f.readline(max_line_chars + 1)
+                if not line:
+                    break
+                if len(line) > max_line_chars and not line.endswith("\n"):
+                    # Oversized line: discard its remainder in bounded
+                    # chunks and skip it.
+                    while True:
+                        rest = f.readline(max_line_chars + 1)
+                        if not rest or rest.endswith("\n"):
+                            break
+                    checked += 1
+                    continue
+                line = line.strip()
+                if not line:
+                    continue
+                checked += 1
+                try:
+                    data = json.loads(line)
+                except (ValueError, RecursionError):
+                    # ValueError covers json.JSONDecodeError plus
+                    # non-decode failures like integer literals over
+                    # Python's digit limit.
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                # Recognized line types take priority: a Codex record
+                # that happens to carry a (null/copied) sessionId key
+                # must not be misclassified as Claude. Records whose
+                # ``type`` is a non-string shape (list/dict/number)
+                # are malformed: they are skipped entirely -- neither
+                # crashing the set-membership check below nor letting
+                # a stray sessionId classify garbage as Claude.
+                line_type = data.get("type")
+                if line_type is not None and not isinstance(
+                    line_type, str
+                ):
+                    continue
+                if line_type in codex_line_types:
+                    return "codex"
+                # Legacy record_type lines: only a RECOGNIZED string
+                # value is Codex evidence. Field presence alone (or
+                # an unknown/null value) must not shadow stronger
+                # structural markers like a Claude sessionId below.
+                record_type = data.get("record_type")
+                if (
+                    isinstance(record_type, str)
+                    and record_type in codex_record_types
+                ):
+                    return "codex"
+                if (
+                    "id" in data
+                    and "timestamp" in data
+                    and ("git" in data or "instructions" in data)
+                ):
+                    # Legacy 2025 codex rollout header line.
+                    return "codex"
+                session_id = data.get("sessionId")
+                if isinstance(session_id, str) and session_id:
+                    return "claude"
+    except OSError:
+        return None
+    return None
+
+
 def is_valid_session(filepath: Path) -> bool:
     """
     Check if a session file is a valid resumable session (WHITELIST approach).
@@ -609,7 +717,7 @@ def is_valid_session(filepath: Path) -> bool:
     codex_valid_types = {"event_msg", "response_item", "turn_context"}
 
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
             has_any_content = False
 
             for line in f:
@@ -621,20 +729,38 @@ def is_valid_session(filepath: Path) -> bool:
 
                 try:
                     data = json.loads(line)
-                    entry_type = data.get("type", "")
-
-                    # Claude Code: valid type with non-null sessionId
-                    session_id = data.get("sessionId")
-                    if entry_type in claude_valid_types and session_id is not None:
-                        return True
-
-                    # Codex: valid conversation content type
-                    if entry_type in codex_valid_types:
-                        return True
-
-                except json.JSONDecodeError:
-                    # Skip malformed JSON lines, continue checking other lines
+                except (ValueError, RecursionError):
+                    # Skip malformed/unparseable JSON lines (including
+                    # ValueError from oversized integer literals) and
+                    # continue checking other lines.
                     continue
+
+                # Valid JSONL records like null / [] / "x" / 1 are not
+                # session lines: skip them instead of crashing.
+                if not isinstance(data, dict):
+                    continue
+
+                # Only string types are recognized: an unhashable
+                # list/dict value must be skipped, not crash the
+                # set-membership tests below.
+                entry_type = data.get("type")
+                if not isinstance(entry_type, str):
+                    continue
+
+                # Claude Code: valid type with a non-empty string
+                # sessionId (arrays/objects/numbers are not session
+                # ids and must not validate a record).
+                session_id = data.get("sessionId")
+                if (
+                    entry_type in claude_valid_types
+                    and isinstance(session_id, str)
+                    and session_id
+                ):
+                    return True
+
+                # Codex: valid conversation content type
+                if entry_type in codex_valid_types:
+                    return True
 
             # If we scanned entire file and found no valid message types
             # (only metadata or empty), session is invalid
@@ -716,6 +842,60 @@ def extract_session_metadata_codex(session_file: Path) -> Optional[dict]:
         return None
 
 
+def _iter_named_session_files(
+    session_id: str,
+    claude_home: Optional[str] = None,
+    codex_home: Optional[str] = None,
+) -> Iterator[Tuple[str, Path]]:
+    """Yield session files whose NAME contains ``session_id``.
+
+    Single shared implementation of the Claude/Codex home traversal
+    used by every session-id lookup (:func:`find_session_file` and
+    :func:`find_matching_session_files`), so the two cannot diverge.
+
+    The identifier is treated as a LITERAL string: glob
+    metacharacters (``* ? [``) are escaped, and an empty or
+    whitespace-only identifier matches nothing. Because a session id
+    names a single FILE, identifiers containing a path separator
+    (``/`` or ``\\``, which ``glob.escape`` cannot neutralize) also
+    match nothing rather than becoming multi-component glob patterns
+    that could reach into unexpected nested directories. Claude-home
+    matches are yielded first, then Codex-home matches, each in
+    deterministic sorted order. No content validation happens here —
+    callers apply their own per-agent validation.
+
+    Args:
+        session_id: Session identifier (full or partial), matched
+            literally against file names.
+        claude_home: Optional custom Claude home directory.
+        codex_home: Optional custom Codex home directory.
+
+    Yields:
+        ``(agent, file_path)`` tuples with agent "claude" or "codex".
+    """
+    import glob as glob_module
+
+    key = session_id.strip()
+    if not key or "/" in key or "\\" in key or os.sep in key:
+        return
+    pattern = f"*{glob_module.escape(key)}*.jsonl"
+
+    claude_base = get_claude_home(claude_home)
+    projects_dir = claude_base / "projects"
+    if projects_dir.is_dir():
+        for project_dir in sorted(projects_dir.iterdir()):
+            if project_dir.is_dir():
+                for f in sorted(project_dir.glob(pattern)):
+                    yield ("claude", f)
+
+    codex_base = get_codex_home(codex_home)
+    sessions_dir = codex_base / "sessions"
+    if sessions_dir.is_dir():
+        # Rollouts live under <year>/<month>/<day>/ directories.
+        for f in sorted(sessions_dir.glob(f"*/*/*/{pattern}")):
+            yield ("codex", f)
+
+
 def find_session_file(
     session_id: str,
     claude_home: Optional[str] = None,
@@ -723,6 +903,10 @@ def find_session_file(
 ) -> Optional[Tuple[str, Path, str, Optional[str]]]:
     """
     Search for session file by ID in both Claude and Codex homes.
+
+    Consumes the shared traversal in :func:`_iter_named_session_files`
+    (partial IDs supported, matched literally) and returns the first
+    candidate that passes per-agent validation.
 
     Args:
         session_id: Session identifier
@@ -733,57 +917,79 @@ def find_session_file(
         Tuple of (agent, file_path, project_path, git_branch) or None
         Note: project_path is the full working directory path, not just the name
     """
-    # Try Claude first
-    claude_base = get_claude_home(claude_home)
-    if claude_base.exists():
-        projects_dir = claude_base / "projects"
-        if projects_dir.exists():
-            for project_dir in projects_dir.iterdir():
-                if project_dir.is_dir():
-                    # Support partial session ID matching
-                    for session_file in project_dir.glob(f"*{session_id}*.jsonl"):
-                        # Skip malformed/invalid sessions
-                        if is_malformed_session(session_file):
-                            continue
-                        # Extract actual cwd from session file
-                        actual_cwd = extract_cwd_from_session(session_file)
-                        if not actual_cwd:
-                            # Skip sessions without cwd
-                            continue
-                        # Try to get git branch from session file
-                        git_branch = extract_git_branch_claude(session_file)
-                        return ("claude", session_file, actual_cwd, git_branch)
-
-    # Try Codex next
-    codex_base = get_codex_home(codex_home)
-    if codex_base.exists():
-        sessions_dir = codex_base / "sessions"
-        if sessions_dir.exists():
-            # Search through date directories
-            for year_dir in sessions_dir.iterdir():
-                if not year_dir.is_dir():
-                    continue
-                for month_dir in year_dir.iterdir():
-                    if not month_dir.is_dir():
-                        continue
-                    for day_dir in month_dir.iterdir():
-                        if not day_dir.is_dir():
-                            continue
-                        # Look for session files matching the ID
-                        for session_file in day_dir.glob(f"*{session_id}*.jsonl"):
-                            # Extract metadata from file
-                            metadata = extract_session_metadata_codex(session_file)
-                            if metadata:
-                                project_path = metadata.get("cwd", "")
-                                git_branch = metadata.get("branch")
-                                return (
-                                    "codex",
-                                    session_file,
-                                    project_path,
-                                    git_branch,
-                                )
+    for agent, session_file in _iter_named_session_files(
+        session_id, claude_home=claude_home, codex_home=codex_home
+    ):
+        if agent == "claude":
+            # Skip malformed/invalid sessions
+            if is_malformed_session(session_file):
+                continue
+            # Extract actual cwd from session file
+            actual_cwd = extract_cwd_from_session(session_file)
+            if not actual_cwd:
+                # Skip sessions without cwd
+                continue
+            # Try to get git branch from session file
+            git_branch = extract_git_branch_claude(session_file)
+            return ("claude", session_file, actual_cwd, git_branch)
+        else:
+            # Extract metadata from file
+            metadata = extract_session_metadata_codex(session_file)
+            if metadata:
+                project_path = metadata.get("cwd", "")
+                git_branch = metadata.get("branch")
+                return ("codex", session_file, project_path, git_branch)
 
     return None
+
+
+def find_matching_session_files(
+    session_id: str,
+    claude_home: Optional[str] = None,
+    codex_home: Optional[str] = None,
+) -> list:
+    """Find every VALID session file whose name contains ``session_id``.
+
+    Consumes the SAME shared traversal as :func:`find_session_file`
+    (:func:`_iter_named_session_files`: literal matching, escaped glob
+    metacharacters, deterministic sorted order) but collects ALL
+    matches, so callers can reject ambiguous partial IDs with a clear
+    error instead of silently acting on whichever file filesystem
+    iteration happened to yield first.
+
+    Every filename match is validated before it is returned
+    (mirroring the existing info/copy lookup behavior in
+    :func:`find_session_file`): a Claude-home candidate must be a
+    valid resumable session per :func:`is_valid_session`, and a
+    Codex-home candidate must be recognized as a Codex rollout by
+    :func:`detect_agent_from_content` (which also covers the legacy
+    2025 format) run as a STREAMING FULL-FILE check
+    (``max_lines=None``), so a valid rollout whose leading records
+    are unrecognized or oversized is still found via its later
+    ``session_meta``/``response_item`` records. Malformed/garbage
+    files that merely share a filename fragment therefore never
+    produce a false "found" result nor make an otherwise unique
+    valid session appear ambiguous.
+
+    Args:
+        session_id: Session identifier (full or partial), matched
+            literally against file names.
+        claude_home: Optional custom Claude home directory.
+        codex_home: Optional custom Codex home directory.
+
+    Returns:
+        List of ``(agent, file_path)`` tuples, possibly empty.
+    """
+    matches: list = []
+    for agent, f in _iter_named_session_files(
+        session_id, claude_home=claude_home, codex_home=codex_home
+    ):
+        if agent == "claude":
+            if is_valid_session(f):
+                matches.append(("claude", f))
+        elif detect_agent_from_content(f, max_lines=None) == "codex":
+            matches.append(("codex", f))
+    return matches
 
 
 def format_session_id_display(

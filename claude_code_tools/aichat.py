@@ -95,8 +95,14 @@ def main(ctx, claude_home, codex_home):
     # Auto-index sessions on every aichat command (incremental, fast if up-to-date)
     # Skip for build-index/clear-index to avoid double-indexing or state conflicts
     # In JSON mode (-j/--json), suppress all output for clean parsing
+    # 'port' is also skipped: its contract requires the detected
+    # direction line to be the FIRST output, so the indexer's progress
+    # bar must never print before it.
     skip_auto_index_cmds = ['build-index', 'clear-index', 'index-stats']
-    should_skip = any(cmd in sys.argv for cmd in skip_auto_index_cmds)
+    should_skip = (
+        ctx.invoked_subcommand == 'port'
+        or any(cmd in sys.argv for cmd in skip_auto_index_cmds)
+    )
     json_mode = any(arg in sys.argv for arg in ['-j', '--json'])
     if not should_skip:
         try:
@@ -1368,6 +1374,85 @@ def move_session(session, new_project, agent):
     else:
         console.print(f"\n[dim]To resume later:[/dim]")
         console.print(f"  [cyan]{resume_cmd}[/cyan]")
+
+
+@main.command("port")
+@click.argument("session", required=True)
+@click.option("--claude-home", help="Path to Claude home directory")
+@click.option("--codex-home", help="Path to Codex home directory")
+@click.pass_context
+def port_session(
+    ctx: click.Context,
+    session: str,
+    claude_home: "str | None",
+    codex_home: "str | None",
+) -> None:
+    """Port a session to the OTHER agent (codex -> claude).
+
+    Auto-detects which agent the session belongs to. Codex sessions
+    are converted into a flattened, resumable Claude Code session.
+    Claude sessions need no conversion: Codex imports them natively
+    via its /import slash command.
+
+    \b
+    Examples:
+        aichat port 019f6d85-df3c-7c83-84f6-b97e73305fcf
+        aichat port abc123 --claude-home ~/.claude-alt
+    """
+    import sys
+
+    from claude_code_tools.port_service import (
+        PortSessionError,
+        port_codex_session,
+        resolve_port_session,
+    )
+
+    # Group-level --claude-home/--codex-home (given BEFORE the
+    # subcommand) are stored on the root context; command-level
+    # options take precedence.
+    root_obj = ctx.find_root().obj or {}
+    claude_home = claude_home or root_obj.get("claude_home")
+    codex_home = codex_home or root_obj.get("codex_home")
+
+    try:
+        resolved = resolve_port_session(
+            session, claude_home=claude_home, codex_home=codex_home
+        )
+    except PortSessionError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if resolved.agent == "claude":
+        print("Detected source agent: claude — porting to Codex")
+        print()
+        print(
+            "No conversion needed: Codex supports importing Claude "
+            "Code sessions natively."
+        )
+        print(
+            "Just start `codex` and type /import to pick this "
+            "Claude session."
+        )
+        return
+
+    print("Detected source agent: codex — porting to Claude Code")
+    try:
+        result = port_codex_session(
+            resolved.session_file, claude_home=claude_home
+        )
+    except PortSessionError as e:
+        # Expected failure modes (missing/empty session, filesystem
+        # or encoding errors) become a clean error, not a traceback.
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    print()
+    print(f"New Claude session id: {result.new_session_id}")
+    print(f"Output file:           {result.output_file}")
+    print(f"Session cwd:           {result.cwd}")
+    print()
+    print("To resume:")
+    print(f"  {result.resume_hint}")
 
 
 @main.command("query")
