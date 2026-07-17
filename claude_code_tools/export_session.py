@@ -23,7 +23,7 @@ def _nonempty_str(value: Any) -> bool:
     Returns:
         True if the value is a non-empty ``str``.
     """
-    return isinstance(value, str) and bool(value)
+    return isinstance(value, str) and bool(value.strip())
 
 
 # Claude-internal wrapper tags (local command execution wrappers,
@@ -455,7 +455,7 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
         with open(
             session_file, "r", encoding="utf-8", errors="replace"
         ) as f:
-            for line_num, line in enumerate(f, 1):
+            for line in f:
                 line = line.strip()
                 if not line:
                     continue
@@ -466,7 +466,6 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
                     # ValueError covers json.JSONDecodeError plus
                     # non-decode failures like oversized integers.
                     continue
-
                 # Valid JSONL records like null / [] / 1 are not
                 # session lines: skip them instead of crashing.
                 if not isinstance(data, dict):
@@ -566,12 +565,11 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
                 ):
                     session_start_timestamp = data["timestamp"]
 
-                # Stop once we have the essential metadata (cwd and branch)
-                # or after 500 lines as a safety limit
-                if (metadata["cwd"] and metadata["branch"]) or line_num >= 500:
+                # Stop once we have the essential metadata (cwd and branch).
+                if metadata["cwd"] and metadata["branch"]:
                     break
 
-    except (OSError, IOError):
+    except (OSError, IOError, UnicodeError):
         pass
 
     # Note: customTitle extraction is done in search_index.py's _extract_session_content
@@ -617,7 +615,7 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
             session_file, "r", encoding="utf-8", errors="replace"
         ) as f:
             metadata["lines"] = sum(1 for _ in f)
-    except (OSError, IOError):
+    except (OSError, IOError, UnicodeError):
         metadata["lines"] = 0
 
     # Derive project name from cwd

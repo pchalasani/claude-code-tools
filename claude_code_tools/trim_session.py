@@ -240,8 +240,10 @@ def is_trimmed_session(session_file: Path) -> bool:
                 return False
 
             data = json.loads(first_line)
+            if not isinstance(data, dict):
+                return False
             return "trim_metadata" in data or "continue_metadata" in data
-    except (json.JSONDecodeError, IOError):
+    except (json.JSONDecodeError, IOError, UnicodeError):
         return False
 
 
@@ -267,12 +269,14 @@ def get_session_derivation_type(session_file: Path) -> Optional[str]:
                 return None
 
             data = json.loads(first_line)
+            if not isinstance(data, dict):
+                return None
             if "trim_metadata" in data:
                 return "trimmed"
             elif "continue_metadata" in data:
                 return "continued"
             return None
-    except (json.JSONDecodeError, IOError):
+    except (json.JSONDecodeError, IOError, UnicodeError):
         return None
 
 

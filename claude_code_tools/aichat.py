@@ -30,6 +30,26 @@ class SessionIDGroup(click.Group):
         return super().parse_args(ctx, args)
 
 
+class ResolveCommand(click.Command):
+    """Click command that renders resolver usage errors without usage text."""
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        """Parse arguments, converting Click usage failures to resolver errors."""
+        import sys
+
+        from claude_code_tools.resolve_session import _render_error
+
+        raw_args = tuple(args)
+        try:
+            return super().parse_args(ctx, args)
+        except click.UsageError as error:
+            pretty = "--pretty" in raw_args or (
+                "--json" not in raw_args and sys.stdout.isatty()
+            )
+            _render_error("invalid_input", error.format_message(), pretty)
+            ctx.exit(1)
+
+
 @click.group(cls=SessionIDGroup, invoke_without_command=True)
 @click.version_option()
 @click.option(
@@ -100,7 +120,8 @@ def main(ctx, claude_home, codex_home):
     # bar must never print before it.
     skip_auto_index_cmds = ['build-index', 'clear-index', 'index-stats']
     should_skip = (
-        ctx.invoked_subcommand == 'port'
+        ctx.invoked_subcommand in ('port', 'resolve')
+        or ctx.invoked_subcommand in skip_auto_index_cmds
         or any(cmd in sys.argv for cmd in skip_auto_index_cmds)
     )
     json_mode = any(arg in sys.argv for arg in ['-j', '--json'])
@@ -132,6 +153,54 @@ def main(ctx, claude_home, codex_home):
             select_target='action',
             results_title=' Select a session ',
         )
+
+
+@main.command("resolve", cls=ResolveCommand)
+@click.argument("query")
+@click.option(
+    "--agent",
+    type=str,
+    metavar="claude|codex",
+    default="claude",
+    show_default=True,
+)
+@click.option(
+    "--home",
+    type=click.Path(readable=False),
+    help="Claude or Codex home directory to search.",
+)
+@click.option("--json", "json_output", is_flag=True, help="Force JSON output.")
+@click.option(
+    "--pretty",
+    "pretty_output",
+    is_flag=True,
+    help="Force human-readable output.",
+)
+@click.pass_context
+def resolve_session_cmd(
+    ctx: click.Context,
+    query: str,
+    agent: str,
+    home: str | None,
+    json_output: bool,
+    pretty_output: bool,
+) -> None:
+    """Resolve a name, full session ID, or partial session ID."""
+    import sys
+
+    from claude_code_tools.resolve_session import run
+
+    if json_output and pretty_output:
+        click.echo(
+            '{"error":"invalid_format",'
+            '"detail":"Choose only one of --json or --pretty."}'
+        )
+        sys.exit(1)
+    if home is None:
+        home_key = "codex_home" if agent.casefold() == "codex" else "claude_home"
+        home = ctx.ensure_object(dict).get(home_key)
+    fmt = "json" if json_output else "pretty" if pretty_output else "auto"
+    sys.exit(run(query, agent.lower(), home, fmt))
 
 
 # Shared help text for find commands
