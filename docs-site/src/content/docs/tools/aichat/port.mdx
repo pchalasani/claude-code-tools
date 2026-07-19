@@ -1,0 +1,109 @@
+---
+title: "Port (Codex ↔ Claude)"
+---
+
+`aichat port` converts a session from one coding agent into a **native,
+resumable** session of the other agent -- so you can pick up a Codex
+conversation inside Claude Code (or vice versa) with the full transcript as
+real conversation history, not a summary.
+
+:::note[Installation]
+Part of the `claude-code-tools` package.
+See [Quick Start](../../../getting-started/) for installation.
+:::
+
+## Usage
+
+```bash
+aichat port <session>
+```
+
+`<session>` accepts every lookup form of the shared
+[resolver](../resolve/):
+
+- a **full session id** (Claude UUID or Codex thread id)
+- a **partial id** — prefix, middle, or suffix fragment (at least 4
+  hex/dash characters)
+- a **session name** — the title set with `/rename` (Claude
+  custom-title, or the Codex thread title)
+- a **timestamp fragment** of a codex rollout file name, e.g.
+  `2026-03-25T14-50` or a `rollout-2026-03-25...` prefix
+- a **session file path** (inside or outside the agent homes)
+
+Lookup is global across **all projects** in both the Claude and Codex
+homes. The query must resolve to exactly one session; if several
+match (in one agent or across both), the command errors with the
+candidate list — one line per candidate showing the agent, session
+id, name (when known), and modification time. The listing shows at
+most 25 candidates and ends with a `... and N more` tail when the
+match set is larger.
+
+The source agent is auto-detected from the resolved session (or file
+path content), and the session is ported to the *other* agent. The
+detected direction is always printed first:
+
+```text
+Detected source agent: codex — porting to Claude Code
+
+New Claude session id: e8f54e2c-2607-416b-be11-aaf68ce8e3e6
+Output file:           ~/.claude/projects/-Users-you-myproject/e8f54e2c-....jsonl
+Session cwd:           /Users/you/myproject
+
+To resume:
+  cd /Users/you/myproject && claude --resume e8f54e2c-2607-416b-be11-aaf68ce8e3e6
+```
+
+Options:
+
+| Option | Description |
+|--------|-------------|
+| `--claude-home PATH` | Override `~/.claude` |
+| `--codex-home PATH` | Override `~/.codex` |
+
+## Codex → Claude
+
+A Codex rollout file is converted into a Claude Code session JSONL under
+`~/.claude/projects/<project>/`, resumable with `claude --resume <new-id>`
+from the session's working directory.
+
+How the conversion works:
+
+- User and assistant messages carry over as real transcript turns.
+- Tool calls and their outputs are **flattened to labeled text** (e.g.
+  `[codex tool call] shell(...)`), since the two agents use different tool
+  schemas. Tool arguments/results are truncated past a cap; normal message
+  text is preserved verbatim.
+- Codex-internal noise is dropped: encrypted reasoning, inter-agent payloads,
+  injected instruction wrappers (`<environment_context>`, AGENTS.md blocks,
+  etc.).
+- The transcript is normalized to strict user/assistant alternation, and the
+  file is written atomically (no partial sessions on failure).
+- The first line records lineage (`continue_metadata` with the source rollout
+  path), so [`aichat lineage`](./actions/) tracks the Codex parent.
+
+Both the modern rollout format and the legacy 2025 format are supported.
+
+## Claude → Codex
+
+A Claude Code session is converted into a native Codex rollout under
+`~/.codex/sessions/YYYY/MM/DD/`, resumable with `codex resume <new-id>`.
+
+The same flattening rules apply in reverse: Claude `tool_use`/`tool_result`
+blocks become labeled text, thinking blocks and sidechain (sub-agent) traffic
+are dropped, and slash-command wrappers are skipped.
+
+:::tip[Native alternative]
+Codex can also import Claude sessions itself: start `codex` and type
+`/import`. The interactive importer covers recent sessions (last 30 days, up
+to 50); `aichat port` is scriptable, has no such limits, and records lineage
+metadata for `aichat` tooling.
+:::
+
+## Fidelity notes
+
+- The ported transcript is a **faithful flattening**, not a byte-level
+  replay: the target agent sees every turn's text and all tool activity as
+  labeled text, which is what matters for continuing the work.
+- Very long sessions port fine (conversion is streaming), but resuming a huge
+  transcript consumes context in the target agent -- consider
+  [trimming](./resume/) first.

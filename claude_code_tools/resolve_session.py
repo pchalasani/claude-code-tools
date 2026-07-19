@@ -5,32 +5,35 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-import sys
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, TextIO
 
-from rich import box
-from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
-from rich.text import Text
-
+from claude_code_tools.resolve_session_names import codex_thread_names
 from claude_code_tools.session_utils import (
-    format_session_id_display,
     get_claude_home,
     get_codex_home,
     is_valid_session,
 )
 
 Agent = Literal["claude", "codex"]
-MatchKind = Literal["id", "partial-id", "name"]
+MatchKind = Literal["id", "partial-id", "id-substring", "name", "filename"]
 ResultKind = Literal["single", "ambiguous", "not_found"]
 OutputFormat = Literal["auto", "json", "pretty"]
 
 _PARTIAL_ID_RE = re.compile(r"^[0-9a-f-]+$", re.IGNORECASE)
 _CODEX_STATE_RE = re.compile(r"state_(\d+)\.sqlite$")
+
+# Queries containing path separators or glob metacharacters never
+# match ANY tier, even when a session name literally contains them:
+# such strings are paths or patterns, not session references.
+_REJECTED_QUERY_CHARS = frozenset("/\\*?[]")
+
+# Maximum characters materialized for any single transcript line while
+# sniffing session files; longer lines are discarded in bounded chunks.
+_MAX_RECORD_CHARS = 1_000_000
 
 
 class ResolverError(Exception):
@@ -173,6 +176,34 @@ def _normalize_directory(value: object) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
+def _iter_bounded_lines(transcript: TextIO) -> Iterator[str]:
+    """Yield transcript lines while bounding per-line memory.
+
+    Reads with ``readline`` so a single enormous unterminated JSONL
+    record never materializes more than :data:`_MAX_RECORD_CHARS`
+    characters at a time; oversized lines are discarded in bounded
+    chunks and skipped entirely.
+
+    Args:
+        transcript: An open text stream over a JSONL transcript.
+
+    Yields:
+        Each physical line no longer than the per-line bound.
+    """
+    while True:
+        line = transcript.readline(_MAX_RECORD_CHARS + 1)
+        if not line:
+            return
+        if len(line) > _MAX_RECORD_CHARS and not line.endswith("\n"):
+            # Oversized line: discard its remainder in bounded chunks.
+            while True:
+                rest = transcript.readline(_MAX_RECORD_CHARS + 1)
+                if not rest or rest.endswith("\n"):
+                    break
+            continue
+        yield line
+
+
 def _has_claude_session_record(session_file: Path) -> bool:
     """Return whether a transcript contains a Claude conversation record.
 
@@ -180,6 +211,11 @@ def _has_claude_session_record(session_file: Path) -> bool:
     record metadata, including ``sessionId``. It still requires at least one
     parseable Claude conversation record so empty, unreadable, or wholly
     truncated files are not presented as resumable sessions.
+
+    Hostile records are isolated to this file: oversized numeric
+    literals (ValueError) and pathologically nested JSON
+    (RecursionError) skip only the offending line, and per-line reads
+    are memory bounded via :func:`_iter_bounded_lines`.
     """
     conversation_types = {
         "assistant",
@@ -190,10 +226,10 @@ def _has_claude_session_record(session_file: Path) -> bool:
     }
     try:
         with session_file.open("r", encoding="utf-8") as transcript:
-            for line in transcript:
+            for line in _iter_bounded_lines(transcript):
                 try:
                     record = json.loads(line)
-                except json.JSONDecodeError:
+                except (ValueError, RecursionError):
                     continue
                 if not isinstance(record, dict):
                     continue
@@ -401,10 +437,53 @@ def _deduplicate_records(
     return unique
 
 
+def _merge_database_and_disk(
+    database_records: list[SessionRecord],
+    disk_records: list[SessionRecord],
+) -> list[SessionRecord]:
+    """Merge Codex records with the state database taking priority.
+
+    Disk-fallback records are appended only when neither their
+    session ID nor their canonical rollout path is already
+    represented by a database record, so the database's
+    authoritative metadata (title, cwd, archived) survives
+    duplicate rollout copies regardless of which file was modified
+    most recently. Both inputs arrive already deduplicated by
+    their enumerators.
+    """
+    merged = list(database_records)
+    seen_ids = {record.session_id.casefold() for record in merged}
+    seen_paths = {
+        str(_absolute(Path(record.session_file))) for record in merged
+    }
+    for record in disk_records:
+        session_id = record.session_id.casefold()
+        session_path = str(_absolute(Path(record.session_file)))
+        if session_id in seen_ids or session_path in seen_paths:
+            continue
+        seen_ids.add(session_id)
+        seen_paths.add(session_path)
+        merged.append(record)
+    return merged
+
+
 def _enumerate_codex_database(
     home: Path, database: Path
 ) -> list[SessionRecord]:
-    """Enumerate Codex threads from a read-only state database."""
+    """Enumerate Codex threads from a read-only state database.
+
+    Rollouts are accepted when they parse as modern sessions or as
+    legacy 2025-format rollouts — the same validity rule the disk
+    fallback applies — so legacy threads indexed in the database
+    keep their authoritative title, cwd, and archived metadata.
+
+    Rows whose claimed ID contradicts the ID embedded in the
+    referenced rollout's filename are stale or corrupt and are
+    rejected, so ID A can never silently resolve to rollout B's
+    transcript.
+    """
+    from claude_code_tools import find_codex_session as codex_sessions
+
     uri = _absolute(database).as_uri() + "?mode=ro"
     try:
         connection = sqlite3.connect(uri, uri=True)
@@ -462,7 +541,19 @@ def _enumerate_codex_database(
             session_file = _codex_path(row["rollout_path"], home)
             if session_file is None or not session_file.is_file():
                 continue
-            if not is_valid_session(session_file):
+            canonical_id = codex_sessions.extract_session_id_from_filename(
+                session_file.name
+            )
+            if (
+                isinstance(canonical_id, str)
+                and canonical_id.casefold() != session_id.casefold()
+            ):
+                # Stale/corrupt row: it claims one ID but points at a
+                # rollout whose filename encodes a different one.
+                continue
+            if not is_valid_session(session_file) and not (
+                _is_legacy_codex_rollout(session_file)
+            ):
                 continue
             modified, timestamp = _mtime(session_file)
             title = row["title"] if "title" in selected else None
@@ -501,8 +592,123 @@ def _enumerate_codex_database(
     return _deduplicate_records(records)
 
 
-def _enumerate_codex_fallback(home: Path) -> list[SessionRecord]:
-    """Enumerate rollout files when Codex has no state database."""
+def _is_legacy_codex_rollout(session_file: Path) -> bool:
+    """Return whether a rollout uses the legacy 2025 header format.
+
+    Legacy rollouts start with a header record carrying ``id`` and
+    ``timestamp`` plus ``git``/``instructions``; they contain none of
+    the modern line types that :func:`is_valid_session` recognizes,
+    so they need their own acceptance check. Only the first parseable
+    records are inspected, with per-line memory bounded via
+    :func:`_iter_bounded_lines`; garbage files never qualify.
+
+    A header is accepted only when ``id`` and ``timestamp`` are
+    nonempty strings, the ``id`` agrees with the ID embedded in the
+    rollout filename (when the filename encodes one), and the record
+    carries recognizable legacy content — a ``git`` object or string
+    ``instructions``. Truncated files whose surviving header holds
+    only null values are therefore never exposed as resumable.
+
+    Args:
+        session_file: Candidate rollout file.
+
+    Returns:
+        True when a valid legacy header record is found.
+    """
+    from claude_code_tools.find_codex_session import (
+        extract_session_id_from_filename,
+    )
+
+    filename_id = extract_session_id_from_filename(session_file.name)
+    try:
+        with session_file.open(
+            "r", encoding="utf-8", errors="replace"
+        ) as transcript:
+            checked = 0
+            for line in _iter_bounded_lines(transcript):
+                if checked >= 25:
+                    break
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                checked += 1
+                try:
+                    record = json.loads(stripped)
+                except (ValueError, RecursionError):
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                header_id = record.get("id")
+                timestamp = record.get("timestamp")
+                if not isinstance(header_id, str) or not header_id.strip():
+                    continue
+                if not isinstance(timestamp, str) or not timestamp.strip():
+                    continue
+                if (
+                    isinstance(filename_id, str)
+                    and header_id.casefold() != filename_id.casefold()
+                ):
+                    continue
+                if isinstance(record.get("git"), dict) or isinstance(
+                    record.get("instructions"), str
+                ):
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def _codex_rollout_files(sessions_root: Path) -> list[Path]:
+    """List rollout files beneath a Codex sessions tree by name only.
+
+    Rollouts normally use YYYY/MM/DD directories, but any depth is
+    accepted. Paths yielded before an inaccessible directory
+    interrupts traversal are preserved; per-file guards downstream
+    isolate failures in those paths.
+    """
+    rollout_files: list[Path] = []
+    try:
+        for path in sessions_root.rglob("rollout-*.jsonl"):
+            rollout_files.append(path)
+    except OSError:
+        pass
+    rollout_files.sort(reverse=True)
+    return rollout_files
+
+
+def _codex_fallback_directory(session_file: Path) -> str | None:
+    """Extract a rollout's cwd for a disk-fallback record, or None."""
+    from claude_code_tools import find_codex_session as codex_sessions
+
+    try:
+        metadata = codex_sessions.extract_session_metadata(session_file)
+    except (OSError, UnicodeError, ValueError, RecursionError):
+        return None
+    if not isinstance(metadata, dict):
+        return None
+    return _normalize_directory(metadata.get("cwd"))
+
+
+def _enumerate_codex_fallback(
+    home: Path,
+    *,
+    skip_ids: frozenset[str] = frozenset(),
+    skip_paths: frozenset[str] = frozenset(),
+) -> list[SessionRecord]:
+    """Enumerate Codex rollout files directly from disk.
+
+    Used on its own when a Codex home has no state database, and
+    merged with the database enumeration otherwise so rollouts the
+    database has not indexed (e.g. files written by ``aichat port``)
+    still resolve.
+
+    Discovery walks rollout FILENAMES first: each session ID comes
+    from the filename, so rollouts already indexed by the database
+    (``skip_ids``/``skip_paths``, casefolded IDs and absolute paths)
+    are skipped without ever being opened. Only genuinely unindexed
+    rollouts are read for validation and metadata, keeping healthy
+    database-backed homes from re-reading every transcript.
+    """
     from claude_code_tools import find_codex_session as codex_sessions
 
     sessions_root = home / "sessions"
@@ -515,66 +721,117 @@ def _enumerate_codex_fallback(home: Path) -> list[SessionRecord]:
         )
 
     records: list[SessionRecord] = []
-    try:
-        found = codex_sessions.find_sessions(
-            home,
-            [],
-            num_matches=None,
-            global_search=True,
+    for rollout in _codex_rollout_files(sessions_root):
+        session_file = _absolute(rollout)
+        if str(session_file) in skip_paths:
+            continue
+        session_id = codex_sessions.extract_session_id_from_filename(
+            session_file.name
         )
-        for session in found:
-            raw_session_file = session.get("file_path")
-            if not isinstance(raw_session_file, str) or not raw_session_file:
-                continue
-            session_file = _absolute(Path(raw_session_file))
-            session_id = codex_sessions.extract_session_id_from_filename(
-                session_file.name
-            )
-            if not isinstance(session_id, str) or not session_id:
-                continue
-            if not is_valid_session(session_file):
-                continue
+        if not isinstance(session_id, str) or not session_id:
+            continue
+        if session_id.casefold() in skip_ids:
+            continue
+        if not is_valid_session(session_file) and not (
+            _is_legacy_codex_rollout(session_file)
+        ):
+            continue
 
-            try:
-                modified, timestamp = _mtime(session_file)
-            except ResolverError as error:
-                if _is_unreadable_session(error):
-                    continue
-                raise
+        try:
+            modified, timestamp = _mtime(session_file)
+        except ResolverError as error:
+            if _is_unreadable_session(error):
+                continue
+            raise
 
-            directory = _normalize_directory(session.get("cwd"))
-            records.append(
-                SessionRecord(
-                    agent="codex",
-                    session_id=session_id,
-                    name=None,
-                    directory=directory,
-                    home=str(home),
-                    session_file=str(session_file),
-                    matched_by=None,
-                    modified=modified,
-                    archived=False,
-                    _modified_timestamp=timestamp,
-                )
+        records.append(
+            SessionRecord(
+                agent="codex",
+                session_id=session_id,
+                name=None,
+                directory=_codex_fallback_directory(session_file),
+                home=str(home),
+                session_file=str(session_file),
+                matched_by=None,
+                modified=modified,
+                archived=False,
+                _modified_timestamp=timestamp,
             )
-    except OSError as error:
-        raise ResolverError(
-            "unreadable_home",
-            f"Cannot scan Codex sessions {sessions_root}: {error}",
-        ) from error
+        )
     return _deduplicate_records(records)
 
 
-def enumerate_codex_sessions(home: Path) -> list[SessionRecord]:
-    """Enumerate Codex sessions from SQLite or recursive rollout fallback."""
+def enumerate_codex_sessions(
+    home: Path, *, fallback_on_database_error: bool = False
+) -> list[SessionRecord]:
+    """Enumerate Codex sessions from SQLite merged with on-disk rollouts.
+
+    The highest-numbered state database is authoritative for session
+    metadata (title, cwd, archived) whenever present, but rollout
+    files missing from it — e.g. sessions written directly to disk by
+    ``aichat port`` — are still enumerated from the sessions tree.
+    Database records win deduplication over their disk counterparts,
+    and rollouts the database already indexed are skipped by filename
+    during disk discovery so they are never re-read.
+
+    Args:
+        home: Absolute Codex home directory.
+        fallback_on_database_error: When True, a corrupt, incomplete,
+            or locked state database degrades to disk-only rollout
+            enumeration instead of raising, so valid rollouts still
+            resolve during database damage or migration.
+
+    Returns:
+        All discovered Codex session records.
+    """
     _validate_home(home)
     database = _codex_state_database(home)
     if database is None:
-        return _enumerate_codex_fallback(home)
+        return _apply_codex_thread_names(_enumerate_codex_fallback(home), home)
+    try:
+        database_records = _enumerate_codex_database(home, database)
+    except ResolverError as error:
+        if fallback_on_database_error and error.code in (
+            "invalid_database",
+            "unreadable_database",
+        ):
+            return _apply_codex_thread_names(
+                _enumerate_codex_fallback(home), home
+            )
+        raise
+    disk_records = _enumerate_codex_fallback(
+        home,
+        skip_ids=frozenset(
+            record.session_id.casefold() for record in database_records
+        ),
+        skip_paths=frozenset(
+            str(_absolute(Path(record.session_file)))
+            for record in database_records
+        ),
+    )
+    return _apply_codex_thread_names(
+        _merge_database_and_disk(database_records, disk_records), home
+    )
 
-    # The highest-numbered state database is authoritative whenever present.
-    # Rollout discovery is only a fallback for homes with no state database.
-    return _enumerate_codex_database(home, database)
+
+def _apply_codex_thread_names(
+    records: list[SessionRecord], home: Path
+) -> list[SessionRecord]:
+    """Overlay explicit ``session_index.jsonl`` thread names.
+
+    An explicit, user-assigned thread name is authoritative over the
+    state database's auto-captured first-message title; records
+    without an index entry keep their existing name.
+    """
+    names = codex_thread_names(home)
+    if not names:
+        return records
+    return [
+        replace(record, name=names[record.session_id.casefold()])
+        if record.session_id.casefold() in names
+        else record
+        for record in records
+    ]
 
 
 def _resolved_home(agent: Agent, home: str | Path | None) -> Path:
@@ -593,7 +850,23 @@ def _resolved_home(agent: Agent, home: str | Path | None) -> Path:
 def _matches(
     records: list[SessionRecord], query: str
 ) -> tuple[list[SessionRecord], MatchKind | None]:
-    """Apply ordered resolution tiers and return only the winning tier."""
+    """Apply ordered resolution tiers and return only the winning tier.
+
+    Tier order: exact ID, exact name, ID prefix, ID substring,
+    session-file name substring, then name substring. Only the first
+    non-empty tier is returned, so an ID prefix match always beats a
+    mid-ID substring match. Filename fragments rank above name
+    substrings because they are structural (a timestamp fragment like
+    "2026-03-25T14-50" identifies one rollout file) while session
+    names are free text that may incidentally contain the same
+    fragment and would otherwise drown the precise match.
+
+    Queries containing path separators or glob metacharacters are
+    rejected before ANY tier runs, so they match nothing even when a
+    session is literally named ``a/b`` or ``has*star``.
+    """
+    if any(char in _REJECTED_QUERY_CHARS for char in query):
+        return [], None
     lowered = query.casefold()
     exact_ids = [
         record
@@ -612,15 +885,40 @@ def _matches(
     if exact_names:
         return exact_names, "name"
 
+    eligible = [record for record in records if record._eligible]
     if len(query) >= 4 and _PARTIAL_ID_RE.fullmatch(query):
         partial_ids = [
             record
-            for record in records
-            if record._eligible
-            and record.session_id.casefold().startswith(lowered)
+            for record in eligible
+            if record.session_id.casefold().startswith(lowered)
         ]
         if partial_ids:
             return partial_ids, "partial-id"
+        id_substrings = [
+            record
+            for record in eligible
+            if lowered in record.session_id.casefold()
+        ]
+        if id_substrings:
+            return id_substrings, "id-substring"
+
+    # Filename fragments (e.g. codex "rollout-..." prefixes or
+    # "2026-03-25T14-50" timestamp fragments) are matched as literal
+    # substrings of the already-enumerated session file basenames;
+    # nothing is ever interpolated into a glob pattern. Path
+    # separators were already rejected above for every tier. This tier
+    # outranks name substrings: names are free text that can
+    # incidentally contain a timestamp fragment (e.g. a session whose
+    # first message quotes a rollout filename) and would otherwise
+    # shadow the single structural match.
+    if len(query) >= 4:
+        filenames = [
+            record
+            for record in eligible
+            if lowered in Path(record.session_file).name.casefold()
+        ]
+        if filenames:
+            return filenames, "filename"
 
     substring_names = [
         record
@@ -636,13 +934,21 @@ def resolve(
     query: str,
     agent: Agent,
     home: str | Path | None = None,
+    *,
+    fallback_on_database_error: bool = False,
 ) -> ResolveResult:
     """Resolve a query to one session, ambiguity, or no result.
 
     Args:
-        query: Session name, full ID, or ID prefix.
+        query: Session name, full ID, ID prefix or substring, or a
+            session-file name fragment (e.g. a codex rollout
+            timestamp such as ``2026-03-25T14-50``). Queries with
+            path separators or glob metacharacters match nothing.
         agent: Agent whose home should be searched.
         home: Optional explicit agent home.
+        fallback_on_database_error: When True, a broken Codex state
+            database degrades to disk-only rollout enumeration
+            instead of raising a structured database error.
 
     Returns:
         A tagged resolution result.
@@ -654,7 +960,10 @@ def resolve(
     records = (
         enumerate_claude_sessions(resolved_home)
         if agent == "claude"
-        else enumerate_codex_sessions(resolved_home)
+        else enumerate_codex_sessions(
+            resolved_home,
+            fallback_on_database_error=fallback_on_database_error,
+        )
     )
     matches, matched_by = _matches(records, query)
     if not matches or matched_by is None:
@@ -684,149 +993,3 @@ def resolve(
         match_count=len(tagged),
     )
 
-
-def _result_payload(result: ResolveResult) -> dict[str, object]:
-    """Convert a tagged result to its exact JSON payload."""
-    if result.kind == "single":
-        return result.records[0].to_dict()
-    if result.kind == "ambiguous":
-        return {
-            "error": "ambiguous",
-            "query": result.query,
-            "agent": result.agent,
-            "match_count": result.match_count,
-            "candidates": [record.to_dict() for record in result.records],
-        }
-    return {
-        "error": "not_found",
-        "query": result.query,
-        "agent": result.agent,
-        "home": result.home,
-    }
-
-
-def render_json(result: ResolveResult) -> None:
-    """Print one JSON object for a tagged resolution result."""
-    print(json.dumps(_result_payload(result)))
-
-
-def _success_table(record: SessionRecord) -> Table:
-    """Build the human-readable table for one resolved session."""
-    table = Table(box=None, show_header=False, pad_edge=False)
-    table.add_column("Field", style="bold cyan", no_wrap=True)
-    table.add_column("Value")
-    values = (
-        ("Agent", record.agent),
-        (
-            "Session ID",
-            format_session_id_display(
-                record.session_id,
-                truncate_length=len(record.session_id),
-            ).removesuffix("..."),
-        ),
-        ("Name", record.name or "—"),
-        ("Directory", record.directory or "—"),
-        ("Home", record.home),
-        ("Session file", record.session_file),
-        ("Matched by", record.matched_by or "—"),
-        ("Modified", record.modified),
-        ("Archived", "yes" if record.archived else "no"),
-    )
-    for label, value in values:
-        table.add_row(label, Text(value))
-    return table
-
-
-def _candidate_table(records: tuple[SessionRecord, ...]) -> Table:
-    """Build the disambiguation table for candidate sessions."""
-    table = Table(box=box.SIMPLE_HEAVY, header_style="bold cyan")
-    table.add_column("Session ID", no_wrap=True)
-    table.add_column("Name")
-    table.add_column("Directory")
-    table.add_column("Modified", no_wrap=True)
-    table.add_column("Archived", no_wrap=True)
-    for record in records:
-        table.add_row(
-            Text(format_session_id_display(record.session_id)),
-            Text(record.name or "—"),
-            Text(record.directory or "—"),
-            Text(record.modified),
-            "yes" if record.archived else "no",
-        )
-    return table
-
-
-def render_pretty(result: ResolveResult) -> None:
-    """Print a Rich panel or table for a tagged resolution result."""
-    console = Console()
-    if result.kind == "single":
-        console.print(Panel(_success_table(result.records[0]), title="Session"))
-    elif result.kind == "ambiguous":
-        message = Text(style="yellow")
-        message.append(f"{result.match_count} sessions match '")
-        message.append(result.query)
-        message.append("' — disambiguate:")
-        console.print(message)
-        console.print(_candidate_table(result.records))
-    else:
-        message = Text(style="yellow")
-        message.append("No session found for '")
-        message.append(result.query)
-        message.append(f"' in {result.home}")
-        console.print(message)
-
-
-def _render_error(code: str, detail: str, pretty: bool) -> None:
-    """Render an expected operational error."""
-    if pretty:
-        message = Text()
-        message.append("Error:", style="red")
-        message.append(f" {detail}")
-        Console().print(message)
-    else:
-        print(json.dumps({"error": code, "detail": detail}))
-
-
-def run(
-    query: str,
-    agent: str,
-    home: str | Path | None,
-    fmt: str = "auto",
-) -> int:
-    """Resolve, render, and return the command's process exit code.
-
-    Args:
-        query: Session name, full ID, or ID prefix.
-        agent: ``claude`` or ``codex``.
-        home: Optional explicit agent home.
-        fmt: ``auto``, ``json``, or ``pretty``.
-
-    Returns:
-        Zero for a unique match, two for ambiguity, or one otherwise.
-    """
-    pretty = fmt == "pretty" or (fmt == "auto" and sys.stdout.isatty())
-    try:
-        if agent not in ("claude", "codex"):
-            raise ResolverError("invalid_agent", f"Unsupported agent: {agent}")
-        if fmt not in ("auto", "json", "pretty"):
-            raise ResolverError("invalid_format", f"Unsupported format: {fmt}")
-        result = resolve(query, cast(Agent, agent), home)
-    except ResolverError as error:
-        _render_error(error.code, error.detail, pretty)
-        return 1
-    except (OSError, sqlite3.Error) as error:
-        _render_error(type(error).__name__, str(error), pretty)
-        return 1
-    except Exception as error:
-        _render_error("resolver_error", str(error) or type(error).__name__, pretty)
-        return 1
-
-    if pretty:
-        render_pretty(result)
-    else:
-        render_json(result)
-    if result.kind == "single":
-        return 0
-    if result.kind == "ambiguous":
-        return 2
-    return 1

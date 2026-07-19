@@ -8,24 +8,87 @@ from io import StringIO
 from pathlib import Path
 from typing import Any, Optional
 
+def _nonempty_str(value: Any) -> bool:
+    """Check whether a metadata value is a usable non-empty string.
+
+    Session files are untrusted input: a field that should hold a
+    string may carry any JSON shape (``{}``, ``[]``, numbers, null).
+    Only non-empty strings are accepted; everything else is ignored
+    so extraction never crashes on a hostile shape (e.g. ``Path()``
+    raising ``TypeError`` on a truthy non-path value).
+
+    Args:
+        value: Raw value extracted from a session line.
+
+    Returns:
+        True if the value is a non-empty ``str``.
+    """
+    return isinstance(value, str) and bool(value.strip())
+
+
+# Claude-internal wrapper tags (local command execution wrappers,
+# caveat banners, background-task completion notifications) recorded
+# as plain type=user lines that were not typed by the user. This is
+# the single shared source of truth for Claude wrapper-tag knowledge:
+# the claude -> codex porter (port_claude_noise) consumes it too, so
+# the two classifiers can never diverge.
+CLAUDE_INTERNAL_WRAPPER_TAGS = frozenset(
+    {
+        "command-name",
+        "command-message",
+        "command-args",
+        "command-contents",
+        "local-command-caveat",
+        "local-command-stdout",
+        "local-command-stderr",
+        "bash-input",
+        "bash-stdout",
+        "bash-stderr",
+        "bash-notification",
+        "task-notification",
+    }
+)
+
+# Codex system tags (environment/context injection).
+CODEX_INTERNAL_WRAPPER_TAGS = frozenset(
+    {
+        "environment_context",
+        "user_instructions",
+        "user_shell_command",
+        "recommended_plugins",
+        "skills_instructions",
+        "apps_instructions",
+        "plugins_instructions",
+        "multi_agent_mode",
+        "turn_aborted",
+    }
+)
+
 # Known system-injected XML tags that appear at the start of messages.
 # Using a whitelist of specific tags avoids filtering legitimate user
 # messages that start with HTML/XML like <div> or <svg>.
-NON_GENUINE_XML_TAGS = {
-    # Claude system tags (local command execution)
-    "command-name",
-    "command-message",
-    "command-args",
-    "local-command-stdout",
-    "bash-input",
-    "bash-stdout",
-    "bash-stderr",
-    "bash-notification",
-    # Codex system tags (environment/context injection)
-    "environment_context",
-    "user_instructions",
-    "user_shell_command",
-}
+NON_GENUINE_XML_TAGS = CLAUDE_INTERNAL_WRAPPER_TAGS | (
+    CODEX_INTERNAL_WRAPPER_TAGS
+)
+
+# Codex-internal wrapper prefixes: message text starting with one of
+# these is system-injected noise, not genuine user input. Complements
+# NON_GENUINE_XML_TAGS for wrappers whose tag names the whitelist regex
+# cannot match (e.g. tags containing spaces, or non-XML markers like
+# the injected AGENTS.md repository-instructions block).
+CODEX_WRAPPER_TEXT_PREFIXES: tuple = (
+    "<environment_context>",
+    "<permissions instructions>",
+    "<user_instructions>",
+    "<turn_aborted>",
+    "<user_shell_command>",
+    "<recommended_plugins>",
+    "<skills_instructions>",
+    "<apps_instructions>",
+    "<plugins_instructions>",
+    "<multi_agent_mode>",
+    "# AGENTS.md instructions",
+)
 
 # Regex patterns for non-genuine user messages (system-injected content).
 # Messages matching any of these patterns are filtered out when finding
@@ -84,10 +147,12 @@ def _get_last_line_timestamp(file_path: Path) -> Optional[str]:
             if file_size == 0:
                 return None
 
-            # Read last 16KB (should be plenty for a JSONL line)
+            # Read last 16KB (should be plenty for a JSONL line).
+            # The chunk may start mid-UTF-8-character, and the file
+            # may contain malformed bytes: decode tolerantly.
             chunk_size = min(16384, file_size)
             f.seek(-chunk_size, 2)
-            chunk = f.read().decode('utf-8')
+            chunk = f.read().decode('utf-8', errors='replace')
 
             # Split by newlines and get last non-empty line
             lines = chunk.strip().split('\n')
@@ -95,14 +160,21 @@ def _get_last_line_timestamp(file_path: Path) -> Optional[str]:
             if not last_line:
                 return None
 
-            # Parse JSON and extract timestamp
+            # Parse JSON and extract timestamp (tolerate non-dict
+            # JSONL records like null / [] / 1)
             data = json.loads(last_line)
             if not isinstance(data, dict):
                 return None
+            # Only a non-empty string is a usable timestamp: a
+            # truthy object/array must not become metadata.modified.
             timestamp = data.get("timestamp")
-            return timestamp if isinstance(timestamp, str) and timestamp else None
+            return timestamp if _nonempty_str(timestamp) else None
 
-    except (OSError, IOError, json.JSONDecodeError, UnicodeDecodeError):
+    except (OSError, IOError, ValueError, RecursionError):
+        # ValueError covers json.JSONDecodeError and UnicodeDecodeError
+        # plus non-decode failures like oversized integer literals;
+        # RecursionError covers pathologically nested final records
+        # (matching the tolerant main scan).
         return None
 
 
@@ -116,7 +188,7 @@ def _extract_claude_message_text(data: dict) -> Optional[str]:
     Returns:
         Extracted text or None if not a text message
     """
-    message = data.get("message", {})
+    message = data.get("message")
     if not isinstance(message, dict):
         return None
     content = message.get("content")
@@ -134,10 +206,10 @@ def _extract_claude_message_text(data: dict) -> Optional[str]:
             if isinstance(block, str) and block.strip():
                 return block.strip()
             if isinstance(block, dict) and block.get("type") == "text":
+                # Tolerate explicitly null / non-string text values.
                 text = block.get("text")
                 if isinstance(text, str) and text.strip():
-                    text = text.strip()
-                    return text
+                    return text.strip()
 
     return None
 
@@ -146,22 +218,28 @@ def _extract_codex_message_text(data: dict) -> Optional[str]:
     """
     Extract text content from a Codex session message.
 
+    Text blocks are classified individually: for user messages, any
+    block that is system-injected wrapper noise (environment context,
+    permissions instructions, etc.) is dropped while genuine blocks
+    are retained, so a wrapper block in any position neither hides
+    genuine input nor leaks into the extracted text.
+
     Args:
         data: Parsed JSON line from Codex session
 
     Returns:
-        Extracted text or None if not a text message
+        Extracted (genuine) text or None if no genuine text remains
     """
-    payload = data.get("payload", {})
-    if not isinstance(payload, dict):
-        return None
-    if payload.get("type") != "message":
+    payload = data.get("payload")
+    if not isinstance(payload, dict) or payload.get("type") != "message":
         return None
 
     content = payload.get("content", [])
     if not isinstance(content, list):
         return None
 
+    is_user = payload.get("role") == "user"
+    parts = []
     for block in content:
         if not isinstance(block, dict):
             continue
@@ -170,9 +248,43 @@ def _extract_codex_message_text(data: dict) -> Optional[str]:
         if block_type in ("input_text", "output_text"):
             text = block.get("text")
             if isinstance(text, str) and text.strip():
-                return text.strip()
+                stripped = text.strip()
+                if is_user and _is_meta_text(stripped):
+                    continue
+                parts.append(stripped)
 
+    if parts:
+        return "\n".join(parts)
     return None
+
+
+def _is_meta_text(text: str) -> bool:
+    """
+    Check if a piece of message text is system-injected meta content.
+
+    Args:
+        text: The text to classify (a whole message or single block)
+
+    Returns:
+        True if the text is meta/wrapper noise, not genuine input
+    """
+    # Check against regex patterns (Caveat, SESSION LINEAGE, etc.)
+    for pattern in NON_GENUINE_MSG_PATTERNS:
+        if pattern.search(text):
+            return True
+
+    # Check if the text starts with a known system-injected XML tag
+    text_stripped = text.strip()
+    match = re.match(r"^<([a-z][a-z0-9_-]*)>", text_stripped)
+    if match and match.group(1) in NON_GENUINE_XML_TAGS:
+        return True
+
+    # Check Codex wrapper prefixes (covers tags with spaces that the
+    # whitelist regex above cannot match).
+    if text_stripped.startswith(CODEX_WRAPPER_TEXT_PREFIXES):
+        return True
+
+    return False
 
 
 def _is_meta_user_message(data: dict, text: str) -> bool:
@@ -193,18 +305,7 @@ def _is_meta_user_message(data: dict, text: str) -> bool:
     if data.get("isMeta") is True:
         return True
 
-    # Check against regex patterns (Caveat, SESSION LINEAGE, etc.)
-    for pattern in NON_GENUINE_MSG_PATTERNS:
-        if pattern.search(text):
-            return True
-
-    # Check if message starts with a known system-injected XML tag
-    text_stripped = text.strip()
-    match = re.match(r"^<([a-z][a-z0-9_-]*)>", text_stripped)
-    if match and match.group(1) in NON_GENUINE_XML_TAGS:
-        return True
-
-    return False
+    return _is_meta_text(text)
 
 
 def extract_first_last_messages(
@@ -230,11 +331,10 @@ def extract_first_last_messages(
     last_msg: Optional[dict[str, str]] = None
     first_user_msg: Optional[dict[str, str]] = None
 
-    # For Codex: track first user message timestamp to detect system-injected msgs
-    codex_first_user_timestamp: Optional[str] = None
-
     try:
-        with open(session_file, "r", encoding="utf-8") as f:
+        with open(
+            session_file, "r", encoding="utf-8", errors="replace"
+        ) as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -242,14 +342,18 @@ def extract_first_last_messages(
 
                 try:
                     data = json.loads(line)
-                except json.JSONDecodeError:
+                except (ValueError, RecursionError):
+                    # ValueError covers json.JSONDecodeError plus
+                    # non-decode failures like oversized integers.
                     continue
+
+                # Valid JSONL records like null / [] / 1 are not
+                # session lines: skip them instead of crashing.
                 if not isinstance(data, dict):
                     continue
 
                 role: Optional[str] = None
                 text: Optional[str] = None
-                timestamp: Optional[str] = None
 
                 if agent == "claude":
                     msg_type = data.get("type")
@@ -258,18 +362,21 @@ def extract_first_last_messages(
                         text = _extract_claude_message_text(data)
                 elif agent == "codex":
                     if data.get("type") == "response_item":
-                        payload = data.get("payload", {})
+                        payload = data.get("payload")
                         if (
                             isinstance(payload, dict)
                             and payload.get("type") == "message"
                         ):
-                            payload_role = payload.get("role")
-                            if isinstance(payload_role, str):
-                                role = payload_role
-                            text = _extract_codex_message_text(data)
-                            raw_timestamp = data.get("timestamp")
-                            if isinstance(raw_timestamp, str):
-                                timestamp = raw_timestamp
+                            # Only the string roles "user" and
+                            # "assistant" are message roles; truthy
+                            # arrays/objects/numbers must not leak
+                            # into extracted messages.
+                            raw_role = payload.get("role")
+                            if raw_role in ("user", "assistant"):
+                                role = raw_role
+                                text = _extract_codex_message_text(
+                                    data
+                                )
 
                 if role and text:
                     msg_dict = {
@@ -279,23 +386,18 @@ def extract_first_last_messages(
                     if first_msg is None:
                         first_msg = msg_dict
 
-                    # Track first real user message (skip meta messages)
-                    if role == "user" and first_user_msg is None:
-                        if agent == "codex":
-                            # For Codex: system messages share the same timestamp
-                            # as the first user message (injected at session start).
-                            # Real user messages have different timestamps.
-                            if codex_first_user_timestamp is None:
-                                codex_first_user_timestamp = timestamp
-                            if (
-                                timestamp != codex_first_user_timestamp
-                                and not _is_meta_user_message(data, text)
-                            ):
-                                first_user_msg = msg_dict
-                        else:
-                            # For Claude: use pattern-based filtering
-                            if not _is_meta_user_message(data, text):
-                                first_user_msg = msg_dict
+                    # Track the first REAL user message. Wrapper/meta
+                    # content is classified directly (for Codex,
+                    # _extract_codex_message_text already removed
+                    # injected wrapper blocks), so the first surviving
+                    # non-meta user message is genuine — including in
+                    # single-turn sessions.
+                    if (
+                        role == "user"
+                        and first_user_msg is None
+                        and not _is_meta_user_message(data, text)
+                    ):
+                        first_user_msg = msg_dict
 
                     # Always update last_msg to get the last one
                     last_msg = msg_dict
@@ -350,7 +452,9 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
     session_start_timestamp: str | None = None
 
     try:
-        with open(session_file, "r", encoding="utf-8") as f:
+        with open(
+            session_file, "r", encoding="utf-8", errors="replace"
+        ) as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -358,63 +462,65 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
 
                 try:
                     data = json.loads(line)
-                except json.JSONDecodeError:
+                except (ValueError, RecursionError):
+                    # ValueError covers json.JSONDecodeError plus
+                    # non-decode failures like oversized integers.
                     continue
+                # Valid JSONL records like null / [] / 1 are not
+                # session lines: skip them instead of crashing.
                 if not isinstance(data, dict):
                     continue
 
-                # Extract cwd (first line with a non-empty string value)
-                cwd = data.get("cwd")
-                if (
-                    metadata["cwd"] is None
-                    and isinstance(cwd, str)
-                    and bool(cwd.strip())
+                # Extract cwd (first line with a usable string value)
+                if metadata["cwd"] is None and _nonempty_str(
+                    data.get("cwd")
                 ):
-                    metadata["cwd"] = cwd
+                    metadata["cwd"] = data["cwd"]
 
                 # Extract git branch (first line that has it)
-                git_branch = data.get("gitBranch")
-                if (
-                    metadata["branch"] is None
-                    and isinstance(git_branch, str)
-                    and bool(git_branch.strip())
+                if metadata["branch"] is None and _nonempty_str(
+                    data.get("gitBranch")
                 ):
-                    metadata["branch"] = git_branch
+                    metadata["branch"] = data["gitBranch"]
 
                 # Extract session ID from sessionId field if available
-                session_id = data.get("sessionId")
-                if isinstance(session_id, str) and session_id.strip():
-                    metadata["session_id"] = session_id
+                if _nonempty_str(data.get("sessionId")):
+                    metadata["session_id"] = data["sessionId"]
 
-                # Extract trim_metadata (for trimmed sessions)
+                # Extract trim_metadata (for trimmed sessions).
+                # Validate the shape: a null/non-dict value (or a
+                # non-string parent_file, which Path() would reject)
+                # must not crash metadata extraction.
                 tm = data.get("trim_metadata")
                 if isinstance(tm, dict):
                     metadata["derivation_type"] = "trimmed"
-                    parent_file = tm.get("parent_file")
-                    if isinstance(parent_file, str) and parent_file.strip():
-                        metadata["parent_session_file"] = parent_file
-                        parent_path = Path(parent_file)
+                    if _nonempty_str(tm.get("parent_file")):
+                        metadata["parent_session_file"] = tm["parent_file"]
+                        parent_path = Path(tm["parent_file"])
                         metadata["parent_session_id"] = parent_path.stem
-                    stats = tm.get("stats")
-                    if isinstance(stats, dict):
-                        metadata["trim_stats"] = stats
+                    if isinstance(tm.get("stats"), dict):
+                        metadata["trim_stats"] = tm["stats"]
 
-                # Extract continue_metadata (for continued sessions)
+                # Extract continue_metadata (for continued sessions).
+                # Same shape validation as trim_metadata above.
                 cm = data.get("continue_metadata")
                 if isinstance(cm, dict):
                     metadata["derivation_type"] = "continued"
-                    parent_id = cm.get("parent_session_id")
-                    if isinstance(parent_id, str) and parent_id.strip():
-                        metadata["parent_session_id"] = parent_id
-                    parent_file = cm.get("parent_session_file")
-                    if isinstance(parent_file, str) and parent_file.strip():
-                        metadata["parent_session_file"] = parent_file
+                    if _nonempty_str(cm.get("parent_session_id")):
+                        metadata["parent_session_id"] = cm[
+                            "parent_session_id"
+                        ]
+                    if _nonempty_str(cm.get("parent_session_file")):
+                        metadata["parent_session_file"] = cm[
+                            "parent_session_file"
+                        ]
 
                 # Extract sessionType (e.g., "helper" for SDK/headless sessions)
-                if "sessionType" in data and metadata["session_type"] is None:
-                    session_type = data.get("sessionType")
-                    if isinstance(session_type, str) and session_type.strip():
-                        metadata["session_type"] = session_type
+                if (
+                    metadata["session_type"] is None
+                    and _nonempty_str(data.get("sessionType"))
+                ):
+                    metadata["session_type"] = data["sessionType"]
 
                 # Extract git branch for Claude from file-history-snapshot metadata
                 if (
@@ -422,41 +528,42 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
                     and metadata["branch"] is None
                     and data.get("type") == "file-history-snapshot"
                 ):
-                    nested_metadata = data.get("metadata")
-                    if isinstance(nested_metadata, dict):
-                        git_info = nested_metadata.get("git")
-                        if isinstance(git_info, dict):
-                            branch = git_info.get("branch")
-                            if isinstance(branch, str) and branch.strip():
-                                metadata["branch"] = branch
+                    snapshot_meta = data.get("metadata")
+                    if not isinstance(snapshot_meta, dict):
+                        snapshot_meta = {}
+                    git_info = snapshot_meta.get("git")
+                    if not isinstance(git_info, dict):
+                        git_info = {}
+                    if _nonempty_str(git_info.get("branch")):
+                        metadata["branch"] = git_info["branch"]
 
-                # Extract git branch for Codex sessions from session_meta
+                # Extract git branch for Codex sessions from session_meta.
+                # Tolerate malformed shapes (null payload, null/non-dict
+                # git) so session finders never misreport such rollouts
+                # as missing.
                 if agent == "codex" and data.get("type") == "session_meta":
                     payload = data.get("payload")
-                    if isinstance(payload, dict):
-                        git_info = payload.get("git")
-                        if isinstance(git_info, dict):
-                            branch = git_info.get("branch")
-                            if isinstance(branch, str) and branch.strip():
-                                metadata["branch"] = branch
-                        payload_cwd = payload.get("cwd")
-                        if (
-                            isinstance(payload_cwd, str)
-                            and payload_cwd.strip()
-                        ):
-                            metadata["cwd"] = payload_cwd
-                        payload_id = payload.get("id")
-                        if isinstance(payload_id, str) and payload_id.strip():
-                            metadata["session_id"] = payload_id
+                    if not isinstance(payload, dict):
+                        payload = {}
+                    git_info = payload.get("git")
+                    if not isinstance(git_info, dict):
+                        git_info = {}
+                    if _nonempty_str(git_info.get("branch")):
+                        metadata["branch"] = git_info["branch"]
+                    if _nonempty_str(payload.get("cwd")):
+                        metadata["cwd"] = payload["cwd"]
+                    if _nonempty_str(payload.get("id")):
+                        metadata["session_id"] = payload["id"]
+                    if session_start_timestamp is None and _nonempty_str(
+                        data.get("timestamp")
+                    ):
+                        session_start_timestamp = data["timestamp"]
 
                 # Extract session start timestamp from first entry with timestamp
-                timestamp = data.get("timestamp")
-                if (
-                    session_start_timestamp is None
-                    and isinstance(timestamp, str)
-                    and timestamp.strip()
+                if session_start_timestamp is None and _nonempty_str(
+                    data.get("timestamp")
                 ):
-                    session_start_timestamp = timestamp
+                    session_start_timestamp = data["timestamp"]
 
                 # Stop once we have the essential metadata (cwd and branch).
                 if metadata["cwd"] and metadata["branch"]:
@@ -504,7 +611,9 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
 
     # Count lines
     try:
-        with open(session_file, "r", encoding="utf-8") as f:
+        with open(
+            session_file, "r", encoding="utf-8", errors="replace"
+        ) as f:
             metadata["lines"] = sum(1 for _ in f)
     except (OSError, IOError, UnicodeError):
         metadata["lines"] = 0
