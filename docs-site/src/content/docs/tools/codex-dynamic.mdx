@@ -134,6 +134,13 @@ generation-specific sockets, so they do not occupy Codex's default local
 socket. Do not stop the old server while a callback is armed; the workflow can
 finish, but its notification would lose its target.
 
+The helper cannot currently reauthenticate a Linux server that remains alive
+across an upgrade from a release older than 1.16.2. Safe automatic cleanup
+requires a native process identity and the creation time of the exact state file
+being read. The current Linux implementation cannot obtain that file evidence,
+so it reports the retained process groups for manual inspection. This
+limitation does not affect servers started by 1.16.2 or later.
+
 Every workflow `run` or `resume` needs host execution for that exact reviewed
 supervisor command. This lets the supervisor write durable state and launch
 headless workers without inheriting the outer tool sandbox. For a callback, the
