@@ -103,6 +103,44 @@ was started outside the helper.
 
 </Steps>
 
+### Import Claude Code Data
+
+Codex disables `/import` in a remote TUI, including a TUI started by
+`codex-dynamic`. Run the import from an ordinary local Codex session:
+
+```bash
+codex
+```
+
+Enter `/import` there. After the import finishes, exit that TUI and start or
+resume your callback-ready session with `codex-dynamic`.
+
+An app server created by an early release of this helper may still occupy
+Codex's default local socket. In that case, even plain `codex` reports that it
+is connected to the local app-server daemon. Wait for active workflow
+callbacks to finish, exit every `codex-dynamic` TUI, and then run:
+
+```bash
+codex-server stop --force
+codex
+```
+
+On macOS, current releases safely reauthenticate the old helper process before
+stopping it. The check binds the state content and filesystem creation-time
+evidence to the same open file. On a filesystem or platform that does not
+expose that proof, the helper remains fail-closed and reports the retained
+process groups for manual inspection. New `codex-dynamic` servers use
+generation-specific sockets, so they do not occupy Codex's default local
+socket. Do not stop the old server while a callback is armed; the workflow can
+finish, but its notification would lose its target.
+
+The helper cannot currently reauthenticate a Linux server that remains alive
+across an upgrade from a release older than 1.16.2. Safe automatic cleanup
+requires a native process identity and the creation time of the exact state file
+being read. The current Linux implementation cannot obtain that file evidence,
+so it reports the retained process groups for manual inspection. This
+limitation does not affect servers started by 1.16.2 or later.
+
 Every workflow `run` or `resume` needs host execution for that exact reviewed
 supervisor command. This lets the supervisor write durable state and launch
 headless workers without inheriting the outer tool sandbox. For a callback, the
@@ -383,10 +421,18 @@ making it the default. Existing TUIs and in-flight callbacks remain connected
 to the old socket, so they are not interrupted and keep the plugin snapshot
 with which they started.
 
+Plugin installation can rewrite the catalog while the launcher reads it. The
+launcher cleans up the uncertified attempt, takes a fresh snapshot, and retries
+with a small fixed limit. Persistent catalog changes still fail closed; wait
+for the installation to finish and run `codex-dynamic` again.
+
 Codex does not expose a reliable count of clients attached to an app server,
 so the helper never guesses that an old generation is unused and kills it.
 Retained generations are capped at 64; reaching that defensive limit produces
 an explicit cleanup instruction instead of disconnecting sessions silently.
+Concurrent launches reserve capacity with their generation lifecycle locks.
+The kernel releases a reservation if its launcher exits or crashes, and a
+second launcher cannot race past the limit.
 
 <Aside type="caution" title="Forced cleanup still disconnects sessions">
   Old generations remain available for sessions and callbacks that still use
@@ -577,7 +623,12 @@ There are two supervisors with different lifetimes:
   the TUI process. During startup, it publishes both supervisor and worker
   identities before releasing the worker to become the app server. Lifecycle
   commands verify recorded process start identities before sending signals and
-  never stop a compatible server they do not own.
+  never stop a compatible server they do not own. When an upgrade encounters
+  an older textual process identity, the helper first verifies the socket
+  inode, listener PID and process group, supervisor-to-worker parent edge, and
+  fresh native identities. Every process must also predate the immutable
+  creation time of its ownership state. Only that complete check can authorize
+  cleanup.
 - The **workflow supervisor** owns one durable run and its worker process
   groups. It contains runaway workflow JavaScript, terminates orphaned worker
   trees, and preserves nonterminal cleanup state when shutdown cannot be

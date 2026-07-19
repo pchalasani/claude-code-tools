@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import shutil
@@ -100,6 +101,438 @@ def test_plugin_regular_file_content_is_hashed_when_metadata_matches(
     artifact.write_text("BBBB", encoding="utf-8")
 
     assert _plugin_configuration_snapshot(paths).fingerprint != before.fingerprint
+
+
+def test_atomic_configuration_replacement_is_a_retryable_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An open descriptor cannot hide replacement of its configuration path."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    paths.codex_home.mkdir(parents=True)
+    config = paths.codex_home / "config.toml"
+    replacement = paths.codex_home / "replacement.toml"
+    config.write_text("[features]\nplugins = true\n", encoding="utf-8")
+    replacement.write_text("[features]\nplugins = false\n", encoding="utf-8")
+    original_read = fingerprinting._read_bounded
+
+    def replace_after_read(fd: int, limit: int) -> bytes:
+        data = original_read(fd, limit)
+        replacement.replace(config)
+        return data
+
+    monkeypatch.setattr(fingerprinting, "_read_bounded", replace_after_read)
+
+    with pytest.raises(
+        fingerprinting.PluginSnapshotChangedError,
+        match="configuration changed",
+    ):
+        _plugin_configuration_snapshot(paths)
+
+
+@pytest.mark.parametrize("input_name", ["configuration", "plugin-root"])
+@pytest.mark.parametrize("error_number", [errno.ENOTDIR, errno.ESTALE])
+def test_initial_plugin_input_race_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    input_name: str,
+    error_number: int,
+) -> None:
+    """Initial-open path races enter the bounded snapshot retry policy."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    paths.codex_home.mkdir(parents=True)
+    target = (
+        paths.codex_home / "config.toml"
+        if input_name == "configuration"
+        else paths.codex_home / "plugins"
+    )
+    original_open = os.open
+
+    def racing_open(
+        path: os.PathLike[str] | str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if os.fspath(path) == os.fspath(target):
+            raise OSError(error_number, os.strerror(error_number))
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(fingerprinting.os, "open", racing_open)
+
+    with pytest.raises(fingerprinting.PluginSnapshotChangedError):
+        _plugin_configuration_snapshot(paths)
+
+
+@pytest.mark.parametrize(
+    "error_number",
+    [errno.ENOENT, errno.ENOTDIR, errno.ESTALE],
+)
+def test_configuration_descriptor_race_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error_number: int,
+) -> None:
+    """Descriptor-phase configuration errors enter the bounded retry policy."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    paths.codex_home.mkdir(parents=True)
+    paths.codex_home.joinpath("config.toml").write_text("", encoding="utf-8")
+
+    def racing_read(_fd: int, _limit: int) -> bytes:
+        raise OSError(error_number, os.strerror(error_number))
+
+    monkeypatch.setattr(fingerprinting, "_read_bounded", racing_read)
+
+    with pytest.raises(fingerprinting.PluginSnapshotChangedError):
+        _plugin_configuration_snapshot(paths)
+
+
+@pytest.mark.parametrize("input_name", ["configuration", "plugin-root"])
+def test_missing_plugin_input_appearance_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    input_name: str,
+) -> None:
+    """A path that appears after missing-parent capture is not certified absent."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    paths.codex_home.mkdir(parents=True)
+    target = (
+        paths.codex_home / "config.toml"
+        if input_name == "configuration"
+        else paths.codex_home / "plugins"
+    )
+    original_missing = fingerprinting._missing_generation
+
+    def appear_after_capture(path: Path) -> str:
+        generation = original_missing(path)
+        if path == target:
+            if input_name == "configuration":
+                path.write_text("", encoding="utf-8")
+            else:
+                path.mkdir()
+        return generation
+
+    monkeypatch.setattr(
+        fingerprinting,
+        "_missing_generation",
+        appear_after_capture,
+    )
+
+    with pytest.raises(fingerprinting.PluginSnapshotChangedError):
+        _plugin_configuration_snapshot(paths)
+
+
+@pytest.mark.parametrize("helper", ["absolute", "relative"])
+@pytest.mark.parametrize("error_number", [errno.ENOTDIR, errno.ESTALE])
+def test_missing_parent_race_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    helper: str,
+    error_number: int,
+) -> None:
+    """Parent traversal races use the same retryable mutation signal."""
+    root = tmp_path / "root"
+    root.mkdir()
+    original_open = os.open
+    root_fd = original_open(root, fingerprinting._directory_flags())
+
+    def racing_open(
+        path: os.PathLike[str] | str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        target = root / "missing" if helper == "absolute" else Path("missing")
+        if os.fspath(path) == os.fspath(target):
+            raise OSError(error_number, os.strerror(error_number))
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(fingerprinting.os, "open", racing_open)
+    try:
+        with pytest.raises(fingerprinting.PluginSnapshotChangedError):
+            if helper == "absolute":
+                fingerprinting._missing_generation(root / "missing/child")
+            else:
+                fingerprinting._missing_generation_at(root_fd, "missing/child")
+    finally:
+        os.close(root_fd)
+
+
+@pytest.mark.parametrize("helper", ["absolute", "relative"])
+def test_transient_missing_existing_parent_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    helper: str,
+) -> None:
+    """One false ENOENT cannot omit an existing nearest parent generation."""
+    root = tmp_path / "root"
+    existing = root / "existing"
+    existing.mkdir(parents=True)
+    original_open = os.open
+    root_fd = original_open(root, fingerprinting._directory_flags())
+    injected = False
+
+    def racing_open(
+        path: os.PathLike[str] | str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal injected
+        target = existing if helper == "absolute" else Path("existing")
+        if not injected and os.fspath(path) == os.fspath(target):
+            injected = True
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT))
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(fingerprinting.os, "open", racing_open)
+    try:
+        with pytest.raises(fingerprinting.PluginSnapshotChangedError):
+            if helper == "absolute":
+                fingerprinting._missing_generation(existing / "child")
+            else:
+                fingerprinting._missing_generation_at(
+                    root_fd,
+                    "existing/child",
+                )
+    finally:
+        os.close(root_fd)
+
+
+def test_absolute_missing_parent_replacement_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A replaced nearest parent cannot certify an absolute path as absent."""
+    root = tmp_path / "root"
+    replacement = tmp_path / "replacement"
+    displaced = tmp_path / "displaced"
+    root.mkdir()
+    replacement.mkdir()
+    original_require_missing = fingerprinting._require_missing_path
+
+    def replace_parent(path: Path, message: str) -> None:
+        original_require_missing(path, message)
+        root.rename(displaced)
+        replacement.rename(root)
+
+    monkeypatch.setattr(
+        fingerprinting,
+        "_require_missing_path",
+        replace_parent,
+    )
+
+    with pytest.raises(fingerprinting.PluginSnapshotChangedError):
+        fingerprinting._missing_generation(root / "missing")
+
+
+def test_relative_missing_parent_replacement_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A replaced nearest parent cannot certify a relative target as absent."""
+    root = tmp_path / "root"
+    parent = root / "parent"
+    replacement = root / "replacement"
+    displaced = root / "displaced"
+    parent.mkdir(parents=True)
+    replacement.mkdir()
+    root_fd = os.open(root, fingerprinting._directory_flags())
+    original_require_missing = fingerprinting._require_missing_path_at
+
+    def replace_parent(
+        directory_fd: int,
+        name: str,
+        message: str,
+        *,
+        follow_symlinks: bool = True,
+    ) -> None:
+        original_require_missing(
+            directory_fd,
+            name,
+            message,
+            follow_symlinks=follow_symlinks,
+        )
+        parent.rename(displaced)
+        replacement.rename(parent)
+
+    monkeypatch.setattr(
+        fingerprinting,
+        "_require_missing_path_at",
+        replace_parent,
+    )
+    try:
+        with pytest.raises(fingerprinting.PluginSnapshotChangedError):
+            fingerprinting._missing_generation_at(root_fd, "parent/missing")
+    finally:
+        os.close(root_fd)
+
+
+@pytest.mark.parametrize("helper", ["absolute", "relative"])
+def test_missing_parent_fstat_race_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    helper: str,
+) -> None:
+    """Descriptor metadata races use the bounded snapshot retry signal."""
+    root = tmp_path / "root"
+    root.mkdir()
+    root_fd = os.open(root, fingerprinting._directory_flags())
+
+    def stale_fstat(_fd: int) -> os.stat_result:
+        raise OSError(errno.ESTALE, os.strerror(errno.ESTALE))
+
+    monkeypatch.setattr(fingerprinting.os, "fstat", stale_fstat)
+    try:
+        with pytest.raises(fingerprinting.PluginSnapshotChangedError):
+            if helper == "absolute":
+                fingerprinting._missing_generation(root / "missing")
+            else:
+                fingerprinting._missing_generation_at(root_fd, "missing")
+    finally:
+        os.close(root_fd)
+
+
+def test_atomic_plugin_root_replacement_is_a_retryable_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A traversal cannot certify a plugin root replaced at its pathname."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    plugins = paths.codex_home / "plugins"
+    replacement = paths.codex_home / "replacement"
+    displaced = paths.codex_home / "displaced"
+    plugins.mkdir(parents=True)
+    replacement.mkdir()
+    original_hash = fingerprinting._hash_directory
+    replaced = False
+
+    def replace_after_hash(
+        directory_fd: int,
+        relative: Path,
+        digest: fingerprinting.HashWriter,
+        generation: fingerprinting.HashWriter,
+        budget: list[int],
+        depth: int,
+    ) -> None:
+        nonlocal replaced
+        original_hash(
+            directory_fd,
+            relative,
+            digest,
+            generation,
+            budget,
+            depth,
+        )
+        if not replaced:
+            replaced = True
+            plugins.rename(displaced)
+            replacement.rename(plugins)
+
+    monkeypatch.setattr(fingerprinting, "_hash_directory", replace_after_hash)
+
+    with pytest.raises(
+        fingerprinting.PluginSnapshotChangedError,
+        match="cache root changed",
+    ):
+        _plugin_configuration_snapshot(paths)
+
+
+def test_plugin_entry_removal_during_traversal_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An installer rename or removal enters the bounded snapshot retry path."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    artifact = paths.codex_home / "plugins/plugin.txt"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("plugin", encoding="utf-8")
+    original_hash = fingerprinting._hash_regular_file
+
+    def remove_before_open(
+        directory_fd: int,
+        name: str,
+        relative: Path,
+        expected: os.stat_result,
+        digest: fingerprinting.HashWriter,
+        generation: fingerprinting.HashWriter,
+        budget: list[int],
+    ) -> None:
+        artifact.unlink()
+        original_hash(
+            directory_fd,
+            name,
+            relative,
+            expected,
+            digest,
+            generation,
+            budget,
+        )
+
+    monkeypatch.setattr(
+        fingerprinting,
+        "_hash_regular_file",
+        remove_before_open,
+    )
+
+    with pytest.raises(
+        fingerprinting.PluginSnapshotChangedError,
+        match="cache changed",
+    ):
+        _plugin_configuration_snapshot(paths)
+
+
+def test_atomic_symlink_target_replacement_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An external target replacement cannot leave a stale plugin digest."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    target = tmp_path / "target.txt"
+    replacement = tmp_path / "replacement.txt"
+    link = paths.codex_home / "plugins/plugin.txt"
+    link.parent.mkdir(parents=True)
+    target.write_text("old", encoding="utf-8")
+    replacement.write_text("new", encoding="utf-8")
+    link.symlink_to(target)
+    original_hash = fingerprinting._hash_regular_descriptor
+    replaced = False
+
+    def replace_after_hash(
+        fd: int,
+        relative: Path,
+        initial_info: os.stat_result,
+        digest: fingerprinting.HashWriter,
+        generation: fingerprinting.HashWriter,
+        budget: list[int],
+    ) -> None:
+        nonlocal replaced
+        original_hash(
+            fd,
+            relative,
+            initial_info,
+            digest,
+            generation,
+            budget,
+        )
+        if not replaced:
+            replaced = True
+            replacement.replace(target)
+
+    monkeypatch.setattr(
+        fingerprinting,
+        "_hash_regular_descriptor",
+        replace_after_hash,
+    )
+
+    with pytest.raises(
+        fingerprinting.PluginSnapshotChangedError,
+        match="symlink target changed",
+    ):
+        _plugin_configuration_snapshot(paths)
 
 
 def test_wide_plugin_tree_respects_file_descriptor_limit(tmp_path: Path) -> None:

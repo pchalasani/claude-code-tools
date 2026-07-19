@@ -64,6 +64,27 @@ def disconnect_refusal(action: str) -> CodexServerError:
     )
 
 
+def same_server_launch(expected: OwnedServer, current: OwnedServer) -> bool:
+    """Return whether two states name the same exact supervised launch."""
+    return (
+        current.pid,
+        current.pgid,
+        current.process_started_at,
+        current.launch_token,
+        current.worker_pid,
+        current.worker_pgid,
+        current.worker_started_at,
+    ) == (
+        expected.pid,
+        expected.pgid,
+        expected.process_started_at,
+        expected.launch_token,
+        expected.worker_pid,
+        expected.worker_pgid,
+        expected.worker_started_at,
+    )
+
+
 def require_external_compatible(
     codex_version: str,
     probe: ServerProbe,

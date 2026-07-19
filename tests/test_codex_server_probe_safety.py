@@ -14,6 +14,7 @@ from typing import NoReturn
 import pytest
 
 import claude_code_tools.codex_server as codex_server
+import claude_code_tools.codex_server_retry as codex_server_retry
 from claude_code_tools.codex_server import (
     CodexServerError,
     OwnedServer,
@@ -344,7 +345,7 @@ def test_plugin_change_during_reuse_probe_is_revalidated(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Reuse cannot return a server certified against a stale snapshot."""
+    """Reuse retries and certifies against the replacement snapshot."""
     environment, _sleeps, _commands = _arrange_live_helper(
         monkeypatch,
         tmp_path,
@@ -354,6 +355,9 @@ def test_plugin_change_during_reuse_probe_is_revalidated(
         [
             _snapshot(),
             _snapshot(),
+            _snapshot(generation="changed during probe"),
+            _snapshot(generation="changed during probe"),
+            _snapshot(generation="changed during probe"),
             _snapshot(generation="changed during probe"),
         ]
     )
@@ -373,12 +377,15 @@ def test_plugin_change_during_reuse_probe_is_revalidated(
         snapshot,
     )
 
-    with pytest.raises(CodexServerError, match="changed during app-server reuse"):
-        ensure_server(environment)
+    status = ensure_server(environment)
 
+    assert status.status == "running"
     assert observed == [
         "stable generation",
         "stable generation",
+        "changed during probe",
+        "changed during probe",
+        "changed during probe",
         "changed during probe",
     ]
 
@@ -518,21 +525,15 @@ def test_plugin_change_during_startup_is_not_certified(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """A server cannot claim a plugin snapshot changed after it spawned."""
+    """Persistent startup churn cleans every attempt and remains bounded."""
     starting = replace(
         _live_state(),
         phase="starting",
         plugin_fingerprint="startup snapshot",
     )
-    snapshots = iter(
-        [
-            _snapshot("startup snapshot", "startup generation"),
-            _snapshot("startup snapshot", "startup generation"),
-            _snapshot("startup snapshot", "changed during startup"),
-        ]
-    )
+    snapshot_calls = 0
     observed: list[str] = []
-    states = iter([None, starting])
+    state_reads = 0
     terminated: list[OwnedServer] = []
     removals: list[object] = []
 
@@ -540,9 +541,21 @@ def test_plugin_change_during_startup_is_not_certified(
         _paths: object,
         _options: object = (),
     ) -> codex_server._PluginSnapshot:
-        value = next(snapshots)
+        nonlocal snapshot_calls
+        snapshot_calls += 1
+        generation = (
+            "changed during startup"
+            if snapshot_calls % 3 == 0
+            else "startup generation"
+        )
+        value = _snapshot("startup snapshot", generation)
         observed.append(value.generation)
         return value
+
+    def read_state(_paths: object) -> OwnedServer | None:
+        nonlocal state_reads
+        state_reads += 1
+        return None if state_reads % 2 == 1 else starting
 
     def spawn(*args: object) -> OwnedServer:
         assert args[-3] == "startup snapshot"
@@ -571,7 +584,7 @@ def test_plugin_change_during_startup_is_not_certified(
         "_plugin_configuration_snapshot",
         snapshot,
     )
-    monkeypatch.setattr(codex_server, "_read_state", lambda _paths: next(states))
+    monkeypatch.setattr(codex_server, "_read_state", read_state)
     monkeypatch.setattr(
         codex_server,
         "_probe_server",
@@ -596,17 +609,23 @@ def test_plugin_change_during_startup_is_not_certified(
         "_remove_state",
         lambda paths: removals.append(paths),
     )
+    monkeypatch.setattr(codex_server_retry.time, "sleep", lambda _delay: None)
 
     with pytest.raises(CodexServerError, match="changed during app-server startup"):
         ensure_server({"CODEX_HOME": str(tmp_path / "home")})
 
+    expected_attempts = codex_server_retry.PLUGIN_SNAPSHOT_ATTEMPTS
     assert observed == [
-        "startup generation",
-        "startup generation",
-        "changed during startup",
+        item
+        for _attempt in range(expected_attempts)
+        for item in (
+            "startup generation",
+            "startup generation",
+            "changed during startup",
+        )
     ]
-    assert terminated == [starting]
-    assert len(removals) == 1
+    assert terminated == [starting] * expected_attempts
+    assert len(removals) == expected_attempts
 
 
 def test_listener_replacement_during_startup_snapshot_is_not_certified(

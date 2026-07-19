@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Protocol, Sequence
 
 from claude_code_tools.codex_server_models import CodexServerError, ServerPaths
+from claude_code_tools.codex_server_retry import PluginSnapshotChangedError
 
 
 PLUGIN_CONFIG_MAX_BYTES = 1024 * 1024
@@ -27,6 +29,16 @@ PLUGIN_APP_FEATURES = (
     "plugin_sharing",
     "remote_plugin",
 )
+_PLUGIN_MUTATION_ERRNOS = {
+    errno.ELOOP,
+    errno.ENOENT,
+    errno.ENOTDIR,
+    errno.ESTALE,
+}
+_PLUGIN_PATH_RACE_ERRNOS = {
+    errno.ENOTDIR,
+    errno.ESTALE,
+}
 
 
 @dataclass(frozen=True)
@@ -137,8 +149,17 @@ def read_plugin_configuration(path: Path) -> tuple[dict[str, object], str]:
     try:
         fd = os.open(path, flags)
     except FileNotFoundError:
-        return {}, _missing_generation(path)
+        generation = _missing_generation(path)
+        _require_missing_path(
+            path,
+            f"Codex plugin configuration changed while being read: {path}",
+        )
+        return {}, generation
     except OSError as exc:
+        if exc.errno in _PLUGIN_PATH_RACE_ERRNOS:
+            raise PluginSnapshotChangedError(
+                f"Codex plugin configuration changed while being read: {path}"
+            ) from exc
         raise CodexServerError(
             f"cannot read Codex plugin configuration {path}: {exc}"
         ) from exc
@@ -151,10 +172,19 @@ def read_plugin_configuration(path: Path) -> tuple[dict[str, object], str]:
         data = _read_bounded(fd, PLUGIN_CONFIG_MAX_BYTES)
         generation = _stat_generation(os.fstat(fd))
         if generation != _stat_generation(initial_info):
-            raise CodexServerError(
+            raise PluginSnapshotChangedError(
                 f"Codex plugin configuration changed while being read: {path}"
             )
+        _require_unchanged_path(
+            path,
+            initial_info,
+            f"Codex plugin configuration changed while being read: {path}",
+        )
     except OSError as exc:
+        if exc.errno in _PLUGIN_MUTATION_ERRNOS:
+            raise PluginSnapshotChangedError(
+                f"Codex plugin configuration changed while being read: {path}"
+            ) from exc
         raise CodexServerError(
             f"cannot read Codex plugin configuration {path}: {exc}"
         ) from exc
@@ -194,16 +224,35 @@ def hash_plugin_tree(root: Path, label: Path, digest: HashWriter) -> str:
         root_fd = os.open(root, flags)
     except FileNotFoundError:
         digest.update(b"missing:" + os.fsencode(str(label)) + b"\0")
-        return _missing_generation(root)
+        generation = _missing_generation(root)
+        _require_missing_path(
+            root,
+            f"Codex plugin cache root changed while being read: {root!r}",
+        )
+        return generation
     except OSError as exc:
+        if exc.errno in _PLUGIN_PATH_RACE_ERRNOS:
+            raise PluginSnapshotChangedError(
+                f"Codex plugin cache root changed while being read: {root!r}"
+            ) from exc
         raise CodexServerError(
             f"cannot inspect Codex plugin cache {root!r}: {exc}"
         ) from exc
     generation = hashlib.sha256()
     budget = [0, 0]
     try:
+        initial_info = os.fstat(root_fd)
         _hash_directory(root_fd, label, digest, generation, budget, 0)
+        _require_unchanged_path(
+            root,
+            initial_info,
+            f"Codex plugin cache root changed while being read: {root!r}",
+        )
     except OSError as exc:
+        if exc.errno in _PLUGIN_MUTATION_ERRNOS:
+            raise PluginSnapshotChangedError(
+                f"Codex plugin cache changed while being read: {root!r}"
+            ) from exc
         raise CodexServerError(
             f"cannot inspect Codex plugin cache {root!r}: {exc}"
         ) from exc
@@ -260,7 +309,7 @@ def _hash_directory(
             child_fd = os.open(name, _directory_flags(), dir_fd=directory_fd)
             try:
                 if _stat_generation(os.fstat(child_fd)) != _stat_generation(info):
-                    raise CodexServerError(
+                    raise PluginSnapshotChangedError(
                         "Codex plugin directory changed while being read: "
                         f"{child_relative!r}"
                     )
@@ -287,7 +336,7 @@ def _hash_directory(
         else:
             _update_entry(digest, generation, b"special", child_relative, info)
     if _stat_generation(os.fstat(directory_fd)) != _stat_generation(initial_info):
-        raise CodexServerError(
+        raise PluginSnapshotChangedError(
             f"Codex plugin directory changed while being read: {relative!r}"
         )
 
@@ -307,11 +356,11 @@ def _hash_regular_file(
     try:
         initial_info = os.fstat(fd)
         if not stat.S_ISREG(initial_info.st_mode):
-            raise CodexServerError(
-                f"Codex plugin artifact is not a regular file: {relative!r}"
+            raise PluginSnapshotChangedError(
+                f"Codex plugin artifact changed while being read: {relative!r}"
             )
         if _stat_generation(initial_info) != _stat_generation(expected):
-            raise CodexServerError(
+            raise PluginSnapshotChangedError(
                 f"Codex plugin artifact changed while being read: {relative!r}"
             )
         _hash_regular_descriptor(
@@ -349,13 +398,18 @@ def _hash_symlink_target(
             + target_generation.encode()
             + b"\0"
         )
+        _require_missing_path_at(
+            directory_fd,
+            name,
+            f"Codex plugin symlink target changed: {relative!r}",
+        )
         return
     if stat.S_ISDIR(expected.st_mode):
         flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
         fd = os.open(name, flags, dir_fd=directory_fd)
         try:
             if _stat_generation(os.fstat(fd)) != _stat_generation(expected):
-                raise CodexServerError(
+                raise PluginSnapshotChangedError(
                     f"Codex plugin symlink target changed: {relative!r}"
                 )
             _hash_directory(
@@ -365,6 +419,12 @@ def _hash_symlink_target(
                 generation,
                 budget,
                 depth + 1,
+            )
+            _require_unchanged_path_at(
+                directory_fd,
+                name,
+                expected,
+                f"Codex plugin symlink target changed: {relative!r}",
             )
         finally:
             os.close(fd)
@@ -377,12 +437,20 @@ def _hash_symlink_target(
             relative,
             expected,
         )
+        _require_unchanged_path_at(
+            directory_fd,
+            name,
+            expected,
+            f"Codex plugin symlink target changed: {relative!r}",
+        )
         return
     fd = os.open(name, os.O_RDONLY | os.O_NONBLOCK, dir_fd=directory_fd)
     try:
         initial_info = os.fstat(fd)
         if _stat_generation(initial_info) != _stat_generation(expected):
-            raise CodexServerError(f"Codex plugin symlink target changed: {relative!r}")
+            raise PluginSnapshotChangedError(
+                f"Codex plugin symlink target changed: {relative!r}"
+            )
         _hash_regular_descriptor(
             fd,
             relative / "<symlink-target>",
@@ -390,6 +458,12 @@ def _hash_symlink_target(
             digest,
             generation,
             budget,
+        )
+        _require_unchanged_path_at(
+            directory_fd,
+            name,
+            expected,
+            f"Codex plugin symlink target changed: {relative!r}",
         )
     finally:
         os.close(fd)
@@ -412,18 +486,18 @@ def _hash_regular_descriptor(
     while remaining:
         chunk = os.read(fd, min(65_536, remaining))
         if not chunk:
-            raise CodexServerError(
+            raise PluginSnapshotChangedError(
                 f"Codex plugin artifact changed while being read: {relative!r}"
             )
         digest.update(chunk)
         remaining -= len(chunk)
     digest.update(b"\0")
     if os.read(fd, 1):
-        raise CodexServerError(
+        raise PluginSnapshotChangedError(
             f"Codex plugin artifact changed while being read: {relative!r}"
         )
     if _stat_generation(os.fstat(fd)) != _stat_generation(initial_info):
-        raise CodexServerError(
+        raise PluginSnapshotChangedError(
             f"Codex plugin artifact changed while being read: {relative!r}"
         )
 
@@ -448,6 +522,81 @@ def _update_entry(
     generation.update(record)
 
 
+def _require_unchanged_path(
+    path: Path,
+    expected: os.stat_result,
+    message: str,
+) -> None:
+    """Reject atomic pathname replacement hidden by an open descriptor."""
+    try:
+        current = path.lstat()
+    except OSError as exc:
+        if exc.errno in _PLUGIN_MUTATION_ERRNOS:
+            raise PluginSnapshotChangedError(message) from exc
+        raise
+    if _stat_generation(current) != _stat_generation(expected):
+        raise PluginSnapshotChangedError(message)
+
+
+def _require_missing_path(path: Path, message: str) -> None:
+    """Require an input path to remain absent after parent-generation capture."""
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        if exc.errno in _PLUGIN_MUTATION_ERRNOS:
+            raise PluginSnapshotChangedError(message) from exc
+        raise
+    raise PluginSnapshotChangedError(message)
+
+
+def _require_unchanged_path_at(
+    directory_fd: int,
+    name: str,
+    expected: os.stat_result,
+    message: str,
+    *,
+    follow_symlinks: bool = True,
+) -> None:
+    """Reject replacement of a followed path relative to a pinned directory."""
+    try:
+        current = os.stat(
+            name,
+            dir_fd=directory_fd,
+            follow_symlinks=follow_symlinks,
+        )
+    except OSError as exc:
+        if exc.errno in _PLUGIN_MUTATION_ERRNOS:
+            raise PluginSnapshotChangedError(message) from exc
+        raise
+    if _stat_generation(current) != _stat_generation(expected):
+        raise PluginSnapshotChangedError(message)
+
+
+def _require_missing_path_at(
+    directory_fd: int,
+    name: str,
+    message: str,
+    *,
+    follow_symlinks: bool = True,
+) -> None:
+    """Require a path to remain absent after missing-parent capture."""
+    try:
+        os.stat(
+            name,
+            dir_fd=directory_fd,
+            follow_symlinks=follow_symlinks,
+        )
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        if exc.errno in _PLUGIN_MUTATION_ERRNOS:
+            raise PluginSnapshotChangedError(message) from exc
+        raise
+    raise PluginSnapshotChangedError(message)
+
+
 def _missing_generation(path: Path) -> str:
     """Identify a missing input through its nearest existing parent."""
     candidate = path.parent
@@ -465,11 +614,26 @@ def _missing_generation(path: Path) -> str:
             candidate = candidate.parent
             continue
         except OSError as exc:
+            if exc.errno in _PLUGIN_PATH_RACE_ERRNOS:
+                raise PluginSnapshotChangedError(
+                    f"Codex plugin input changed while being read: {path}"
+                ) from exc
             raise CodexServerError(
                 f"cannot inspect parent of Codex plugin input {path}: {exc}"
             ) from exc
+        message = f"Codex plugin input changed while being read: {path}"
         try:
-            info = os.fstat(fd)
+            try:
+                info = os.fstat(fd)
+                _require_missing_path(candidate / unresolved[-1], message)
+                _require_missing_path(path, message)
+                _require_unchanged_path(candidate, info, message)
+                if _stat_generation(os.fstat(fd)) != _stat_generation(info):
+                    raise PluginSnapshotChangedError(message)
+            except OSError as exc:
+                if exc.errno in _PLUGIN_MUTATION_ERRNOS:
+                    raise PluginSnapshotChangedError(message) from exc
+                raise
         finally:
             os.close(fd)
         suffix = "/".join(reversed(unresolved))
@@ -495,11 +659,37 @@ def _missing_generation_at(directory_fd: int, target: str) -> str:
             candidate = candidate.parent
             continue
         except OSError as exc:
+            if exc.errno in _PLUGIN_PATH_RACE_ERRNOS:
+                raise PluginSnapshotChangedError(
+                    f"plugin symlink target changed while being read: {target!r}"
+                ) from exc
             raise CodexServerError(
                 f"cannot inspect parent of plugin symlink target {target!r}: {exc}"
             ) from exc
+        message = f"plugin symlink target changed while being read: {target!r}"
         try:
-            info = os.fstat(fd)
+            try:
+                info = os.fstat(fd)
+                _require_missing_path_at(
+                    fd,
+                    unresolved[-1],
+                    message,
+                    follow_symlinks=False,
+                )
+                _require_missing_path_at(directory_fd, target, message)
+                _require_unchanged_path_at(
+                    directory_fd,
+                    candidate_name,
+                    info,
+                    message,
+                    follow_symlinks=False,
+                )
+                if _stat_generation(os.fstat(fd)) != _stat_generation(info):
+                    raise PluginSnapshotChangedError(message)
+            except OSError as exc:
+                if exc.errno in _PLUGIN_MUTATION_ERRNOS:
+                    raise PluginSnapshotChangedError(message) from exc
+                raise
         finally:
             os.close(fd)
         suffix = "/".join(reversed(unresolved))
