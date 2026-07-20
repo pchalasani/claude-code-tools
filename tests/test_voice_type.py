@@ -1107,3 +1107,31 @@ def test_mlx_engine_config() -> None:
     Config(mode="wake", engine="parakeet-mlx").validate()
     with pytest.raises(ValueError, match="engine"):
         Config(engine="whisper-mlx").validate()
+
+
+def test_collapse_repeats() -> None:
+    from claude_code_tools.voice_type.logic import collapse_repeats
+
+    assert collapse_repeats("I I I think this is good") == (
+        "I think this is good"
+    )
+    assert collapse_repeats("no, no, no, fine") == "no, fine"
+    assert collapse_repeats("blah blah blah done") == "blah done"
+    assert collapse_repeats("very very good") == "very very good"
+    assert collapse_repeats("that that happened") == "that that happened"
+    assert collapse_repeats("I i i think") == "I think"
+    assert collapse_repeats("it's it's it's fine") == "it's fine"
+    assert collapse_repeats("clean text stays clean") == (
+        "clean text stays clean"
+    )
+
+
+def test_fillers_then_repeats_compose() -> None:
+    from claude_code_tools.voice_type.logic import (
+        collapse_repeats,
+        strip_fillers,
+    )
+
+    assert collapse_repeats(strip_fillers("I um I uh I think")) == (
+        "I think"
+    )

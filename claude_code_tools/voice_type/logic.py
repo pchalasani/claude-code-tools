@@ -56,6 +56,24 @@ def strip_fillers(text: str) -> str:
     return " ".join(kept)
 
 
+# A word repeated 3+ times consecutively (dictation stutter like
+# "I I I think"); optional comma/period between repeats. Two repeats
+# are left alone — "very very good" is legitimate emphasis.
+_REPEAT_RE = re.compile(
+    r"\b([\w']+)(?:[,.]?\s+\1\b){2,}", re.IGNORECASE
+)
+
+
+def collapse_repeats(text: str) -> str:
+    """Collapse a word stuttered 3+ times in a row down to one.
+
+    "I I I think" -> "I think"; "no, no, no, fine" -> "no, fine";
+    "very very good" is untouched (only two repeats). Keeps the first
+    occurrence's casing.
+    """
+    return _REPEAT_RE.sub(r"\1", text)
+
+
 def is_exact_phrase(text: str, phrase: str) -> bool:
     """Return True if ``text`` is exactly ``phrase`` (normalized).
 

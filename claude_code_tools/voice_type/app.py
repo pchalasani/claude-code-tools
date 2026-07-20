@@ -17,6 +17,7 @@ from typing import Callable
 from .config import Config
 from .inject import Typist, play_sound
 from .logic import (
+    collapse_repeats,
     contains_phrase,
     is_exact_phrase,
     strip_fillers,
@@ -293,7 +294,9 @@ class VoiceTypeApp:
         (used for grace-window commits, which by definition arrive
         after a state transition)."""
         if self.cfg.strip_fillers:
-            text = strip_fillers(text)
+            # Fillers first: removing "um"s can make a stutter run
+            # adjacent ("I um I um I" -> "I I I"), which then collapses.
+            text = collapse_repeats(strip_fillers(text))
             if not text:
                 return
         if self.cfg.trailing_space:
