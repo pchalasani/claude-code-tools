@@ -319,25 +319,27 @@ def test_app_toggle_hotkey_flips_state(app_factory) -> None:  # noqa: ANN001
     assert _state(app) == "ACTIVE"
     app.handle_utterance("hello world")
     assert app.typist.typed == ["hello world "]
+    app._last_toggle = 0.0  # bypass debounce: a later, real press
     app.toggle()
     assert _state(app) == "PAUSED"
 
 
 def test_app_concurrent_toggles_never_lose_a_toggle(app_factory) -> None:
-    """Two simultaneous hotkey toggles must commit two transitions.
+    """Two simultaneous hotkey toggles commit exactly ONE transition.
 
-    Regression: toggle() used to read the state and commit the inverse
-    under separate lock acquisitions, so two concurrent toggles could
-    both observe the same state and collapse into a single transition.
-    With an atomic read-invert-commit, every pair of toggles always
-    returns to the starting state and bumps the version by exactly 2 —
-    assertions that hold deterministically for correct code under any
-    thread interleaving.
+    Contract (updated for debounce): macro keys can re-fire the chord
+    for one intended press, so near-simultaneous toggles must collapse
+    into a single committed transition — never zero (the old lost-
+    toggle bug: state read and inverse committed under separate lock
+    acquisitions) and never two (double-flip back to the start). Each
+    round resets the debounce clock to simulate distinct real presses.
     """
     app, _ = app_factory(mode="toggle")
     assert _state(app) == "PAUSED"
     rounds = 25
+    expected = "PAUSED"
     for round_no in range(1, rounds + 1):
+        app._last_toggle = 0.0  # new intended press for this round
         barrier = threading.Barrier(2)
 
         def worker() -> None:
@@ -350,8 +352,9 @@ def test_app_concurrent_toggles_never_lose_a_toggle(app_factory) -> None:
         for t in threads:
             t.join(timeout=5.0)
         assert not any(t.is_alive() for t in threads)
-        assert _state(app) == "PAUSED"
-        assert app._state_version == 2 * round_no
+        expected = "ACTIVE" if expected == "PAUSED" else "PAUSED"
+        assert _state(app) == expected
+        assert app._state_version == round_no
 
 
 def test_app_submit_phrase_beats_stop_phrase(app_factory) -> None:  # noqa: ANN001
@@ -976,6 +979,7 @@ def test_toggle_off_flushes_and_grace_commits_in_flight() -> None:
 def test_toggle_on_resets_engine_audio() -> None:
     app = _grace_app()
     app.toggle()  # off
+    app._last_toggle = 0.0  # bypass debounce for the test
     app.toggle()  # back on -> reset
     assert app._engine.resets == 1
 
@@ -994,3 +998,30 @@ def test_submit_phrase_in_grace_presses_enter() -> None:
     app.toggle()  # off; "go" was in flight
     app.handle_utterance("go")
     assert app.typist.enters == 1
+
+
+def test_toggle_debounce_ignores_rapid_second_press() -> None:
+    from claude_code_tools.voice_type.app import State
+
+    app = _grace_app()
+    app.toggle()  # ACTIVE -> PAUSED
+    app.toggle()  # re-fire within debounce window: ignored
+    assert app._state is State.PAUSED
+    app._last_toggle = 0.0
+    app.toggle()  # a real later press works
+    assert app._state is State.ACTIVE
+
+
+def test_wake_word_alias_matches() -> None:
+    pytest.importorskip("pynput")
+    from claude_code_tools.voice_type.app import State, VoiceTypeApp
+
+    app = VoiceTypeApp(Config(
+        mode="wake", sounds=False,
+        wake_word_aliases=["claud", "clawed"],
+    ))
+    app.typist = _CollectingTypist()
+    app._engine = _RecordingEngine()
+    app.handle_utterance("Clawed, type this out")
+    assert app._state is State.ACTIVE
+    assert app.typist.typed == ["type this out "]

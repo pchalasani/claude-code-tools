@@ -34,7 +34,13 @@ voice-type --mode wake --wake-word claude
 ```
 
 In `wake` mode, voice-type listens passively and
-discards everything until it hears the wake word:
+discards everything until it hears the wake word.
+Tips: a two-word phrase ("hey claude") survives
+VAD onset-clipping better than a bare first word,
+and if the terminal's `heard (awaiting wake word)`
+lines show the transcriber misspelling your wake
+word, add that spelling to `wake_word_aliases` in
+the config.
 
 - "**Claude**, write hello" → activates and types
   `write hello`

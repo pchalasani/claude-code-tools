@@ -63,6 +63,7 @@ class VoiceTypeApp:
         self._effects_lock = threading.Lock()
         self._last_activity = time.monotonic()
         self._grace_until = 0.0
+        self._last_toggle = 0.0
         self._engine = None
         self._stop = threading.Event()
 
@@ -128,6 +129,12 @@ class VoiceTypeApp:
     #: (speech finished just before the toggle) is still committed.
     TOGGLE_GRACE = 2.0
 
+    #: Ignore a second toggle within this window: macro keys (e.g. UHK)
+    #: can re-fire the chord on hold, flipping the state twice for one
+    #: intended press. OS autorepeat is already filtered at the event
+    #: tap; this catches firmware-generated repeats too.
+    TOGGLE_DEBOUNCE = 0.3
+
     def toggle(self) -> None:
         """Hotkey handler: flip between active and the off state.
 
@@ -141,6 +148,12 @@ class VoiceTypeApp:
         audio state so stale pre-activation speech never leaks into the
         first utterance.
         """
+        now = time.monotonic()
+        with self._lock:
+            if now - self._last_toggle < self.TOGGLE_DEBOUNCE:
+                return
+            self._last_toggle = now
+
         deactivating = {}
 
         def compute(current: State) -> State:
@@ -211,7 +224,11 @@ class VoiceTypeApp:
             self._status(f'heard while paused (dropped): "{_preview(text)}"')
             return
         if state == State.PASSIVE:
-            remainder = text_after_wake_word(text, self.cfg.wake_word)
+            remainder = None
+            for word in (self.cfg.wake_word, *self.cfg.wake_word_aliases):
+                remainder = text_after_wake_word(text, word)
+                if remainder is not None:
+                    break
             if remainder is None:
                 self._status(
                     f'heard (awaiting wake word): "{_preview(text)}"'

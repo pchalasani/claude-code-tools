@@ -47,6 +47,9 @@ class Config:
         language: Language tag understood by Moonshine (e.g. "en").
         hotkey: Global toggle hotkey in pynput syntax, e.g. "<ctrl>+;".
         wake_word: Phrase that activates dictation in "wake" mode.
+        wake_word_aliases: Alternate spellings the transcriber may
+            produce for the wake word (e.g. "claud", "clawed"); any
+            of them activates dictation too.
         stop_phrase: Spoken phrase that deactivates dictation.
         submit_phrases: Phrases that press Enter when spoken as an
             entire utterance (e.g. say "go" alone to submit).
@@ -62,6 +65,7 @@ class Config:
     language: str = "en"
     hotkey: str = "<ctrl>+;"
     wake_word: str = "claude"
+    wake_word_aliases: list[str] = field(default_factory=list)
     stop_phrase: str = "stop listening"
     submit_phrases: list[str] = field(
         default_factory=lambda: ["over", "go", "submit"]
@@ -132,6 +136,13 @@ class Config:
         ):
             raise ValueError(
                 "submit_phrases must be a list of non-empty strings"
+            )
+        if not isinstance(self.wake_word_aliases, list) or any(
+            not isinstance(p, str) or not p.strip()
+            for p in self.wake_word_aliases
+        ):
+            raise ValueError(
+                "wake_word_aliases must be a list of non-empty strings"
             )
 
 
@@ -209,6 +220,13 @@ hotkey = "<ctrl>+;"
 # Wake word / stop phrase (used in "wake" mode; stop phrase works in
 # every mode). Matching is case- and punctuation-insensitive.
 wake_word = "claude"
+
+# Alternate spellings the transcriber may produce for your wake word --
+# check the terminal's 'heard (awaiting wake word)' lines and add
+# whatever it actually printed, e.g.:
+# wake_word_aliases = ["claud", "clod", "clawed"]
+wake_word_aliases = []
+
 stop_phrase = "stop listening"
 
 # Saying one of these as an ENTIRE utterance (pause, say it, pause)
