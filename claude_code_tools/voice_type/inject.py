@@ -12,8 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-_ACTIVATE_SOUND = Path("/System/Library/Sounds/Pop.aiff")
-_DEACTIVATE_SOUND = Path("/System/Library/Sounds/Bottle.aiff")
+_SYSTEM_SOUNDS = Path("/System/Library/Sounds")
 
 
 class Typist:
@@ -35,11 +34,20 @@ class Typist:
         self._keyboard.tap(Key.enter)
 
 
-def play_sound(activate: bool) -> None:
-    """Play a short system sound (macOS only; silently no-ops elsewhere)."""
-    if sys.platform != "darwin":
+def play_sound(name: str) -> None:
+    """Play a named macOS system sound or a sound file path.
+
+    ``name`` is either a system sound name (e.g. "Glass", "Bottle" —
+    see /System/Library/Sounds) or an absolute path to an audio file.
+    Silently no-ops off macOS, on empty names, and on missing files.
+    """
+    if sys.platform != "darwin" or not name:
         return
-    sound = _ACTIVATE_SOUND if activate else _DEACTIVATE_SOUND
+    sound = (
+        Path(name)
+        if "/" in name
+        else _SYSTEM_SOUNDS / f"{name}.aiff"
+    )
     if not sound.exists():
         return
     subprocess.Popen(
@@ -47,3 +55,15 @@ def play_sound(activate: bool) -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+
+
+def copy_to_clipboard(text: str) -> None:
+    """Put ``text`` on the macOS clipboard (no-op elsewhere/on failure)."""
+    if sys.platform != "darwin" or not text:
+        return
+    try:
+        subprocess.run(
+            ["pbcopy"], input=text.encode(), check=False, timeout=5
+        )
+    except Exception:
+        pass

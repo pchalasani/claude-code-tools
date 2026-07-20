@@ -80,33 +80,37 @@ def parse_hotkey(hotkey: str) -> tuple[frozenset[str], str]:
     return frozenset(mods), terminal
 
 
-class _SuppressingHotKey:
-    """macOS hotkey listener that consumes the chord via an event tap."""
+class _SuppressingHotKeys:
+    """macOS listener consuming one or more chords via a single event tap."""
 
     def __init__(
-        self, mods: frozenset[str], char: str, callback: Callable[[], None]
+        self,
+        bindings: list[tuple[frozenset[str], str, Callable[[], None]]],
     ) -> None:
         import Quartz
         from pynput import keyboard
 
         self._quartz = Quartz
-        self._callback = callback
         masks = {
             "ctrl": Quartz.kCGEventFlagMaskControl,
             "alt": Quartz.kCGEventFlagMaskAlternate,
             "cmd": Quartz.kCGEventFlagMaskCommand,
             "shift": Quartz.kCGEventFlagMaskShift,
         }
-        self._mask = 0
-        for m in mods:
-            self._mask |= masks[m]
-        vk = _vk_for_char(Quartz, char)
-        if vk is None:
-            raise ValueError(
-                f"could not resolve key {char!r} on this keyboard layout"
-            )
-        self._vk = vk
-        self._down = False
+        # vk -> list of (mask, callback); several chords may share a key.
+        self._by_vk: dict[int, list[tuple[int, Callable[[], None]]]] = {}
+        for mods, char, callback in bindings:
+            mask = 0
+            for m in mods:
+                mask |= masks[m]
+            vk = _vk_for_char(Quartz, char)
+            if vk is None:
+                raise ValueError(
+                    f"could not resolve key {char!r} on this "
+                    "keyboard layout"
+                )
+            self._by_vk.setdefault(vk, []).append((mask, callback))
+        self._down: set[int] = set()
         self._listener = keyboard.Listener(
             darwin_intercept=self._intercept
         )
@@ -118,23 +122,26 @@ class _SuppressingHotKey:
         if event_type not in (q.kCGEventKeyDown, q.kCGEventKeyUp):
             return event
         vk = q.CGEventGetIntegerValueField(event, q.kCGKeyboardEventKeycode)
-        if vk != self._vk:
+        entries = self._by_vk.get(vk)
+        if entries is None:
             return event
         if event_type == q.kCGEventKeyDown:
             flags = q.CGEventGetFlags(event)
-            if (flags & self._mask) != self._mask:
-                return event
-            repeat = q.CGEventGetIntegerValueField(
-                event, q.kCGKeyboardEventAutorepeat
-            )
-            if not repeat:
-                self._down = True
-                threading.Thread(
-                    target=self._callback, daemon=True
-                ).start()
-            return None  # swallow the chord (and its auto-repeats)
-        if self._down:
-            self._down = False
+            for mask, callback in entries:
+                if (flags & mask) != mask:
+                    continue
+                repeat = q.CGEventGetIntegerValueField(
+                    event, q.kCGKeyboardEventAutorepeat
+                )
+                if not repeat:
+                    self._down.add(vk)
+                    threading.Thread(
+                        target=callback, daemon=True
+                    ).start()
+                return None  # swallow the chord (and auto-repeats)
+            return event
+        if vk in self._down:
+            self._down.discard(vk)
             return None  # swallow the matching key-up
         return event
 
@@ -218,30 +225,48 @@ def record_hotkey(timeout: float = 15.0) -> str | None:
     return result.get("chord")
 
 
-def start_hotkey(hotkey: str, callback: Callable[[], None]):  # noqa: ANN201
-    """Start a global hotkey listener; returns an object with ``stop()``.
+def start_hotkeys(
+    bindings: list[tuple[str, Callable[[], None]]],
+):  # noqa: ANN201
+    """Start one global listener for several chords; returns ``stop()``-able.
 
-    On macOS the chord is fully suppressed (the focused app never sees
-    it). Elsewhere -- or when suppression isn't possible, e.g. a named
-    terminal key like ``<f5>`` -- falls back to pynput's observing
-    ``GlobalHotKeys``, in which case the app may also receive the keys.
+    On macOS every chord is fully suppressed (the focused app never
+    sees it). Elsewhere -- or when suppression isn't possible, e.g. a
+    named terminal key like ``<f5>`` -- falls back to pynput's
+    observing ``GlobalHotKeys``, in which case apps may also receive
+    the keys.
 
     Raises:
-        ValueError: If the hotkey string is malformed.
+        ValueError: If any hotkey string is malformed.
     """
-    mods, terminal = parse_hotkey(hotkey)  # validate on every platform
-    if sys.platform == "darwin" and len(terminal) == 1:
+    parsed = [
+        (*parse_hotkey(hk), cb) for hk, cb in bindings
+    ]  # validate on every platform
+    if sys.platform == "darwin" and all(
+        len(term) == 1 for _, term, _ in parsed
+    ):
         try:
-            return _SuppressingHotKey(mods, terminal, callback)
+            return _SuppressingHotKeys(parsed)
         except ValueError as e:
             print(
                 f"[voice-type] {e}; falling back to non-suppressing "
-                "hotkey (the chord may leak keystrokes)",
+                "hotkeys (chords may leak keystrokes)",
                 file=sys.stderr,
             )
     from pynput import keyboard
 
-    hotkeys = keyboard.GlobalHotKeys({hotkey: callback})
+    # Rebuild canonical pynput syntax (GlobalHotKeys doesn't know our
+    # bracket-less spellings).
+    canonical = {
+        "+".join([f"<{m}>" for m in sorted(mods)] + [term]): cb
+        for mods, term, cb in parsed
+    }
+    hotkeys = keyboard.GlobalHotKeys(canonical)
     hotkeys.daemon = True
     hotkeys.start()
     return hotkeys
+
+
+def start_hotkey(hotkey: str, callback: Callable[[], None]):  # noqa: ANN201
+    """Single-chord convenience wrapper around ``start_hotkeys``."""
+    return start_hotkeys([(hotkey, callback)])

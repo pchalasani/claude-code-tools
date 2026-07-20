@@ -163,6 +163,18 @@ higher precision, closest to what Hex/FluidAudio
 run). Try both with `--parakeet-model` and keep the
 one that hears you better.
 
+## Sounds and Transcript Rescue
+
+Start/stop sounds are configurable (`sound_start`,
+`sound_stop` — any macOS system sound name or file
+path; `sounds = false` disables). If you dictate
+into the wrong window, the transcript isn't lost:
+set `copy_to_clipboard = true` to keep each
+session's text on the clipboard, and/or set
+`paste_hotkey` (e.g. `"<cmd>+<ctrl>+v"`) to a
+global chord that re-types the last session's
+transcript wherever the cursor is now.
+
 ## Recording Indicator
 
 While dictating, a floating waveform pill appears at

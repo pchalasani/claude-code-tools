@@ -1135,3 +1135,59 @@ def test_fillers_then_repeats_compose() -> None:
     assert collapse_repeats(strip_fillers("I um I uh I think")) == (
         "I think"
     )
+
+
+# -- sounds / clipboard / paste-again -------------------------------------
+
+
+def test_config_new_fields_validate() -> None:
+    Config(
+        sound_start="Hero",
+        sound_stop="/tmp/x.aiff",
+        copy_to_clipboard=True,
+        paste_hotkey="<cmd>+<ctrl>+v",
+    ).validate()
+    with pytest.raises(ValueError, match="sound_start"):
+        Config(sound_start=None).validate()
+    with pytest.raises(ValueError, match="copy_to_clipboard"):
+        Config(copy_to_clipboard="yes").validate()
+
+
+def test_parse_paste_hotkey_chord() -> None:
+    assert parse_hotkey("<cmd>+<ctrl>+v") == (
+        frozenset({"cmd", "ctrl"}),
+        "v",
+    )
+
+
+def test_session_buffer_and_paste_last() -> None:
+    pytest.importorskip("pynput")
+    from claude_code_tools.voice_type.app import VoiceTypeApp
+
+    app = VoiceTypeApp(Config(mode="vad", sounds=False, overlay=False))
+    app.typist = _CollectingTypist()
+    app._engine = _RecordingEngine()
+    app.handle_utterance("first part")
+    app.handle_utterance("second part")
+    assert app.typist.typed == ["first part ", "second part "]
+    # rescue: re-type the whole session at the (new) cursor position
+    app.paste_last()
+    assert app.typist.typed[-1] == "first part second part "
+    # a new session resets the buffer
+    app.toggle()  # off
+    app._last_toggle = 0.0
+    app._grace_until = 0.0
+    app.toggle()  # on -> new session
+    app.handle_utterance("fresh")
+    app.paste_last()
+    assert app.typist.typed[-1] == "fresh "
+
+
+def test_paste_last_empty_session() -> None:
+    pytest.importorskip("pynput")
+    from claude_code_tools.voice_type.app import VoiceTypeApp
+
+    app = VoiceTypeApp(Config(mode="toggle", sounds=False, overlay=False))
+    app.typist = _CollectingTypist()
+    app.paste_last()
+    assert app.typist.typed == []

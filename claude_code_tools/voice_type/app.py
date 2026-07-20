@@ -15,7 +15,7 @@ from enum import Enum
 from typing import Callable
 
 from .config import Config
-from .inject import Typist, play_sound
+from .inject import Typist, copy_to_clipboard, play_sound
 from .logic import (
     collapse_repeats,
     contains_phrase,
@@ -66,6 +66,9 @@ class VoiceTypeApp:
         self._grace_until = 0.0
         self._last_toggle = 0.0
         self._engine = None
+        # Text of the current/most recent dictation session, for the
+        # clipboard option and the paste-again hotkey.
+        self._session_texts: list[str] = []
         self._stop = threading.Event()
 
     # -- state transitions ------------------------------------------------
@@ -123,8 +126,16 @@ class VoiceTypeApp:
             if pre_msg is not None:
                 self._status(pre_msg)
             if self.cfg.sounds and State.ACTIVE in (old, new):
-                play_sound(activate=new == State.ACTIVE)
+                play_sound(
+                    self.cfg.sound_start
+                    if new == State.ACTIVE
+                    else self.cfg.sound_stop
+                )
             self._status(new.value)
+            if new == State.ACTIVE:
+                # Fresh dictation session begins.
+                with self._lock:
+                    self._session_texts = []
 
     #: Seconds after a toggle-off during which an in-flight utterance
     #: (speech finished just before the toggle) is still committed.
@@ -299,6 +310,14 @@ class VoiceTypeApp:
             text = collapse_repeats(strip_fillers(text))
             if not text:
                 return
+        # Record for the paste-again hotkey / clipboard BEFORE typing:
+        # even text that lands in the wrong window (or is skipped as
+        # stale) stays rescuable.
+        with self._lock:
+            self._session_texts.append(text)
+            session = " ".join(self._session_texts)
+        if self.cfg.copy_to_clipboard:
+            copy_to_clipboard(session)
         if self.cfg.trailing_space:
             text += " "
         if version is None:
@@ -306,6 +325,23 @@ class VoiceTypeApp:
                 self.typist.type_text(text)
         else:
             self._inject(version, lambda: self.typist.type_text(text))
+
+    def paste_last(self) -> None:
+        """Paste-hotkey handler: type the last session's transcript.
+
+        Rescues dictation that went to the wrong window — place the
+        cursor where it should have gone and hit the paste hotkey.
+        """
+        with self._lock:
+            session = " ".join(self._session_texts)
+        if not session:
+            self._status("nothing to paste")
+            return
+        if self.cfg.trailing_space:
+            session += " "
+        with self._lock:
+            self.typist.type_text(session)
+        self._status(f'pasted last transcript: "{_preview(session)}"')
 
     # -- main loop --------------------------------------------------------
 
@@ -435,14 +471,16 @@ class VoiceTypeApp:
             )
 
     def _start_hotkey_listener(self):  # noqa: ANN202
-        from .hotkey import start_hotkey
+        from .hotkey import start_hotkeys
 
+        bindings = [(self.cfg.hotkey, self.toggle)]
+        if self.cfg.paste_hotkey:
+            bindings.append((self.cfg.paste_hotkey, self.paste_last))
         try:
-            return start_hotkey(self.cfg.hotkey, self.toggle)
+            return start_hotkeys(bindings)
         except ValueError as e:
             self._status(
-                f"invalid hotkey {self.cfg.hotkey!r} ({e}); "
-                "hotkey disabled"
+                f"invalid hotkey config ({e}); hotkeys disabled"
             )
             return None
 

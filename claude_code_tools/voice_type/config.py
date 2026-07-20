@@ -71,6 +71,15 @@ class Config:
         idle_timeout: Seconds of silence after which "wake" mode re-arms.
         trailing_space: Append a space after each typed utterance.
         sounds: Play a system sound on activate/deactivate (macOS).
+        sound_start: Sound when recording starts — a macOS system
+            sound name (see /System/Library/Sounds) or a file path.
+        sound_stop: Sound when recording stops (same forms).
+        copy_to_clipboard: Also place each dictation session's text on
+            the clipboard (overwrites it per utterance).
+        paste_hotkey: Optional global chord (e.g. "<cmd>+<ctrl>+v")
+            that types the LAST session's transcript at the cursor —
+            rescues dictation that went to the wrong window. Empty
+            disables.
     """
 
     mode: str = "toggle"
@@ -93,6 +102,10 @@ class Config:
     idle_timeout: float = 20.0
     trailing_space: bool = True
     sounds: bool = True
+    sound_start: str = "Glass"
+    sound_stop: str = "Bottle"
+    copy_to_clipboard: bool = False
+    paste_hotkey: str = ""
 
     def validate(self) -> None:
         """Raise ``ValueError`` if any field has an invalid type or value.
@@ -190,6 +203,11 @@ class Config:
             raise ValueError(
                 "wake_word_aliases must be a list of non-empty strings"
             )
+        for field_name in ("sound_start", "sound_stop", "paste_hotkey"):
+            if not isinstance(getattr(self, field_name), str):
+                raise ValueError(f"{field_name} must be a string")
+        if not isinstance(self.copy_to_clipboard, bool):
+            raise ValueError("copy_to_clipboard must be a boolean")
 
 
 def load_config(
@@ -309,8 +327,20 @@ idle_timeout = 20.0
 # Append a space after each typed utterance.
 trailing_space = true
 
-# Play a system sound when dictation starts/stops (macOS only).
+# Play a sound when dictation starts/stops (macOS only). Names are
+# system sounds from /System/Library/Sounds (Glass, Hero, Ping, Tink,
+# Bottle, ...) or absolute paths to audio files.
 sounds = true
+sound_start = "Glass"
+sound_stop = "Bottle"
+
+# Also keep each dictation session's text on the clipboard.
+copy_to_clipboard = false
+
+# Optional global chord that RE-TYPES the last session's transcript at
+# the cursor — rescues dictation typed into the wrong window. Empty
+# string disables.
+paste_hotkey = ""
 '''
 
 
