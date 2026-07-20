@@ -319,6 +319,8 @@ class ParakeetEngine:
         # True once the current capture session has produced audio.
         self._capture_progress = False
         self._agc = AutoGain()
+        # Latest post-gain peak (0..1); read by the overlay waveform.
+        self.level = 0.0
         # Cross-thread requests, honored by the capture worker (the VAD
         # is only ever touched from that thread).
         self._flush_req = threading.Event()
@@ -418,7 +420,7 @@ class ParakeetEngine:
             decoder=str(files["decoder"]),
             joiner=str(files["joiner"]),
             tokens=str(files["tokens"]),
-            num_threads=2,
+            num_threads=getattr(self.cfg, "parakeet_threads", 4),
             model_type="nemo_transducer",
         )
         vad_config = sherpa_onnx.VadModelConfig()
@@ -614,6 +616,9 @@ class ParakeetEngine:
                         continue
                     empty_reads = 0
                     samples = self._agc.process(samples)
+                    self.level = float(
+                        min(1.0, float(np.abs(samples).max()))
+                    )
                     # Only now — after a validated chunk was actually
                     # folded into the pipeline — does the session count
                     # as having made progress; malformed data must

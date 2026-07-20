@@ -51,8 +51,12 @@ class Config:
             mid-sentence chopping; parakeet + toggle mode only).
         parakeet_model: Parakeet build: "v3-int8" (multilingual,
             ~490 MB) or "v2-fp16" (English, ~1.1 GB, higher precision).
+        parakeet_threads: CPU threads for decoding (4 benchmarks
+            fastest for v3-int8 on Apple Silicon; 8 helps v2-fp16).
         strip_fillers: Drop standalone filler words (uh, um, ...) from
             typed text.
+        overlay: Show the floating waveform pill while running
+            (macOS only; ignored elsewhere).
         model_arch: Moonshine model architecture name (moonshine engine
             only).
         language: Language tag understood by Moonshine (e.g. "en").
@@ -73,7 +77,9 @@ class Config:
     engine: str = "moonshine"
     segmentation: str = "vad"
     parakeet_model: str = "v3-int8"
+    parakeet_threads: int = 4
     strip_fillers: bool = True
+    overlay: bool = True
     model_arch: str = "medium-streaming"
     language: str = "en"
     hotkey: str = "<ctrl>+;"
@@ -119,6 +125,14 @@ class Config:
             raise ValueError(
                 f"invalid parakeet_model {self.parakeet_model!r}; "
                 f"must be one of {VALID_PARAKEET_MODELS}"
+            )
+        if (
+            not isinstance(self.parakeet_threads, int)
+            or isinstance(self.parakeet_threads, bool)
+            or not 1 <= self.parakeet_threads <= 32
+        ):
+            raise ValueError(
+                "parakeet_threads must be an integer between 1 and 32"
             )
         if self.model_arch not in VALID_MODEL_ARCHS:
             raise ValueError(
@@ -241,6 +255,14 @@ segmentation = "vad"
 # Parakeet build: "v3-int8" (multilingual, ~490 MB download) or
 # "v2-fp16" (English-only, ~1.1 GB, higher precision = better accuracy)
 parakeet_model = "v3-int8"
+
+# CPU threads for Parakeet decoding. 4 is fastest for v3-int8 on
+# Apple Silicon (~32x realtime); v2-fp16 benefits from 8 (~16x).
+parakeet_threads = 4
+
+# Floating waveform pill (macOS): red waves while dictating, dim flat
+# line when paused/waiting. Click-through; never steals focus.
+overlay = true
 
 # Remove standalone filler words (uh, um, ...) from typed text.
 strip_fillers = true

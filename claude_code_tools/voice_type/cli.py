@@ -68,6 +68,11 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="disable activate/deactivate sounds",
     )
+    parser.add_argument(
+        "--no-overlay",
+        action="store_true",
+        help="disable the floating waveform pill",
+    )
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
@@ -84,6 +89,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     }
     if args.no_sounds:
         overrides["sounds"] = False
+    if args.no_overlay:
+        overrides["overlay"] = False
     try:
         cfg = load_config(args.config, overrides)
     except (ValueError, FileNotFoundError) as e:
@@ -99,6 +106,22 @@ def _cmd_run(args: argparse.Namespace) -> int:
     except ImportError as e:
         print(f"voice-type: {e}\n\n{_INSTALL_HINT}", file=sys.stderr)
         return 1
+
+
+def _cmd_hotkey() -> int:
+    try:
+        from .hotkey import record_hotkey
+    except ImportError as e:
+        print(f"voice-type: {e}\n\n{_INSTALL_HINT}", file=sys.stderr)
+        return 1
+    print("Press the key combo you want as your hotkey (15s timeout)...")
+    chord = record_hotkey()
+    if chord is None:
+        print("voice-type: no key combo detected", file=sys.stderr)
+        return 1
+    print(f"\nAdd this to {DEFAULT_CONFIG_PATH}:\n")
+    print(f'hotkey = "{chord}"')
+    return 0
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
@@ -141,10 +164,16 @@ Microphone access, plus Input Monitoring for the global hotkey
     p_init.add_argument(
         "--force", action="store_true", help="overwrite existing config"
     )
+    sub.add_parser(
+        "hotkey",
+        help="press a key combo and print the matching config line",
+    )
 
     args = parser.parse_args()
     if args.command == "init":
         return _cmd_init(args)
+    if args.command == "hotkey":
+        return _cmd_hotkey()
     return _cmd_run(args)
 
 

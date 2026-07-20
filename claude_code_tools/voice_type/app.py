@@ -339,14 +339,7 @@ class VoiceTypeApp:
                 f"hotkey={self.cfg.hotkey}, Ctrl+C to quit"
             )
             self._status(self._state.value)
-            while not self._stop.is_set():
-                time.sleep(0.25)
-                self._check_idle_timeout()
-                fatal = getattr(engine, "fatal_error", None)
-                if fatal:
-                    self._status(f"engine failed: {fatal}")
-                    exit_code = 1
-                    break
+            exit_code = self._main_loop(engine)
         except KeyboardInterrupt:
             pass
         except ImportError:
@@ -369,6 +362,48 @@ class VoiceTypeApp:
                     self._status(f"error stopping hotkey listener: {e}")
             self._status("stopped")
         return exit_code
+
+    def _main_loop(self, engine) -> int:  # noqa: ANN001
+        """Run the housekeeping loop until stop; returns the exit code.
+
+        With the overlay enabled (macOS), AppKit's run loop drives the
+        ticks (the waveform pill needs the main thread); otherwise a
+        plain sleep loop does. Housekeeping is identical either way.
+        """
+        result = {"code": 0}
+
+        def tick() -> None:
+            self._check_idle_timeout()
+            fatal = getattr(engine, "fatal_error", None)
+            if fatal:
+                self._status(f"engine failed: {fatal}")
+                result["code"] = 1
+                self._stop.set()
+
+        if self.cfg.overlay:
+            from . import overlay
+
+            if overlay.overlay_available():
+
+                def sample() -> tuple[str, bool, float]:
+                    with self._lock:
+                        state = self._state
+                    level = getattr(engine, "level", 0.0)
+                    try:
+                        level = float(level)
+                    except (TypeError, ValueError):
+                        level = 0.0
+                    return state.value, state is State.ACTIVE, level
+
+                overlay.run_overlay(
+                    sample, tick, self._stop.is_set
+                )
+                return result["code"]
+            self._status("overlay unavailable; running without it")
+        while not self._stop.is_set():
+            time.sleep(0.25)
+            tick()
+        return result["code"]
 
     def _check_idle_timeout(self) -> None:
         if self.cfg.mode != "wake":

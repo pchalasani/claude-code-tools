@@ -273,6 +273,7 @@ def app_factory(monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
 
     def make(**kw):  # noqa: ANN003, ANN202
         kw.setdefault("sounds", False)
+        kw.setdefault("overlay", False)  # never launch AppKit in tests
         cfg = Config(**kw)
         cfg.validate()
         monkeypatch.setattr(app_mod, "Typist", RecordingTypist)
@@ -657,7 +658,8 @@ def _lifecycle_app(monkeypatch, engine, sleep=None):  # noqa: ANN001, ANN202
     monkeypatch.setattr(
         app_mod.time, "sleep", sleep or (lambda s: None)
     )
-    app = app_mod.VoiceTypeApp(Config(sounds=False))
+    # overlay=False: tests must never enter the AppKit run loop
+    app = app_mod.VoiceTypeApp(Config(sounds=False, overlay=False))
     return app, hotkeys
 
 
@@ -1079,3 +1081,20 @@ def test_hold_toggle_uses_hold_requests_and_grace() -> None:
     assert app.typist.typed == [
         "the entire dictated take as one utterance "
     ]
+
+
+def test_parse_hotkey_bracketless() -> None:
+    assert parse_hotkey("ctrl+;") == (frozenset({"ctrl"}), ";")
+    assert parse_hotkey("cmd+shift+v") == (
+        frozenset({"cmd", "shift"}),
+        "v",
+    )
+    assert parse_hotkey("ctrl+f5") == (frozenset({"ctrl"}), "<f5>")
+
+
+def test_config_overlay_and_threads() -> None:
+    Config(overlay=False, parakeet_threads=8).validate()
+    with pytest.raises(ValueError, match="parakeet_threads"):
+        Config(parakeet_threads=0).validate()
+    with pytest.raises(ValueError, match="parakeet_threads"):
+        Config(parakeet_threads=True).validate()

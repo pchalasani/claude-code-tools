@@ -24,6 +24,16 @@ _MODIFIERS = {
     "shift": "shift",
 }
 
+# Named keys accepted without angle brackets ("ctrl+f5" == "<ctrl>+<f5>").
+_NAMED_KEYS = frozenset(
+    [f"f{i}" for i in range(1, 25)]
+    + [
+        "space", "tab", "enter", "esc", "home", "end",
+        "page_up", "page_down", "up", "down", "left", "right",
+        "delete", "backspace",
+    ]
+)
+
 
 def parse_hotkey(hotkey: str) -> tuple[frozenset[str], str]:
     """Split a pynput-style hotkey into (modifiers, terminal key).
@@ -50,8 +60,14 @@ def parse_hotkey(hotkey: str) -> tuple[frozenset[str], str]:
                 mods.add(_MODIFIERS[name])
                 continue
             key = part  # named non-modifier key, e.g. <f5>
+        elif part in _MODIFIERS:
+            # bracket-less spelling: "ctrl+;" == "<ctrl>+;"
+            mods.add(_MODIFIERS[part])
+            continue
         elif len(part) == 1:
             key = part
+        elif part in _NAMED_KEYS:
+            key = f"<{part}>"  # bare named key, e.g. "f5"
         else:
             raise ValueError(f"cannot parse hotkey part {part!r}")
         if terminal is not None:
@@ -138,6 +154,68 @@ def _vk_for_char(quartz, char: str) -> int | None:  # noqa: ANN001
         if s == char:
             return vk
     return None
+
+
+def record_hotkey(timeout: float = 15.0) -> str | None:
+    """Capture one key chord from the keyboard; return its config string.
+
+    Waits for the user to press modifiers plus one non-modifier key and
+    formats the result in the notation ``parse_hotkey`` accepts (e.g.
+    ``"<ctrl>+;"``). Returns None if nothing was pressed in ``timeout``
+    seconds. Requires the same Input Monitoring permission as the
+    hotkey listener itself.
+    """
+    from pynput import keyboard
+
+    mod_names = {
+        keyboard.Key.ctrl: "ctrl",
+        keyboard.Key.ctrl_l: "ctrl",
+        keyboard.Key.ctrl_r: "ctrl",
+        keyboard.Key.alt: "alt",
+        keyboard.Key.alt_l: "alt",
+        keyboard.Key.alt_r: "alt",
+        keyboard.Key.alt_gr: "alt",
+        keyboard.Key.cmd: "cmd",
+        keyboard.Key.cmd_l: "cmd",
+        keyboard.Key.cmd_r: "cmd",
+        keyboard.Key.shift: "shift",
+        keyboard.Key.shift_l: "shift",
+        keyboard.Key.shift_r: "shift",
+    }
+    order = ("ctrl", "alt", "shift", "cmd")
+    held: set[str] = set()
+    result: dict[str, str] = {}
+    listener_box: dict = {}
+
+    def on_press(key):  # noqa: ANN001, ANN202
+        if key in mod_names:
+            held.add(mod_names[key])
+            return None
+        listener = listener_box.get("l")
+        base = listener.canonical(key) if listener else key
+        char = getattr(base, "char", None)
+        if isinstance(char, str) and len(char) == 1 and char.isprintable():
+            terminal = char.lower()
+        else:
+            name = getattr(key, "name", None)
+            if not name:
+                return None
+            terminal = f"<{name}>"
+        parts = [f"<{m}>" for m in order if m in held]
+        result["chord"] = "+".join(parts + [terminal])
+        return False  # stop the listener
+
+    def on_release(key):  # noqa: ANN001, ANN202
+        if key in mod_names:
+            held.discard(mod_names[key])
+        return None
+
+    with keyboard.Listener(
+        on_press=on_press, on_release=on_release
+    ) as listener:
+        listener_box["l"] = listener
+        listener.join(timeout)
+    return result.get("chord")
 
 
 def start_hotkey(hotkey: str, callback: Callable[[], None]):  # noqa: ANN201
