@@ -810,3 +810,89 @@ def test_parakeet_no_callbacks_after_stop(monkeypatch) -> None:  # noqa: ANN001
     eng._stop.set()
     eng._safe_call(lambda: called.__setitem__("n", 1), "on_utterance")
     assert called["n"] == 0  # suppressed once shutdown began
+
+
+# -- AutoGain -------------------------------------------------------------
+
+
+def test_autogain_amplifies_quiet_audio() -> None:
+    np = pytest.importorskip("numpy")
+    from claude_code_tools.voice_type.engine_parakeet import AutoGain
+
+    agc = AutoGain()
+    quiet = (0.005 * np.sin(np.linspace(0, 200, 1600))).astype(np.float32)
+    out = quiet
+    for _ in range(60):  # ~6s of chunks; gain converges
+        out = agc.process(quiet)
+    assert np.abs(out).max() > 0.1  # brought toward TARGET_PEAK
+    assert np.abs(out).max() <= 1.0
+
+
+def test_autogain_leaves_normal_audio_alone() -> None:
+    np = pytest.importorskip("numpy")
+    from claude_code_tools.voice_type.engine_parakeet import AutoGain
+
+    agc = AutoGain()
+    loud = (0.5 * np.sin(np.linspace(0, 200, 1600))).astype(np.float32)
+    for _ in range(20):
+        out = agc.process(loud)
+    assert np.allclose(out, loud)  # gain stays at 1.0
+
+
+def test_autogain_handles_silence_and_empty() -> None:
+    np = pytest.importorskip("numpy")
+    from claude_code_tools.voice_type.engine_parakeet import AutoGain
+
+    agc = AutoGain()
+    for _ in range(10):
+        out = agc.process(np.zeros(1600, dtype=np.float32))
+    assert np.abs(out).max() <= 1.0  # no blow-up on silence
+    agc.process(np.zeros(0, dtype=np.float32))  # empty chunk is safe
+
+
+# -- segment drain order (front must be read BEFORE pop) ------------------
+
+
+class _PopInvalidatingVad:
+    """Mimics sherpa-onnx: front becomes invalid once pop() is called."""
+
+    class _Front:
+        def __init__(self, samples):  # noqa: ANN001
+            self.samples = samples
+
+    def __init__(self, segments):  # noqa: ANN001
+        self._segments = list(segments)
+        self._front = None
+
+    def empty(self) -> bool:
+        return not self._segments and self._front is None
+
+    @property
+    def front(self):  # noqa: ANN202
+        if self._front is None and self._segments:
+            self._front = self._Front(self._segments.pop(0))
+        return self._front
+
+    def pop(self) -> None:
+        if self._front is not None:
+            self._front.samples = []  # invalidate, like the native queue
+            self._front = None
+
+
+def test_drain_reads_segment_before_pop() -> None:
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("sherpa_onnx")
+    from claude_code_tools.voice_type.config import Config
+    from claude_code_tools.voice_type.engine_parakeet import ParakeetEngine
+
+    eng = ParakeetEngine(Config(engine="parakeet"), lambda m: None)
+    eng._vad = _PopInvalidatingVad(
+        [np.ones(1600, dtype=np.float32)]
+    )
+    eng.transcribe = lambda samples, sr: f"len={len(samples)}"  # type: ignore
+
+    got: list[str] = []
+    eng._drain_segments(got.append)
+    # If the drain popped before copying, the segment would be empty and
+    # silently skipped; reading first yields the real 1600 samples.
+    assert got == ["len=1600"]

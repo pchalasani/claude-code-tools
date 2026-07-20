@@ -39,6 +39,44 @@ SAMPLE_RATE = 16000
 MIN_SILENCE = 0.5
 
 
+class AutoGain:
+    """Adaptive software gain so quiet mics reach VAD-friendly levels.
+
+    Dynamic microphones (e.g. Shure MV7) can deliver peaks around 0.005
+    full scale — far below Silero VAD's detection range, so speech is
+    never segmented. This tracks the running peak with slow decay and
+    scales chunks toward ``TARGET_PEAK``. Gain never attenuates
+    (min 1.0), is capped at ``MAX_GAIN``, and moves gradually to avoid
+    pumping. Output is clipped to [-1, 1].
+    """
+
+    TARGET_PEAK = 0.3
+    MAX_GAIN = 100.0
+    # Running-peak attack is instantaneous (max); release decays fast
+    # enough to adapt to a quiet mic within a few seconds of audio.
+    DECAY = 0.85  # per ~0.1 s chunk
+    SMOOTHING = 0.3  # fraction of the way to the target gain per chunk
+
+    def __init__(self) -> None:
+        self._running_peak = self.TARGET_PEAK  # start at gain 1.0
+        self._gain = 1.0
+
+    def process(self, samples):  # noqa: ANN001, ANN202
+        """Return ``samples`` scaled toward the target peak level."""
+        import numpy as np
+
+        peak = float(np.abs(samples).max()) if samples.size else 0.0
+        self._running_peak = max(peak, self._running_peak * self.DECAY)
+        target_gain = min(
+            self.MAX_GAIN,
+            max(1.0, self.TARGET_PEAK / max(self._running_peak, 1e-6)),
+        )
+        self._gain += self.SMOOTHING * (target_gain - self._gain)
+        if self._gain <= 1.001:
+            return samples
+        return np.clip(samples * self._gain, -1.0, 1.0).astype(np.float32)
+
+
 def _download(url: str, dest: Path, status: StatusFn) -> None:
     """Download ``url`` to ``dest`` atomically via a unique temp file.
 
@@ -237,6 +275,7 @@ class ParakeetEngine:
         self._stream: Any = None
         # True once the current capture session has produced audio.
         self._capture_progress = False
+        self._agc = AutoGain()
         self.fatal_error: str | None = None
 
     def start(
@@ -452,6 +491,7 @@ class ParakeetEngine:
                             )
                         continue
                     empty_reads = 0
+                    samples = self._agc.process(samples)
                     buffer = np.concatenate([buffer, samples])
                     # Only now — after a validated chunk was actually
                     # folded into the pipeline — does the session count
@@ -527,19 +567,28 @@ class ParakeetEngine:
         import numpy as np
 
         while not self._vad.empty() and not self._stop.is_set():
+            # Read (and COPY) the segment before pop(): vad.front is a
+            # view into the native queue and popping invalidates it —
+            # reading afterwards yields empty/dangling data, silently
+            # discarding every utterance.
             front = self._vad.front
-            self._vad.pop()
             raw = (
                 getattr(front, "samples", None)
                 if front is not None
                 else None
             )
-            if raw is None:
+            try:
+                segment = (
+                    None
+                    if raw is None
+                    else np.array(raw, dtype=np.float32, copy=True)
+                )
+            except Exception:
+                segment = None
+            self._vad.pop()
+            if segment is None or segment.ndim != 1 or segment.size == 0:
                 continue
             try:
-                segment = np.asarray(raw, dtype=np.float32)
-                if segment.ndim != 1 or segment.size == 0:
-                    continue
                 text = self.transcribe(segment, SAMPLE_RATE)
             except Exception as e:
                 self._report(f"parakeet decode error: {e}")
