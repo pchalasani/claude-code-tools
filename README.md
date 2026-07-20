@@ -194,6 +194,13 @@ See [tmux-cli](https://pchalasani.github.io/claude-code-tools/tools/tmux-cli/) i
 ## Voice Plugin
 See [Voice](https://pchalasani.github.io/claude-code-tools/plugins-detail/voice/) in the full documentation.
 
+<a id="voice-type"></a>
+## voice-type — Local Voice Dictation
+Fully on-device speech-to-text (Moonshine + VAD) that types wherever your
+cursor is, with a configurable toggle hotkey and optional wake word.
+Install with `uv tool install "claude-code-tools[voice]"`.
+See [voice-type](https://pchalasani.github.io/claude-code-tools/tools/voice-type/) in the full documentation.
+
 <a id="license"></a>
 ## License
 

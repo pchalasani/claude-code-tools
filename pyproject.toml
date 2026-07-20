@@ -26,6 +26,10 @@ gdocs = [
     "google-auth-oauthlib>=1.0.0",
     "Pillow>=10.0.0",
 ]
+voice = [
+    "moonshine-voice>=0.0.69",
+    "pynput>=1.7.7",
+]
 
 [dependency-groups]
 dev = ["hatchling==1.28.0"]
@@ -51,6 +55,7 @@ agent-tunnel = "claude_code_tools.agent_tunnel.cli:main"
 codex-server = "claude_code_tools.codex_server_cli:server_main"
 codex-dynamic = "claude_code_tools.codex_server_cli:dynamic_main"
 codex-workflows = "claude_code_tools.workflow_cli:main"
+voice-type = "claude_code_tools.voice_type.cli:main"
 
 [build-system]
 requires = ["hatchling==1.28.0"]

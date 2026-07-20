@@ -1,0 +1,111 @@
+---
+title: "voice-type — Local Voice Dictation"
+description: >
+  Fully on-device speech-to-text that types wherever
+  your cursor is. Moonshine models with built-in VAD,
+  a configurable global hotkey, and an optional wake
+  word like "claude".
+---
+
+`voice-type` turns speech into text in whatever app
+has focus -- your editor, browser, terminal, or a
+coding agent's prompt. Transcription runs entirely
+on-device using [Moonshine](https://github.com/moonshine-ai/moonshine)
+streaming models (the medium model beats Whisper
+Large v3 on accuracy at a fraction of the size),
+with built-in voice activity detection: speak, pause,
+and the utterance is typed atomically -- one `Cmd-Z`
+undoes it.
+
+:::note[Installation]
+```bash
+uv tool install "claude-code-tools[voice]"
+# or try it without installing:
+uvx --from "claude-code-tools[voice]" voice-type
+```
+:::
+
+## Quick Start
+
+```bash
+voice-type            # start paused; Ctrl+; toggles dictation
+voice-type --mode vad # hands-free: types every utterance
+voice-type --mode wake --wake-word claude
+```
+
+In `wake` mode, voice-type listens passively and
+discards everything until it hears the wake word:
+
+- "**Claude**, write hello" → activates and types
+  `write hello`
+- keeps typing each utterance until you say the stop
+  phrase ("**stop listening**") or stay silent for
+  `idle_timeout` seconds
+- the hotkey always works as a manual override
+
+## Activation Modes
+
+| Mode | Starts | Behavior |
+|------|--------|----------|
+| `toggle` | paused | hotkey starts/stops dictation |
+| `vad` | dictating | hands-free; hotkey pauses |
+| `wake` | passive | wake word activates; stop phrase or silence re-arms |
+
+## Configuration
+
+Write a commented sample config, then edit it:
+
+```bash
+voice-type init   # creates ~/.config/voice-type/config.toml
+```
+
+```toml
+mode = "toggle"
+model_arch = "medium-streaming"  # tiny | base | *-streaming
+language = "en"
+hotkey = "<ctrl>+;"              # pynput syntax, any combo
+wake_word = "claude"
+stop_phrase = "stop listening"
+submit_phrases = ["over", "go", "submit"]
+idle_timeout = 20.0
+trailing_space = true
+sounds = true                    # activate/deactivate chimes
+```
+
+Every setting is also a CLI flag (`--mode`,
+`--model-arch`, `--hotkey`, ...); flags override the
+config file.
+
+Saying a submit phrase as an *entire* utterance --
+pause, say "go", pause -- presses Enter in the
+focused app, so you can dictate a prompt to a coding
+agent and submit it without touching the keyboard.
+Mid-sentence occurrences ("go to the file") are
+typed normally.
+
+On macOS the toggle hotkey is fully suppressed: the
+chord never reaches the focused app, so binding e.g.
+`<ctrl>+;` won't type a stray ";".
+
+Models download automatically on first use and are
+cached. `medium-streaming` (245M params) is the most
+accurate; `base-streaming` is a good fast fallback on
+older machines. Non-English models are covered by the
+non-commercial Moonshine Community License.
+
+## macOS Permissions
+
+Grant these to your **terminal app** (System
+Settings → Privacy & Security), one time each:
+
+- **Microphone** -- to hear you
+- **Accessibility** -- to type into other apps
+- **Input Monitoring** -- for the global hotkey
+
+:::caution
+In hands-free modes, voice-type types into whatever
+window has focus -- including a terminal where a
+stray transcription could run as a command. Keep the
+toggle hotkey handy, or use `wake` mode so nothing
+is typed until you address it by name.
+:::
