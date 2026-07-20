@@ -32,6 +32,11 @@ class State(Enum):
     ACTIVE = "dictating"
 
 
+def _preview(text: str, limit: int = 60) -> str:
+    """Shorten ``text`` for a one-line status message."""
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 class VoiceTypeApp:
     """Runs the mic transcriber and types utterances per the config."""
 
@@ -57,6 +62,8 @@ class VoiceTypeApp:
         # emit in commit order and stale ones are suppressed.
         self._effects_lock = threading.Lock()
         self._last_activity = time.monotonic()
+        self._grace_until = 0.0
+        self._engine = None
         self._stop = threading.Event()
 
     # -- state transitions ------------------------------------------------
@@ -117,18 +124,45 @@ class VoiceTypeApp:
                 play_sound(activate=new == State.ACTIVE)
             self._status(new.value)
 
+    #: Seconds after a toggle-off during which an in-flight utterance
+    #: (speech finished just before the toggle) is still committed.
+    TOGGLE_GRACE = 2.0
+
     def toggle(self) -> None:
         """Hotkey handler: flip between active and the off state.
 
         The read-invert-commit runs atomically inside ``_transition``:
         two concurrent toggles can never both observe the same state
         and collapse into one transition (a lost toggle).
+
+        Toggle-off means "commit what I said": the engine is asked to
+        flush its in-flight VAD segment and a grace window lets that
+        trailing utterance still type. Toggle-on resets the engine's
+        audio state so stale pre-activation speech never leaks into the
+        first utterance.
         """
-        self._transition(
-            lambda current: self._off_state
-            if current == State.ACTIVE
-            else State.ACTIVE
-        )
+        deactivating = {}
+
+        def compute(current: State) -> State:
+            deactivating["was_active"] = current == State.ACTIVE
+            return (
+                self._off_state
+                if current == State.ACTIVE
+                else State.ACTIVE
+            )
+
+        self._transition(compute)
+        engine = self._engine
+        if deactivating.get("was_active"):
+            with self._lock:
+                self._grace_until = time.monotonic() + self.TOGGLE_GRACE
+            flush = getattr(engine, "request_flush", None)
+            if flush is not None:
+                flush()
+        else:
+            reset = getattr(engine, "request_reset", None)
+            if reset is not None:
+                reset()
 
     # -- transcript handling ----------------------------------------------
 
@@ -156,11 +190,32 @@ class VoiceTypeApp:
             state = self._state
             version = self._state_version
             self._last_activity = time.monotonic()
+        if state in (State.PAUSED, State.PASSIVE):
+            with self._lock:
+                in_grace = time.monotonic() < self._grace_until
+            if in_grace:
+                # In-flight speech from just before a toggle-off:
+                # commit it (the user said it while dictating).
+                if any(
+                    is_exact_phrase(text, p)
+                    for p in self.cfg.submit_phrases
+                ):
+                    with self._lock:
+                        self.typist.press_enter()
+                    self._status("submitted (Enter, in-flight)")
+                else:
+                    self._status(f'typed in-flight: "{_preview(text)}"')
+                    self._type(text, None)
+                return
         if state == State.PAUSED:
+            self._status(f'heard while paused (dropped): "{_preview(text)}"')
             return
         if state == State.PASSIVE:
             remainder = text_after_wake_word(text, self.cfg.wake_word)
             if remainder is None:
+                self._status(
+                    f'heard (awaiting wake word): "{_preview(text)}"'
+                )
                 return
             version = self._set_state(State.ACTIVE)
             if remainder:
@@ -178,6 +233,7 @@ class VoiceTypeApp:
         ):
             self._set_state(self._off_state)
             return
+        self._status(f'typed: "{_preview(text)}"')
         self._type(text, version)
 
     def _inject(
@@ -201,14 +257,21 @@ class VoiceTypeApp:
             action()
             return True
 
-    def _type(self, text: str, version: int) -> None:
+    def _type(self, text: str, version: int | None) -> None:
+        """Type ``text``; ``version=None`` skips the staleness check
+        (used for grace-window commits, which by definition arrive
+        after a state transition)."""
         if self.cfg.strip_fillers:
             text = strip_fillers(text)
             if not text:
                 return
         if self.cfg.trailing_space:
             text += " "
-        self._inject(version, lambda: self.typist.type_text(text))
+        if version is None:
+            with self._lock:
+                self.typist.type_text(text)
+        else:
+            self._inject(version, lambda: self.typist.type_text(text))
 
     # -- main loop --------------------------------------------------------
 
@@ -237,6 +300,7 @@ class VoiceTypeApp:
         exit_code = 0
         try:
             engine = create_engine(self.cfg, self._status)
+            self._engine = engine
             hotkeys = self._start_hotkey_listener()
             engine.start(self.handle_utterance, self.note_activity)
             self._status(

@@ -276,7 +276,27 @@ class ParakeetEngine:
         # True once the current capture session has produced audio.
         self._capture_progress = False
         self._agc = AutoGain()
+        # Cross-thread requests, honored by the capture worker (the VAD
+        # is only ever touched from that thread).
+        self._flush_req = threading.Event()
+        self._reset_req = threading.Event()
         self.fatal_error: str | None = None
+
+    def request_flush(self) -> None:
+        """Ask the worker to finalize the in-flight VAD segment now.
+
+        Used on toggle-off so speech finished just before the toggle is
+        still delivered instead of waiting for trailing silence.
+        """
+        self._flush_req.set()
+
+    def request_reset(self) -> None:
+        """Ask the worker to drop buffered audio and reset the VAD.
+
+        Used on toggle-on so stale pre-activation audio never leaks
+        into the first dictated utterance.
+        """
+        self._reset_req.set()
 
     def start(
         self,
@@ -472,6 +492,21 @@ class ParakeetEngine:
                 buffer = np.zeros(0, dtype=np.float32)
                 empty_reads = 0
                 while not self._stop.is_set():
+                    if self._reset_req.is_set():
+                        self._reset_req.clear()
+                        self._flush_req.clear()
+                        try:
+                            self._vad.reset()
+                        except Exception as e:
+                            self._report(f"vad reset error: {e}")
+                        buffer = np.zeros(0, dtype=np.float32)
+                    if self._flush_req.is_set():
+                        self._flush_req.clear()
+                        try:
+                            self._vad.flush()
+                        except Exception as e:
+                            self._report(f"vad flush error: {e}")
+                        self._drain_segments(on_utterance)
                     samples = self._read_samples(
                         stream, read_size, native_rate, np
                     )

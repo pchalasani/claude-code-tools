@@ -115,6 +115,12 @@ class MoonshineEngine:
         self._transcriber.add_listener(_Listener())
         self._transcriber.start()
 
+    def request_flush(self) -> None:
+        """No-op: Moonshine's streaming VAD finalizes lines itself."""
+
+    def request_reset(self) -> None:
+        """No-op: Moonshine manages its own stream state."""
+
     def stop(self) -> None:
         transcriber, self._transcriber = self._transcriber, None
         if transcriber is None:

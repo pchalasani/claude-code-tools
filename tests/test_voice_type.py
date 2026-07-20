@@ -925,3 +925,72 @@ def test_moonshine_stop_is_idempotent_and_always_closes(monkeypatch) -> None:
         eng2.stop()
     assert transcriber2.closed  # close still ran
     assert eng2._transcriber is None
+
+
+# -- toggle-off grace window (commit in-flight speech) --------------------
+
+
+class _RecordingEngine:
+    def __init__(self) -> None:
+        self.flushes = 0
+        self.resets = 0
+
+    def request_flush(self) -> None:
+        self.flushes += 1
+
+    def request_reset(self) -> None:
+        self.resets += 1
+
+
+class _CollectingTypist:
+    def __init__(self) -> None:
+        self.typed: list[str] = []
+        self.enters = 0
+
+    def type_text(self, text: str) -> None:
+        self.typed.append(text)
+
+    def press_enter(self) -> None:
+        self.enters += 1
+
+
+def _grace_app():
+    pytest.importorskip("pynput")
+    from claude_code_tools.voice_type.app import VoiceTypeApp
+
+    app = VoiceTypeApp(Config(mode="vad", sounds=False))
+    app.typist = _CollectingTypist()
+    app._engine = _RecordingEngine()
+    return app
+
+
+def test_toggle_off_flushes_and_grace_commits_in_flight() -> None:
+    app = _grace_app()
+    app.toggle()  # ACTIVE -> PAUSED
+    assert app._engine.flushes == 1
+    # utterance arrives moments later (VAD closed it after the toggle)
+    app.handle_utterance("this was in flight")
+    assert app.typist.typed == ["this was in flight "]
+
+
+def test_toggle_on_resets_engine_audio() -> None:
+    app = _grace_app()
+    app.toggle()  # off
+    app.toggle()  # back on -> reset
+    assert app._engine.resets == 1
+
+
+def test_utterance_after_grace_expires_is_dropped() -> None:
+    app = _grace_app()
+    app.toggle()  # ACTIVE -> PAUSED, grace starts
+    app._grace_until = 0.0  # force-expire the grace window
+    app.handle_utterance("too late")
+    assert app.typist.typed == []
+
+
+def test_submit_phrase_in_grace_presses_enter() -> None:
+    app = _grace_app()
+    app.handle_utterance("send this text")
+    app.toggle()  # off; "go" was in flight
+    app.handle_utterance("go")
+    assert app.typist.enters == 1
