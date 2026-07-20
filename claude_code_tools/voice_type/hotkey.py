@@ -34,6 +34,10 @@ _NAMED_KEYS = frozenset(
     ]
 )
 
+# Layout-independent macOS virtual keycodes for named keys the
+# suppressing tap supports (character keys are probed per layout).
+_NAMED_VKS = {"esc": 53, "enter": 36, "tab": 48, "space": 49}
+
 
 def parse_hotkey(hotkey: str) -> tuple[frozenset[str], str]:
     """Split a pynput-style hotkey into (modifiers, terminal key).
@@ -85,7 +89,7 @@ class _SuppressingHotKeys:
 
     def __init__(
         self,
-        bindings: list[tuple[frozenset[str], str, Callable[[], None]]],
+        bindings: list[tuple],  # (mods, terminal, callback, when|None)
     ) -> None:
         import Quartz
         from pynput import keyboard
@@ -97,19 +101,24 @@ class _SuppressingHotKeys:
             "cmd": Quartz.kCGEventFlagMaskCommand,
             "shift": Quartz.kCGEventFlagMaskShift,
         }
-        # vk -> list of (mask, callback); several chords may share a key.
-        self._by_vk: dict[int, list[tuple[int, Callable[[], None]]]] = {}
-        for mods, char, callback in bindings:
+        # vk -> list of (mask, callback, when); ``when`` (nullable)
+        # gates matching dynamically: a False-returning ``when`` lets
+        # the event pass through untouched, so e.g. Escape can cancel
+        # recording without being globally stolen from other apps.
+        self._by_vk: dict[int, list[tuple]] = {}
+        for mods, terminal, callback, when in bindings:
             mask = 0
             for m in mods:
                 mask |= masks[m]
-            vk = _vk_for_char(Quartz, char)
+            vk = _resolve_vk(Quartz, terminal)
             if vk is None:
                 raise ValueError(
-                    f"could not resolve key {char!r} on this "
+                    f"could not resolve key {terminal!r} on this "
                     "keyboard layout"
                 )
-            self._by_vk.setdefault(vk, []).append((mask, callback))
+            self._by_vk.setdefault(vk, []).append(
+                (mask, callback, when)
+            )
         self._down: set[int] = set()
         self._listener = keyboard.Listener(
             darwin_intercept=self._intercept
@@ -127,9 +136,15 @@ class _SuppressingHotKeys:
             return event
         if event_type == q.kCGEventKeyDown:
             flags = q.CGEventGetFlags(event)
-            for mask, callback in entries:
+            for mask, callback, when in entries:
                 if (flags & mask) != mask:
                     continue
+                if when is not None:
+                    try:
+                        if not when():
+                            continue  # pass through untouched
+                    except Exception:
+                        continue
                 repeat = q.CGEventGetIntegerValueField(
                     event, q.kCGKeyboardEventAutorepeat
                 )
@@ -147,6 +162,13 @@ class _SuppressingHotKeys:
 
     def stop(self) -> None:
         self._listener.stop()
+
+
+def _resolve_vk(quartz, terminal: str) -> int | None:  # noqa: ANN001
+    """Map a parsed terminal (char or ``<name>``) to a virtual keycode."""
+    if len(terminal) == 1:
+        return _vk_for_char(quartz, terminal)
+    return _NAMED_VKS.get(terminal.strip("<>"))
 
 
 def _vk_for_char(quartz, char: str) -> int | None:  # noqa: ANN001
@@ -225,26 +247,29 @@ def record_hotkey(timeout: float = 15.0) -> str | None:
     return result.get("chord")
 
 
-def start_hotkeys(
-    bindings: list[tuple[str, Callable[[], None]]],
-):  # noqa: ANN201
+def start_hotkeys(bindings: list[tuple]):  # noqa: ANN201
     """Start one global listener for several chords; returns ``stop()``-able.
 
-    On macOS every chord is fully suppressed (the focused app never
-    sees it). Elsewhere -- or when suppression isn't possible, e.g. a
-    named terminal key like ``<f5>`` -- falls back to pynput's
-    observing ``GlobalHotKeys``, in which case apps may also receive
-    the keys.
+    Each binding is ``(hotkey, callback)`` or ``(hotkey, callback,
+    when)`` — a nullable predicate polled at keypress time: when it
+    returns False the chord passes through to the focused app
+    untouched (used for context-dependent keys like Escape-to-cancel).
+
+    On macOS every matched chord is fully suppressed. Elsewhere -- or
+    when suppression isn't possible for a key -- falls back to
+    pynput's observing ``GlobalHotKeys`` (apps may also receive the
+    keys; ``when`` is then checked inside the callback).
 
     Raises:
         ValueError: If any hotkey string is malformed.
     """
-    parsed = [
-        (*parse_hotkey(hk), cb) for hk, cb in bindings
-    ]  # validate on every platform
-    if sys.platform == "darwin" and all(
-        len(term) == 1 for _, term, _ in parsed
-    ):
+    parsed = []
+    for binding in bindings:
+        hk, cb = binding[0], binding[1]
+        when = binding[2] if len(binding) > 2 else None
+        mods, term = parse_hotkey(hk)  # validate on every platform
+        parsed.append((mods, term, cb, when))
+    if sys.platform == "darwin":
         try:
             return _SuppressingHotKeys(parsed)
         except ValueError as e:
@@ -256,10 +281,18 @@ def start_hotkeys(
     from pynput import keyboard
 
     # Rebuild canonical pynput syntax (GlobalHotKeys doesn't know our
-    # bracket-less spellings).
+    # bracket-less spellings); gate conditionals inside the callback.
+    def _gated(cb, when):  # noqa: ANN001, ANN202
+        if when is None:
+            return cb
+        return lambda: when() and cb()
+
     canonical = {
-        "+".join([f"<{m}>" for m in sorted(mods)] + [term]): cb
-        for mods, term, cb in parsed
+        "+".join(
+            [f"<{m}>" for m in sorted(mods)]
+            + [term if len(term) > 1 else term]
+        ): _gated(cb, when)
+        for mods, term, cb, when in parsed
     }
     hotkeys = keyboard.GlobalHotKeys(canonical)
     hotkeys.daemon = True

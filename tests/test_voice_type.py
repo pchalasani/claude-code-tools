@@ -1191,3 +1191,41 @@ def test_paste_last_empty_session() -> None:
     app.typist = _CollectingTypist()
     app.paste_last()
     assert app.typist.typed == []
+
+
+# -- cancel (escape) ------------------------------------------------------
+
+
+def test_cancel_discards_recording() -> None:
+    pytest.importorskip("pynput")
+    from claude_code_tools.voice_type.app import State, VoiceTypeApp
+
+    app = VoiceTypeApp(Config(
+        mode="toggle", engine="parakeet", segmentation="hold",
+        sounds=False, overlay=False,
+    ))
+    app.typist = _CollectingTypist()
+    app._engine = _HoldEngine()
+    app.toggle()  # recording
+    app.cancel()
+    assert app._state is State.PAUSED
+    assert app._engine.resets == 1  # pending audio dropped
+    # nothing in flight may type: grace is dead
+    app.handle_utterance("late straggler")
+    assert app.typist.typed == []
+
+
+def test_cancel_noop_when_not_recording() -> None:
+    pytest.importorskip("pynput")
+    from claude_code_tools.voice_type.app import State, VoiceTypeApp
+
+    app = VoiceTypeApp(Config(mode="toggle", sounds=False, overlay=False))
+    app.typist = _CollectingTypist()
+    app._engine = _RecordingEngine()
+    app.cancel()  # paused: nothing happens
+    assert app._state is State.PAUSED
+    assert app._engine.resets == 0
+
+
+def test_parse_esc_hotkey() -> None:
+    assert parse_hotkey("<esc>") == (frozenset(), "<esc>")

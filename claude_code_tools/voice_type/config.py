@@ -80,6 +80,10 @@ class Config:
             that types the LAST session's transcript at the cursor —
             rescues dictation that went to the wrong window. Empty
             disables.
+        cancel_hotkey: Chord that cancels a recording in progress,
+            discarding everything (default Escape). Only intercepted
+            WHILE recording; otherwise the key passes through to the
+            focused app. Empty disables.
     """
 
     mode: str = "toggle"
@@ -106,6 +110,7 @@ class Config:
     sound_stop: str = "Bottle"
     copy_to_clipboard: bool = False
     paste_hotkey: str = ""
+    cancel_hotkey: str = "<esc>"
 
     def validate(self) -> None:
         """Raise ``ValueError`` if any field has an invalid type or value.
@@ -203,7 +208,12 @@ class Config:
             raise ValueError(
                 "wake_word_aliases must be a list of non-empty strings"
             )
-        for field_name in ("sound_start", "sound_stop", "paste_hotkey"):
+        for field_name in (
+            "sound_start",
+            "sound_stop",
+            "paste_hotkey",
+            "cancel_hotkey",
+        ):
             if not isinstance(getattr(self, field_name), str):
                 raise ValueError(f"{field_name} must be a string")
         if not isinstance(self.copy_to_clipboard, bool):
@@ -341,6 +351,11 @@ copy_to_clipboard = false
 # the cursor — rescues dictation typed into the wrong window. Empty
 # string disables.
 paste_hotkey = ""
+
+# Cancel a recording in progress, discarding everything. Only
+# intercepted WHILE recording; otherwise the key reaches the focused
+# app normally. Empty string disables.
+cancel_hotkey = "<esc>"
 '''
 
 

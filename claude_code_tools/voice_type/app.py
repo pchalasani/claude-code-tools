@@ -203,6 +203,30 @@ class VoiceTypeApp:
         if action is not None:
             action()
 
+    def cancel(self) -> None:
+        """Cancel-hotkey handler: discard the recording in progress.
+
+        Drops the engine's pending audio (hold buffer / open VAD
+        segment), transitions to the off state with NO grace window
+        (nothing in flight may type), and reports the cancellation.
+        Only bound while recording, so Escape works normally otherwise.
+        """
+        with self._lock:
+            if self._state != State.ACTIVE:
+                return
+            self._grace_until = 0.0
+        reset = getattr(self._engine, "request_reset", None)
+        if reset is not None:
+            reset()
+        self._set_state(self._off_state)
+        with self._lock:
+            self._grace_until = 0.0  # _set_state must not resurrect it
+        self._status("recording cancelled (discarded)")
+
+    def _is_recording(self) -> bool:
+        with self._lock:
+            return self._state == State.ACTIVE
+
     # -- transcript handling ----------------------------------------------
 
     def note_activity(self) -> None:
@@ -473,9 +497,15 @@ class VoiceTypeApp:
     def _start_hotkey_listener(self):  # noqa: ANN202
         from .hotkey import start_hotkeys
 
-        bindings = [(self.cfg.hotkey, self.toggle)]
+        bindings: list[tuple] = [(self.cfg.hotkey, self.toggle)]
         if self.cfg.paste_hotkey:
             bindings.append((self.cfg.paste_hotkey, self.paste_last))
+        if self.cfg.cancel_hotkey:
+            # Conditional: intercepted only while recording; passes
+            # through to the focused app otherwise.
+            bindings.append(
+                (self.cfg.cancel_hotkey, self.cancel, self._is_recording)
+            )
         try:
             return start_hotkeys(bindings)
         except ValueError as e:

@@ -592,6 +592,11 @@ class ParakeetEngine:
                         except Exception as e:
                             self._report(f"vad reset error: {e}")
                         buffer = np.zeros(0, dtype=np.float32)
+                        # Reset also discards any in-progress hold
+                        # take (this is how cancel drops a recording).
+                        holding = False
+                        hold_buf, hold_len = [], 0
+                        speech_since = None
                     if self._flush_req.is_set():
                         self._flush_req.clear()
                         try:
