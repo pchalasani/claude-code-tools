@@ -599,6 +599,17 @@ class ParakeetEngine:
                         except Exception as e:
                             self._report(f"vad flush error: {e}")
                         self._drain_segments(on_utterance)
+                        # flush() leaves sherpa's internal circular
+                        # buffer in a state that is NOT safe to keep
+                        # streaming into (negative-size Get/Pop errors,
+                        # then a scrambled detector). Reset to a clean
+                        # state before feeding more audio.
+                        try:
+                            self._vad.reset()
+                        except Exception as e:
+                            self._report(f"vad reset error: {e}")
+                        buffer = np.zeros(0, dtype=np.float32)
+                        speech_since = None
                     if self._hold_start_req.is_set():
                         self._hold_start_req.clear()
                         holding = True
