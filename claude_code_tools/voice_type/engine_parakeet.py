@@ -15,6 +15,7 @@ import shutil
 import tarfile
 import tempfile
 import threading
+import time
 import urllib.request
 import warnings
 from pathlib import Path
@@ -48,6 +49,9 @@ SAMPLE_RATE = 16000
 MIN_SILENCE = 0.5
 # Hold-mode recordings are capped at this length to bound memory.
 MAX_HOLD_SECONDS = 600
+# A VAD segment continuously "in speech" for this long is stuck
+# (amplified noise pinning the detector): force-close and recover.
+MAX_SEGMENT_SECONDS = 30.0
 
 
 class AutoGain:
@@ -62,7 +66,12 @@ class AutoGain:
     """
 
     TARGET_PEAK = 0.3
-    MAX_GAIN = 100.0
+    # Capped so an idle mic's noise floor (~0.0005) can never be
+    # amplified into VAD-triggering territory: at 60x it stays ~0.03,
+    # while quiet-dynamic-mic speech (~0.005+) still reaches ~0.3.
+    # (At the previous 100x cap, amplified room noise could hold the
+    # VAD in "speech" forever, so segments never closed.)
+    MAX_GAIN = 60.0
     # Running-peak attack is instantaneous (max); release decays fast
     # enough to adapt to a quiet mic within a few seconds of audio.
     DECAY = 0.85  # per ~0.1 s chunk
@@ -569,6 +578,7 @@ class ParakeetEngine:
                 hold_mode = (
                     getattr(self.cfg, "segmentation", "vad") == "hold"
                 )
+                speech_since = None  # monotonic start of open segment
                 holding = False
                 hold_buf: list = []
                 hold_len = 0
@@ -656,6 +666,32 @@ class ParakeetEngine:
                         buffer = buffer[window_size:]
                     if self._vad.is_speech_detected():
                         self._safe_call(on_activity, "on_activity")
+                        if speech_since is None:
+                            speech_since = time.monotonic()
+                        elif (
+                            time.monotonic() - speech_since
+                            > MAX_SEGMENT_SECONDS
+                        ):
+                            # Stuck open (noise pinning the VAD):
+                            # force-close, deliver what's there, and
+                            # reset so listening resumes cleanly.
+                            self._report(
+                                "VAD segment open "
+                                f">{MAX_SEGMENT_SECONDS:g}s; "
+                                "force-closing (noisy mic?)"
+                            )
+                            try:
+                                self._vad.flush()
+                            except Exception as e:
+                                self._report(f"vad flush error: {e}")
+                            self._drain_segments(on_utterance)
+                            try:
+                                self._vad.reset()
+                            except Exception as e:
+                                self._report(f"vad reset error: {e}")
+                            speech_since = None
+                    else:
+                        speech_since = None
                     self._drain_segments(on_utterance)
         finally:
             with self._stream_lock:
@@ -759,6 +795,14 @@ class ParakeetEngine:
             if text:
                 self._safe_call(
                     lambda t=text: on_utterance(t), "on_utterance"
+                )
+            else:
+                # Never drop audio invisibly: an empty decode is the
+                # difference between "didn't hear you" and "heard you
+                # but made nothing of it".
+                self._report(
+                    f"segment ({segment.size / SAMPLE_RATE:.1f}s) "
+                    "decoded to empty text"
                 )
 
     def stop(self) -> None:
