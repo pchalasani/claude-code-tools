@@ -6,9 +6,18 @@ description: >
 ---
 
 Configuration lives at `~/.config/voice-type/config.toml`.
-Every setting is also a CLI flag; **flags override
-the config file**. `voice-type --help` shows the
-same information from the terminal.
+
+**You never need CLI flags.** Every flag is just an
+override of a config key, so the intended workflow
+is: put your preferences in the config once, then
+your daily command is plain `voice-type` — flags
+exist for one-off experiments (e.g. trying another
+engine) and always win over the file. The config
+also holds keys that have *no* flag at all
+(`wake_word_aliases`, `submit_phrases`, sound names,
+`paste_hotkey`, `cancel_hotkey`, `copy_to_clipboard`,
+`parakeet_threads`, ...), so the file is the
+complete interface; the flags are a subset.
 
 ```bash
 voice-type init          # write a fully commented sample config
