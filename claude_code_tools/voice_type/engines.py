@@ -142,4 +142,8 @@ def create_engine(cfg: Config, status: StatusFn) -> Engine:
         from .engine_parakeet import ParakeetEngine
 
         return ParakeetEngine(cfg, status)
+    if cfg.engine == "parakeet-mlx":
+        from .engine_parakeet_mlx import ParakeetMlxEngine
+
+        return ParakeetMlxEngine(cfg, status)
     return MoonshineEngine(cfg, status)

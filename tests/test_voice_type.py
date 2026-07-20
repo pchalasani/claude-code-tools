@@ -1098,3 +1098,12 @@ def test_config_overlay_and_threads() -> None:
         Config(parakeet_threads=0).validate()
     with pytest.raises(ValueError, match="parakeet_threads"):
         Config(parakeet_threads=True).validate()
+
+
+def test_mlx_engine_config() -> None:
+    Config(
+        mode="toggle", engine="parakeet-mlx", segmentation="hold"
+    ).validate()
+    Config(mode="wake", engine="parakeet-mlx").validate()
+    with pytest.raises(ValueError, match="engine"):
+        Config(engine="whisper-mlx").validate()

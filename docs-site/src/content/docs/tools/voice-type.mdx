@@ -106,7 +106,7 @@ Two local transcription backends, selected with
 
 - `moonshine` (default) -- Moonshine streaming
   models; small and fast; needs the `voice` extra.
-- `parakeet` -- NVIDIA Parakeet-TDT 0.6b v3 via
+- `parakeet` -- NVIDIA Parakeet-TDT 0.6b v3 on CPU via
   [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
   with Silero VAD; noticeably cleaner transcripts
   (drops filler words natively, strong on technical
@@ -116,6 +116,20 @@ Two local transcription backends, selected with
 ```bash
 uv tool install "claude-code-tools[voice,voice-parakeet]"
 voice-type --engine parakeet
+```
+
+- `parakeet-mlx` -- the same Parakeet v3 running on
+  the Apple GPU via
+  [parakeet-mlx](https://github.com/senstella/parakeet-mlx):
+  **fp16 accuracy at ~40x realtime** — the best
+  accuracy *and* speed combination (what Hex-class
+  apps run). Apple Silicon only; weights download
+  from HuggingFace on first use; needs the
+  `voice-mlx` extra:
+
+```bash
+uv tool install "claude-code-tools[voice-mlx]"
+voice-type --engine parakeet-mlx --segmentation hold
 ```
 
 Every feature (wake word, submit phrases, hotkey,
@@ -148,6 +162,16 @@ voice-type --engine parakeet --segmentation hold
 higher precision, closest to what Hex/FluidAudio
 run). Try both with `--parakeet-model` and keep the
 one that hears you better.
+
+## Recording Indicator
+
+While dictating, a floating waveform pill appears at
+the bottom-center of the screen — a live scrolling
+waveform of your mic level. Its presence IS the
+indicator: pill on screen means the mic is live;
+no pill means not listening. It is click-through
+and never steals focus. Disable with
+`overlay = false` or `--no-overlay`.
 
 ## macOS Permissions
 

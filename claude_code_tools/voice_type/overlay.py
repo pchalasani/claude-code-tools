@@ -122,13 +122,20 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
                 ).fill()
 
     class Driver(AppKit.NSObject):
-        """NSTimer target: samples audio, ticks the app, ends the loop."""
+        """NSTimer target: samples audio, ticks the app, ends the loop.
 
-        def initWithView_(self, view):  # noqa: ANN001, ANN201, N802
+        The pill is shown ONLY while recording — its mere presence is
+        the "you left the mic on" indicator; absence means not
+        listening. (A color change alone proved too subtle.)
+        """
+
+        def initWithView_panel_(self, view, panel):  # noqa: ANN001, ANN201, N802, E501
             self = objc.super(Driver, self).init()
             if self is None:
                 return None
             self.view = view
+            self.panel = panel
+            self.shown = False
             return self
 
         def tick_(self, _timer):  # noqa: ANN001, ANN201, N802
@@ -137,7 +144,16 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
             except Exception:
                 pass
             try:
-                self.view.push_(sample())
+                data = sample()
+                recording = bool(data[1])
+                if recording != self.shown:
+                    if recording:
+                        self.panel.orderFrontRegardless()
+                    else:
+                        self.panel.orderOut_(None)
+                    self.shown = recording
+                if recording:
+                    self.view.push_(data)
             except Exception:
                 pass
             if stopped():
@@ -184,9 +200,9 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
         NSMakeRect(0, 0, _WIDTH, _HEIGHT)
     )
     panel.setContentView_(view)
-    panel.orderFrontRegardless()
+    # Hidden at startup; the driver shows it only while recording.
 
-    driver = Driver.alloc().initWithView_(view)
+    driver = Driver.alloc().initWithView_panel_(view, panel)
     timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(  # noqa: E501
         _TICK_SECONDS, driver, b"tick:", None, True
     )

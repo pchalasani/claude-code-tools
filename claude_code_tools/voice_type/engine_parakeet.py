@@ -271,13 +271,18 @@ def ensure_models(
         with _install_lock():
             if not _model_cache_valid(model_dir):
                 _install_model(model_dir, model_key, status)
+    return model_dir, ensure_vad(status)
+
+
+def ensure_vad(status: StatusFn) -> Path:
+    """Ensure the Silero VAD model is cached; returns its path."""
     vad_path = CACHE_DIR / "silero_vad.onnx"
     if not _file_ok(vad_path):
         with _install_lock():
             if not _file_ok(vad_path):
                 _remove_cache_entry(vad_path)
                 _download(VAD_URL, vad_path, status)
-    return model_dir, vad_path
+    return vad_path
 
 
 class ParakeetEngine:

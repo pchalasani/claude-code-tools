@@ -17,7 +17,7 @@ DEFAULT_CONFIG_PATH = Path.home() / ".config" / "voice-type" / "config.toml"
 
 VALID_MODES = ("toggle", "vad", "wake")
 
-VALID_ENGINES = ("moonshine", "parakeet")
+VALID_ENGINES = ("moonshine", "parakeet", "parakeet-mlx")
 
 VALID_SEGMENTATIONS = ("vad", "hold")
 
@@ -78,6 +78,7 @@ class Config:
     segmentation: str = "vad"
     parakeet_model: str = "v3-int8"
     parakeet_threads: int = 4
+    mlx_model: str = "mlx-community/parakeet-tdt-0.6b-v3"
     strip_fillers: bool = True
     overlay: bool = True
     model_arch: str = "medium-streaming"
@@ -115,10 +116,11 @@ class Config:
                 f"must be one of {VALID_SEGMENTATIONS}"
             )
         if self.segmentation == "hold" and (
-            self.engine != "parakeet" or self.mode != "toggle"
+            self.engine not in ("parakeet", "parakeet-mlx")
+            or self.mode != "toggle"
         ):
             raise ValueError(
-                'segmentation "hold" requires engine "parakeet" and '
+                'segmentation "hold" requires a parakeet engine and '
                 'mode "toggle" (wake/vad modes need per-utterance VAD)'
             )
         if self.parakeet_model not in VALID_PARAKEET_MODELS:
@@ -240,11 +242,16 @@ def sample_config() -> str:
 mode = "toggle"
 
 # Transcription backend:
-#   "moonshine" - Moonshine streaming models (voice extra)
-#   "parakeet"  - NVIDIA Parakeet-TDT 0.6b v3 via sherpa-onnx
-#                 (voice-parakeet extra; ~490 MB one-time download;
-#                 cleaner transcripts, drops filler words natively)
+#   "moonshine"    - Moonshine streaming models (voice extra)
+#   "parakeet"     - Parakeet-TDT 0.6b v3 on CPU via sherpa-onnx
+#                    (voice-parakeet extra; ~490 MB download)
+#   "parakeet-mlx" - Parakeet-TDT 0.6b v3 on the Apple GPU via MLX:
+#                    fp16 accuracy at ~40x realtime — best accuracy
+#                    AND speed (voice-mlx extra; Apple Silicon only)
 engine = "moonshine"
+
+# HuggingFace model id for the parakeet-mlx engine.
+mlx_model = "mlx-community/parakeet-tdt-0.6b-v3"
 
 # How speech becomes text (parakeet engine, toggle mode only):
 #   "vad"  - each utterance types when you pause (default)
