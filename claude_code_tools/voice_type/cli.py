@@ -17,6 +17,8 @@ from .config import (
     VALID_ENGINES,
     VALID_MODEL_ARCHS,
     VALID_MODES,
+    VALID_PARAKEET_MODELS,
+    VALID_SEGMENTATIONS,
     load_config,
     write_sample_config,
 )
@@ -40,6 +42,19 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--mode", choices=VALID_MODES, default=None)
     parser.add_argument("--engine", choices=VALID_ENGINES, default=None)
     parser.add_argument(
+        "--segmentation",
+        choices=VALID_SEGMENTATIONS,
+        default=None,
+        help='"hold" = record from toggle-on to toggle-off, '
+        "transcribe the whole take at once",
+    )
+    parser.add_argument(
+        "--parakeet-model",
+        choices=VALID_PARAKEET_MODELS,
+        default=None,
+        help='"v2-fp16" is English-only but higher precision',
+    )
+    parser.add_argument(
         "--model-arch", choices=VALID_MODEL_ARCHS, default=None
     )
     parser.add_argument("--language", default=None)
@@ -59,6 +74,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     overrides = {
         "mode": args.mode,
         "engine": args.engine,
+        "segmentation": args.segmentation,
+        "parakeet_model": args.parakeet_model,
         "model_arch": args.model_arch,
         "language": args.language,
         "hotkey": args.hotkey,

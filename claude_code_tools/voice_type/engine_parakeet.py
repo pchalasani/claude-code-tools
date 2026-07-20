@@ -25,18 +25,29 @@ from .engines import StatusFn
 
 CACHE_DIR = Path.home() / ".cache" / "voice-type"
 _RELEASE = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models"
-MODEL_NAME = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
+# Parakeet builds published by k2-fsa (keys match config.parakeet_model).
+MODELS = {
+    "v3-int8": "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
+    "v2-fp16": "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16",
+}
+DEFAULT_MODEL = "v3-int8"
+# Sizes shown to the user before the one-time download.
+_MODEL_SIZES = {"v3-int8": "~490 MB", "v2-fp16": "~1.1 GB"}
+# Convenience constants for the DEFAULT model (also used by tests).
+MODEL_NAME = MODELS[DEFAULT_MODEL]
 MODEL_URL = f"{_RELEASE}/{MODEL_NAME}.tar.bz2"
-VAD_URL = f"{_RELEASE}/silero_vad.onnx"
 MODEL_FILES = (
     "encoder.int8.onnx",
     "decoder.int8.onnx",
     "joiner.int8.onnx",
     "tokens.txt",
 )
+VAD_URL = f"{_RELEASE}/silero_vad.onnx"
 SAMPLE_RATE = 16000
 # Seconds of trailing silence that closes an utterance.
 MIN_SILENCE = 0.5
+# Hold-mode recordings are capped at this length to bound memory.
+MAX_HOLD_SECONDS = 600
 
 
 class AutoGain:
@@ -108,9 +119,30 @@ def _file_ok(path: Path) -> bool:
         return False
 
 
+def _find_model_files(model_dir: Path) -> dict[str, Path] | None:
+    """Locate encoder/decoder/joiner/tokens in ``model_dir``.
+
+    File names vary per build (encoder.int8.onnx, encoder.fp16.onnx,
+    encoder.onnx, ...), so discovery is glob-based. Returns None if any
+    role is missing or empty.
+    """
+    files: dict[str, Path] = {}
+    for role in ("encoder", "decoder", "joiner"):
+        candidates = sorted(model_dir.glob(f"{role}*.onnx"))
+        good = [p for p in candidates if _file_ok(p)]
+        if not good:
+            return None
+        files[role] = good[0]
+    tokens = model_dir / "tokens.txt"
+    if not _file_ok(tokens):
+        return None
+    files["tokens"] = tokens
+    return files
+
+
 def _model_cache_valid(model_dir: Path) -> bool:
     """True if every expected model artifact is present and nonempty."""
-    return all(_file_ok(model_dir / f) for f in MODEL_FILES)
+    return _find_model_files(model_dir) is not None
 
 
 def _remove_cache_entry(path: Path) -> None:
@@ -180,7 +212,9 @@ def _extract_archive(archive: Path, dest: Path) -> None:
             tf.extractall(dest)
 
 
-def _install_model(model_dir: Path, status: StatusFn) -> None:
+def _install_model(
+    model_dir: Path, model_key: str, status: StatusFn
+) -> None:
     """Download + extract the model into a temp dir, verify, then publish.
 
     Extraction happens in a unique temporary directory under the cache
@@ -188,23 +222,25 @@ def _install_model(model_dir: Path, status: StatusFn) -> None:
     into its final location, so an interrupted install can never leave a
     partial cache that a later run mistakes for a valid one.
     """
-    status("Parakeet model not cached; downloading ~490 MB (one time)")
+    model_name = MODELS[model_key]
+    size = _MODEL_SIZES.get(model_key, "")
+    status(
+        f"Parakeet model {model_key} not cached; "
+        f"downloading {size} (one time)"
+    )
     with tempfile.TemporaryDirectory(
         dir=CACHE_DIR, prefix=".install-"
     ) as td:
         tmp_dir = Path(td)
-        archive = tmp_dir / f"{MODEL_NAME}.tar.bz2"
-        _download(MODEL_URL, archive, status)
+        archive = tmp_dir / f"{model_name}.tar.bz2"
+        _download(f"{_RELEASE}/{model_name}.tar.bz2", archive, status)
         status("extracting model...")
         _extract_archive(archive, tmp_dir)
-        extracted = tmp_dir / MODEL_NAME
+        extracted = tmp_dir / model_name
         if not _model_cache_valid(extracted):
-            missing = [
-                f for f in MODEL_FILES if not _file_ok(extracted / f)
-            ]
             raise RuntimeError(
-                "model archive did not contain expected files "
-                f"(missing/empty): {missing}"
+                "model archive did not contain the expected files "
+                "(encoder/decoder/joiner .onnx and tokens.txt)"
             )
         # A stale/invalid cache entry may be a directory, a regular
         # file, or a symlink; we hold the install lock, so removing it
@@ -213,7 +249,9 @@ def _install_model(model_dir: Path, status: StatusFn) -> None:
         extracted.replace(model_dir)
 
 
-def ensure_models(status: StatusFn) -> tuple[Path, Path]:
+def ensure_models(
+    status: StatusFn, model_key: str = DEFAULT_MODEL
+) -> tuple[Path, Path]:
     """Ensure the Parakeet model and Silero VAD are cached locally.
 
     Validates that every artifact is present and nonempty (mere existence
@@ -223,11 +261,16 @@ def ensure_models(status: StatusFn) -> tuple[Path, Path]:
     Returns:
         (model_dir, vad_model_path)
     """
-    model_dir = CACHE_DIR / MODEL_NAME
+    if model_key not in MODELS:
+        raise ValueError(
+            f"unknown parakeet model {model_key!r}; "
+            f"must be one of {tuple(MODELS)}"
+        )
+    model_dir = CACHE_DIR / MODELS[model_key]
     if not _model_cache_valid(model_dir):
         with _install_lock():
             if not _model_cache_valid(model_dir):
-                _install_model(model_dir, status)
+                _install_model(model_dir, model_key, status)
     vad_path = CACHE_DIR / "silero_vad.onnx"
     if not _file_ok(vad_path):
         with _install_lock():
@@ -280,6 +323,8 @@ class ParakeetEngine:
         # is only ever touched from that thread).
         self._flush_req = threading.Event()
         self._reset_req = threading.Event()
+        self._hold_start_req = threading.Event()
+        self._hold_stop_req = threading.Event()
         self.fatal_error: str | None = None
 
     def request_flush(self) -> None:
@@ -297,6 +342,24 @@ class ParakeetEngine:
         into the first dictated utterance.
         """
         self._reset_req.set()
+
+    def request_hold_start(self) -> None:
+        """Begin a hold-mode recording (toggle-on in "hold" segmentation).
+
+        The worker discards any previous hold buffer and accumulates
+        raw (gain-adjusted) audio until ``request_hold_stop``.
+        """
+        self._hold_stop_req.clear()
+        self._hold_start_req.set()
+
+    def request_hold_stop(self) -> None:
+        """End a hold-mode recording and transcribe the whole take.
+
+        The worker decodes the entire accumulated buffer as ONE segment
+        (full sentence context, no VAD chopping) and delivers it via
+        ``on_utterance``.
+        """
+        self._hold_stop_req.set()
 
     def start(
         self,
@@ -324,8 +387,9 @@ class ParakeetEngine:
         The cache is therefore never left in a state that fails on
         every subsequent run without triggering a repair.
         """
+        model_key = getattr(self.cfg, "parakeet_model", DEFAULT_MODEL)
         for attempt in (1, 2):
-            model_dir, vad_path = ensure_models(self._status)
+            model_dir, vad_path = ensure_models(self._status, model_key)
             try:
                 self._load_models(model_dir, vad_path)
                 return
@@ -344,12 +408,16 @@ class ParakeetEngine:
         """Construct the sherpa-onnx recognizer and VAD from the cache."""
         import sherpa_onnx
 
-        self._status("loading parakeet-tdt-0.6b-v3 (int8)...")
+        files = _find_model_files(model_dir)
+        if files is None:
+            raise RuntimeError(f"model files missing in {model_dir}")
+        model_key = getattr(self.cfg, "parakeet_model", DEFAULT_MODEL)
+        self._status(f"loading parakeet-tdt-0.6b ({model_key})...")
         self._recognizer = sherpa_onnx.OfflineRecognizer.from_transducer(
-            encoder=str(model_dir / "encoder.int8.onnx"),
-            decoder=str(model_dir / "decoder.int8.onnx"),
-            joiner=str(model_dir / "joiner.int8.onnx"),
-            tokens=str(model_dir / "tokens.txt"),
+            encoder=str(files["encoder"]),
+            decoder=str(files["decoder"]),
+            joiner=str(files["joiner"]),
+            tokens=str(files["tokens"]),
             num_threads=2,
             model_type="nemo_transducer",
         )
@@ -491,6 +559,13 @@ class ParakeetEngine:
                 read_size = max(1, int(0.1 * native_rate))
                 buffer = np.zeros(0, dtype=np.float32)
                 empty_reads = 0
+                hold_mode = (
+                    getattr(self.cfg, "segmentation", "vad") == "hold"
+                )
+                holding = False
+                hold_buf: list = []
+                hold_len = 0
+                hold_capped = False
                 while not self._stop.is_set():
                     if self._reset_req.is_set():
                         self._reset_req.clear()
@@ -507,6 +582,18 @@ class ParakeetEngine:
                         except Exception as e:
                             self._report(f"vad flush error: {e}")
                         self._drain_segments(on_utterance)
+                    if self._hold_start_req.is_set():
+                        self._hold_start_req.clear()
+                        holding = True
+                        hold_buf, hold_len = [], 0
+                        hold_capped = False
+                    if self._hold_stop_req.is_set():
+                        self._hold_stop_req.clear()
+                        if holding and hold_len:
+                            take = np.concatenate(hold_buf)
+                            hold_buf, hold_len = [], 0
+                            self._deliver_take(take, on_utterance)
+                        holding = False
                     samples = self._read_samples(
                         stream, read_size, native_rate, np
                     )
@@ -527,13 +614,28 @@ class ParakeetEngine:
                         continue
                     empty_reads = 0
                     samples = self._agc.process(samples)
-                    buffer = np.concatenate([buffer, samples])
                     # Only now — after a validated chunk was actually
                     # folded into the pipeline — does the session count
                     # as having made progress; malformed data must
                     # never reset the consecutive-failure streak in
                     # _loop.
                     self._capture_progress = True
+                    if hold_mode:
+                        # Hold segmentation: accumulate the raw take;
+                        # no VAD chopping. Decoded whole on hold-stop.
+                        if not holding:
+                            continue
+                        if hold_len < MAX_HOLD_SECONDS * SAMPLE_RATE:
+                            hold_buf.append(samples)
+                            hold_len += len(samples)
+                        elif not hold_capped:
+                            hold_capped = True
+                            self._report(
+                                "hold recording capped at "
+                                f"{MAX_HOLD_SECONDS}s"
+                            )
+                        continue
+                    buffer = np.concatenate([buffer, samples])
                     while (
                         len(buffer) >= window_size
                         and not self._stop.is_set()
@@ -548,6 +650,22 @@ class ParakeetEngine:
         finally:
             with self._stream_lock:
                 self._stream = None
+
+    def _deliver_take(
+        self, take, on_utterance: Callable[[str], None]  # noqa: ANN001
+    ) -> None:
+        """Transcribe one whole hold-mode take and deliver the text."""
+        secs = len(take) / SAMPLE_RATE
+        self._report(f"transcribing {secs:.1f}s take...")
+        try:
+            text = self.transcribe(take, SAMPLE_RATE)
+        except Exception as e:
+            self._report(f"parakeet decode error: {e}")
+            return
+        if text:
+            self._safe_call(
+                lambda t=text: on_utterance(t), "on_utterance"
+            )
 
     def _read_samples(  # noqa: ANN202
         self, stream, read_size, native_rate, np  # noqa: ANN001

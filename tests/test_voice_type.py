@@ -1025,3 +1025,57 @@ def test_wake_word_alias_matches() -> None:
     app.handle_utterance("Clawed, type this out")
     assert app._state is State.ACTIVE
     assert app.typist.typed == ["type this out "]
+
+
+# -- hold segmentation ----------------------------------------------------
+
+
+class _HoldEngine(_RecordingEngine):
+    def __init__(self) -> None:
+        super().__init__()
+        self.hold_starts = 0
+        self.hold_stops = 0
+
+    def request_hold_start(self) -> None:
+        self.hold_starts += 1
+
+    def request_hold_stop(self) -> None:
+        self.hold_stops += 1
+
+
+def test_hold_config_requires_parakeet_toggle() -> None:
+    Config(mode="toggle", engine="parakeet", segmentation="hold").validate()
+    with pytest.raises(ValueError, match="hold"):
+        Config(mode="wake", engine="parakeet", segmentation="hold").validate()
+    with pytest.raises(ValueError, match="hold"):
+        Config(
+            mode="toggle", engine="moonshine", segmentation="hold"
+        ).validate()
+
+
+def test_parakeet_model_validation() -> None:
+    Config(parakeet_model="v2-fp16").validate()
+    with pytest.raises(ValueError, match="parakeet_model"):
+        Config(parakeet_model="v9-int4").validate()
+
+
+def test_hold_toggle_uses_hold_requests_and_grace() -> None:
+    pytest.importorskip("pynput")
+    from claude_code_tools.voice_type.app import VoiceTypeApp
+
+    app = VoiceTypeApp(Config(
+        mode="toggle", engine="parakeet", segmentation="hold",
+        sounds=False,
+    ))
+    app.typist = _CollectingTypist()
+    app._engine = _HoldEngine()
+    app.toggle()  # on -> hold_start
+    assert app._engine.hold_starts == 1
+    app._last_toggle = 0.0
+    app.toggle()  # off -> hold_stop + long grace
+    assert app._engine.hold_stops == 1
+    # the decoded whole-take utterance arrives during the grace window
+    app.handle_utterance("the entire dictated take as one utterance")
+    assert app.typist.typed == [
+        "the entire dictated take as one utterance "
+    ]

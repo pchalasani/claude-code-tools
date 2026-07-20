@@ -129,6 +129,10 @@ class VoiceTypeApp:
     #: (speech finished just before the toggle) is still committed.
     TOGGLE_GRACE = 2.0
 
+    #: Grace after a hold-mode toggle-off: the whole take is decoded
+    #: before delivery, which can take a few seconds for long takes.
+    HOLD_GRACE = 10.0
+
     #: Ignore a second toggle within this window: macro keys (e.g. UHK)
     #: can re-fire the chord on hold, flipping the state twice for one
     #: intended press. OS autorepeat is already filtered at the event
@@ -166,16 +170,26 @@ class VoiceTypeApp:
 
         self._transition(compute)
         engine = self._engine
+        hold = self.cfg.segmentation == "hold"
         if deactivating.get("was_active"):
+            # Hold mode decodes the whole take on stop, so give its
+            # delivery a longer grace window than a mere VAD flush.
+            grace = self.HOLD_GRACE if hold else self.TOGGLE_GRACE
             with self._lock:
-                self._grace_until = time.monotonic() + self.TOGGLE_GRACE
-            flush = getattr(engine, "request_flush", None)
-            if flush is not None:
-                flush()
+                self._grace_until = time.monotonic() + grace
+            action = getattr(
+                engine,
+                "request_hold_stop" if hold else "request_flush",
+                None,
+            )
         else:
-            reset = getattr(engine, "request_reset", None)
-            if reset is not None:
-                reset()
+            action = getattr(
+                engine,
+                "request_hold_start" if hold else "request_reset",
+                None,
+            )
+        if action is not None:
+            action()
 
     # -- transcript handling ----------------------------------------------
 

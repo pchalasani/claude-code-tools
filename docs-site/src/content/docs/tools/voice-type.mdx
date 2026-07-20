@@ -124,6 +124,31 @@ Independently of the engine, `strip_fillers = true`
 (default) removes standalone "uh"/"um"-style words
 from typed text.
 
+## Hold segmentation
+
+By default (`segmentation = "vad"`) each utterance
+types when you pause. With `segmentation = "hold"`
+(parakeet engine, toggle mode), voice-type instead
+records everything between toggle-on and toggle-off
+and transcribes the **whole take as one segment** on
+toggle-off — full sentence context for the model, no
+mid-sentence chopping, one atomic paste. This
+mirrors push-to-talk apps like Hex and noticeably
+improves accuracy for think-as-you-dictate speech:
+
+```bash
+voice-type --engine parakeet --segmentation hold
+```
+
+## Parakeet model choice
+
+`parakeet_model` selects the build: `"v3-int8"`
+(default; multilingual, ~490 MB) or `"v2-fp16"`
+(English-only, ~1.1 GB, unquantized fp16 weights —
+higher precision, closest to what Hex/FluidAudio
+run). Try both with `--parakeet-model` and keep the
+one that hears you better.
+
 ## macOS Permissions
 
 Grant these to your **terminal app** (System

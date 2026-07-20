@@ -19,6 +19,11 @@ VALID_MODES = ("toggle", "vad", "wake")
 
 VALID_ENGINES = ("moonshine", "parakeet")
 
+VALID_SEGMENTATIONS = ("vad", "hold")
+
+# Parakeet model builds published by k2-fsa (see engine_parakeet.MODELS).
+VALID_PARAKEET_MODELS = ("v3-int8", "v2-fp16")
+
 # Mirrors moonshine_voice.ModelArch; kept local so config validation
 # doesn't require importing the (optional) moonshine dependency.
 VALID_MODEL_ARCHS = (
@@ -40,6 +45,12 @@ class Config:
             dictation), "vad" starts dictating immediately, "wake" starts
             passive and activates on the wake word.
         engine: Transcription backend, "moonshine" or "parakeet".
+        segmentation: "vad" types each utterance when you pause;
+            "hold" records everything between toggle-on and toggle-off
+            and transcribes the whole take at once (full context, no
+            mid-sentence chopping; parakeet + toggle mode only).
+        parakeet_model: Parakeet build: "v3-int8" (multilingual,
+            ~490 MB) or "v2-fp16" (English, ~1.1 GB, higher precision).
         strip_fillers: Drop standalone filler words (uh, um, ...) from
             typed text.
         model_arch: Moonshine model architecture name (moonshine engine
@@ -60,6 +71,8 @@ class Config:
 
     mode: str = "toggle"
     engine: str = "moonshine"
+    segmentation: str = "vad"
+    parakeet_model: str = "v3-int8"
     strip_fillers: bool = True
     model_arch: str = "medium-streaming"
     language: str = "en"
@@ -89,6 +102,23 @@ class Config:
             raise ValueError(
                 f"invalid engine {self.engine!r}; "
                 f"must be one of {VALID_ENGINES}"
+            )
+        if self.segmentation not in VALID_SEGMENTATIONS:
+            raise ValueError(
+                f"invalid segmentation {self.segmentation!r}; "
+                f"must be one of {VALID_SEGMENTATIONS}"
+            )
+        if self.segmentation == "hold" and (
+            self.engine != "parakeet" or self.mode != "toggle"
+        ):
+            raise ValueError(
+                'segmentation "hold" requires engine "parakeet" and '
+                'mode "toggle" (wake/vad modes need per-utterance VAD)'
+            )
+        if self.parakeet_model not in VALID_PARAKEET_MODELS:
+            raise ValueError(
+                f"invalid parakeet_model {self.parakeet_model!r}; "
+                f"must be one of {VALID_PARAKEET_MODELS}"
             )
         if self.model_arch not in VALID_MODEL_ARCHS:
             raise ValueError(
@@ -201,6 +231,16 @@ mode = "toggle"
 #                 (voice-parakeet extra; ~490 MB one-time download;
 #                 cleaner transcripts, drops filler words natively)
 engine = "moonshine"
+
+# How speech becomes text (parakeet engine, toggle mode only):
+#   "vad"  - each utterance types when you pause (default)
+#   "hold" - record from toggle-on to toggle-off, transcribe the whole
+#            take at once: full context, no mid-sentence chopping
+segmentation = "vad"
+
+# Parakeet build: "v3-int8" (multilingual, ~490 MB download) or
+# "v2-fp16" (English-only, ~1.1 GB, higher precision = better accuracy)
+parakeet_model = "v3-int8"
 
 # Remove standalone filler words (uh, um, ...) from typed text.
 strip_fillers = true
