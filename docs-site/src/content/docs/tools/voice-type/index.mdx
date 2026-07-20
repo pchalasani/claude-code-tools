@@ -16,6 +16,16 @@ coding agent's prompt box. Everything runs on your
 machine: no cloud, no accounts, no audio leaving
 your Mac.
 
+:::caution[macOS only]
+voice-type is built for **macOS**: it types via
+macOS accessibility, suppresses hotkeys at the
+CGEvent tap, and draws its overlay with AppKit. The
+recommended `parakeet-mlx` engine additionally
+requires **Apple Silicon** (M1 or later), where it
+runs on the GPU via MLX; Intel Macs can use the
+CPU engines (`parakeet`, `moonshine`) instead.
+:::
+
 :::note[Installation]
 ```bash
 # recommended: Apple-GPU engine (best accuracy AND speed)
