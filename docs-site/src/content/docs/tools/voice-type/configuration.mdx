@@ -15,6 +15,74 @@ voice-type init          # write a fully commented sample config
 voice-type init --force  # overwrite an existing one
 ```
 
+## The three independent axes
+
+Three settings combine to define how voice-type
+behaves, and they answer different questions:
+
+- **`mode`** — *when is it listening?*
+  `toggle`: only between two presses of the hotkey.
+  `wake`: always passively listening for the wake
+  word (hotkey works as an override).
+  `vad`: dictating from the moment it starts.
+- **`segmentation`** — *when does text appear?*
+  `vad`: each utterance types as soon as you pause
+  (live feedback, but the model transcribes small
+  fragments with less context).
+  `hold`: nothing types until you toggle off, then
+  the whole take is transcribed as ONE segment
+  (maximum accuracy, one atomic paste — requires
+  `toggle` mode, since the wake word needs
+  continuous per-utterance transcription to be
+  heard at all).
+- **`engine`** — *what transcribes it?* Pure
+  speed/accuracy/platform trade-off; see the
+  [engine table](#engines) below. Any engine works
+  with any mode.
+
+## Common setups
+
+**Push-to-talk dictation (recommended daily driver).**
+No wake word involved at all; maximum accuracy; text
+lands as one paste you can undo with one Cmd-Z:
+
+```toml
+mode = "toggle"
+segmentation = "hold"
+engine = "parakeet-mlx"
+```
+
+**Toggle with live feedback.** Same hotkey workflow,
+but text appears at every pause instead of at the
+end — useful when you want to see progress while
+dictating something long, at some cost in accuracy:
+
+```toml
+mode = "toggle"
+segmentation = "vad"
+engine = "parakeet-mlx"
+```
+
+**Hands-free with a wake word.** Say "hey claude
+..." to dictate, "stop listening" (or silence) to
+re-arm; the hotkey still toggles manually.
+Per-pause typing is inherent to this mode:
+
+```toml
+mode = "wake"
+engine = "parakeet-mlx"
+wake_word_aliases = ["hey cloud"]  # add what the model mishears
+```
+
+**Always-on transcription.** Types everything it
+hears while running — for captioning yourself or
+short bursts of use:
+
+```toml
+mode = "vad"
+engine = "parakeet-mlx"
+```
+
 ## Engines
 
 Selected with `engine` / `--engine`. All run 100%
