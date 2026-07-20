@@ -1,0 +1,148 @@
+---
+title: "voice-type: Configuration & CLI"
+description: >
+  Every voice-type config key, CLI flag, engine, and
+  hotkey — the complete reference.
+---
+
+Configuration lives at `~/.config/voice-type/config.toml`.
+Every setting is also a CLI flag; **flags override
+the config file**. `voice-type --help` shows the
+same information from the terminal.
+
+```bash
+voice-type init          # write a fully commented sample config
+voice-type init --force  # overwrite an existing one
+```
+
+## Engines
+
+Selected with `engine` / `--engine`. All run 100%
+on-device.
+
+| Engine | Runs on | Speed* | Notes |
+|--------|---------|--------|-------|
+| `parakeet-mlx` | Apple GPU (MLX) | ~40x realtime | **Recommended.** fp16 Parakeet-TDT v3: best accuracy and speed. Apple Silicon only; weights from HuggingFace on first run. Extra: `voice-mlx` |
+| `parakeet` | CPU (sherpa-onnx) | ~32x realtime | int8 Parakeet-TDT v3 (or fp16 v2 via `parakeet_model`); ~490 MB download. Extra: `voice-parakeet` |
+| `moonshine` | CPU (ONNX) | streaming | Moonshine streaming models; smallest footprint. Extra: `voice` |
+
+*measured on an M-series Mac; see `parakeet_threads`
+for CPU tuning.
+
+## Config reference
+
+```toml
+# ~/.config/voice-type/config.toml — all keys optional; these are defaults
+
+# Activation: "toggle" (hotkey), "vad" (hands-free), "wake" (wake word)
+mode = "toggle"
+
+# Engine: "moonshine" | "parakeet" | "parakeet-mlx"
+engine = "moonshine"
+
+# "vad" types each utterance when you pause; "hold" records everything
+# between toggle-on/off and transcribes the whole take at once
+# (parakeet engines + toggle mode only)
+segmentation = "vad"
+
+# parakeet (CPU) build: "v3-int8" | "v2-fp16"; and decode threads
+parakeet_model = "v3-int8"
+parakeet_threads = 4
+
+# parakeet-mlx model (HuggingFace id)
+mlx_model = "mlx-community/parakeet-tdt-0.6b-v3"
+
+# moonshine model: tiny | base | tiny-streaming | base-streaming |
+# small-streaming | medium-streaming
+model_arch = "medium-streaming"
+
+language = "en"
+
+# Hotkeys (pynput or bracket-less syntax; `voice-type hotkey` records one)
+hotkey = "<ctrl>+;"          # toggle recording
+cancel_hotkey = "<esc>"      # cancel recording (only intercepted WHILE recording)
+paste_hotkey = ""            # re-type last transcript, e.g. "<cmd>+<ctrl>+v"
+
+# Wake mode
+wake_word = "claude"
+wake_word_aliases = []       # misspellings the model produces, e.g. ["hey cloud"]
+stop_phrase = "stop listening"
+idle_timeout = 20.0          # seconds of silence before wake mode re-arms
+
+# Spoken submit: saying one of these as an ENTIRE utterance presses Enter
+submit_phrases = ["over", "go", "submit"]
+
+# Transcript cleanup: strip standalone fillers (uh, um, ...) and
+# collapse 3+ word stutters ("I I I think" -> "I think")
+strip_fillers = true
+
+trailing_space = true        # append a space after each typed utterance
+
+# Sounds: system-sound names (/System/Library/Sounds) or file paths
+sounds = true
+sound_start = "Glass"
+sound_stop = "Bottle"
+
+# Keep each session's text on the clipboard too
+copy_to_clipboard = false
+
+# Floating waveform pill while recording (macOS)
+overlay = true
+```
+
+## CLI
+
+```
+voice-type [flags]           run with config + flag overrides
+voice-type init [--force]    write the commented sample config
+voice-type hotkey            press a chord; prints the config line
+voice-type --help            full flag reference
+```
+
+Flags mirror the config keys: `--mode`, `--engine`,
+`--segmentation`, `--parakeet-model`, `--model-arch`,
+`--language`, `--hotkey`, `--wake-word`,
+`--stop-phrase`, `--no-sounds`, `--no-overlay`,
+`--config PATH`.
+
+## Hotkey notation
+
+Both spellings work everywhere a chord is accepted:
+
+```toml
+hotkey = "<ctrl>+;"          # pynput style
+hotkey = "ctrl+;"            # bracket-less
+hotkey = "cmd+shift+f5"      # named keys too
+```
+
+Easiest of all: run `voice-type hotkey`, press the
+combo you want, and paste the printed line into your
+config. On macOS matched chords are **fully
+suppressed** — the focused app never sees them — and
+context-dependent keys like `Esc` are only
+intercepted while recording.
+
+## macOS permissions
+
+Grant these to your **terminal app** (System
+Settings → Privacy & Security), once each:
+
+- **Microphone** — to hear you
+- **Accessibility** — to type into other apps
+- **Input Monitoring** — for the global hotkeys
+
+## Troubleshooting
+
+- Every utterance's fate is logged to the terminal
+  (`typed: ...`, `heard (awaiting wake word): ...`,
+  `dropped`, `decoded to empty text`) — nothing is
+  discarded silently. Read these lines first.
+- Wake word not firing? Check the `heard` lines for
+  how the model actually spelled it and add that to
+  `wake_word_aliases`; prefer a two-word phrase
+  ("hey claude") over a bare word.
+- Quiet dynamic mic (Shure MV7 class)? Automatic
+  gain control is built in; if speech still isn't
+  detected, move closer to the mic.
+- Dictated into the wrong window? Set `paste_hotkey`
+  and re-type the last session anywhere.

@@ -39,8 +39,20 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help=f"config file (default: {DEFAULT_CONFIG_PATH})",
     )
-    parser.add_argument("--mode", choices=VALID_MODES, default=None)
-    parser.add_argument("--engine", choices=VALID_ENGINES, default=None)
+    parser.add_argument(
+        "--mode",
+        choices=VALID_MODES,
+        default=None,
+        help="activation: toggle=hotkey, vad=hands-free, "
+        "wake=wake word (+hotkey override)",
+    )
+    parser.add_argument(
+        "--engine",
+        choices=VALID_ENGINES,
+        default=None,
+        help="transcription backend; parakeet-mlx (Apple GPU) has the "
+        "best accuracy and speed",
+    )
     parser.add_argument(
         "--segmentation",
         choices=VALID_SEGMENTATIONS,
@@ -55,14 +67,30 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
         help='"v2-fp16" is English-only but higher precision',
     )
     parser.add_argument(
-        "--model-arch", choices=VALID_MODEL_ARCHS, default=None
+        "--model-arch",
+        choices=VALID_MODEL_ARCHS,
+        default=None,
+        help="moonshine model (moonshine engine only)",
     )
-    parser.add_argument("--language", default=None)
     parser.add_argument(
-        "--hotkey", default=None, help='e.g. "<ctrl>+;" (pynput syntax)'
+        "--language", default=None, help='language tag (default "en")'
     )
-    parser.add_argument("--wake-word", default=None)
-    parser.add_argument("--stop-phrase", default=None)
+    parser.add_argument(
+        "--hotkey",
+        default=None,
+        help='toggle chord, e.g. "<ctrl>+;" or "ctrl+;" '
+        "(run `voice-type hotkey` to record one)",
+    )
+    parser.add_argument(
+        "--wake-word",
+        default=None,
+        help='wake phrase for --mode wake (default "claude")',
+    )
+    parser.add_argument(
+        "--stop-phrase",
+        default=None,
+        help='spoken deactivation phrase (default "stop listening")',
+    )
     parser.add_argument(
         "--no-sounds",
         action="store_true",
@@ -143,13 +171,24 @@ def main() -> int:
         epilog="""\
 examples:
   voice-type                     # run with ~/.config/voice-type/config.toml
+  voice-type --engine parakeet-mlx --segmentation hold
+                                 # best accuracy: whole-take dictation
   voice-type --mode wake         # hands-free with wake word "claude"
-  voice-type --hotkey "<ctrl>+;" # custom toggle hotkey
   voice-type init                # write a commented sample config
+  voice-type hotkey              # record a chord, print the config line
 
-macOS permissions: grant your terminal Accessibility (to type) and
-Microphone access, plus Input Monitoring for the global hotkey
-(System Settings > Privacy & Security).
+while recording:
+  <hotkey> again  stop and type the take     Esc      cancel (discard)
+  say "go"/"over"/"submit" alone -> press Enter
+  say "stop listening" -> stop dictating
+
+config file: ~/.config/voice-type/config.toml (all flags + more:
+wake_word_aliases, submit_phrases, sounds, copy_to_clipboard,
+paste_hotkey, cancel_hotkey, overlay, parakeet_threads, ...)
+docs: https://pchalasani.github.io/claude-code-tools/tools/voice-type/
+
+macOS permissions (grant to your terminal, one time): Microphone,
+Accessibility (to type), Input Monitoring (global hotkeys).
 """,
     )
     _add_run_args(parser)
