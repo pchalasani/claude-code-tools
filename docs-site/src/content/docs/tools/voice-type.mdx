@@ -93,6 +93,31 @@ accurate; `base-streaming` is a good fast fallback on
 older machines. Non-English models are covered by the
 non-commercial Moonshine Community License.
 
+## Engines
+
+Two local transcription backends, selected with
+`engine` in the config (or `--engine`):
+
+- `moonshine` (default) -- Moonshine streaming
+  models; small and fast; needs the `voice` extra.
+- `parakeet` -- NVIDIA Parakeet-TDT 0.6b v3 via
+  [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
+  with Silero VAD; noticeably cleaner transcripts
+  (drops filler words natively, strong on technical
+  vocabulary); ~490 MB one-time download; needs the
+  `voice-parakeet` extra:
+
+```bash
+uv tool install "claude-code-tools[voice,voice-parakeet]"
+voice-type --engine parakeet
+```
+
+Every feature (wake word, submit phrases, hotkey,
+atomic typing) works identically on both engines.
+Independently of the engine, `strip_fillers = true`
+(default) removes standalone "uh"/"um"-style words
+from typed text.
+
 ## macOS Permissions
 
 Grant these to your **terminal app** (System

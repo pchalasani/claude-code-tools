@@ -31,6 +31,31 @@ def contains_phrase(text: str, phrase: str) -> bool:
     return _find_subsequence(normalize_words(text), normalize_words(phrase)) >= 0
 
 
+FILLER_WORDS = ("uh", "um", "uhm", "umm", "erm", "mmm", "hmm")
+
+# Leading/trailing punctuation runs around a whitespace-delimited token
+# (underscore is a word char in \w, so it is listed explicitly).
+_TOKEN_EDGE_PUNCT_RE = re.compile(r"^[\W_]+|[\W_]+$")
+
+
+def strip_fillers(text: str) -> str:
+    """Remove standalone filler words (uh, um, ...) from ``text``.
+
+    A filler is standalone when a whitespace-delimited token is nothing
+    but the filler plus surrounding punctuation: "um,", "Um...",
+    "(um)", and '"um"' are all stripped (punctuation and all), while
+    fillers embedded in real words ("umbrella", "gum") are untouched.
+    Returns "" if the utterance was nothing but fillers.
+    """
+    kept = [
+        token
+        for token in text.split()
+        if _TOKEN_EDGE_PUNCT_RE.sub("", token).lower()
+        not in FILLER_WORDS
+    ]
+    return " ".join(kept)
+
+
 def is_exact_phrase(text: str, phrase: str) -> bool:
     """Return True if ``text`` is exactly ``phrase`` (normalized).
 

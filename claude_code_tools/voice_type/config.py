@@ -7,6 +7,7 @@ default so voice-type runs with no config file at all.
 
 from __future__ import annotations
 
+import math
 import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -15,6 +16,8 @@ from typing import Any
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "voice-type" / "config.toml"
 
 VALID_MODES = ("toggle", "vad", "wake")
+
+VALID_ENGINES = ("moonshine", "parakeet")
 
 # Mirrors moonshine_voice.ModelArch; kept local so config validation
 # doesn't require importing the (optional) moonshine dependency.
@@ -36,7 +39,11 @@ class Config:
         mode: Activation mode. "toggle" starts paused (hotkey starts
             dictation), "vad" starts dictating immediately, "wake" starts
             passive and activates on the wake word.
-        model_arch: Moonshine model architecture name.
+        engine: Transcription backend, "moonshine" or "parakeet".
+        strip_fillers: Drop standalone filler words (uh, um, ...) from
+            typed text.
+        model_arch: Moonshine model architecture name (moonshine engine
+            only).
         language: Language tag understood by Moonshine (e.g. "en").
         hotkey: Global toggle hotkey in pynput syntax, e.g. "<ctrl>+;".
         wake_word: Phrase that activates dictation in "wake" mode.
@@ -49,6 +56,8 @@ class Config:
     """
 
     mode: str = "toggle"
+    engine: str = "moonshine"
+    strip_fillers: bool = True
     model_arch: str = "medium-streaming"
     language: str = "en"
     hotkey: str = "<ctrl>+;"
@@ -62,18 +71,59 @@ class Config:
     sounds: bool = True
 
     def validate(self) -> None:
-        """Raise ``ValueError`` if any field has an invalid value."""
+        """Raise ``ValueError`` if any field has an invalid type or value.
+
+        Every field is type-checked before it is dereferenced, so junk
+        values (None, wrong types) raise a descriptive ``ValueError``
+        rather than an ``AttributeError``/``TypeError``.
+        """
         if self.mode not in VALID_MODES:
             raise ValueError(
                 f"invalid mode {self.mode!r}; must be one of {VALID_MODES}"
+            )
+        if self.engine not in VALID_ENGINES:
+            raise ValueError(
+                f"invalid engine {self.engine!r}; "
+                f"must be one of {VALID_ENGINES}"
             )
         if self.model_arch not in VALID_MODEL_ARCHS:
             raise ValueError(
                 f"invalid model_arch {self.model_arch!r}; "
                 f"must be one of {VALID_MODEL_ARCHS}"
             )
+        for name in ("strip_fillers", "trailing_space", "sounds"):
+            value = getattr(self, name)
+            if not isinstance(value, bool):
+                raise ValueError(
+                    f"{name} must be a boolean (true/false), "
+                    f"got {value!r}"
+                )
+        for name in ("language", "hotkey", "wake_word", "stop_phrase"):
+            value = getattr(self, name)
+            if not isinstance(value, str):
+                raise ValueError(
+                    f"{name} must be a string, got {value!r}"
+                )
         if self.mode == "wake" and not self.wake_word.strip():
             raise ValueError('mode "wake" requires a non-empty wake_word')
+        if isinstance(self.idle_timeout, bool) or not isinstance(
+            self.idle_timeout, (int, float)
+        ):
+            raise ValueError(
+                f"idle_timeout must be a number of seconds, "
+                f"got {self.idle_timeout!r}"
+            )
+        if isinstance(self.idle_timeout, float) and not math.isfinite(
+            self.idle_timeout
+        ):
+            # TOML accepts nan/inf literals; NaN would make the wake-mode
+            # expiry comparison permanently false and infinity would
+            # silently disable re-arming. Only floats can be non-finite:
+            # Python ints are always finite, and math.isfinite() would
+            # raise OverflowError on ints too large for a float.
+            raise ValueError(
+                f"idle_timeout must be finite, got {self.idle_timeout!r}"
+            )
         if self.idle_timeout <= 0:
             raise ValueError("idle_timeout must be positive")
         if not isinstance(self.submit_phrases, list) or any(
@@ -133,6 +183,16 @@ def sample_config() -> str:
 #   "vad"    - start dictating immediately (hands-free)
 #   "wake"   - start passive; saying the wake word starts dictation
 mode = "toggle"
+
+# Transcription backend:
+#   "moonshine" - Moonshine streaming models (voice extra)
+#   "parakeet"  - NVIDIA Parakeet-TDT 0.6b v3 via sherpa-onnx
+#                 (voice-parakeet extra; ~490 MB one-time download;
+#                 cleaner transcripts, drops filler words natively)
+engine = "moonshine"
+
+# Remove standalone filler words (uh, um, ...) from typed text.
+strip_fillers = true
 
 # Moonshine model: tiny | base | tiny-streaming | base-streaming |
 # small-streaming | medium-streaming (most accurate; ~245M params)

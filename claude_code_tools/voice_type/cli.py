@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .config import (
     DEFAULT_CONFIG_PATH,
+    VALID_ENGINES,
     VALID_MODEL_ARCHS,
     VALID_MODES,
     load_config,
@@ -23,6 +24,7 @@ from .config import (
 _INSTALL_HINT = (
     "voice-type needs its optional dependencies. Install with:\n"
     '  uv tool install "claude-code-tools[voice]"\n'
+    '(add the parakeet engine with "claude-code-tools[voice,voice-parakeet]")\n'
     "or run directly:\n"
     '  uvx --from "claude-code-tools[voice]" voice-type'
 )
@@ -36,6 +38,7 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
         help=f"config file (default: {DEFAULT_CONFIG_PATH})",
     )
     parser.add_argument("--mode", choices=VALID_MODES, default=None)
+    parser.add_argument("--engine", choices=VALID_ENGINES, default=None)
     parser.add_argument(
         "--model-arch", choices=VALID_MODEL_ARCHS, default=None
     )
@@ -55,6 +58,7 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
 def _cmd_run(args: argparse.Namespace) -> int:
     overrides = {
         "mode": args.mode,
+        "engine": args.engine,
         "model_arch": args.model_arch,
         "language": args.language,
         "hotkey": args.hotkey,
@@ -68,13 +72,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
     except (ValueError, FileNotFoundError) as e:
         print(f"voice-type: {e}", file=sys.stderr)
         return 1
+    # The optional deps (pynput, moonshine-voice, sherpa-onnx) are
+    # imported lazily at construction/run time, so the ImportError guard
+    # must cover the whole lifecycle, not just the module import.
     try:
         from .app import VoiceTypeApp
+
+        return VoiceTypeApp(cfg).run()
     except ImportError as e:
         print(f"voice-type: {e}\n\n{_INSTALL_HINT}", file=sys.stderr)
         return 1
-    VoiceTypeApp(cfg).run()
-    return 0
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
