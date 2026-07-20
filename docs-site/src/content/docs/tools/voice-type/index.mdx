@@ -29,16 +29,18 @@ engines and options, or run `voice-type --help`.
 ## Why it's different
 
 <CardGrid>
-  <Card title="Wake word, your way" icon="comment">
-    Say "hey claude" (configurable, with alias
-    spellings) to start dictating hands-free; say
-    "stop listening" or go quiet to re-arm.
+  <Card title="One key to dictate" icon="pen">
+    Hit the toggle hotkey (default `Ctrl+;`), speak
+    as long as you like, hit it again -- the whole
+    take is transcribed with full sentence context
+    and typed as one atomic paste (one Cmd-Z undoes
+    it). No chopping at pauses, sub-second results.
   </Card>
-  <Card title="Whole-take accuracy" icon="approve-check">
-    Hold mode transcribes everything between
-    toggle-on and toggle-off as ONE segment: full
-    sentence context, no mid-sentence chopping, one
-    atomic paste (one Cmd-Z undoes it).
+  <Card title="Or go hands-free" icon="comment">
+    Prefer no keys at all? Say "hey claude"
+    (configurable, with alias spellings) to start
+    dictating; say "stop listening" or go quiet to
+    re-arm. The hotkey still works as an override.
   </Card>
   <Card title="Spoken submit" icon="rocket">
     Say "go", "over", or "submit" as a standalone
@@ -97,13 +99,17 @@ engines and options, or run `voice-type --help`.
 
 </Steps>
 
-## The three modes
+## Make it yours
 
-| Mode | Starts | Behavior |
-|------|--------|----------|
-| `toggle` | paused | hotkey starts/stops; pairs with `--segmentation hold` for whole-take accuracy |
-| `wake` | passive | "hey claude ..." activates; stop phrase or silence re-arms; hotkey works as override |
-| `vad` | dictating | hands-free; each utterance types when you pause |
+Everything above is a choice, not a default you're
+stuck with: how dictation activates (hotkey, wake
+word, or always-on), how speech becomes text
+(whole-take vs. per-pause), which local engine runs
+it (Apple-GPU Parakeet, CPU Parakeet, or Moonshine),
+plus hotkeys, sounds, clipboard behavior, and more.
+The complete reference -- every config key with its
+default, the engine comparison, and all CLI flags --
+lives in **[Configuration & CLI](./configuration/)**.
 
 ## Hotkey & voice vocabulary
 
