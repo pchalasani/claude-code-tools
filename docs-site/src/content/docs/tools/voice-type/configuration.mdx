@@ -34,20 +34,49 @@ behaves, and they answer different questions:
   `wake`: always passively listening for the wake
   word (hotkey works as an override).
   `vad`: dictating from the moment it starts.
-- **`segmentation`** — *when does text appear?*
-  `vad`: each utterance types as soon as you pause
-  (live feedback, but the model transcribes small
-  fragments with less context).
-  `hold`: nothing types until you toggle off, then
-  the whole take is transcribed as ONE segment
-  (maximum accuracy, one atomic paste — requires
-  `toggle` mode, since the wake word needs
-  continuous per-utterance transcription to be
-  heard at all).
+- **`segmentation`** — *when does text appear?* See
+  ["When does the text appear?"](#when-does-the-text-appear)
+  below — this is the axis people mean when they ask
+  about "streaming" dictation.
 - **`engine`** — *what transcribes it?* Pure
   speed/accuracy/platform trade-off; see the
   [engine table](#engines) below. Any engine works
   with any mode.
+
+## When does the text appear?
+
+Dictation tools differ in how *immediately* the
+transcript shows up. The spectrum, from most to
+least immediate:
+
+1. **Word-by-word streaming** (Apple-dictation
+   style: words materialize and self-correct as you
+   speak). voice-type deliberately does **not** do
+   this into your apps: revising already-typed text
+   in another application means blindly sending
+   backspaces into whatever has focus — one desync
+   and your document is mangled. Typed text should
+   be final.
+2. **Per-pause typing** — `segmentation = "vad"`.
+   Speak; roughly half a second after each natural
+   pause, that utterance is typed. This is the
+   closest voice-type comes to a streaming feel:
+   text flows in sentence-sized pieces while you
+   keep talking. Trade-off: the model transcribes
+   each fragment with only that fragment's context,
+   so accuracy is a notch lower.
+3. **Whole-take** — `segmentation = "hold"`.
+   Nothing appears while you speak (the waveform
+   pill is your feedback); on toggle-off the entire
+   take is transcribed as one segment and typed as
+   one atomic paste. Maximum accuracy — the model
+   sees full sentence context — and one Cmd-Z undoes
+   it. Requires `toggle` mode, since the wake word
+   can only be heard by continuous per-utterance
+   transcription.
+
+Wake and vad **modes** always use per-pause typing
+(2); toggle mode lets you pick between (2) and (3).
 
 ## Common setups
 
