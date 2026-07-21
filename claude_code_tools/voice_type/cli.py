@@ -137,13 +137,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
 
 def _cmd_hotkey() -> int:
+    # record_hotkey() imports pynput lazily, so the ImportError guard
+    # must cover the call itself, not just the module import.
     try:
         from .hotkey import record_hotkey
+
+        print(
+            "Press the key combo you want as your hotkey (15s timeout)..."
+        )
+        chord = record_hotkey()
     except ImportError as e:
         print(f"voice-type: {e}\n\n{_INSTALL_HINT}", file=sys.stderr)
         return 1
-    print("Press the key combo you want as your hotkey (15s timeout)...")
-    chord = record_hotkey()
     if chord is None:
         print("voice-type: no key combo detected", file=sys.stderr)
         return 1
@@ -180,7 +185,7 @@ examples:
 while recording:
   <hotkey> again  stop and type the take     Esc      cancel (discard)
   say "go"/"over"/"submit" alone -> press Enter
-  say "stop listening" -> stop dictating
+  say "stop listening" -> stop dictating (vad segmentation only)
 
 config file: ~/.config/voice-type/config.toml (all flags + more:
 wake_word_aliases, submit_phrases, sounds, copy_to_clipboard,
@@ -198,7 +203,13 @@ Accessibility (to type), Input Monitoring (global hotkeys).
         "init", help="write a sample config file and exit"
     )
     p_init.add_argument(
-        "--config", type=Path, default=None, help="destination path"
+        "--config",
+        type=Path,
+        # SUPPRESS: without it the subparser's default (None) would
+        # clobber a --config given BEFORE the subcommand, silently
+        # writing to the default path instead of the requested one.
+        default=argparse.SUPPRESS,
+        help="destination path",
     )
     p_init.add_argument(
         "--force", action="store_true", help="overwrite existing config"

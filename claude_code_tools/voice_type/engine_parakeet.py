@@ -11,6 +11,7 @@ Requires the ``voice-parakeet`` extra (sherpa-onnx, sounddevice, numpy).
 from __future__ import annotations
 
 import contextlib
+import queue
 import shutil
 import tarfile
 import tempfile
@@ -18,6 +19,7 @@ import threading
 import time
 import urllib.request
 import warnings
+from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -82,9 +84,18 @@ class AutoGain:
         self._gain = 1.0
 
     def process(self, samples):  # noqa: ANN001, ANN202
-        """Return ``samples`` scaled toward the target peak level."""
+        """Return ``samples`` scaled toward the target peak level.
+
+        The result is always finite and clipped to [-1, 1], even for
+        hostile input: NaN/Inf samples are sanitized first so they can
+        never poison the running peak or pass through unchanged.
+        """
         import numpy as np
 
+        if samples.size and not np.isfinite(samples).all():
+            samples = np.nan_to_num(
+                samples, nan=0.0, posinf=1.0, neginf=-1.0
+            ).astype(np.float32)
         peak = float(np.abs(samples).max()) if samples.size else 0.0
         self._running_peak = max(peak, self._running_peak * self.DECAY)
         target_gain = min(
@@ -93,7 +104,9 @@ class AutoGain:
         )
         self._gain += self.SMOOTHING * (target_gain - self._gain)
         if self._gain <= 1.001:
-            return samples
+            if peak <= 1.0:
+                return samples
+            return np.clip(samples, -1.0, 1.0).astype(np.float32)
         return np.clip(samples * self._gain, -1.0, 1.0).astype(np.float32)
 
 
@@ -335,13 +348,36 @@ class ParakeetEngine:
         self._agc = AutoGain()
         # Latest post-gain peak (0..1); read by the overlay waveform.
         self.level = 0.0
-        # Cross-thread requests, honored by the capture worker (the VAD
-        # is only ever touched from that thread).
-        self._flush_req = threading.Event()
-        self._reset_req = threading.Event()
-        self._hold_start_req = threading.Event()
-        self._hold_stop_req = threading.Event()
+        # Cross-thread requests, honored by the capture worker in the
+        # order they were made (the VAD is only ever touched from that
+        # thread). A single ordered queue — not per-command flags —
+        # preserves rapid sequences: hold-stop then hold-start delivers
+        # the finished take before the new one begins, and a reset can
+        # never be replayed ahead of the hold-start it followed.
+        self._cmd_lock = threading.Lock()
+        self._commands: deque[str] = deque()
+        # Completed hold takes, decoded on a FIFO decoder thread so a
+        # slow decode never blocks capture; None = shutdown sentinel.
+        self._takes: queue.Queue = queue.Queue()
+        # Set once stop() completes: no delivery may happen after it.
+        self._closed = threading.Event()
+        # Hold-mode recording state. Instance attributes (not capture-
+        # session locals) so an in-progress take SURVIVES a recoverable
+        # stream failure and retry: hold-stop after a mid-take hiccup
+        # still delivers everything captured so far.
+        self._holding = False
+        self._hold_buf: list = []
+        self._hold_len = 0
+        self._hold_capped = False
+        # Per-session VAD staging buffer / open-segment clock; given
+        # real values at the top of each capture session.
+        self._vad_pending: Any = None
+        self._speech_since: float | None = None
         self.fatal_error: str | None = None
+
+    def _request(self, command: str) -> None:
+        with self._cmd_lock:
+            self._commands.append(command)
 
     def request_flush(self) -> None:
         """Ask the worker to finalize the in-flight VAD segment now.
@@ -349,7 +385,7 @@ class ParakeetEngine:
         Used on toggle-off so speech finished just before the toggle is
         still delivered instead of waiting for trailing silence.
         """
-        self._flush_req.set()
+        self._request("flush")
 
     def request_reset(self) -> None:
         """Ask the worker to drop buffered audio and reset the VAD.
@@ -357,7 +393,7 @@ class ParakeetEngine:
         Used on toggle-on so stale pre-activation audio never leaks
         into the first dictated utterance.
         """
-        self._reset_req.set()
+        self._request("reset")
 
     def request_hold_start(self) -> None:
         """Begin a hold-mode recording (toggle-on in "hold" segmentation).
@@ -365,8 +401,7 @@ class ParakeetEngine:
         The worker discards any previous hold buffer and accumulates
         raw (gain-adjusted) audio until ``request_hold_stop``.
         """
-        self._hold_stop_req.clear()
-        self._hold_start_req.set()
+        self._request("hold_start")
 
     def request_hold_stop(self) -> None:
         """End a hold-mode recording and transcribe the whole take.
@@ -375,16 +410,29 @@ class ParakeetEngine:
         (full sentence context, no VAD chopping) and delivers it via
         ``on_utterance``.
         """
-        self._hold_stop_req.set()
+        self._request("hold_stop")
+
+    def _reset_runtime_state(self) -> None:
+        """Reset per-run state BEFORE any (possibly slow) model load,
+        so commands queued during it — e.g. a toggle pressed during a
+        first-run model download — are preserved for the worker."""
+        self.fatal_error = None
+        self._stop.clear()
+        self._closed.clear()
+        with self._cmd_lock:
+            self._commands.clear()
+        self._takes = queue.Queue()
+        self._holding = False
+        self._hold_buf, self._hold_len = [], 0
+        self._hold_capped = False
 
     def start(
         self,
         on_utterance: Callable[[str], None],
         on_activity: Callable[[], None],
     ) -> None:
+        self._reset_runtime_state()
         self._load_models_with_repair()
-        self.fatal_error = None
-        self._stop.clear()
         self._thread = threading.Thread(
             target=self._loop,
             args=(on_utterance, on_activity),
@@ -503,30 +551,67 @@ class ParakeetEngine:
         long run never accumulate into a fatal shutdown. Sessions that
         die before producing any audio (mic gone, bad device) keep
         incrementing until the limit.
+
+        A companion decoder thread (one per ``_loop`` run) decodes
+        completed hold takes; the exit path drains it via a sentinel
+        and join, so every take enqueued before shutdown is delivered
+        (or suppressed by ``_closed``) before this returns.
         """
-        failures = 0
-        while not self._stop.is_set():
-            self._capture_progress = False
-            try:
-                self._capture_session(on_utterance, on_activity)
-                failures = 0
-            except Exception as e:
-                if self._stop.is_set():
-                    break
-                failures = 1 if self._capture_progress else failures + 1
-                if failures >= self.MAX_CONSECUTIVE_FAILURES:
-                    self.fatal_error = (
-                        f"microphone capture failed {failures} times "
-                        f"in a row; giving up (last error: {e})"
+        takes = self._takes
+        decoder = threading.Thread(
+            target=self._decode_takes,
+            args=(takes, on_utterance),
+            name="ParakeetDecoder",
+            daemon=True,
+        )
+        decoder.start()
+        try:
+            failures = 0
+            while not self._stop.is_set():
+                self._capture_progress = False
+                try:
+                    self._capture_session(on_utterance, on_activity)
+                    failures = 0
+                except Exception as e:
+                    if self._stop.is_set():
+                        break
+                    failures = 1 if self._capture_progress else failures + 1
+                    if failures >= self.MAX_CONSECUTIVE_FAILURES:
+                        self.fatal_error = (
+                            f"microphone capture failed {failures} times"
+                            f" in a row; giving up (last error: {e})"
+                        )
+                        self._report(self.fatal_error)
+                        return
+                    self._report(
+                        f"capture error: {e}; retrying in "
+                        f"{self.RETRY_DELAY:g}s "
+                        f"({failures}/{self.MAX_CONSECUTIVE_FAILURES})"
                     )
-                    self._report(self.fatal_error)
-                    return
-                self._report(
-                    f"capture error: {e}; retrying in "
-                    f"{self.RETRY_DELAY:g}s "
-                    f"({failures}/{self.MAX_CONSECUTIVE_FAILURES})"
-                )
-                self._stop.wait(self.RETRY_DELAY)
+                    self._stop.wait(self.RETRY_DELAY)
+        finally:
+            takes.put(None)
+            decoder.join(timeout=10.0)
+            if decoder.is_alive():
+                self._report("take decoder still busy after 10s")
+
+    def _decode_takes(
+        self, takes: queue.Queue, on_utterance: Callable[[str], None]
+    ) -> None:
+        """Decoder-thread loop: decode hold takes in FIFO arrival order.
+
+        Runs beside the capture loop so a long decode never starves
+        capture — rapid off/on/off sequences deliver every take. One
+        thread draining a FIFO queue preserves delivery order; ``None``
+        is the shutdown sentinel.
+        """
+        while True:
+            take = takes.get()
+            if take is None:
+                return
+            if self._closed.is_set():
+                continue  # shutdown completed: never deliver late
+            self._deliver_take(take, on_utterance)
 
     def _open_stream(self, sd):  # noqa: ANN001, ANN202
         """Open the mic at 16 kHz, falling back to the device's own rate."""
@@ -573,60 +658,14 @@ class ParakeetEngine:
                         f"{getattr(stream, 'samplerate', None)!r}"
                     )
                 read_size = max(1, int(0.1 * native_rate))
-                buffer = np.zeros(0, dtype=np.float32)
+                self._vad_pending = np.zeros(0, dtype=np.float32)
+                self._speech_since = None  # start of open VAD segment
                 empty_reads = 0
                 hold_mode = (
                     getattr(self.cfg, "segmentation", "vad") == "hold"
                 )
-                speech_since = None  # monotonic start of open segment
-                holding = False
-                hold_buf: list = []
-                hold_len = 0
-                hold_capped = False
                 while not self._stop.is_set():
-                    if self._reset_req.is_set():
-                        self._reset_req.clear()
-                        self._flush_req.clear()
-                        try:
-                            self._vad.reset()
-                        except Exception as e:
-                            self._report(f"vad reset error: {e}")
-                        buffer = np.zeros(0, dtype=np.float32)
-                        # Reset also discards any in-progress hold
-                        # take (this is how cancel drops a recording).
-                        holding = False
-                        hold_buf, hold_len = [], 0
-                        speech_since = None
-                    if self._flush_req.is_set():
-                        self._flush_req.clear()
-                        try:
-                            self._vad.flush()
-                        except Exception as e:
-                            self._report(f"vad flush error: {e}")
-                        self._drain_segments(on_utterance)
-                        # flush() leaves sherpa's internal circular
-                        # buffer in a state that is NOT safe to keep
-                        # streaming into (negative-size Get/Pop errors,
-                        # then a scrambled detector). Reset to a clean
-                        # state before feeding more audio.
-                        try:
-                            self._vad.reset()
-                        except Exception as e:
-                            self._report(f"vad reset error: {e}")
-                        buffer = np.zeros(0, dtype=np.float32)
-                        speech_since = None
-                    if self._hold_start_req.is_set():
-                        self._hold_start_req.clear()
-                        holding = True
-                        hold_buf, hold_len = [], 0
-                        hold_capped = False
-                    if self._hold_stop_req.is_set():
-                        self._hold_stop_req.clear()
-                        if holding and hold_len:
-                            take = np.concatenate(hold_buf)
-                            hold_buf, hold_len = [], 0
-                            self._deliver_take(take, on_utterance)
-                        holding = False
+                    self._process_commands(on_utterance, np)
                     samples = self._read_samples(
                         stream, read_size, native_rate, np
                     )
@@ -659,33 +698,49 @@ class ParakeetEngine:
                     if hold_mode:
                         # Hold segmentation: accumulate the raw take;
                         # no VAD chopping. Decoded whole on hold-stop.
-                        if not holding:
+                        if not self._holding:
                             continue
-                        if hold_len < MAX_HOLD_SECONDS * SAMPLE_RATE:
-                            hold_buf.append(samples)
-                            hold_len += len(samples)
-                        elif not hold_capped:
-                            hold_capped = True
+                        # Enforce the memory cap per-sample, not
+                        # per-chunk: only the portion fitting in the
+                        # remaining budget is kept, so even a huge
+                        # single read cannot blow past the cap.
+                        budget = (
+                            MAX_HOLD_SECONDS * SAMPLE_RATE
+                            - self._hold_len
+                        )
+                        if budget > 0:
+                            chunk = samples[:budget]
+                            self._hold_buf.append(chunk)
+                            self._hold_len += len(chunk)
+                        if (
+                            budget <= len(samples)
+                            and not self._hold_capped
+                        ):
+                            self._hold_capped = True
                             self._report(
                                 "hold recording capped at "
                                 f"{MAX_HOLD_SECONDS}s"
                             )
                         continue
-                    buffer = np.concatenate([buffer, samples])
+                    self._vad_pending = np.concatenate(
+                        [self._vad_pending, samples]
+                    )
                     while (
-                        len(buffer) >= window_size
+                        len(self._vad_pending) >= window_size
                         and not self._stop.is_set()
                     ):
                         self._vad.accept_waveform(
-                            buffer[:window_size]
+                            self._vad_pending[:window_size]
                         )
-                        buffer = buffer[window_size:]
+                        self._vad_pending = self._vad_pending[
+                            window_size:
+                        ]
                     if self._vad.is_speech_detected():
                         self._safe_call(on_activity, "on_activity")
-                        if speech_since is None:
-                            speech_since = time.monotonic()
+                        if self._speech_since is None:
+                            self._speech_since = time.monotonic()
                         elif (
-                            time.monotonic() - speech_since
+                            time.monotonic() - self._speech_since
                             > MAX_SEGMENT_SECONDS
                         ):
                             # Stuck open (noise pinning the VAD):
@@ -705,18 +760,87 @@ class ParakeetEngine:
                                 self._vad.reset()
                             except Exception as e:
                                 self._report(f"vad reset error: {e}")
-                            speech_since = None
+                            self._speech_since = None
                     else:
-                        speech_since = None
+                        self._speech_since = None
                     self._drain_segments(on_utterance)
         finally:
             with self._stream_lock:
                 self._stream = None
 
+    def _process_commands(
+        self, on_utterance: Callable[[str], None], np  # noqa: ANN001
+    ) -> None:
+        """Apply queued cross-thread requests in the order they arrived.
+
+        Ordering is the contract: a hold-stop queued before a hold-start
+        delivers the finished take before the new recording begins, and
+        a reset queued after a hold-start can never be processed first
+        and resurrect a discarded recording.
+        """
+        while True:
+            with self._cmd_lock:
+                if not self._commands:
+                    return
+                command = self._commands.popleft()
+            if command == "reset":
+                try:
+                    self._vad.reset()
+                except Exception as e:
+                    self._report(f"vad reset error: {e}")
+                self._vad_pending = np.zeros(0, dtype=np.float32)
+                # Reset also discards any in-progress hold take
+                # (this is how cancel drops a recording).
+                self._holding = False
+                self._hold_buf, self._hold_len = [], 0
+                self._speech_since = None
+            elif command == "flush":
+                try:
+                    self._vad.flush()
+                except Exception as e:
+                    self._report(f"vad flush error: {e}")
+                self._drain_segments(on_utterance)
+                # flush() leaves sherpa's internal circular buffer in
+                # a state that is NOT safe to keep streaming into
+                # (negative-size Get/Pop errors, then a scrambled
+                # detector). Reset to a clean state before feeding
+                # more audio.
+                try:
+                    self._vad.reset()
+                except Exception as e:
+                    self._report(f"vad reset error: {e}")
+                self._vad_pending = np.zeros(0, dtype=np.float32)
+                self._speech_since = None
+            elif command == "hold_start":
+                self._holding = True
+                self._hold_buf, self._hold_len = [], 0
+                self._hold_capped = False
+            elif command == "hold_stop":
+                if self._holding and self._hold_len:
+                    take = np.concatenate(self._hold_buf)
+                    self._hold_buf, self._hold_len = [], 0
+                    self._enqueue_take(take, on_utterance)
+                self._holding = False
+
+    def _enqueue_take(
+        self, take, on_utterance: Callable[[str], None]  # noqa: ANN001
+    ) -> None:
+        """Hand a completed hold take to the decoder thread (FIFO).
+
+        ``on_utterance`` is unused (the decoder holds the same
+        callback) but lets ParakeetMlxEngine decode inline instead
+        (MLX models are thread-local)."""
+        self._takes.put(take)
+
     def _deliver_take(
         self, take, on_utterance: Callable[[str], None]  # noqa: ANN001
     ) -> None:
-        """Transcribe one whole hold-mode take and deliver the text."""
+        """Transcribe one whole hold-mode take and deliver the text.
+
+        Delivery is gated on ``_closed`` (stop() completed), not
+        ``_stop`` (stop() requested): an accepted take still delivers
+        while ``stop()`` joins the workers, never after it returned.
+        """
         secs = len(take) / SAMPLE_RATE
         self._report(f"transcribing {secs:.1f}s take...")
         try:
@@ -725,8 +849,21 @@ class ParakeetEngine:
             self._report(f"parakeet decode error: {e}")
             return
         if text:
-            self._safe_call(
-                lambda t=text: on_utterance(t), "on_utterance"
+            if self._closed.is_set():
+                return
+            try:
+                on_utterance(text)
+            except Exception as e:
+                self._report(
+                    f"on_utterance callback error (ignored): {e}"
+                )
+        else:
+            # Never drop audio invisibly (same contract as the VAD
+            # drain): an empty decode is the difference between
+            # "didn't hear you" and "heard you but made nothing of
+            # it".
+            self._report(
+                f"hold take ({secs:.1f}s) decoded to empty text"
             )
 
     def _read_samples(  # noqa: ANN202
@@ -735,11 +872,12 @@ class ParakeetEngine:
         """Read one chunk as mono float32 at 16 kHz; None if unusable.
 
         Never returns junk: an empty tuple from ``read()``, ``None``
-        data, values numpy cannot convert, scalars, and arrays of
-        unexpected rank all yield ``None`` (the caller counts these
-        toward the empty-read cap) rather than raising or leaking a
-        shape that would break ``np.concatenate`` downstream. The
-        result is always a nonempty 1-D float32 array.
+        data, values numpy cannot convert, scalars, arrays of
+        unexpected rank, non-finite samples (NaN/Inf), and implausibly
+        huge single reads all yield ``None`` (the caller counts these
+        toward the empty-read cap) rather than raising or leaking data
+        that would break the AGC/VAD/decoder downstream. The result is
+        always a nonempty 1-D finite float32 array.
         """
         result = stream.read(read_size)
         if isinstance(result, tuple):
@@ -757,6 +895,14 @@ class ParakeetEngine:
         if samples.ndim == 2 and samples.shape[1] > 0:
             samples = samples[:, 0]  # (frames, channels) -> channel 0
         if samples.ndim != 1 or samples.size == 0:
+            return None
+        if samples.size > 30 * native_rate:
+            # A single blocking read of ~0.1 s can never legitimately
+            # return >30 s of audio; a glitching driver could otherwise
+            # force an unbounded downstream allocation.
+            return None
+        if not np.isfinite(samples).all():
+            # NaN/Inf junk must never reach the AGC, VAD, or decoder.
             return None
         if native_rate != SAMPLE_RATE:
             n_out = int(samples.size * SAMPLE_RATE / native_rate)
@@ -849,3 +995,5 @@ class ParakeetEngine:
                 )
             else:
                 self._thread = None
+        # Stop is complete: no in-flight decode may deliver from now on.
+        self._closed.set()

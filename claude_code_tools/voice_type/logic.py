@@ -10,9 +10,21 @@ from __future__ import annotations
 import re
 
 
+# A word is a run of Unicode letters/digits (underscore excluded), with
+# apostrophes kept only INSIDE the word: "don't" stays whole, while the
+# quotes in "'claude'" are stripped. ``\w`` is Unicode-aware, so accented
+# ("café") and non-Latin ("クロード") words survive normalization.
+_WORD_RE = re.compile(r"[^\W_]+(?:['’][^\W_]+)*")
+
+
 def normalize_words(text: str) -> list[str]:
-    """Lowercase ``text``, strip punctuation, and split into words."""
-    return re.findall(r"[a-z0-9']+", text.lower())
+    """Casefold ``text``, strip punctuation, and split into words.
+
+    Unicode-aware: accented and non-Latin words are preserved whole
+    (never ASCII-stripped into false matches like "café" vs "caf"),
+    and casefolding handles non-ASCII case pairs correctly.
+    """
+    return _WORD_RE.findall(text.casefold())
 
 
 def _find_subsequence(words: list[str], phrase_words: list[str]) -> int:

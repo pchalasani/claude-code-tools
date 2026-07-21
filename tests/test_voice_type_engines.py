@@ -896,3 +896,258 @@ def test_drain_reads_segment_before_pop() -> None:
     # If the drain popped before copying, the segment would be empty and
     # silently skipped; reading first yields the real 1600 samples.
     assert got == ["len=1600"]
+
+
+# -- hold-mode robustness -------------------------------------------------
+
+
+def _hold_engine(monkeypatch):  # noqa: ANN001, ANN202
+    eng, statuses, holder = _make_parakeet(monkeypatch, texts=())
+    eng.cfg = Config(
+        mode="toggle", engine="parakeet", segmentation="hold"
+    )
+    eng.transcribe = (  # type: ignore[method-assign]
+        lambda samples, sr: f"len={len(samples)}"
+    )
+    return eng, statuses, holder
+
+
+def test_parakeet_hold_take_survives_capture_retry(monkeypatch) -> None:
+    """A recoverable stream failure mid-take must not discard the hold
+    buffer: hold-stop still delivers everything captured so far."""
+    np = pytest.importorskip("numpy")
+    eng, statuses, holder = _hold_engine(monkeypatch)
+    data = np.ones((160, 1), dtype=np.float32)
+    sessions = {"n": 0}
+
+    def queue_stop_then_finish():  # noqa: ANN202
+        eng.request_hold_stop()
+        return np.zeros((0, 1), dtype=np.float32)
+
+    def final_read():  # noqa: ANN202
+        eng._stop.set()
+        return np.zeros((0, 1), dtype=np.float32)
+
+    def factory(**kwargs):  # noqa: ANN003, ANN202
+        sessions["n"] += 1
+        if sessions["n"] == 1:  # take begins, then the stream hiccups
+            return ScriptedStream([data, RuntimeError("mic glitch")])
+        return ScriptedStream([data, queue_stop_then_finish, final_read])
+
+    holder["factory"] = factory
+    eng.request_hold_start()
+    utterances: list[str] = []
+    eng._loop(utterances.append, lambda: None)
+    # Both chunks (before AND after the retry) are in the take.
+    assert utterances == ["len=320"]
+    assert any("retrying" in s for s in statuses)
+
+
+def test_parakeet_rapid_hold_stop_then_start_keeps_take(
+    monkeypatch,
+) -> None:
+    """Commands apply in order: a hold-stop immediately followed by a
+    new hold-start still delivers the finished take (regression for
+    the old Event flags, where start cleared a pending stop)."""
+    np = pytest.importorskip("numpy")
+    eng, _, holder = _hold_engine(monkeypatch)
+    data = np.ones((160, 1), dtype=np.float32)
+
+    def stop_then_start():  # noqa: ANN202
+        eng.request_hold_stop()
+        eng.request_hold_start()
+        return np.zeros((0, 1), dtype=np.float32)
+
+    def final_read():  # noqa: ANN202
+        eng._stop.set()
+        return np.zeros((0, 1), dtype=np.float32)
+
+    holder["factory"] = lambda **kw: ScriptedStream(
+        [data, stop_then_start, data, final_read]
+    )
+    eng.request_hold_start()
+    utterances: list[str] = []
+    eng._loop(utterances.append, lambda: None)
+    assert utterances == ["len=160"]
+    assert eng._holding  # the new take is recording
+    assert eng._hold_len == 160  # ...and captured the post-start chunk
+
+
+def test_parakeet_hold_start_then_cancel_stays_cancelled(
+    monkeypatch,
+) -> None:
+    """A reset queued after hold-start must be processed after it:
+    the recording ends up discarded, never resurrected."""
+    np = pytest.importorskip("numpy")
+    eng, _, holder = _hold_engine(monkeypatch)
+    data = np.ones((160, 1), dtype=np.float32)
+
+    def final_read():  # noqa: ANN202
+        eng._stop.set()
+        return np.zeros((0, 1), dtype=np.float32)
+
+    holder["factory"] = lambda **kw: ScriptedStream([data, final_read])
+    eng.request_hold_start()
+    eng.request_reset()  # cancel right after starting
+    utterances: list[str] = []
+    eng._loop(utterances.append, lambda: None)
+    assert not eng._holding
+    assert eng._hold_len == 0
+    eng.request_hold_stop()
+    assert utterances == []
+
+
+def test_parakeet_empty_hold_decode_is_reported(monkeypatch) -> None:
+    """A hold take decoded to empty text must log its outcome (same
+    contract as the VAD drain), never vanish silently."""
+    np = pytest.importorskip("numpy")
+    eng, statuses, _ = _hold_engine(monkeypatch)
+    eng.transcribe = lambda samples, sr: ""  # type: ignore[method-assign]
+    got: list[str] = []
+    eng._deliver_take(np.ones(1600, dtype=np.float32), got.append)
+    assert got == []
+    assert any("decoded to empty" in s for s in statuses)
+
+
+def test_parakeet_hold_cap_bounds_oversized_reads(monkeypatch) -> None:
+    """The hold memory cap is enforced per-sample: even one chunk
+    larger than the remaining budget cannot blow past the cap."""
+    np = pytest.importorskip("numpy")
+    from claude_code_tools.voice_type import engine_parakeet as ep
+
+    eng, statuses, holder = _hold_engine(monkeypatch)
+    monkeypatch.setattr(ep, "MAX_HOLD_SECONDS", 1)  # cap = 16000 samples
+    big = np.ones((12000, 1), dtype=np.float32)
+
+    def final_read():  # noqa: ANN202
+        eng._stop.set()
+        return np.zeros((0, 1), dtype=np.float32)
+
+    holder["factory"] = lambda **kw: ScriptedStream(
+        [big, big, big, final_read]
+    )
+    eng.request_hold_start()
+    eng._loop(lambda t: None, lambda: None)
+    assert eng._hold_len == 16000  # exactly the cap, not 24000+
+    assert any("capped" in s for s in statuses)
+
+
+def test_parakeet_hold_takes_survive_slow_decode(monkeypatch) -> None:
+    """stop/start/stop while the first take is still decoding must
+    deliver BOTH takes, in order: decoding runs off the capture
+    thread, so audio spoken during a slow decode keeps flowing into
+    the second take's buffer instead of being stopped away empty."""
+    np = pytest.importorskip("numpy")
+    eng, _, holder = _hold_engine(monkeypatch)
+    first_decode_started = threading.Event()
+    release_decode = threading.Event()
+
+    def slow_transcribe(samples, sr):  # noqa: ANN001, ANN202
+        if not first_decode_started.is_set():
+            first_decode_started.set()
+            assert release_decode.wait(timeout=10.0)
+        return f"len={len(samples)}"
+
+    eng.transcribe = slow_transcribe  # type: ignore[method-assign]
+    data = np.ones((160, 1), dtype=np.float32)
+    empty = np.zeros((0, 1), dtype=np.float32)
+
+    def stop_first_take():  # noqa: ANN202
+        eng.request_hold_stop()
+        return empty
+
+    def toggle_on_mid_decode():  # noqa: ANN202
+        # The first take is being decoded RIGHT NOW; the user toggles
+        # a new recording on while it runs.
+        assert first_decode_started.wait(timeout=10.0)
+        eng.request_hold_start()
+        return empty
+
+    def stop_second_take():  # noqa: ANN202
+        eng.request_hold_stop()
+        release_decode.set()  # first decode finishes only now
+        return empty
+
+    def final_read():  # noqa: ANN202
+        eng._stop.set()
+        return empty
+
+    holder["factory"] = lambda **kw: ScriptedStream(
+        [
+            data,  # first take: one chunk
+            stop_first_take,
+            toggle_on_mid_decode,
+            data,  # second take: two chunks, read DURING the decode
+            data,
+            stop_second_take,
+            final_read,
+        ]
+    )
+    eng.request_hold_start()
+    utterances: list[str] = []
+    eng._loop(utterances.append, lambda: None)
+    assert utterances == ["len=160", "len=320"]
+
+
+def test_parakeet_start_preserves_commands_queued_during_load(
+    monkeypatch,
+) -> None:
+    """A toggle pressed during the (possibly minutes-long) first-run
+    model download queues engine commands; start() must preserve
+    them for the worker, not clear them after loading."""
+    np = pytest.importorskip("numpy")
+    eng, _, holder = _hold_engine(monkeypatch)
+    monkeypatch.setattr(
+        eng,
+        "_load_models_with_repair",
+        lambda: eng.request_hold_start(),  # toggle lands mid-download
+    )
+
+    def final_read():  # noqa: ANN202
+        eng._stop.set()
+        return np.zeros((0, 1), dtype=np.float32)
+
+    holder["factory"] = lambda **kw: ScriptedStream([final_read])
+    eng.start(lambda t: None, lambda: None)
+    eng._thread.join(timeout=5.0)
+    assert not eng._thread.is_alive()
+    assert eng._holding  # the mid-download toggle was honored
+
+
+# -- hostile audio data ---------------------------------------------------
+
+
+def test_parakeet_rejects_nonfinite_and_huge_reads(monkeypatch) -> None:
+    np = pytest.importorskip("numpy")
+    eng, _, holder = _make_parakeet(monkeypatch, texts=())
+    nan_chunk = np.full((160, 1), np.nan, dtype=np.float32)
+    inf_chunk = np.full((160, 1), np.inf, dtype=np.float32)
+    huge = np.ones((16000 * 31, 1), dtype=np.float32)  # >30 s in one read
+    good = np.ones((160, 1), dtype=np.float32)
+
+    def final_read():  # noqa: ANN202
+        eng._stop.set()
+        return np.zeros((0, 1), dtype=np.float32)
+
+    holder["factory"] = lambda **kw: ScriptedStream(
+        [nan_chunk, inf_chunk, huge, good, final_read]
+    )
+    eng._loop(lambda t: None, lambda: None)
+    assert eng.fatal_error is None
+    # Only the finite, plausible chunk reached the VAD.
+    assert len(eng._vad.windows) == 1
+    assert all(np.isfinite(w).all() for w in eng._vad.windows)
+
+
+def test_autogain_output_is_finite_and_clipped_for_hostile_input() -> None:
+    np = pytest.importorskip("numpy")
+    from claude_code_tools.voice_type.engine_parakeet import AutoGain
+
+    agc = AutoGain()
+    hostile = np.array(
+        [np.nan, np.inf, -np.inf, 5.0, -5.0, 0.1], dtype=np.float32
+    )
+    for _ in range(5):
+        out = agc.process(hostile)
+        assert np.isfinite(out).all()
+        assert np.abs(out).max() <= 1.0

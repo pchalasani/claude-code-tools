@@ -23,7 +23,8 @@ CGEvent tap, and draws its overlay with AppKit. The
 recommended `parakeet-mlx` engine additionally
 requires **Apple Silicon** (M1 or later), where it
 runs on the GPU via MLX; Intel Macs can use the
-CPU engines (`parakeet`, `moonshine`) instead.
+`parakeet` CPU engine instead (`moonshine` ships
+no Intel-macOS build).
 :::
 
 :::note[Installation]
@@ -43,8 +44,9 @@ engines and options, or run `voice-type --help`.
     Hit the toggle hotkey (default `Ctrl+;`), speak
     as long as you like, hit it again -- the whole
     take is transcribed with full sentence context
-    and typed as one atomic paste (one Cmd-Z undoes
-    it). No chopping at pauses, sub-second results.
+    and typed in one go (a single edit to undo, in
+    most apps). No chopping at pauses, sub-second
+    results.
   </Card>
   <Card title="Or go hands-free" icon="comment">
     Prefer no keys at all? Say "hey claude"

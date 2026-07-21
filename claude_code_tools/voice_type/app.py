@@ -2,8 +2,8 @@
 
 Wires Moonshine's ``MicTranscriber`` (streaming transcription with built-in
 voice activity detection) to a small activation state machine and the
-keystroke injector. Utterances are typed atomically when the VAD completes
-a line, so each dictated sentence is a single undo unit in the target app.
+keystroke injector. Each utterance is typed in one go when the VAD
+completes a line (most apps undo it as a single edit).
 """
 
 from __future__ import annotations
@@ -64,10 +64,13 @@ class VoiceTypeApp:
         self._effects_lock = threading.Lock()
         self._last_activity = time.monotonic()
         self._grace_until = 0.0
-        # Hold-mode handoff: True from toggle-off until the decoded
-        # take arrives (however long decoding takes) — delivery is tied
-        # to the stop request, never to a wall-clock window.
-        self._expect_hold = False
+        # Hold-mode handoff: count of hold-stop requests whose decoded
+        # take has not arrived yet (however long decoding takes) —
+        # delivery is tied one-to-one to stop requests, never to a
+        # wall-clock window. A counter (not a bool) so a rapid
+        # off/on/off sequence with two takes still in decode delivers
+        # both instead of silently dropping the second.
+        self._expect_hold = 0
         self._last_toggle = 0.0
         self._engine = None
         # Text of the current/most recent dictation session, for the
@@ -100,6 +103,13 @@ class VoiceTypeApp:
             self._state_version += 1
             version = self._state_version
             self._last_activity = time.monotonic()
+            if new == State.ACTIVE:
+                # Fresh dictation session: the buffer is cleared as
+                # part of the SAME commit that publishes ACTIVE, so a
+                # transcript delivered right after activation can never
+                # be appended first and then erased by a later effect
+                # (which would break clipboard/paste-last recovery).
+                self._session_texts = []
         self._emit_transition_effects(version, old, new)
         return version
 
@@ -136,10 +146,6 @@ class VoiceTypeApp:
                     else self.cfg.sound_stop
                 )
             self._status(new.value)
-            if new == State.ACTIVE:
-                # Fresh dictation session begins.
-                with self._lock:
-                    self._session_texts = []
 
     #: Seconds after a toggle-off during which an in-flight utterance
     #: (speech finished just before the toggle) is still committed.
@@ -181,7 +187,7 @@ class VoiceTypeApp:
         if predicted_active:
             with self._lock:
                 if hold:
-                    self._expect_hold = True
+                    self._expect_hold += 1
                 else:
                     self._grace_until = now + self.TOGGLE_GRACE
         else:
@@ -211,7 +217,7 @@ class VoiceTypeApp:
             # possibly-wrong handoff; the winning transition owns it.
             with self._lock:
                 self._grace_until = 0.0
-                self._expect_hold = False
+                self._expect_hold = 0
             return
         if was_active:
             action = getattr(
@@ -225,23 +231,27 @@ class VoiceTypeApp:
     def cancel(self) -> None:
         """Cancel-hotkey handler: discard the recording in progress.
 
-        Drops the engine's pending audio (hold buffer / open VAD
-        segment), transitions to the off state with NO grace window
-        (nothing in flight may type), and reports the cancellation.
-        Only bound while recording, so Escape works normally otherwise.
+        Transitions to the off state FIRST — with NO grace window — and
+        only then asks the engine to drop its pending audio (hold
+        buffer / open VAD segment). The engine reset is asynchronous,
+        so the order matters: invalidating the state/version before
+        requesting the reset means a transcript completing concurrently
+        fails the version check and grace test instead of typing after
+        the user pressed cancel. Only bound while recording, so Escape
+        works normally otherwise.
         """
         with self._lock:
             if self._state != State.ACTIVE:
                 return
             self._grace_until = 0.0
-            self._expect_hold = False
-        reset = getattr(self._engine, "request_reset", None)
-        if reset is not None:
-            reset()
+            self._expect_hold = 0
         self._set_state(self._off_state)
         with self._lock:
             self._grace_until = 0.0  # _set_state must not resurrect it
-            self._expect_hold = False
+            self._expect_hold = 0
+        reset = getattr(self._engine, "request_reset", None)
+        if reset is not None:
+            reset()
         self._status("recording cancelled (discarded)")
 
     def _is_recording(self) -> bool:
@@ -275,15 +285,7 @@ class VoiceTypeApp:
             version = self._state_version
             self._last_activity = time.monotonic()
         if state in (State.PAUSED, State.PASSIVE):
-            with self._lock:
-                in_grace = (
-                    self._expect_hold
-                    or time.monotonic() < self._grace_until
-                )
-                # A hold take is delivered exactly once per stop
-                # request, however long the decode took.
-                self._expect_hold = False
-            if in_grace:
+            if self._consume_handoff():
                 # In-flight speech from just before a toggle-off:
                 # commit it (the user said it while dictating).
                 if any(
@@ -293,6 +295,14 @@ class VoiceTypeApp:
                     with self._lock:
                         self.typist.press_enter()
                     self._status("submitted (Enter, in-flight)")
+                elif self.cfg.stop_phrase and is_exact_phrase(
+                    text, self.cfg.stop_phrase
+                ):
+                    # The trailing utterance was itself the stop
+                    # phrase: the user was deactivating, not dictating
+                    # — typing it would spray "stop listening" into
+                    # the focused app.
+                    self._status("stop phrase in flight (dropped)")
                 else:
                     self._status(f'typed in-flight: "{_preview(text)}"')
                     self._type(text, None)
@@ -321,6 +331,13 @@ class VoiceTypeApp:
         ):
             if self._inject(version, self.typist.press_enter):
                 self._status("submitted (Enter)")
+            elif self._consume_handoff():
+                # Snapshot said ACTIVE but a toggle-off landed before
+                # injection: this utterance IS the in-flight one that
+                # toggle's grace/hold handoff authorizes.
+                with self._lock:
+                    self.typist.press_enter()
+                self._status("submitted (Enter, in-flight)")
             return
         if self.cfg.stop_phrase and contains_phrase(
             text, self.cfg.stop_phrase
@@ -329,6 +346,27 @@ class VoiceTypeApp:
             return
         self._status(f'typed: "{_preview(text)}"')
         self._type(text, version)
+
+    def _consume_handoff(self) -> bool:
+        """Consume the armed toggle-off handoff; True if one was armed.
+
+        The handoff (a pending hold delivery or the wall-clock grace
+        window) authorizes exactly ONE delivery per toggle-off: the
+        segment in flight at that toggle. Consuming it atomically —
+        wherever the delivery happens to land — means later utterances
+        (speech begun after the toggle) can never ride the same
+        window, and each hold take is delivered exactly once per stop
+        request, however long the decode took.
+        """
+        with self._lock:
+            armed = (
+                self._expect_hold > 0
+                or time.monotonic() < self._grace_until
+            )
+            if self._expect_hold:
+                self._expect_hold -= 1
+            self._grace_until = 0.0
+            return armed
 
     def _inject(
         self, version: int, action: Callable[[], None]
@@ -374,8 +412,17 @@ class VoiceTypeApp:
         if version is None:
             with self._lock:
                 self.typist.type_text(text)
-        else:
-            self._inject(version, lambda: self.typist.type_text(text))
+        elif not self._inject(
+            version, lambda: self.typist.type_text(text)
+        ) and self._consume_handoff():
+            # The utterance snapshotted ACTIVE but lost the injection
+            # race to a toggle-off that armed the grace/hold handoff.
+            # It IS the one in-flight delivery that handoff authorizes
+            # — dropping it here would lose the promised toggle-off
+            # commit while leaving the grace window armed for stray
+            # later speech. Consume the handoff and type.
+            with self._lock:
+                self.typist.type_text(text)
 
     def paste_last(self) -> None:
         """Paste-hotkey handler: type the last session's transcript.
@@ -522,17 +569,49 @@ class VoiceTypeApp:
             )
 
     def _start_hotkey_listener(self):  # noqa: ANN202
-        from .hotkey import start_hotkeys
+        """Start the global hotkey listener; invalid chords degrade.
 
-        bindings: list[tuple] = [(self.cfg.hotkey, self.toggle)]
+        Each configured chord is validated independently, so one
+        malformed OPTIONAL binding (paste/cancel) only disables itself
+        — a typo in cancel_hotkey must never take the toggle hotkey
+        (and with it all of toggle mode) down.
+        """
+        from .hotkey import parse_hotkey, start_hotkeys
+
+        candidates: list[tuple[str, tuple]] = [
+            ("toggle", (self.cfg.hotkey, self.toggle))
+        ]
         if self.cfg.paste_hotkey:
-            bindings.append((self.cfg.paste_hotkey, self.paste_last))
+            candidates.append(
+                ("paste", (self.cfg.paste_hotkey, self.paste_last))
+            )
         if self.cfg.cancel_hotkey:
             # Conditional: intercepted only while recording; passes
             # through to the focused app otherwise.
-            bindings.append(
-                (self.cfg.cancel_hotkey, self.cancel, self._is_recording)
+            candidates.append(
+                (
+                    "cancel",
+                    (
+                        self.cfg.cancel_hotkey,
+                        self.cancel,
+                        self._is_recording,
+                    ),
+                )
             )
+        bindings: list[tuple] = []
+        for name, binding in candidates:
+            try:
+                parse_hotkey(binding[0])
+            except ValueError as e:
+                self._status(
+                    f"invalid {name} hotkey {binding[0]!r} ({e}); "
+                    f"{name} hotkey disabled"
+                )
+                continue
+            bindings.append(binding)
+        if not bindings:
+            self._status("no valid hotkeys configured; hotkeys disabled")
+            return None
         try:
             return start_hotkeys(bindings)
         except ValueError as e:

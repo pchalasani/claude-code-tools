@@ -22,6 +22,8 @@ from .engine_parakeet import (
     MIN_SILENCE,
     SAMPLE_RATE,
     ParakeetEngine,
+    _install_lock,
+    _remove_cache_entry,
     ensure_vad,
 )
 from .engines import StatusFn
@@ -47,16 +49,23 @@ class ParakeetMlxEngine(ParakeetEngine):
         on_utterance: Callable[[str], None],
         on_activity: Callable[[], None],
     ) -> None:
-        """Spawn the worker; model loading happens ON the worker thread.
+        """Spawn the worker and BLOCK until its models are loaded.
 
         MLX streams are thread-local: a model loaded on the main thread
         cannot decode on the capture thread ("There is no Stream(cpu, 1)
-        in current thread"). Loading inside the worker keeps every MLX
-        operation on one thread. Load failures surface via
-        ``fatal_error`` (polled by the app) rather than synchronously.
+        in current thread"), so loading happens ON the worker thread.
+        ``start`` still waits for the worker to finish loading (or
+        fail) before returning: the app reports "ready" right after
+        ``start``, and a first-run model download can take minutes —
+        without the wait, recordings during that window would be
+        silently lost.
+
+        Raises:
+            RuntimeError: If model loading failed (``fatal_error`` is
+                set to the same message).
         """
-        self.fatal_error = None
-        self._stop.clear()
+        self._reset_runtime_state()
+        self._ready = threading.Event()
         self._thread = threading.Thread(
             target=self._load_and_loop,
             args=(on_utterance, on_activity),
@@ -64,6 +73,12 @@ class ParakeetMlxEngine(ParakeetEngine):
             daemon=True,
         )
         self._thread.start()
+        # Short-interval polling keeps the main thread responsive to
+        # Ctrl+C while the (possibly minutes-long) first download runs.
+        while not self._ready.wait(0.2):
+            pass
+        if self.fatal_error:
+            raise RuntimeError(self.fatal_error)
 
     def _load_and_loop(
         self,
@@ -76,11 +91,19 @@ class ParakeetMlxEngine(ParakeetEngine):
             self.fatal_error = f"model load failed: {e}"
             self._report(self.fatal_error)
             return
+        finally:
+            self._ready.set()
         self._loop(on_utterance, on_activity)
 
     def _load_models_with_repair(self) -> None:
-        """Load the MLX model (HF-cached) and the Silero VAD."""
-        import sherpa_onnx
+        """Load the MLX model (HF-cached) and the Silero VAD.
+
+        Self-repairing, as the name promises: a cached-but-corrupt
+        Silero VAD (nonempty file that fails to construct) is removed
+        under the install lock and redownloaded once; a second failure
+        propagates. Without this, every subsequent launch would reuse
+        the same bad file and fail forever.
+        """
         from parakeet_mlx import from_pretrained
 
         model_id = getattr(
@@ -92,7 +115,25 @@ class ParakeetMlxEngine(ParakeetEngine):
         )
         self._model = from_pretrained(model_id)
 
-        vad_path = ensure_vad(self._status)
+        for attempt in (1, 2):
+            vad_path = ensure_vad(self._status)
+            try:
+                self._build_vad(vad_path)
+                return
+            except Exception as e:
+                if attempt == 2:
+                    raise
+                self._report(
+                    f"VAD load failed ({e}); clearing cached VAD "
+                    "and redownloading"
+                )
+                with _install_lock():
+                    _remove_cache_entry(vad_path)
+
+    def _build_vad(self, vad_path: Path) -> None:
+        """Construct the Silero VAD from ``vad_path``."""
+        import sherpa_onnx
+
         vad_config = sherpa_onnx.VadModelConfig()
         vad_config.silero_vad.model = str(vad_path)
         vad_config.silero_vad.min_silence_duration = MIN_SILENCE
@@ -110,6 +151,20 @@ class ParakeetMlxEngine(ParakeetEngine):
         self._vad = sherpa_onnx.VoiceActivityDetector(
             vad_config, buffer_size_in_seconds=120
         )
+
+    def _enqueue_take(
+        self, take, on_utterance: Callable[[str], None]  # noqa: ANN001
+    ) -> None:
+        """Decode the take inline on the capture (model-owning) thread.
+
+        MLX streams are thread-local (see ``start``): the model loaded
+        on this worker thread cannot decode on the base class's shared
+        decoder thread. Inline decode blocks capture for the take's
+        decode time — at MLX's ~40x realtime that window is small, and
+        audio arriving meanwhile is retained by the input stream's
+        buffer.
+        """
+        self._deliver_take(take, on_utterance)
 
     def transcribe(self, samples, sample_rate: int) -> str:  # noqa: ANN001
         """Decode one float32 mono segment via a temp wav file.

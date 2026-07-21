@@ -25,8 +25,11 @@ _MODIFIERS = {
 }
 
 # Named keys accepted without angle brackets ("ctrl+f5" == "<ctrl>+<f5>").
+# f1-f20 only: pynput's Key defines no f21+, and every accepted name
+# must also be suppressible on macOS (_NAMED_VKS below) — anything
+# else is rejected at parse time instead of degrading silently.
 _NAMED_KEYS = frozenset(
-    [f"f{i}" for i in range(1, 25)]
+    [f"f{i}" for i in range(1, 21)]
     + [
         "space", "tab", "enter", "esc", "home", "end",
         "page_up", "page_down", "up", "down", "left", "right",
@@ -34,9 +37,19 @@ _NAMED_KEYS = frozenset(
     ]
 )
 
-# Layout-independent macOS virtual keycodes for named keys the
-# suppressing tap supports (character keys are probed per layout).
-_NAMED_VKS = {"esc": 53, "enter": 36, "tab": 48, "space": 49}
+# Layout-independent macOS virtual keycodes (Carbon kVK_*) for EVERY
+# named key in _NAMED_KEYS, so all documented named chords get the
+# suppressing event tap (character keys are probed per layout).
+_NAMED_VKS = {
+    "esc": 53, "enter": 36, "tab": 48, "space": 49,
+    "backspace": 51, "delete": 117,
+    "home": 115, "end": 119, "page_up": 116, "page_down": 121,
+    "left": 123, "right": 124, "down": 125, "up": 126,
+    "f1": 122, "f2": 120, "f3": 99, "f4": 118, "f5": 96,
+    "f6": 97, "f7": 98, "f8": 100, "f9": 101, "f10": 109,
+    "f11": 103, "f12": 111, "f13": 105, "f14": 107, "f15": 113,
+    "f16": 106, "f17": 64, "f18": 79, "f19": 80, "f20": 90,
+}
 
 
 def parse_hotkey(hotkey: str) -> tuple[frozenset[str], str]:
@@ -63,6 +76,15 @@ def parse_hotkey(hotkey: str) -> tuple[frozenset[str], str]:
             if name in _MODIFIERS:
                 mods.add(_MODIFIERS[name])
                 continue
+            if name not in _NAMED_KEYS:
+                # Reject unknown/unsupported named keys up front:
+                # accepting them here would silently degrade to the
+                # non-suppressing fallback on macOS (chord leaks into
+                # the focused app) or fail at listener startup.
+                raise ValueError(
+                    f"unsupported named key {part!r}; supported: "
+                    f"{', '.join(sorted(_NAMED_KEYS))}"
+                )
             key = part  # named non-modifier key, e.g. <f5>
         elif part in _MODIFIERS:
             # bracket-less spelling: "ctrl+;" == "<ctrl>+;"
@@ -101,6 +123,13 @@ class _SuppressingHotKeys:
             "cmd": Quartz.kCGEventFlagMaskCommand,
             "shift": Quartz.kCGEventFlagMaskShift,
         }
+        # All chord-relevant modifier bits. Matching compares these for
+        # EQUALITY, so "<ctrl>+;" does not also fire on Ctrl+Shift+;
+        # (exact-chord promise); lock/synthetic flags such as Caps Lock
+        # and Fn stay outside the mask and never affect chord identity.
+        self._mod_mask = 0
+        for m in masks.values():
+            self._mod_mask |= m
         # vk -> list of (mask, callback, when); ``when`` (nullable)
         # gates matching dynamically: a False-returning ``when`` lets
         # the event pass through untouched, so e.g. Escape can cancel
@@ -120,6 +149,11 @@ class _SuppressingHotKeys:
                 (mask, callback, when)
             )
         self._down: set[int] = set()
+        # In-flight callback threads, tracked so stop() can wait for
+        # them: a toggle/paste callback must not inject keystrokes
+        # after the app has reported that it stopped.
+        self._threads: list[threading.Thread] = []
+        self._stopping = False
         self._listener = keyboard.Listener(
             darwin_intercept=self._intercept
         )
@@ -135,10 +169,17 @@ class _SuppressingHotKeys:
         if entries is None:
             return event
         if event_type == q.kCGEventKeyDown:
+            if vk in self._down:
+                # Autorepeat of an already-accepted chord. Swallow it
+                # WITHOUT re-evaluating predicates: a conditional chord
+                # (Escape-to-cancel) whose `when` turned False after
+                # the first press must not start leaking repeats into
+                # the focused app while its key-up is still swallowed.
+                return None
             flags = q.CGEventGetFlags(event)
             for mask, callback, when in entries:
-                if (flags & mask) != mask:
-                    continue
+                if (flags & self._mod_mask) != mask:
+                    continue  # extra or missing modifiers: not ours
                 if when is not None:
                     try:
                         if not when():
@@ -148,11 +189,16 @@ class _SuppressingHotKeys:
                 repeat = q.CGEventGetIntegerValueField(
                     event, q.kCGKeyboardEventAutorepeat
                 )
-                if not repeat:
+                if not repeat and not self._stopping:
                     self._down.add(vk)
-                    threading.Thread(
+                    thread = threading.Thread(
                         target=callback, daemon=True
-                    ).start()
+                    )
+                    self._threads = [
+                        t for t in self._threads if t.is_alive()
+                    ]
+                    self._threads.append(thread)
+                    thread.start()
                 return None  # swallow the chord (and auto-repeats)
             return event
         if vk in self._down:
@@ -161,7 +207,17 @@ class _SuppressingHotKeys:
         return event
 
     def stop(self) -> None:
+        """Stop the listener and wait for in-flight callbacks.
+
+        New callbacks are refused first, then any already-started ones
+        are joined (bounded), so no keystroke injection or side effect
+        can land after shutdown reports completion.
+        """
+        self._stopping = True
         self._listener.stop()
+        for thread in self._threads:
+            thread.join(timeout=2.0)
+        self._threads = [t for t in self._threads if t.is_alive()]
 
 
 def _resolve_vk(quartz, terminal: str) -> int | None:  # noqa: ANN001

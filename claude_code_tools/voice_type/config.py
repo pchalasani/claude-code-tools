@@ -55,8 +55,9 @@ class Config:
             fastest for v3-int8 on Apple Silicon; 8 helps v2-fp16).
         strip_fillers: Drop standalone filler words (uh, um, ...) from
             typed text.
-        overlay: Show the floating waveform pill while running
-            (macOS only; ignored elsewhere).
+        overlay: Show the floating waveform pill while recording
+            (macOS only; ignored elsewhere). The pill is hidden while
+            paused/passive — its presence IS the recording indicator.
         model_arch: Moonshine model architecture name (moonshine engine
             only).
         language: Language tag understood by Moonshine (e.g. "en").
@@ -65,7 +66,10 @@ class Config:
         wake_word_aliases: Alternate spellings the transcriber may
             produce for the wake word (e.g. "claud", "clawed"); any
             of them activates dictation too.
-        stop_phrase: Spoken phrase that deactivates dictation.
+        stop_phrase: Spoken phrase that deactivates dictation. Only
+            heard with VAD segmentation: a "hold" take is raw audio
+            until toggle-off (nothing is transcribed mid-take), so in
+            hold mode stop with the hotkey, or Esc to cancel.
         submit_phrases: Phrases that press Enter when spoken as an
             entire utterance (e.g. say "go" alone to submit).
         idle_timeout: Seconds of silence after which "wake" mode re-arms.
@@ -159,7 +163,12 @@ class Config:
                 f"invalid model_arch {self.model_arch!r}; "
                 f"must be one of {VALID_MODEL_ARCHS}"
             )
-        for name in ("strip_fillers", "trailing_space", "sounds"):
+        if not isinstance(self.mlx_model, str) or not self.mlx_model.strip():
+            raise ValueError(
+                f"mlx_model must be a non-empty string (a HuggingFace "
+                f"model id), got {self.mlx_model!r}"
+            )
+        for name in ("strip_fillers", "trailing_space", "sounds", "overlay"):
             value = getattr(self, name)
             if not isinstance(value, bool):
                 raise ValueError(
@@ -295,8 +304,9 @@ parakeet_model = "v3-int8"
 # Apple Silicon (~32x realtime); v2-fp16 benefits from 8 (~16x).
 parakeet_threads = 4
 
-# Floating waveform pill (macOS): red waves while dictating, dim flat
-# line when paused/waiting. Click-through; never steals focus.
+# Floating waveform pill (macOS): shown ONLY while recording — red
+# waves as you speak; hidden when paused/waiting. Click-through; never
+# steals focus.
 overlay = true
 
 # Remove standalone filler words (uh, um, ...) from typed text.
@@ -314,8 +324,12 @@ language = "en"
 # "<ctrl>+<alt>+d", "<cmd>+<shift>+v"
 hotkey = "<ctrl>+;"
 
-# Wake word / stop phrase (used in "wake" mode; stop phrase works in
-# every mode). Matching is case- and punctuation-insensitive.
+# Wake word / stop phrase. The wake word is used in "wake" mode; the
+# stop phrase deactivates dictation wherever utterances are
+# transcribed as you pause (segmentation "vad"). A "hold" take is raw
+# audio until toggle-off — no phrase can be heard mid-take — so stop
+# with the hotkey (or Esc to cancel) instead. Matching is case- and
+# punctuation-insensitive.
 wake_word = "claude"
 
 # Alternate spellings the transcriber may produce for your wake word --
@@ -370,8 +384,17 @@ def write_sample_config(path: Path | None = None, force: bool = False) -> Path:
         The path written.
     """
     path = path or DEFAULT_CONFIG_PATH
-    if path.exists() and not force:
-        raise FileExistsError(f"{path} exists (use --force to overwrite)")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(sample_config())
+    if force:
+        path.write_text(sample_config())
+        return path
+    try:
+        # Exclusive create: an exists-then-write sequence would silently
+        # overwrite a config created concurrently between the two steps.
+        with open(path, "x") as f:
+            f.write(sample_config())
+    except FileExistsError:
+        raise FileExistsError(
+            f"{path} exists (use --force to overwrite)"
+        ) from None
     return path

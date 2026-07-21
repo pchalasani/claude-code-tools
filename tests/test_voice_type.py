@@ -131,6 +131,32 @@ def test_parse_hotkey_rejects_malformed(bad: str) -> None:
         parse_hotkey(bad)
 
 
+@pytest.mark.parametrize(
+    "bad", ["<f21>", "<bogus>", "<ctrl>+<f24>", "<cmd>+<media_play>"]
+)
+def test_parse_hotkey_rejects_unsupported_named_keys(bad: str) -> None:
+    """Unknown named keys fail at parse time with a clear error, not
+    later by silently degrading to non-suppressing (leaky) hotkeys."""
+    with pytest.raises(ValueError, match="named key"):
+        parse_hotkey(bad)
+
+
+def test_every_named_key_has_a_mac_virtual_keycode() -> None:
+    """Every documented named key must be suppressible on macOS: a
+    gap would make an advertised chord leak into the focused app."""
+    from claude_code_tools.voice_type.hotkey import (
+        _NAMED_KEYS,
+        _NAMED_VKS,
+        _resolve_vk,
+    )
+
+    assert set(_NAMED_VKS) == set(_NAMED_KEYS)
+    # Spot-check a few Carbon kVK_* values (layout-independent).
+    assert _resolve_vk(None, "<f5>") == 96
+    assert _resolve_vk(None, "<up>") == 126
+    assert _resolve_vk(None, "<esc>") == 53
+
+
 # -- config ---------------------------------------------------------------
 
 
@@ -473,15 +499,17 @@ def test_app_ignores_non_string_transcripts(app_factory) -> None:  # noqa: ANN00
     assert _state(app) == "ACTIVE"
 
 
-def test_app_no_typing_after_concurrent_deactivation(
+def test_app_concurrent_toggle_off_commits_utterance_exactly_once(
     app_factory, monkeypatch
 ) -> None:  # noqa: ANN001
-    """Hotkey deactivation between state snapshot and typing wins.
+    """A toggle-off landing between snapshot and injection still commits.
 
     A worker thread handles an utterance but is paused (deterministically,
     via a patched strip_fillers) between the state inspection and the
-    injection; the main thread then toggles the app off. The stale
-    utterance must not be typed after deactivation.
+    injection; the main thread then toggles the app off. That toggle-off
+    arms the one-shot grace handoff for exactly this in-flight utterance,
+    so it must be typed (toggle-off means "commit what I said") — once,
+    consuming the handoff so later stray speech cannot ride it.
     """
     import claude_code_tools.voice_type.app as app_mod
 
@@ -506,12 +534,18 @@ def test_app_no_typing_after_concurrent_deactivation(
     worker.join(timeout=5.0)
     assert not worker.is_alive()
     assert _state(app) == "PAUSED"
-    assert app.typist.typed == []
+    assert app.typist.typed == ["hello world "]
+    # the handoff was consumed: speech begun after the toggle is dropped
+    monkeypatch.setattr(app_mod, "strip_fillers", orig)
+    app.handle_utterance("later stray speech")
+    assert app.typist.typed == ["hello world "]
 
 
-def test_app_no_enter_after_concurrent_deactivation(
+def test_app_concurrent_toggle_off_still_submits_in_flight_enter(
     app_factory, monkeypatch
 ) -> None:  # noqa: ANN001
+    """A submit phrase losing the injection race to a toggle-off is the
+    in-flight utterance that toggle's grace authorizes: Enter fires."""
     import claude_code_tools.voice_type.app as app_mod
 
     app, _ = app_factory(mode="vad")
@@ -526,13 +560,19 @@ def test_app_no_enter_after_concurrent_deactivation(
 
     monkeypatch.setattr(app_mod, "is_exact_phrase", racing)
     app.handle_utterance("go")
-    assert app.typist.enters == 0
+    assert app.typist.enters == 1
     assert _state(app) == "PAUSED"
+    # one-shot: the handoff is spent
+    monkeypatch.setattr(app_mod, "is_exact_phrase", orig)
+    app.handle_utterance("anything else")
+    assert app.typist.typed == []
 
 
-def test_app_wake_types_remainder_unless_deactivated_meanwhile(
+def test_app_wake_remainder_rides_handoff_when_toggled_off_meanwhile(
     app_factory, monkeypatch
 ) -> None:  # noqa: ANN001
+    """The wake remainder losing its injection race to a toggle-off is
+    committed via that toggle's armed grace handoff, exactly once."""
     import claude_code_tools.voice_type.app as app_mod
 
     app, _ = app_factory(mode="wake")
@@ -543,7 +583,7 @@ def test_app_wake_types_remainder_unless_deactivated_meanwhile(
 
     monkeypatch.setattr(app_mod, "strip_fillers", racing_strip)
     app.handle_utterance("claude write hello")
-    assert app.typist.typed == []
+    assert app.typist.typed == ["write hello "]
     assert _state(app) == "PASSIVE"
 
 
@@ -1256,6 +1296,38 @@ def test_hold_take_delivered_no_matter_how_slow_decode() -> None:
     assert app.typist.typed == ["a very long take finally decoded "]
 
 
+def test_two_outstanding_hold_stops_both_deliver() -> None:
+    """Off/on/off with two takes still in decode delivers BOTH.
+
+    The hold handoff is a counter, not a bool: the first arriving take
+    must not consume the authorization for the second stop request.
+    """
+    pytest.importorskip("pynput")
+    from claude_code_tools.voice_type.app import VoiceTypeApp
+
+    app = VoiceTypeApp(Config(
+        mode="toggle", engine="parakeet", segmentation="hold",
+        sounds=False, overlay=False,
+    ))
+    app.typist = _CollectingTypist()
+    app._engine = _HoldEngine()
+    app.toggle()               # record take 1
+    app._last_toggle = 0.0
+    app.toggle()               # stop 1 -> decode begins
+    app._last_toggle = 0.0
+    app.toggle()               # record take 2
+    app._last_toggle = 0.0
+    app.toggle()               # stop 2 -> decode begins
+    assert app._engine.hold_stops == 2
+    app._grace_until = 0.0     # no wall-clock window: counter only
+    app.handle_utterance("first take")
+    app.handle_utterance("second take")
+    assert app.typist.typed == ["first take ", "second take "]
+    # both authorizations consumed: stray noise is NOT typed
+    app.handle_utterance("stray noise")
+    assert app.typist.typed == ["first take ", "second take "]
+
+
 def test_cancel_clears_pending_hold_delivery() -> None:
     pytest.importorskip("pynput")
     from claude_code_tools.voice_type.app import VoiceTypeApp
@@ -1270,3 +1342,212 @@ def test_cancel_clears_pending_hold_delivery() -> None:
     app.cancel()   # discard
     app.handle_utterance("should never appear")
     assert app.typist.typed == []
+
+
+# -- unicode-aware phrase matching ----------------------------------------
+
+
+def test_normalize_words_unicode_and_edge_apostrophes() -> None:
+    # Accented words are kept whole, never ASCII-stripped into "caf".
+    assert normalize_words("Café, s'il vous plaît!") == [
+        "café", "s'il", "vous", "plaît",
+    ]
+    # Non-Latin scripts survive normalization (documented languages).
+    assert normalize_words("クロード、 これを書いて") == [
+        "クロード", "これを書いて",
+    ]
+    # Apostrophes are kept only INSIDE a word, never at its edges.
+    assert normalize_words("'claude' said don't") == [
+        "claude", "said", "don't",
+    ]
+    assert normalize_words("’quoted’") == ["quoted"]
+
+
+def test_unicode_wake_and_phrase_matching() -> None:
+    assert not contains_phrase("café au lait", "caf")
+    assert contains_phrase("Über uns", "über")
+    assert is_exact_phrase("Envía.", "envía")
+    assert text_after_wake_word("クロード これを書いて", "クロード") == (
+        "これを書いて"
+    )
+
+
+# -- overlay / mlx_model validation ---------------------------------------
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("overlay", "false"),  # truthy string must not enable the pill
+        ("overlay", 1),
+        ("overlay", None),
+        ("mlx_model", None),
+        ("mlx_model", ""),
+        ("mlx_model", "   "),
+        ("mlx_model", 3),
+    ],
+)
+def test_validate_rejects_bad_overlay_and_mlx_model(
+    field: str, value: object
+) -> None:
+    with pytest.raises(ValueError):
+        Config(**{field: value}).validate()
+
+
+# -- CLI: --config placement and hotkey dependency guard ------------------
+
+
+def test_cli_init_config_before_subcommand(monkeypatch, tmp_path) -> None:
+    """`voice-type --config X init` must write X, not the default path."""
+    from claude_code_tools.voice_type.cli import main
+
+    dest = tmp_path / "wanted.toml"
+    monkeypatch.setattr(
+        sys, "argv", ["voice-type", "--config", str(dest), "init"]
+    )
+    assert main() == 0
+    assert dest.exists()
+
+
+def test_cli_init_config_after_subcommand(monkeypatch, tmp_path) -> None:
+    from claude_code_tools.voice_type.cli import main
+
+    dest = tmp_path / "after.toml"
+    monkeypatch.setattr(
+        sys, "argv", ["voice-type", "init", "--config", str(dest)]
+    )
+    assert main() == 0
+    assert dest.exists()
+
+
+def test_cli_hotkey_missing_dependency_hint(
+    monkeypatch, capsys
+) -> None:
+    """The lazy pynput import inside record_hotkey() must be guarded."""
+    from claude_code_tools.voice_type.cli import main
+
+    monkeypatch.setitem(sys.modules, "pynput", None)  # import -> error
+    monkeypatch.setattr(sys, "argv", ["voice-type", "hotkey"])
+    assert main() == 1
+    err = capsys.readouterr().err
+    assert "uv tool install" in err
+
+
+# -- moonshine reset drops in-flight (pre-activation) lines ---------------
+
+
+def test_moonshine_reset_drops_line_in_progress(monkeypatch) -> None:
+    utterances: list[str] = []
+    eng, _, listener, statuses = _start_moonshine(
+        monkeypatch, utterances.append, lambda: None
+    )
+    # A line begun (partial text) BEFORE toggle-on must not be typed
+    # after activation, even though it completes afterwards.
+    listener.on_line_text_changed(SimpleNamespace())
+    eng.request_reset()
+    listener.on_line_completed(
+        SimpleNamespace(line=SimpleNamespace(text="stale paused speech"))
+    )
+    assert utterances == []
+    assert any("stale" in s for s in statuses)
+    # A line begun after activation is delivered normally.
+    listener.on_line_text_changed(SimpleNamespace())
+    listener.on_line_completed(
+        SimpleNamespace(line=SimpleNamespace(text="fresh dictation"))
+    )
+    assert utterances == ["fresh dictation"]
+
+
+# -- cancel ordering and one-shot grace -----------------------------------
+
+
+def test_cancel_deactivates_before_engine_reset() -> None:
+    """The state must be off (version bumped) BEFORE the async engine
+    reset is requested, so nothing in flight can type after cancel."""
+    pytest.importorskip("pynput")
+    from claude_code_tools.voice_type.app import State, VoiceTypeApp
+
+    app = VoiceTypeApp(Config(mode="vad", sounds=False, overlay=False))
+    app.typist = _CollectingTypist()
+    states_at_reset: list[State] = []
+
+    class _Engine(_RecordingEngine):
+        def request_reset(self) -> None:
+            super().request_reset()
+            states_at_reset.append(app._state)
+
+    app._engine = _Engine()
+    app.cancel()
+    assert states_at_reset == [State.PAUSED]
+
+
+def test_grace_window_is_consumed_by_first_delivery() -> None:
+    """Grace authorizes exactly one in-flight utterance; speech begun
+    after the toggle-off can never ride the same window."""
+    app = _grace_app()
+    app.toggle()  # ACTIVE -> PAUSED, grace armed
+    app.handle_utterance("the in-flight utterance")
+    app.handle_utterance("speech begun after toggle-off")
+    assert app.typist.typed == ["the in-flight utterance "]
+
+
+def test_utterance_losing_injection_race_to_toggle_off_still_types() -> None:
+    """An utterance that snapshotted ACTIVE but reaches injection just
+    after a toggle-off IS the in-flight delivery that toggle's grace
+    window authorizes: it must type, consuming the handoff, instead of
+    being dropped while the window stays armed for stray speech."""
+    app = _grace_app()
+    version = app._state_version  # snapshot, as handle_utterance does
+    app.toggle()  # toggle-off commits first: version moves, grace armed
+    app._type("in flight", version)  # stale-version injection path
+    assert app.typist.typed == ["in flight "]
+    # the handoff was consumed: later stray speech cannot ride it
+    app.handle_utterance("stray noise")
+    assert app.typist.typed == ["in flight "]
+
+
+def test_stale_injection_without_armed_handoff_stays_dropped() -> None:
+    """Losing the injection race to a transition that armed NO handoff
+    (cancel) must still drop the text."""
+    app = _grace_app()
+    version = app._state_version
+    app.cancel()  # off with no grace: everything in flight is discarded
+    app._type("late straggler", version)
+    assert app.typist.typed == []
+
+
+def test_stop_phrase_in_flight_is_dropped_not_typed() -> None:
+    """A trailing in-flight utterance that is exactly the stop phrase
+    was a deactivation attempt, not dictation: never type it."""
+    app = _grace_app()  # default stop_phrase = "stop listening"
+    app.toggle()  # off, grace armed
+    app.handle_utterance("Stop listening.")
+    assert app.typist.typed == []
+    # the grace was still consumed by that delivery
+    app.handle_utterance("later speech")
+    assert app.typist.typed == []
+
+
+# -- hotkey bindings degrade independently --------------------------------
+
+
+def test_invalid_optional_hotkey_keeps_toggle(monkeypatch) -> None:
+    pytest.importorskip("pynput")
+    import claude_code_tools.voice_type.hotkey as hotkey_mod
+    from claude_code_tools.voice_type.app import VoiceTypeApp
+
+    started: dict = {}
+
+    def fake_start_hotkeys(bindings):  # noqa: ANN001, ANN202
+        started["bindings"] = bindings
+        return SimpleNamespace(stop=lambda: None)
+
+    monkeypatch.setattr(hotkey_mod, "start_hotkeys", fake_start_hotkeys)
+    app = VoiceTypeApp(Config(
+        mode="toggle", sounds=False, overlay=False,
+        cancel_hotkey="escape", paste_hotkey="<cmd>+<ctrl>+v",
+    ))
+    assert app._start_hotkey_listener() is not None
+    chords = [b[0] for b in started["bindings"]]
+    # The malformed cancel chord is dropped; toggle and paste survive.
+    assert chords == ["<ctrl>+;", "<cmd>+<ctrl>+v"]

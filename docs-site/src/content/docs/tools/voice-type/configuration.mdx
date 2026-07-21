@@ -68,10 +68,12 @@ least immediate:
 3. **Whole-take** — `segmentation = "hold"`.
    Nothing appears while you speak (the waveform
    pill is your feedback); on toggle-off the entire
-   take is transcribed as one segment and typed as
-   one atomic paste. Maximum accuracy — the model
-   sees full sentence context — and one Cmd-Z undoes
-   it. Requires `toggle` mode, since the wake word
+   take is transcribed as one segment and typed in
+   one go. Maximum accuracy — the model sees full
+   sentence context — and most apps undo it as a
+   single edit (keystrokes are synthesized, so undo
+   grouping is up to the focused app).
+   Requires `toggle` mode, since the wake word
    can only be heard by continuous per-utterance
    transcription.
 
@@ -82,7 +84,7 @@ Wake and vad **modes** always use per-pause typing
 
 **Push-to-talk dictation (recommended daily driver).**
 No wake word involved at all; maximum accuracy; text
-lands as one paste you can undo with one Cmd-Z:
+lands in one go (a single edit to undo, in most apps):
 
 ```toml
 mode = "toggle"

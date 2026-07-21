@@ -43,6 +43,15 @@ class MoonshineEngine:
         self.cfg = cfg
         self._status = status
         self._transcriber = None
+        # Activation epoch: bumped by request_reset(). A line whose
+        # audio began (first partial text) under an older epoch is
+        # dropped when it completes — Moonshine's mic stream cannot be
+        # rewound, so this is how paused speech is kept out of a new
+        # dictation session.
+        self._epoch = 0
+        # Epoch at which the in-progress line started (None = no line
+        # in progress). Touched only on Moonshine's event thread.
+        self._line_epoch: int | None = None
 
     def start(
         self,
@@ -64,6 +73,7 @@ class MoonshineEngine:
             wanted_model_arch=wanted_arch,
         )
         status = self._status
+        engine = self
 
         def safe_status(msg: str) -> None:
             # The status callback itself may raise; nothing reported
@@ -84,6 +94,10 @@ class MoonshineEngine:
             """
 
             def on_line_text_changed(self, event) -> None:  # noqa: ANN001
+                if engine._line_epoch is None:
+                    # First partial text of a new line: stamp it with
+                    # the current activation epoch.
+                    engine._line_epoch = engine._epoch
                 try:
                     on_activity()
                 except Exception as e:
@@ -92,12 +106,25 @@ class MoonshineEngine:
                     )
 
             def on_line_completed(self, event) -> None:  # noqa: ANN001
+                line_epoch = engine._line_epoch
+                engine._line_epoch = None
                 line = getattr(event, "line", None)
                 text = getattr(line, "text", None)
                 if not isinstance(text, str):
                     return
                 text = text.strip()
                 if not text:
+                    return
+                if (
+                    line_epoch is not None
+                    and line_epoch != engine._epoch
+                ):
+                    # The line's audio began before the most recent
+                    # reset (toggle-on): stale paused speech must not
+                    # leak into the fresh dictation session.
+                    safe_status(
+                        f'dropped stale pre-activation line: "{text}"'
+                    )
                     return
                 try:
                     on_utterance(text)
@@ -119,7 +146,14 @@ class MoonshineEngine:
         """No-op: Moonshine's streaming VAD finalizes lines itself."""
 
     def request_reset(self) -> None:
-        """No-op: Moonshine manages its own stream state."""
+        """Invalidate any utterance already in progress.
+
+        Moonshine captures continuously and its stream cannot be
+        rewound, so the reset is an activation-epoch bump: a line whose
+        audio began before this call is discarded when it completes,
+        instead of being typed as if it were current dictation.
+        """
+        self._epoch += 1
 
     def stop(self) -> None:
         transcriber, self._transcriber = self._transcriber, None

@@ -1,11 +1,11 @@
 """Floating waveform pill: visible proof that voice-type is listening.
 
 A small always-on-top, click-through, non-activating macOS panel at the
-bottom-center of the screen. It scrolls a live waveform of the mic
-level: red waves while dictating, a dim flat line while paused or
-waiting for the wake word. Because the panel is a non-activating
-borderless NSPanel that ignores mouse events, it can never steal
-keyboard focus from the app being dictated into.
+bottom-center of the screen, shown ONLY while recording. It scrolls a
+live waveform of the mic level — red waves as you speak — and hides
+when paused or waiting for the wake word. Because the panel is a
+non-activating borderless NSPanel that ignores mouse events, it can
+never steal keyboard focus from the app being dictated into.
 
 Uses pyobjc (already a transitive dependency of pynput on macOS).
 The overlay must run on the process's MAIN thread (AppKit rule); the
