@@ -96,6 +96,20 @@ export default defineConfig({
             { label: "sasy-guard", slug: "tools/sasy-guard" },
             { label: "agent-tunnel", slug: "tools/agent-tunnel" },
             {
+              label: "voice-type",
+              collapsed: false,
+              items: [
+                {
+                  label: "Overview",
+                  slug: "tools/voice-type",
+                },
+                {
+                  label: "Configuration & CLI",
+                  slug: "tools/voice-type/configuration",
+                },
+              ],
+            },
+            {
               label: "codex-dynamic",
               collapsed: false,
               items: [

@@ -1,0 +1,256 @@
+---
+title: "voice-type: Configuration & CLI"
+description: >
+  Every voice-type config key, CLI flag, engine, and
+  hotkey — the complete reference.
+---
+
+Configuration lives at `~/.config/voice-type/config.toml`.
+
+**You never need CLI flags.** Every flag is just an
+override of a config key, so the intended workflow
+is: put your preferences in the config once, then
+your daily command is plain `voice-type` — flags
+exist for one-off experiments (e.g. trying another
+engine) and always win over the file. The config
+also holds keys that have *no* flag at all
+(`wake_word_aliases`, `submit_phrases`, sound names,
+`paste_hotkey`, `cancel_hotkey`, `copy_to_clipboard`,
+`parakeet_threads`, ...), so the file is the
+complete interface; the flags are a subset.
+
+```bash
+voice-type init          # write a fully commented sample config
+voice-type init --force  # overwrite an existing one
+```
+
+## The three independent axes
+
+Three settings combine to define how voice-type
+behaves, and they answer different questions:
+
+- **`mode`** — *when is it listening?*
+  `toggle`: only between two presses of the hotkey.
+  `wake`: always passively listening for the wake
+  word (hotkey works as an override).
+  `vad`: dictating from the moment it starts.
+- **`segmentation`** — *when does text appear?* See
+  ["When does the text appear?"](#when-does-the-text-appear)
+  below — this is the axis people mean when they ask
+  about "streaming" dictation.
+- **`engine`** — *what transcribes it?* Pure
+  speed/accuracy/platform trade-off; see the
+  [engine table](#engines) below. Any engine works
+  with any mode.
+
+## When does the text appear?
+
+Dictation tools differ in how *immediately* the
+transcript shows up. The spectrum, from most to
+least immediate:
+
+1. **Word-by-word streaming** (Apple-dictation
+   style: words materialize and self-correct as you
+   speak). voice-type deliberately does **not** do
+   this into your apps: revising already-typed text
+   in another application means blindly sending
+   backspaces into whatever has focus — one desync
+   and your document is mangled. Typed text should
+   be final.
+2. **Per-pause typing** — `segmentation = "vad"`.
+   Speak; roughly half a second after each natural
+   pause, that utterance is typed. This is the
+   closest voice-type comes to a streaming feel:
+   text flows in sentence-sized pieces while you
+   keep talking. Trade-off: the model transcribes
+   each fragment with only that fragment's context,
+   so accuracy is a notch lower.
+3. **Whole-take** — `segmentation = "hold"`.
+   Nothing appears while you speak (the waveform
+   pill is your feedback); on toggle-off the entire
+   take is transcribed as one segment and typed in
+   one go. Maximum accuracy — the model sees full
+   sentence context — and most apps undo it as a
+   single edit (keystrokes are synthesized, so undo
+   grouping is up to the focused app).
+   Requires `toggle` mode, since the wake word
+   can only be heard by continuous per-utterance
+   transcription.
+
+Wake and vad **modes** always use per-pause typing
+(2); toggle mode lets you pick between (2) and (3).
+
+## Common setups
+
+**Push-to-talk dictation (recommended daily driver).**
+No wake word involved at all; maximum accuracy; text
+lands in one go (a single edit to undo, in most apps):
+
+```toml
+mode = "toggle"
+segmentation = "hold"
+engine = "parakeet-mlx"
+```
+
+**Toggle with live feedback.** Same hotkey workflow,
+but text appears at every pause instead of at the
+end — useful when you want to see progress while
+dictating something long, at some cost in accuracy:
+
+```toml
+mode = "toggle"
+segmentation = "vad"
+engine = "parakeet-mlx"
+```
+
+**Hands-free with a wake word.** Say "hey claude
+..." to dictate, "stop listening" (or silence) to
+re-arm; the hotkey still toggles manually.
+Per-pause typing is inherent to this mode:
+
+```toml
+mode = "wake"
+engine = "parakeet-mlx"
+wake_word_aliases = ["hey cloud"]  # add what the model mishears
+```
+
+**Always-on transcription.** Types everything it
+hears while running — for captioning yourself or
+short bursts of use:
+
+```toml
+mode = "vad"
+engine = "parakeet-mlx"
+```
+
+## Engines
+
+Selected with `engine` / `--engine`. All run 100%
+on-device.
+
+| Engine | Runs on | Speed* | Notes |
+|--------|---------|--------|-------|
+| `parakeet-mlx` | Apple GPU (MLX) | ~40x realtime | **Recommended.** fp16 Parakeet-TDT v3: best accuracy and speed. Apple Silicon only; weights from HuggingFace on first run. Extra: `voice-mlx` |
+| `parakeet` | CPU (sherpa-onnx) | ~32x realtime | int8 Parakeet-TDT v3 (or fp16 v2 via `parakeet_model`); ~490 MB download. Extra: `voice-parakeet` |
+| `moonshine` | CPU (ONNX) | streaming | Moonshine streaming models; smallest footprint. Extra: `voice` |
+
+*measured on an M-series Mac; see `parakeet_threads`
+for CPU tuning.
+
+## Config reference
+
+```toml
+# ~/.config/voice-type/config.toml — all keys optional; these are defaults
+
+# Activation: "toggle" (hotkey), "vad" (hands-free), "wake" (wake word)
+mode = "toggle"
+
+# Engine: "moonshine" | "parakeet" | "parakeet-mlx"
+engine = "moonshine"
+
+# "vad" types each utterance when you pause; "hold" records everything
+# between toggle-on/off and transcribes the whole take at once
+# (parakeet engines + toggle mode only)
+segmentation = "vad"
+
+# parakeet (CPU) build: "v3-int8" | "v2-fp16"; and decode threads
+parakeet_model = "v3-int8"
+parakeet_threads = 4
+
+# parakeet-mlx model (HuggingFace id)
+mlx_model = "mlx-community/parakeet-tdt-0.6b-v3"
+
+# moonshine model: tiny | base | tiny-streaming | base-streaming |
+# small-streaming | medium-streaming
+model_arch = "medium-streaming"
+
+language = "en"
+
+# Hotkeys (pynput or bracket-less syntax; `voice-type hotkey` records one)
+hotkey = "<ctrl>+;"          # toggle recording
+cancel_hotkey = "<esc>"      # cancel recording (only intercepted WHILE recording)
+paste_hotkey = ""            # re-type last transcript, e.g. "<cmd>+<ctrl>+v"
+
+# Wake mode
+wake_word = "claude"
+wake_word_aliases = []       # misspellings the model produces, e.g. ["hey cloud"]
+stop_phrase = "stop listening"
+idle_timeout = 20.0          # seconds of silence before wake mode re-arms
+
+# Spoken submit: saying one of these as an ENTIRE utterance presses Enter
+submit_phrases = ["over", "go", "submit"]
+
+# Transcript cleanup: strip standalone fillers (uh, um, ...) and
+# collapse 3+ word stutters ("I I I think" -> "I think")
+strip_fillers = true
+
+trailing_space = true        # append a space after each typed utterance
+
+# Sounds: system-sound names (/System/Library/Sounds) or file paths
+sounds = true
+sound_start = "Glass"
+sound_stop = "Bottle"
+
+# Keep each session's text on the clipboard too
+copy_to_clipboard = false
+
+# Floating waveform pill while recording (macOS)
+overlay = true
+```
+
+## CLI
+
+```
+voice-type [flags]           run with config + flag overrides
+voice-type init [--force]    write the commented sample config
+voice-type hotkey            press a chord; prints the config line
+voice-type --help            full flag reference
+```
+
+Flags mirror the config keys: `--mode`, `--engine`,
+`--segmentation`, `--parakeet-model`, `--model-arch`,
+`--language`, `--hotkey`, `--wake-word`,
+`--stop-phrase`, `--no-sounds`, `--no-overlay`,
+`--config PATH`.
+
+## Hotkey notation
+
+Both spellings work everywhere a chord is accepted:
+
+```toml
+hotkey = "<ctrl>+;"          # pynput style
+hotkey = "ctrl+;"            # bracket-less
+hotkey = "cmd+shift+f5"      # named keys too
+```
+
+Easiest of all: run `voice-type hotkey`, press the
+combo you want, and paste the printed line into your
+config. On macOS matched chords are **fully
+suppressed** — the focused app never sees them — and
+context-dependent keys like `Esc` are only
+intercepted while recording.
+
+## macOS permissions
+
+Grant these to your **terminal app** (System
+Settings → Privacy & Security), once each:
+
+- **Microphone** — to hear you
+- **Accessibility** — to type into other apps
+- **Input Monitoring** — for the global hotkeys
+
+## Troubleshooting
+
+- Every utterance's fate is logged to the terminal
+  (`typed: ...`, `heard (awaiting wake word): ...`,
+  `dropped`, `decoded to empty text`) — nothing is
+  discarded silently. Read these lines first.
+- Wake word not firing? Check the `heard` lines for
+  how the model actually spelled it and add that to
+  `wake_word_aliases`; prefer a two-word phrase
+  ("hey claude") over a bare word.
+- Quiet dynamic mic (Shure MV7 class)? Automatic
+  gain control is built in; if speech still isn't
+  detected, move closer to the mic.
+- Dictated into the wrong window? Set `paste_hotkey`
+  and re-type the last session anywhere.
