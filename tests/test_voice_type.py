@@ -1229,3 +1229,44 @@ def test_cancel_noop_when_not_recording() -> None:
 
 def test_parse_esc_hotkey() -> None:
     assert parse_hotkey("<esc>") == (frozenset(), "<esc>")
+
+
+# -- hold delivery is tied to the stop request, not a clock ---------------
+
+
+def test_hold_take_delivered_no_matter_how_slow_decode() -> None:
+    pytest.importorskip("pynput")
+    from claude_code_tools.voice_type.app import VoiceTypeApp
+
+    app = VoiceTypeApp(Config(
+        mode="toggle", engine="parakeet", segmentation="hold",
+        sounds=False, overlay=False,
+    ))
+    app.typist = _CollectingTypist()
+    app._engine = _HoldEngine()
+    app.toggle()  # record
+    app._last_toggle = 0.0
+    app.toggle()  # stop -> decode begins
+    # simulate a decode far longer than any wall-clock grace
+    app._grace_until = 0.0
+    app.handle_utterance("a very long take finally decoded")
+    assert app.typist.typed == ["a very long take finally decoded "]
+    # delivered exactly once: later stray utterances are NOT committed
+    app.handle_utterance("stray noise")
+    assert app.typist.typed == ["a very long take finally decoded "]
+
+
+def test_cancel_clears_pending_hold_delivery() -> None:
+    pytest.importorskip("pynput")
+    from claude_code_tools.voice_type.app import VoiceTypeApp
+
+    app = VoiceTypeApp(Config(
+        mode="toggle", engine="parakeet", segmentation="hold",
+        sounds=False, overlay=False,
+    ))
+    app.typist = _CollectingTypist()
+    app._engine = _HoldEngine()
+    app.toggle()   # record
+    app.cancel()   # discard
+    app.handle_utterance("should never appear")
+    assert app.typist.typed == []

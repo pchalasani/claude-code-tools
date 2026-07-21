@@ -64,6 +64,10 @@ class VoiceTypeApp:
         self._effects_lock = threading.Lock()
         self._last_activity = time.monotonic()
         self._grace_until = 0.0
+        # Hold-mode handoff: True from toggle-off until the decoded
+        # take arrives (however long decoding takes) — delivery is tied
+        # to the stop request, never to a wall-clock window.
+        self._expect_hold = False
         self._last_toggle = 0.0
         self._engine = None
         # Text of the current/most recent dictation session, for the
@@ -141,9 +145,6 @@ class VoiceTypeApp:
     #: (speech finished just before the toggle) is still committed.
     TOGGLE_GRACE = 2.0
 
-    #: Grace after a hold-mode toggle-off: the whole take is decoded
-    #: before delivery, which can take a few seconds for long takes.
-    HOLD_GRACE = 10.0
 
     #: Ignore a second toggle within this window: macro keys (e.g. UHK)
     #: can re-fire the chord on hold, flipping the state twice for one
@@ -169,6 +170,28 @@ class VoiceTypeApp:
             if now - self._last_toggle < self.TOGGLE_DEBOUNCE:
                 return
             self._last_toggle = now
+            predicted_active = self._state == State.ACTIVE
+
+        engine = self._engine
+        hold = self.cfg.segmentation == "hold"
+        # Arm the handoff BEFORE the new state becomes visible, so an
+        # utterance delivered mid-transition can never fall in a gap:
+        # deactivation arms the grace/hold-delivery flags first;
+        # activation clears stale engine audio while still off.
+        if predicted_active:
+            with self._lock:
+                if hold:
+                    self._expect_hold = True
+                else:
+                    self._grace_until = now + self.TOGGLE_GRACE
+        else:
+            action = getattr(
+                engine,
+                "request_hold_start" if hold else "request_reset",
+                None,
+            )
+            if action is not None:
+                action()
 
         deactivating = {}
 
@@ -181,27 +204,23 @@ class VoiceTypeApp:
             )
 
         self._transition(compute)
-        engine = self._engine
-        hold = self.cfg.segmentation == "hold"
-        if deactivating.get("was_active"):
-            # Hold mode decodes the whole take on stop, so give its
-            # delivery a longer grace window than a mere VAD flush.
-            grace = self.HOLD_GRACE if hold else self.TOGGLE_GRACE
+        was_active = deactivating.get("was_active")
+        if was_active != predicted_active:
+            # A concurrent transition raced us between the prediction
+            # and the commit (debounce makes this rare). Disarm the
+            # possibly-wrong handoff; the winning transition owns it.
             with self._lock:
-                self._grace_until = time.monotonic() + grace
+                self._grace_until = 0.0
+                self._expect_hold = False
+            return
+        if was_active:
             action = getattr(
                 engine,
                 "request_hold_stop" if hold else "request_flush",
                 None,
             )
-        else:
-            action = getattr(
-                engine,
-                "request_hold_start" if hold else "request_reset",
-                None,
-            )
-        if action is not None:
-            action()
+            if action is not None:
+                action()
 
     def cancel(self) -> None:
         """Cancel-hotkey handler: discard the recording in progress.
@@ -215,12 +234,14 @@ class VoiceTypeApp:
             if self._state != State.ACTIVE:
                 return
             self._grace_until = 0.0
+            self._expect_hold = False
         reset = getattr(self._engine, "request_reset", None)
         if reset is not None:
             reset()
         self._set_state(self._off_state)
         with self._lock:
             self._grace_until = 0.0  # _set_state must not resurrect it
+            self._expect_hold = False
         self._status("recording cancelled (discarded)")
 
     def _is_recording(self) -> bool:
@@ -255,7 +276,13 @@ class VoiceTypeApp:
             self._last_activity = time.monotonic()
         if state in (State.PAUSED, State.PASSIVE):
             with self._lock:
-                in_grace = time.monotonic() < self._grace_until
+                in_grace = (
+                    self._expect_hold
+                    or time.monotonic() < self._grace_until
+                )
+                # A hold take is delivered exactly once per stop
+                # request, however long the decode took.
+                self._expect_hold = False
             if in_grace:
                 # In-flight speech from just before a toggle-off:
                 # commit it (the user said it while dictating).
