@@ -571,12 +571,20 @@ class VoiceTypeApp:
     def _start_hotkey_listener(self):  # noqa: ANN202
         """Start the global hotkey listener; invalid chords degrade.
 
+        Missing macOS permissions are reported LOUDLY first: a launch
+        context without Input Monitoring gets a dead event tap with no
+        error from the OS, which previously looked exactly like "the
+        hotkey just doesn't work".
+
         Each configured chord is validated independently, so one
         malformed OPTIONAL binding (paste/cancel) only disables itself
         — a typo in cancel_hotkey must never take the toggle hotkey
         (and with it all of toggle mode) down.
         """
-        from .hotkey import parse_hotkey, start_hotkeys
+        from .hotkey import check_permissions, parse_hotkey, start_hotkeys
+
+        for warning in check_permissions():
+            self._status(f"WARNING: {warning}")
 
         candidates: list[tuple[str, tuple]] = [
             ("toggle", (self.cfg.hotkey, self.toggle))

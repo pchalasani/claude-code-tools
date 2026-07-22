@@ -11,6 +11,7 @@ back to the observing ``GlobalHotKeys`` behavior.
 
 from __future__ import annotations
 
+import contextlib
 import sys
 import threading
 from typing import Callable
@@ -301,6 +302,54 @@ def record_hotkey(timeout: float = 15.0) -> str | None:
         listener_box["l"] = listener
         listener.join(timeout)
     return result.get("chord")
+
+
+def check_permissions() -> list[str]:
+    """Report missing macOS permissions that silently kill hotkeys.
+
+    macOS attributes keystroke access to the LAUNCH CONTEXT (the
+    terminal app — or tmux, when launched inside tmux), and a context
+    without Input Monitoring gets a dead event tap with no error: the
+    app looks healthy but hotkeys simply never fire. Observed in the
+    field when a rebuilt venv/new launch context lost the prior grant.
+
+    Returns human-readable warnings (empty when all is well) and asks
+    macOS to register/prompt for the missing access so the user can
+    grant it in System Settings.
+    """
+    if sys.platform != "darwin":
+        return []
+    warnings: list[str] = []
+    try:
+        import Quartz
+
+        if hasattr(Quartz, "CGPreflightListenEventAccess") and (
+            not Quartz.CGPreflightListenEventAccess()
+        ):
+            warnings.append(
+                "Input Monitoring permission MISSING for this launch "
+                "context — hotkeys will NOT work. Grant it in System "
+                "Settings > Privacy & Security > Input Monitoring "
+                "(to your terminal app, and to tmux if you launched "
+                "inside tmux), then restart voice-type."
+            )
+            with contextlib.suppress(Exception):
+                Quartz.CGRequestListenEventAccess()
+    except Exception:
+        pass
+    try:
+        from ApplicationServices import AXIsProcessTrusted
+
+        if not AXIsProcessTrusted():
+            warnings.append(
+                "Accessibility permission MISSING for this launch "
+                "context — typing into other apps will NOT work. "
+                "Grant it in System Settings > Privacy & Security > "
+                "Accessibility, then restart voice-type."
+            )
+    except Exception:
+        pass
+    return warnings
 
 
 def start_hotkeys(bindings: list[tuple]):  # noqa: ANN201

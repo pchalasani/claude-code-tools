@@ -164,7 +164,17 @@ def test_default_config_is_valid() -> None:
     Config().validate()
 
 
-def test_load_config_missing_default_uses_defaults(tmp_path: Path) -> None:
+def test_load_config_missing_default_uses_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Isolate from the developer's real ~/.config/voice-type/config.toml:
+    # the default path must be a missing file for this test to mean
+    # "missing config falls back to defaults".
+    import claude_code_tools.voice_type.config as config_mod
+
+    monkeypatch.setattr(
+        config_mod, "DEFAULT_CONFIG_PATH", tmp_path / "absent.toml"
+    )
     cfg = load_config(None, overrides={"mode": "wake"})
     assert cfg.mode == "wake"
     assert cfg.model_arch == "medium-streaming"
@@ -1551,3 +1561,12 @@ def test_invalid_optional_hotkey_keeps_toggle(monkeypatch) -> None:
     chords = [b[0] for b in started["bindings"]]
     # The malformed cancel chord is dropped; toggle and paste survive.
     assert chords == ["<ctrl>+;", "<cmd>+<ctrl>+v"]
+
+
+def test_check_permissions_returns_warning_list() -> None:
+    pytest.importorskip("pynput")
+    from claude_code_tools.voice_type.hotkey import check_permissions
+
+    warnings = check_permissions()
+    assert isinstance(warnings, list)
+    assert all(isinstance(w, str) and w for w in warnings)

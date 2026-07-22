@@ -44,6 +44,10 @@ voice-parakeet = [
 voice-mlx = [
     "pynput>=1.7.7",
     "parakeet-mlx>=0.5.0",
+    # Resolver guard: without it uv can backtrack through parakeet-mlx
+    # -> librosa -> numba to a 2021 llvmlite that cannot build on
+    # modern Python ("Cannot install on Python version 3.13...").
+    "numba>=0.61",
     # sherpa-onnx supplies the Silero VAD used for segmentation.
     "sherpa-onnx>=1.12.0,<1.13",
     "sherpa-onnx-core>=1.12.0,<1.13",
