@@ -194,3 +194,24 @@ class ParakeetMlxEngine(ParakeetEngine):
             return text.strip() if isinstance(text, str) else ""
         finally:
             tmp.unlink(missing_ok=True)
+            self._release_gpu_cache()
+
+    @staticmethod
+    def _release_gpu_cache() -> None:
+        """Release MLX's buffer cache after a decode.
+
+        MLX caches every GPU buffer size it has ever allocated and
+        never frees them on its own. In a long-running dictation
+        process decoding takes of many different lengths, the cache
+        grows without bound — observed at 49 GB of dirty IOAccelerator
+        memory after two days of use, driving system-wide memory
+        pressure and multi-second paging stalls. Decodes happen at
+        human cadence, so re-allocating per take costs nothing
+        noticeable (~0.15 s decodes measured either way).
+        """
+        try:
+            import mlx.core as mx
+
+            mx.clear_cache()
+        except Exception:
+            pass
