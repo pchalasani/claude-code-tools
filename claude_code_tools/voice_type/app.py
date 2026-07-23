@@ -15,7 +15,7 @@ from enum import Enum
 from typing import Callable
 
 from .config import Config
-from .inject import Typist, copy_to_clipboard, play_sound
+from .inject import SoundPlayer, Typist, copy_to_clipboard
 from .logic import (
     collapse_repeats,
     contains_phrase,
@@ -44,6 +44,9 @@ class VoiceTypeApp:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
         self.typist = Typist()
+        # Preload the chimes so the first one is instant and in sync
+        # with the overlay (afplay would lag ~100 ms behind the pill).
+        self._sound = SoundPlayer(cfg.sound_start, cfg.sound_stop)
         self._lock = threading.Lock()
         self._state = (
             State.ACTIVE
@@ -140,7 +143,7 @@ class VoiceTypeApp:
             if pre_msg is not None:
                 self._status(pre_msg)
             if self.cfg.sounds and State.ACTIVE in (old, new):
-                play_sound(
+                self._sound.play(
                     self.cfg.sound_start
                     if new == State.ACTIVE
                     else self.cfg.sound_stop
