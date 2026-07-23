@@ -303,6 +303,126 @@ def record_hotkey(timeout: float = 15.0) -> str | None:
     return result.get("chord")
 
 
+def check_permissions() -> list[str]:
+    """Report missing macOS permissions that silently kill hotkeys.
+
+    macOS attributes keystroke access to the LAUNCH CONTEXT (the
+    terminal app — or tmux, when launched inside tmux), and a context
+    without Input Monitoring gets a dead event tap with no error: the
+    app looks healthy but hotkeys simply never fire. Observed in the
+    field when a rebuilt venv/new launch context lost the prior grant.
+
+    Returns human-readable warnings (empty ONLY when every check ran
+    and every permission is granted — an unavailable module/symbol or
+    a probe that throws produces a "could not verify" warning instead
+    of silently passing) and asks macOS to register/prompt for the
+    missing access so the user can grant it in System Settings.
+    """
+    if sys.platform != "darwin":
+        return []
+    warnings: list[str] = []
+    warnings.extend(_check_input_monitoring())
+    warnings.extend(_check_accessibility())
+    return warnings
+
+
+def _check_input_monitoring() -> list[str]:
+    """Probe the Input Monitoring grant; never silently swallow failure."""
+    try:
+        import Quartz
+    except Exception as e:  # pragma: no cover - environment-specific
+        return [
+            "could not verify Input Monitoring permission (Quartz "
+            f"bridge unavailable: {e!r}) — hotkeys may silently not "
+            "work. Check that pyobjc is installed correctly."
+        ]
+    preflight = getattr(Quartz, "CGPreflightListenEventAccess", None)
+    if preflight is None:
+        return [
+            "could not verify Input Monitoring permission (this "
+            "macOS/pyobjc lacks CGPreflightListenEventAccess) — "
+            "hotkeys may silently not work."
+        ]
+    try:
+        granted = bool(preflight())
+    except Exception as e:
+        return [
+            "could not verify Input Monitoring permission (the "
+            f"CGPreflightListenEventAccess probe failed: {e!r}) — "
+            "hotkeys may silently not work."
+        ]
+    if granted:
+        return []
+    warnings = [
+        "Input Monitoring permission MISSING for this launch "
+        "context — hotkeys will NOT work. Grant it in System "
+        "Settings > Privacy & Security > Input Monitoring "
+        "(to your terminal app, and to tmux if you launched "
+        "inside tmux), then restart voice-type."
+    ]
+    # Nonfatal: registration just makes the app appear in System
+    # Settings so the user can flip the toggle — but a failure is
+    # still reported, never silently suppressed.
+    try:
+        Quartz.CGRequestListenEventAccess()
+    except Exception as e:
+        warnings.append(
+            "requesting Input Monitoring registration failed "
+            f"({e!r}); add your terminal app manually in System "
+            "Settings > Privacy & Security > Input Monitoring."
+        )
+    return warnings
+
+
+def _check_accessibility() -> list[str]:
+    """Probe the Accessibility grant; never silently swallow failure."""
+    try:
+        from ApplicationServices import AXIsProcessTrusted
+    except Exception as e:  # pragma: no cover - environment-specific
+        return [
+            "could not verify Accessibility permission "
+            f"(ApplicationServices bridge unavailable: {e!r}) — "
+            "typing into other apps may silently not work. Check "
+            "that pyobjc is installed correctly."
+        ]
+    try:
+        trusted = bool(AXIsProcessTrusted())
+    except Exception as e:
+        return [
+            "could not verify Accessibility permission (the "
+            f"AXIsProcessTrusted probe failed: {e!r}) — typing into "
+            "other apps may silently not work."
+        ]
+    if trusted:
+        return []
+    warnings = [
+        "Accessibility permission MISSING for this launch "
+        "context — typing into other apps will NOT work. "
+        "Grant it in System Settings > Privacy & Security > "
+        "Accessibility, then restart voice-type."
+    ]
+    # Nonfatal: the prompt request registers the app in System
+    # Settings (and may show the system grant dialog) so the user can
+    # flip the toggle — a failure is still reported, never silently
+    # suppressed.
+    try:
+        from ApplicationServices import (
+            AXIsProcessTrustedWithOptions,
+            kAXTrustedCheckOptionPrompt,
+        )
+
+        AXIsProcessTrustedWithOptions(
+            {kAXTrustedCheckOptionPrompt: True}
+        )
+    except Exception as e:
+        warnings.append(
+            "requesting Accessibility registration failed "
+            f"({e!r}); add your terminal app manually in System "
+            "Settings > Privacy & Security > Accessibility."
+        )
+    return warnings
+
+
 def start_hotkeys(bindings: list[tuple]):  # noqa: ANN201
     """Start one global listener for several chords; returns ``stop()``-able.
 

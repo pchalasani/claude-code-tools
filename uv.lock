@@ -443,7 +443,7 @@ wheels = [
 
 [[package]]
 name = "claude-code-tools"
-version = "1.19.0"
+version = "1.19.1"
 source = { editable = "." }
 dependencies = [
     { name = "claude-agent-sdk" },
@@ -474,6 +474,7 @@ voice = [
     { name = "pynput" },
 ]
 voice-mlx = [
+    { name = "numba" },
     { name = "numpy" },
     { name = "parakeet-mlx" },
     { name = "pynput" },
@@ -506,6 +507,7 @@ requires-dist = [
     { name = "google-auth-oauthlib", marker = "extra == 'gdocs'", specifier = ">=1.0.0" },
     { name = "mcp", specifier = ">=1.13.0" },
     { name = "moonshine-voice", marker = "extra == 'voice'", specifier = ">=0.0.69" },
+    { name = "numba", marker = "extra == 'voice-mlx'", specifier = ">=0.61" },
     { name = "numpy", marker = "extra == 'voice-mlx'", specifier = ">=1.26.0" },
     { name = "numpy", marker = "extra == 'voice-parakeet'", specifier = ">=1.26.0" },
     { name = "parakeet-mlx", marker = "extra == 'voice-mlx'", specifier = ">=0.5.0" },
