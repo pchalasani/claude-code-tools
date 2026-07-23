@@ -22,7 +22,7 @@ SampleFn = Callable[[], tuple[str, bool, float]]
 TickFn = Callable[[], None]
 
 _WIDTH = 210.0
-_HEIGHT = 230.0  # generous headroom so the halo never clips when moving
+_HEIGHT = 240.0  # generous headroom so the halo never clips when moving
 _MARGIN_BOTTOM = 110.0
 _TICK_SECONDS = 0.033  # ~30 fps
 # Master animation speed: small = slow, gentle, gradual motion.
@@ -42,8 +42,14 @@ def overlay_available() -> bool:
         return False
 
 
-def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> None:
-    """Show the pill and block until ``stopped()`` returns True.
+def run_overlay(  # noqa: PLR0913
+    sample: SampleFn,
+    tick: TickFn,
+    stopped: Callable[[], bool],
+    flex: float = 1.0,
+    speed: float = 1.0,
+) -> None:
+    """Show the ghost and block until ``stopped()`` returns True.
 
     Args:
         sample: Returns (state_label, is_recording, level) each frame.
@@ -51,6 +57,8 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
             checks); exceptions are swallowed so the UI never dies.
         stopped: Polled each frame; True ends the loop and closes the
             panel.
+        flex: Face shape-flex multiplier (config overlay_flex).
+        speed: Animation speed multiplier (config overlay_speed).
 
     SIGINT is redirected to a flag-friendly handler while the loop
     runs (AppKit's run loop would otherwise swallow Ctrl+C), and
@@ -127,9 +135,9 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
         """
         import math
 
-        rx = gw * (0.38 + 0.08 * open_)
-        ry = gw * (0.05 + 0.42 * open_)
-        cy = lip_y - ry * 0.7  # grows downward from the lip line
+        rx = gw * (0.36 + 0.08 * open_)
+        ry = gw * (0.05 + 0.34 * open_)
+        cy = lip_y - ry * 0.6  # grows downward from the lip line
         # Constrained flex: two gentle low harmonics at small amplitude
         # so the mouth has organic life without becoming a lumpy blob.
         # (It is also clipped to the face by the caller, so it can never
@@ -179,7 +187,7 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
             # gradually rather than twitching frame-to-frame.
             k = 0.4 if level > self.amp else 0.10
             self.amp += k * (level - self.amp)
-            self.phase += _PHASE_SPEED
+            self.phase += _PHASE_SPEED * speed
             self.frame_no += 1
             self.recording = bool(recording)
             self.setNeedsDisplay_(True)
@@ -189,7 +197,7 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
 
             b = self.bounds()
             cx, cy = b.size.width / 2, b.size.height / 2
-            gw = min(b.size.width, b.size.height) * 0.24
+            gw = min(b.size.width, b.size.height) * 0.22
             amp = self.amp
             ph = self.phase
 
@@ -215,9 +223,10 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
             t.translateXBy_yBy_(-dcx, -dcy)
             t.concat()
             try:
-                # Slow, small, spatially-coherent jelly flex so the head
-                # is non-rigid; a touch more when talking.
-                jelly = 1.6 + 2.4 * amp
+                # Slow, spatially-coherent jelly flex so the head is
+                # visibly non-rigid; more when talking, and scaled by the
+                # user's overlay_flex.
+                jelly = (2.6 + 5.0 * amp) * flex
 
                 # soft halo for presence (flexes WITH the body)
                 halo = _mk_ghost(dcx, dcy, gw * 1.10, jelly, ph)
@@ -273,7 +282,7 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
                         dcx + s * eye_dx, eye_y, eye_w, eye_h
                     ).fill()
                 _mk_oval(dcx, dcy + gw * 0.05, gw * 0.10, gw * 0.12).fill()
-                lip_y = dcy - gw * 0.30
+                lip_y = dcy - gw * 0.18
                 _mk_mouth(dcx, lip_y, gw, amp, ph).fill()
                 gc.restoreGraphicsState()
             finally:
