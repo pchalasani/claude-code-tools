@@ -21,14 +21,12 @@ from typing import Callable
 SampleFn = Callable[[], tuple[str, bool, float]]
 TickFn = Callable[[], None]
 
-_WIDTH = 460.0
-_HEIGHT = 92.0
-_MARGIN_BOTTOM = 110.0
-# Recent audio-level history (drives the local vibration envelope) and
-# the number of points the string is rendered with (smoothness).
-_HISTORY = 96
-_RENDER = 190
-_TICK_SECONDS = 0.033  # ~30 fps, smooth string motion
+_WIDTH = 200.0
+_HEIGHT = 150.0
+_MARGIN_BOTTOM = 120.0
+# Points around the blob's rim (smoothness) and frame rate.
+_BLOB_POINTS = 108
+_TICK_SECONDS = 0.033  # ~30 fps, smooth wobble
 
 
 def overlay_available() -> bool:
@@ -62,6 +60,7 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
         NSBackingStoreBuffered,
         NSBezierPath,
         NSColor,
+        NSGradient,
         NSMakeRect,
         NSPanel,
         NSScreen,
@@ -69,21 +68,21 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
     )
 
     class WaveView(AppKit.NSView):  # noqa: D401
-        """A translucent string that lies flat and vibrates with the voice.
+        """A glowing blue blob that wobbles and swells with the voice.
 
-        The line is pinned at both ends (like a plucked string) and its
-        oscillation amplitude tracks the live, gain-adjusted mic level:
-        silence reads as a near-flat line, speech makes it ripple. The
-        recent-level history modulates the amplitude ALONG the string
-        (and scrolls), so the shape reflects the actual audio rather
-        than a fixed animation.
+        A soft orb sits at the bottom of the screen: it breathes gently
+        in silence and, as the live gain-adjusted mic level rises, its
+        rim deforms (organic multi-harmonic wobble) and the whole blob
+        swells — so its shape reflects the actual audio. Bluish, with a
+        radial gradient core, a rim highlight, and an outer halo for
+        presence.
         """
 
         def initWithFrame_(self, frame):  # noqa: ANN001, ANN201, N802
             self = objc.super(WaveView, self).initWithFrame_(frame)
             if self is None:
                 return None
-            self.levels = [0.0] * _HISTORY
+            self.amp = 0.0  # smoothed audio level driving the wobble
             self.phase = 0.0
             self.recording = False
             return self
@@ -91,72 +90,74 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
         def push_(self, sample):  # noqa: ANN001, ANN201, N802
             _label, recording, level = sample
             level = max(0.0, min(1.0, float(level)))
-            # Mild smoothing so the string settles rather than jitters.
-            prev = self.levels[-1]
-            smoothed = prev + 0.5 * (level - prev)
-            self.levels = self.levels[1:] + [smoothed]
-            self.phase += 0.42  # advance the travelling wave each frame
+            # Fast attack, slow release: pops on speech, settles gently.
+            k = 0.55 if level > self.amp else 0.15
+            self.amp += k * (level - self.amp)
+            self.phase += 0.16
             self.recording = bool(recording)
             self.setNeedsDisplay_(True)
 
-        def _string_path(self, width, mid, max_amp):  # noqa: ANN001, ANN202
+        def _blob_path(self, cx, cy, base_r):  # noqa: ANN001, ANN202
             import math
 
             path = NSBezierPath.bezierPath()
-            path.setLineJoinStyle_(AppKit.NSLineJoinStyleRound)
-            path.setLineCapStyle_(AppKit.NSLineCapStyleRound)
-            n = len(self.levels)
-            for i in range(_RENDER + 1):
-                u = i / _RENDER  # 0..1 along the string
-                # local amplitude from the level history at this point
-                fpos = u * (n - 1)
-                lo = int(fpos)
-                frac = fpos - lo
-                lvl = self.levels[lo]
-                if lo + 1 < n:
-                    lvl += frac * (self.levels[lo + 1] - lvl)
-                window = math.sin(math.pi * u)  # pin both ends to flat
-                amp = lvl * max_amp * window
-                disp = amp * (
-                    math.sin(u * 7.0 * math.pi + self.phase)
-                    + 0.4 * math.sin(u * 13.0 * math.pi - 1.7 * self.phase)
-                ) / 1.4
-                x = u * width
-                y = mid + disp
+            wob = 0.09 + 0.42 * self.amp      # rim deformation depth
+            breathe = 0.05 * math.sin(self.phase * 0.5)
+            swell = 1.0 + 0.24 * self.amp     # overall growth with volume
+            for i in range(_BLOB_POINTS + 1):
+                a = 2.0 * math.pi * i / _BLOB_POINTS
+                shape = (
+                    math.sin(3 * a + self.phase)
+                    + 0.6 * math.sin(5 * a - 1.3 * self.phase)
+                    + 0.3 * math.sin(7 * a + 1.7 * self.phase)
+                ) / 1.9
+                r = base_r * swell * (1.0 + breathe + wob * shape)
+                x = cx + r * math.cos(a)
+                y = cy + r * math.sin(a)
                 if i == 0:
                     path.moveToPoint_((x, y))
                 else:
                     path.lineToPoint_((x, y))
+            path.closePath()
             return path
 
         def drawRect_(self, rect):  # noqa: ANN001, ANN201, N802
             b = self.bounds()
-            # Ultra-faint rounded backdrop: just enough to read the
-            # string over any wallpaper, without looking like a panel.
-            pad = 6.0
-            back = NSMakeRect(
-                pad, pad, b.size.width - 2 * pad, b.size.height - 2 * pad
-            )
-            r = back.size.height / 2
-            NSColor.colorWithCalibratedWhite_alpha_(0.0, 0.16).setFill()
-            NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-                back, r, r
-            ).fill()
+            cx, cy = b.size.width / 2, b.size.height / 2
+            base_r = min(b.size.width, b.size.height) * 0.26
 
-            mid = b.size.height / 2
-            max_amp = b.size.height / 2 - 16.0
-            path = self._string_path(b.size.width, mid, max_amp)
-            # soft glow behind, then the crisp translucent string
+            # outer halo for presence
+            halo = self._blob_path(cx, cy, base_r * 1.28)
             NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                1.0, 0.30, 0.26, 0.16
-            ).setStroke()
-            path.setLineWidth_(7.0)
-            path.stroke()
+                0.30, 0.62, 1.0, 0.20
+            ).setFill()
+            halo.fill()
+
+            # the blob: radial gradient core -> deeper blue rim
+            blob = self._blob_path(cx, cy, base_r)
+            core = NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                0.60, 0.85, 1.0, 0.85
+            )
+            edge = NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                0.16, 0.44, 0.98, 0.70
+            )
+            grad = NSGradient.alloc().initWithStartingColor_endingColor_(
+                core, edge
+            )
+            if grad is not None:
+                grad.drawInBezierPath_relativeCenterPosition_(
+                    blob, (0.0, 0.28)
+                )
+            else:  # pragma: no cover - gradient unavailable
+                edge.setFill()
+                blob.fill()
+
+            # bright rim
             NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                1.0, 0.42, 0.38, 0.55
+                0.75, 0.92, 1.0, 0.9
             ).setStroke()
-            path.setLineWidth_(2.0)
-            path.stroke()
+            blob.setLineWidth_(2.0)
+            blob.stroke()
 
     class Driver(AppKit.NSObject):
         """NSTimer target: samples audio, ticks the app, ends the loop.
