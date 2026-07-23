@@ -19,10 +19,21 @@ also holds keys that have *no* flag at all
 `parakeet_threads`, ...), so the file is the
 complete interface; the flags are a subset.
 
+Two ways to create that file:
+
 ```bash
-voice-type init          # write a fully commented sample config
-voice-type init --force  # overwrite an existing one
+voice-type setup         # interactive walkthrough — asks, then writes
+voice-type init          # write a fully commented sample to edit by hand
+voice-type init --force  # overwrite an existing sample
 ```
+
+`voice-type setup` is the quickest start: it asks a
+short series of explained questions (engine, mode,
+segmentation, hotkey, wake word, and optional extras),
+validates your choices, and writes a ready-to-use
+config — you can record the hotkey live during the
+walkthrough. `init` instead drops the fully commented
+template below for hand-editing.
 
 ## The three independent axes
 
