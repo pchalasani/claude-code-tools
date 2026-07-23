@@ -525,6 +525,25 @@ class ParakeetEngine:
         except Exception:
             pass
 
+    def _report_decode_time(self, audio_secs: float, elapsed: float) -> None:
+        """Log how long a decode took, and its speed vs. real time.
+
+        Makes latency visible per utterance: a healthy MLX/CPU decode
+        runs at many times real time, so a drop toward 1x (or below) is
+        an at-a-glance signal that something — memory pressure, thermal
+        throttling — is slowing transcription down.
+        """
+        if elapsed > 0:
+            self._report(
+                f"transcribed {audio_secs:.1f}s of audio in "
+                f"{elapsed:.2f}s ({audio_secs / elapsed:.0f}x realtime)"
+            )
+        else:
+            self._report(
+                f"transcribed {audio_secs:.1f}s of audio in "
+                f"{elapsed:.2f}s"
+            )
+
     def _safe_call(self, fn: Callable[[], None], name: str) -> None:
         """Invoke a client callback; never let its exception escape.
 
@@ -843,11 +862,13 @@ class ParakeetEngine:
         """
         secs = len(take) / SAMPLE_RATE
         self._report(f"transcribing {secs:.1f}s take...")
+        t0 = time.monotonic()
         try:
             text = self.transcribe(take, SAMPLE_RATE)
         except Exception as e:
             self._report(f"parakeet decode error: {e}")
             return
+        self._report_decode_time(secs, time.monotonic() - t0)
         if text:
             if self._closed.is_set():
                 return
@@ -949,11 +970,14 @@ class ParakeetEngine:
             self._vad.pop()
             if segment is None or segment.ndim != 1 or segment.size == 0:
                 continue
+            seg_secs = segment.size / SAMPLE_RATE
+            t0 = time.monotonic()
             try:
                 text = self.transcribe(segment, SAMPLE_RATE)
             except Exception as e:
                 self._report(f"parakeet decode error: {e}")
                 continue
+            self._report_decode_time(seg_secs, time.monotonic() - t0)
             if text:
                 self._safe_call(
                     lambda t=text: on_utterance(t), "on_utterance"
