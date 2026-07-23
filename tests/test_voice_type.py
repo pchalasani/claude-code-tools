@@ -1831,3 +1831,52 @@ def test_setup_wizard_cancel_leaves_no_file(monkeypatch, tmp_path) -> None:
     out = tmp_path / "c.toml"
     assert run_setup(config_path=out, force=True) == 1
     assert not out.exists()
+
+
+def test_setup_wizard_cancel_at_optional_prompt_keeps_file(
+    monkeypatch, tmp_path
+) -> None:
+    """Aborting an OPTIONAL prompt cancels — never overwrites a config."""
+    out = tmp_path / "c.toml"
+    out.write_text('engine = "moonshine"\n')  # pre-existing config
+    monkeypatch.setitem(
+        sys.modules,
+        "questionary",
+        _fake_questionary(
+            [
+                "parakeet-mlx",             # engine
+                "toggle",                   # mode
+                "hold",                     # segmentation
+                "Keep default (<ctrl>+;)",  # hotkey
+                None,                       # extras? -> CANCEL (Esc)
+            ]
+        ),
+    )
+    from claude_code_tools.voice_type.setup_wizard import run_setup
+
+    assert run_setup(config_path=out, force=True) == 1
+    assert out.read_text() == 'engine = "moonshine"\n'  # untouched
+
+
+def test_setup_config_flag_before_subcommand_preserved(
+    monkeypatch, tmp_path
+) -> None:
+    """`voice-type --config X setup` must target X, not the default."""
+    import claude_code_tools.voice_type.cli as cli_mod
+
+    target = tmp_path / "chosen.toml"
+    seen = {}
+
+    def _fake_run_setup(config_path=None, force=False):  # noqa: ANN001
+        seen["path"] = config_path
+        return 0
+
+    monkeypatch.setattr(
+        "claude_code_tools.voice_type.setup_wizard.run_setup",
+        _fake_run_setup,
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["voice-type", "--config", str(target), "setup"]
+    )
+    assert cli_mod.main() == 0
+    assert seen["path"] == target  # global --config survived the subparser

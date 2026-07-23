@@ -231,7 +231,12 @@ Accessibility (to type), Input Monitoring (global hotkeys).
         help="interactive walkthrough that writes your config",
     )
     p_setup.add_argument(
-        "--config", type=Path, default=None, help="destination path"
+        "--config",
+        type=Path,
+        # SUPPRESS so a --config given BEFORE the subcommand is not
+        # clobbered by the subparser's default (see the init parser).
+        default=argparse.SUPPRESS,
+        help="destination path",
     )
     p_setup.add_argument(
         "--force", action="store_true", help="overwrite existing config"

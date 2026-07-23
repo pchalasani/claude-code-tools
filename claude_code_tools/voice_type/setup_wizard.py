@@ -18,6 +18,24 @@ from .config import (
 )
 
 
+class _Cancelled(Exception):
+    """Raised when the user aborts a prompt (Ctrl-C / Esc)."""
+
+
+def _ask(prompt):  # noqa: ANN001, ANN202
+    """Return a prompt's answer, or raise ``_Cancelled`` if aborted.
+
+    questionary returns ``None`` when a prompt is cancelled; every
+    answer flows through here so an abort — at a required OR an optional
+    prompt — always cancels the whole wizard instead of being mistaken
+    for a "no"/default and writing a config anyway.
+    """
+    value = prompt.ask()
+    if value is None:
+        raise _Cancelled
+    return value
+
+
 def _toml_value(v: object) -> str:
     if isinstance(v, bool):
         return "true" if v else "false"
@@ -44,16 +62,14 @@ def _write_config(path: Path, answers: dict) -> None:
 
 def _ask_hotkey(q, label: str, default: str):  # noqa: ANN001, ANN202
     """Return a hotkey string via keep-default / record / type."""
-    how = q.select(
+    how = _ask(q.select(
         f"{label} hotkey:",
         choices=[
             f"Keep default ({default})",
             "Record one now (press the combo)",
             "Type it manually",
         ],
-    ).ask()
-    if how is None:
-        return None
+    ))
     if how.startswith("Keep"):
         return default
     if how.startswith("Record"):
@@ -78,11 +94,11 @@ def _ask_hotkey(q, label: str, default: str):  # noqa: ANN001, ANN202
         except ValueError as e:
             return str(e)
 
-    return q.text(
+    return _ask(q.text(
         'Hotkey (e.g. "<ctrl>+;" or "ctrl+;"):',
         default=default,
         validate=_valid,
-    ).ask()
+    ))
 
 
 def run_setup(config_path: Path | None = None, force: bool = False) -> int:
@@ -94,126 +110,114 @@ def run_setup(config_path: Path | None = None, force: bool = False) -> int:
         return 1
 
     path = config_path or DEFAULT_CONFIG_PATH
-    if path.exists() and not force:
-        if not q.confirm(
-            f"{path} exists — overwrite it?", default=False
-        ).ask():
-            print("setup cancelled.")
-            return 1
-
-    print("voice-type setup — a few questions, then you're ready.\n")
     ans: dict = {}
+    try:
+        if path.exists() and not force:
+            if not _ask(
+                q.confirm(f"{path} exists — overwrite it?", default=False)
+            ):
+                print("setup cancelled.")
+                return 1
 
-    engine = q.select(
-        "Transcription engine:",
-        choices=[
-            q.Choice(
-                "parakeet-mlx — best accuracy + speed (Apple GPU; "
-                "needs the voice-mlx extra)",
-                value="parakeet-mlx",
-            ),
-            q.Choice(
-                "parakeet — Parakeet on CPU (needs voice-parakeet)",
-                value="parakeet",
-            ),
-            q.Choice(
-                "moonshine — small streaming models (needs voice)",
-                value="moonshine",
-            ),
-        ],
-    ).ask()
-    if engine is None:
-        return 1
-    ans["engine"] = engine
-    is_parakeet = engine in ("parakeet", "parakeet-mlx")
+        print("voice-type setup — a few questions, then you're ready.\n")
 
-    if engine == "parakeet":
-        pm = q.select(
-            "Parakeet build:",
-            choices=[
-                q.Choice("v3-int8 — multilingual, ~490 MB", "v3-int8"),
-                q.Choice("v2-fp16 — English, higher precision", "v2-fp16"),
-            ],
-        ).ask()
-        if pm is None:
-            return 1
-        ans["parakeet_model"] = pm
-    elif engine == "moonshine":
-        arch = q.select(
-            "Moonshine model:",
-            choices=list(VALID_MODEL_ARCHS),
-            default="medium-streaming",
-        ).ask()
-        if arch is None:
-            return 1
-        ans["model_arch"] = arch
-
-    mode = q.select(
-        "How should dictation activate?",
-        choices=[
-            q.Choice("toggle — a hotkey starts/stops", "toggle"),
-            q.Choice("wake — say a wake word (hands-free)", "wake"),
-            q.Choice("vad — always on while running", "vad"),
-        ],
-    ).ask()
-    if mode is None:
-        return 1
-    ans["mode"] = mode
-
-    if mode == "toggle" and is_parakeet:
-        seg = q.select(
-            "When should the text appear?",
+        engine = _ask(q.select(
+            "Transcription engine:",
             choices=[
                 q.Choice(
-                    "hold — whole take on toggle-off (most accurate)",
-                    "hold",
+                    "parakeet-mlx — best accuracy + speed (Apple GPU; "
+                    "needs the voice-mlx extra)",
+                    value="parakeet-mlx",
                 ),
-                q.Choice("vad — each utterance when you pause", "vad"),
+                q.Choice(
+                    "parakeet — Parakeet on CPU (needs voice-parakeet)",
+                    value="parakeet",
+                ),
+                q.Choice(
+                    "moonshine — small streaming models (needs voice)",
+                    value="moonshine",
+                ),
             ],
-        ).ask()
-        if seg is None:
-            return 1
-        ans["segmentation"] = seg
+        ))
+        ans["engine"] = engine
+        is_parakeet = engine in ("parakeet", "parakeet-mlx")
 
-    hotkey = _ask_hotkey(q, "Toggle-recording", "<ctrl>+;")
-    if hotkey is None:
-        return 1
-    ans["hotkey"] = hotkey
+        if engine == "parakeet":
+            ans["parakeet_model"] = _ask(q.select(
+                "Parakeet build:",
+                choices=[
+                    q.Choice("v3-int8 — multilingual, ~490 MB", "v3-int8"),
+                    q.Choice(
+                        "v2-fp16 — English, higher precision", "v2-fp16"
+                    ),
+                ],
+            ))
+        elif engine == "moonshine":
+            ans["model_arch"] = _ask(q.select(
+                "Moonshine model:",
+                choices=list(VALID_MODEL_ARCHS),
+                default="medium-streaming",
+            ))
 
-    if mode == "wake":
-        word = q.text("Wake word:", default="claude").ask()
-        if word is None:
-            return 1
-        ans["wake_word"] = word.strip() or "claude"
-        aliases = q.text(
-            "Wake-word aliases the model mishears "
-            "(comma-separated, optional):",
-            default="",
-        ).ask()
-        if aliases:
-            ans["wake_word_aliases"] = [
-                a.strip() for a in aliases.split(",") if a.strip()
-            ]
+        mode = _ask(q.select(
+            "How should dictation activate?",
+            choices=[
+                q.Choice("toggle — a hotkey starts/stops", "toggle"),
+                q.Choice("wake — say a wake word (hands-free)", "wake"),
+                q.Choice("vad — always on while running", "vad"),
+            ],
+        ))
+        ans["mode"] = mode
 
-    if q.confirm(
-        "Configure extras (sounds, clipboard rescue, ghost)?",
-        default=False,
-    ).ask():
-        ans["sounds"] = q.confirm(
-            "Play start/stop chimes?", default=True
-        ).ask()
-        if q.confirm(
-            "Add a hotkey to re-type the last transcript "
-            "(wrong-window rescue)?",
+        if mode == "toggle" and is_parakeet:
+            ans["segmentation"] = _ask(q.select(
+                "When should the text appear?",
+                choices=[
+                    q.Choice(
+                        "hold — whole take on toggle-off (most accurate)",
+                        "hold",
+                    ),
+                    q.Choice("vad — each utterance when you pause", "vad"),
+                ],
+            ))
+
+        ans["hotkey"] = _ask_hotkey(q, "Toggle-recording", "<ctrl>+;")
+
+        if mode == "wake":
+            word = _ask(q.text("Wake word:", default="claude"))
+            ans["wake_word"] = word.strip() or "claude"
+            aliases = _ask(q.text(
+                "Wake-word aliases the model mishears "
+                "(comma-separated, optional):",
+                default="",
+            ))
+            if aliases.strip():
+                ans["wake_word_aliases"] = [
+                    a.strip() for a in aliases.split(",") if a.strip()
+                ]
+
+        if _ask(q.confirm(
+            "Configure extras (sounds, clipboard rescue, ghost)?",
             default=False,
-        ).ask():
-            paste = _ask_hotkey(q, "Paste-again", "<cmd>+<ctrl>+v")
-            if paste:
-                ans["paste_hotkey"] = paste
+        )):
+            ans["sounds"] = _ask(
+                q.confirm("Play start/stop chimes?", default=True)
+            )
+            if _ask(q.confirm(
+                "Add a hotkey to re-type the last transcript "
+                "(wrong-window rescue)?",
+                default=False,
+            )):
+                ans["paste_hotkey"] = _ask_hotkey(
+                    q, "Paste-again", "<cmd>+<ctrl>+v"
+                )
                 ans["copy_to_clipboard"] = True
-        ans["overlay"] = q.confirm(
-            "Show the floating ghost while recording?", default=True
-        ).ask()
+            ans["overlay"] = _ask(q.confirm(
+                "Show the floating ghost while recording?", default=True
+            ))
+    except _Cancelled:
+        print("\nsetup cancelled — nothing written.")
+        return 1
 
     # Validate the combination before writing.
     try:
