@@ -1151,3 +1151,16 @@ def test_autogain_output_is_finite_and_clipped_for_hostile_input() -> None:
         out = agc.process(hostile)
         assert np.isfinite(out).all()
         assert np.abs(out).max() <= 1.0
+
+
+def test_report_decode_time_formats(monkeypatch) -> None:
+    pytest.importorskip("sherpa_onnx")
+    from claude_code_tools.voice_type.config import Config
+    from claude_code_tools.voice_type.engine_parakeet import ParakeetEngine
+
+    msgs: list[str] = []
+    eng = ParakeetEngine(Config(engine="parakeet"), msgs.append)
+    eng._report_decode_time(4.0, 0.2)
+    assert msgs[-1] == "transcribed 4.0s of audio in 0.20s (20x realtime)"
+    eng._report_decode_time(1.0, 0.0)  # never divides by zero
+    assert msgs[-1] == "transcribed 1.0s of audio in 0.00s"
