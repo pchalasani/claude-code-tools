@@ -1563,10 +1563,45 @@ def test_invalid_optional_hotkey_keeps_toggle(monkeypatch) -> None:
     assert chords == ["<ctrl>+;", "<cmd>+<ctrl>+v"]
 
 
-def test_check_permissions_returns_warning_list() -> None:
-    pytest.importorskip("pynput")
-    from claude_code_tools.voice_type.hotkey import check_permissions
+def test_check_permissions_non_darwin_is_empty(monkeypatch) -> None:
+    """Off macOS the preflight is a no-op (and touches no OS APIs)."""
+    from claude_code_tools.voice_type import hotkey as hotkey_mod
 
-    warnings = check_permissions()
-    assert isinstance(warnings, list)
-    assert all(isinstance(w, str) and w for w in warnings)
+    monkeypatch.setattr(hotkey_mod.sys, "platform", "linux")
+    assert hotkey_mod.check_permissions() == []
+
+
+def test_check_permissions_reports_missing_grants(monkeypatch) -> None:
+    """Missing grants produce warnings — via STUBBED macOS APIs only.
+
+    The real CGRequestListenEventAccess can open a blocking system
+    privacy prompt, so the test injects fake Quartz/ApplicationServices
+    modules instead of ever invoking the genuine preflight.
+    """
+    from claude_code_tools.voice_type import hotkey as hotkey_mod
+
+    monkeypatch.setattr(hotkey_mod.sys, "platform", "darwin")
+    requested = {"n": 0}
+    fake_quartz = types.SimpleNamespace(
+        CGPreflightListenEventAccess=lambda: False,
+        CGRequestListenEventAccess=lambda: requested.__setitem__(
+            "n", requested["n"] + 1
+        ),
+    )
+    fake_appserv = types.SimpleNamespace(
+        AXIsProcessTrusted=lambda: False
+    )
+    monkeypatch.setitem(sys.modules, "Quartz", fake_quartz)
+    monkeypatch.setitem(
+        sys.modules, "ApplicationServices", fake_appserv
+    )
+    warnings = hotkey_mod.check_permissions()
+    assert len(warnings) == 2
+    assert "Input Monitoring" in warnings[0]
+    assert "Accessibility" in warnings[1]
+    assert requested["n"] == 1  # registration was requested
+
+    # granted context: no warnings
+    fake_quartz.CGPreflightListenEventAccess = lambda: True
+    fake_appserv.AXIsProcessTrusted = lambda: True
+    assert hotkey_mod.check_permissions() == []
