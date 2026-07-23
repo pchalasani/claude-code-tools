@@ -21,12 +21,13 @@ from typing import Callable
 SampleFn = Callable[[], tuple[str, bool, float]]
 TickFn = Callable[[], None]
 
-_WIDTH = 200.0
-_HEIGHT = 150.0
+_WIDTH = 184.0
+_HEIGHT = 184.0
 _MARGIN_BOTTOM = 120.0
-# Points around the blob's rim (smoothness) and frame rate.
-_BLOB_POINTS = 108
-_TICK_SECONDS = 0.033  # ~30 fps, smooth wobble
+_TICK_SECONDS = 0.033  # ~30 fps
+# Idle blink: every ~_BLINK_EVERY frames the eyes close for a few.
+_BLINK_EVERY = 108
+_BLINK_FRAMES = 5
 
 
 def overlay_available() -> bool:
@@ -67,97 +68,126 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
         NSTimer,
     )
 
-    class WaveView(AppKit.NSView):  # noqa: D401
-        """A glowing blue blob that wobbles and swells with the voice.
+    # Plain helpers (NOT NSView methods — pyobjc would try to bridge
+    # underscored methods as selectors and reject the extra arguments).
+    def _mk_oval(cx, cy, w, h):  # noqa: ANN001, ANN202
+        return NSBezierPath.bezierPathWithOvalInRect_(
+            NSMakeRect(cx - w / 2, cy - h / 2, w, h)
+        )
 
-        A soft orb sits at the bottom of the screen: it breathes gently
-        in silence and, as the live gain-adjusted mic level rises, its
-        rim deforms (organic multi-harmonic wobble) and the whole blob
-        swells — so its shape reflects the actual audio. Bluish, with a
-        radial gradient core, a rim highlight, and an outer halo for
-        presence.
+    def _mk_ghost(cx, cy, gw, bob):  # noqa: ANN001, ANN202
+        """Classic ghost silhouette: domed head, wavy hem."""
+        import math
+
+        p = NSBezierPath.bezierPath()
+        dome_y = cy + gw * 0.55 + bob
+        hem_y = cy - gw * 0.95 + bob
+        p.moveToPoint_((cx + gw, hem_y))
+        p.lineToPoint_((cx + gw, dome_y))
+        p.appendBezierPathWithArcWithCenter_radius_startAngle_endAngle_(
+            (cx, dome_y), gw, 0, 180
+        )
+        p.lineToPoint_((cx - gw, hem_y))
+        segs, bumps, ha = 36, 3, gw * 0.16
+        for i in range(1, segs + 1):
+            u = i / segs
+            x = cx - gw + u * 2 * gw
+            y = hem_y - ha * math.sin(u * math.pi * bumps)
+            p.lineToPoint_((x, y))
+        p.closePath()
+        return p
+
+    class WaveView(AppKit.NSView):  # noqa: D401
+        """A little glowing-blue ghost whose mouth opens with your voice.
+
+        A friendly translucent ghost floats at the bottom of the screen:
+        it bobs and blinks on its own so it feels alive, and its mouth
+        opens wider the louder you speak (driven by the live,
+        gain-adjusted mic level) -- the Animoji-style talking face that
+        makes the tool fun to use.
         """
 
         def initWithFrame_(self, frame):  # noqa: ANN001, ANN201, N802
             self = objc.super(WaveView, self).initWithFrame_(frame)
             if self is None:
                 return None
-            self.amp = 0.0  # smoothed audio level driving the wobble
+            self.amp = 0.0  # smoothed level -> mouth opening
             self.phase = 0.0
+            self.frame_no = 0
             self.recording = False
             return self
 
         def push_(self, sample):  # noqa: ANN001, ANN201, N802
             _label, recording, level = sample
             level = max(0.0, min(1.0, float(level)))
-            # Fast attack, slow release: pops on speech, settles gently.
-            k = 0.55 if level > self.amp else 0.15
+            # Fast attack, slow release: the mouth pops open on speech
+            # and eases shut.
+            k = 0.6 if level > self.amp else 0.18
             self.amp += k * (level - self.amp)
             self.phase += 0.16
+            self.frame_no += 1
             self.recording = bool(recording)
             self.setNeedsDisplay_(True)
 
-        def _blob_path(self, cx, cy, base_r):  # noqa: ANN001, ANN202
+        def drawRect_(self, rect):  # noqa: ANN001, ANN201, N802
             import math
 
-            path = NSBezierPath.bezierPath()
-            wob = 0.09 + 0.42 * self.amp      # rim deformation depth
-            breathe = 0.05 * math.sin(self.phase * 0.5)
-            swell = 1.0 + 0.24 * self.amp     # overall growth with volume
-            for i in range(_BLOB_POINTS + 1):
-                a = 2.0 * math.pi * i / _BLOB_POINTS
-                shape = (
-                    math.sin(3 * a + self.phase)
-                    + 0.6 * math.sin(5 * a - 1.3 * self.phase)
-                    + 0.3 * math.sin(7 * a + 1.7 * self.phase)
-                ) / 1.9
-                r = base_r * swell * (1.0 + breathe + wob * shape)
-                x = cx + r * math.cos(a)
-                y = cy + r * math.sin(a)
-                if i == 0:
-                    path.moveToPoint_((x, y))
-                else:
-                    path.lineToPoint_((x, y))
-            path.closePath()
-            return path
-
-        def drawRect_(self, rect):  # noqa: ANN001, ANN201, N802
             b = self.bounds()
             cx, cy = b.size.width / 2, b.size.height / 2
-            base_r = min(b.size.width, b.size.height) * 0.26
+            gw = min(b.size.width, b.size.height) * 0.30
+            bob = 3.0 * math.sin(self.phase * 0.5)  # gentle float
 
-            # outer halo for presence
-            halo = self._blob_path(cx, cy, base_r * 1.28)
+            # soft halo for presence
+            halo = _mk_ghost(cx, cy, gw * 1.12, bob)
             NSColor.colorWithCalibratedRed_green_blue_alpha_(
                 0.30, 0.62, 1.0, 0.20
             ).setFill()
             halo.fill()
 
-            # the blob: radial gradient core -> deeper blue rim
-            blob = self._blob_path(cx, cy, base_r)
+            # body: bluish radial gradient + bright rim
+            body = _mk_ghost(cx, cy, gw, bob)
             core = NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                0.60, 0.85, 1.0, 0.85
+                0.62, 0.86, 1.0, 0.88
             )
             edge = NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                0.16, 0.44, 0.98, 0.70
+                0.16, 0.44, 0.98, 0.74
             )
             grad = NSGradient.alloc().initWithStartingColor_endingColor_(
                 core, edge
             )
             if grad is not None:
                 grad.drawInBezierPath_relativeCenterPosition_(
-                    blob, (0.0, 0.28)
+                    body, (0.0, 0.35)
                 )
-            else:  # pragma: no cover - gradient unavailable
+            else:  # pragma: no cover
                 edge.setFill()
-                blob.fill()
-
-            # bright rim
+                body.fill()
             NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                0.75, 0.92, 1.0, 0.9
+                0.80, 0.94, 1.0, 0.9
             ).setStroke()
-            blob.setLineWidth_(2.0)
-            blob.stroke()
+            body.setLineWidth_(2.0)
+            body.stroke()
+
+            # --- face (dark, translucent "holes" like the ghost emoji) ---
+            dark = NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                0.05, 0.10, 0.26, 0.9
+            )
+            dark.setFill()
+            eye_y = cy + gw * 0.45 + bob
+            eye_dx = gw * 0.42
+            blinking = (self.frame_no % _BLINK_EVERY) < _BLINK_FRAMES
+            eye_w = gw * 0.26
+            eye_h = gw * 0.06 if blinking else gw * 0.36
+            for sx in (-1, 1):
+                _mk_oval(cx + sx * eye_dx, eye_y, eye_w, eye_h).fill()
+            # tiny nose
+            _mk_oval(cx, cy + gw * 0.05 + bob, gw * 0.10, gw * 0.12).fill()
+            # mouth: opens with volume (a small line at rest -> wide oval)
+            mouth_h = gw * (0.08 + 0.80 * self.amp)
+            mouth_w = gw * (0.34 + 0.18 * self.amp)
+            _mk_oval(
+                cx, cy - gw * 0.42 + bob, mouth_w, mouth_h
+            ).fill()
 
     class Driver(AppKit.NSObject):
         """NSTimer target: samples audio, ticks the app, ends the loop.
