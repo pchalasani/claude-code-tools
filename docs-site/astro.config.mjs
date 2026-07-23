@@ -4,6 +4,12 @@ import starlight from "@astrojs/starlight";
 export default defineConfig({
   site: "https://pchalasani.github.io",
   base: "/claude-code-tools",
+  redirects: {
+    // voice-type was renamed to the standalone voxtype package
+    "/tools/voice-type": "/claude-code-tools/tools/voxtype/",
+    "/tools/voice-type/configuration":
+      "/claude-code-tools/tools/voxtype/configuration/",
+  },
   legacy: { collections: true },
   integrations: [
     starlight({
@@ -96,16 +102,16 @@ export default defineConfig({
             { label: "sasy-guard", slug: "tools/sasy-guard" },
             { label: "agent-tunnel", slug: "tools/agent-tunnel" },
             {
-              label: "voice-type",
+              label: "voxtype",
               collapsed: false,
               items: [
                 {
                   label: "Overview",
-                  slug: "tools/voice-type",
+                  slug: "tools/voxtype",
                 },
                 {
                   label: "Configuration & CLI",
-                  slug: "tools/voice-type/configuration",
+                  slug: "tools/voxtype/configuration",
                 },
               ],
             },

@@ -1,4 +1,4 @@
-"""The voice-type runtime: mic transcription -> state machine -> keystrokes.
+"""The voxtype runtime: mic transcription -> state machine -> keystrokes.
 
 Wires Moonshine's ``MicTranscriber`` (streaming transcription with built-in
 voice activity detection) to a small activation state machine and the
@@ -637,4 +637,4 @@ class VoiceTypeApp:
 
     @staticmethod
     def _status(msg: str) -> None:
-        print(f"[voice-type] {msg}", file=sys.stderr, flush=True)
+        print(f"[voxtype] {msg}", file=sys.stderr, flush=True)

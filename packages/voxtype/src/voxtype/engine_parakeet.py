@@ -3,7 +3,7 @@
 Pipeline: sounddevice mic capture -> Silero VAD (segments utterances on
 silence) -> sherpa-onnx offline transducer decode of each segment. Both
 models run fully on-device; files are auto-downloaded on first use from
-the k2-fsa/sherpa-onnx release assets into ``~/.cache/voice-type/``.
+the k2-fsa/sherpa-onnx release assets into ``~/.cache/voxtype/``.
 
 Requires the ``voice-parakeet`` extra (sherpa-onnx, sounddevice, numpy).
 """
@@ -26,7 +26,14 @@ from typing import Any, Callable, Iterator
 from .config import Config
 from .engines import StatusFn
 
-CACHE_DIR = Path.home() / ".cache" / "voice-type"
+# Prefer the legacy voice-type cache when it exists so users upgrading
+# from claude-code-tools don't re-download ~0.5-1 GB of models.
+_LEGACY_CACHE_DIR = Path.home() / ".cache" / "voice-type"
+CACHE_DIR = (
+    _LEGACY_CACHE_DIR
+    if _LEGACY_CACHE_DIR.is_dir()
+    else Path.home() / ".cache" / "voxtype"
+)
 _RELEASE = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models"
 # Parakeet builds published by k2-fsa (keys match config.parakeet_model).
 MODELS = {

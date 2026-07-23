@@ -5,6 +5,12 @@ resolution-markers = [
     "python_full_version >= '3.13'",
 ]
 
+[manifest]
+members = [
+    "claude-code-tools",
+    "voxtype",
+]
+
 [[package]]
 name = "aiohappyeyeballs"
 version = "2.6.2"
@@ -443,7 +449,7 @@ wheels = [
 
 [[package]]
 name = "claude-code-tools"
-version = "1.19.7"
+version = "1.19.8"
 source = { editable = "." }
 dependencies = [
     { name = "claude-agent-sdk" },
@@ -470,24 +476,13 @@ gdocs = [
     { name = "pillow" },
 ]
 voice = [
-    { name = "moonshine-voice" },
-    { name = "pynput" },
+    { name = "voxtype" },
 ]
 voice-mlx = [
-    { name = "numba" },
-    { name = "numpy" },
-    { name = "parakeet-mlx" },
-    { name = "pynput" },
-    { name = "sherpa-onnx" },
-    { name = "sherpa-onnx-core" },
-    { name = "sounddevice" },
+    { name = "voxtype", extra = ["mlx"] },
 ]
 voice-parakeet = [
-    { name = "numpy" },
-    { name = "pynput" },
-    { name = "sherpa-onnx" },
-    { name = "sherpa-onnx-core" },
-    { name = "sounddevice" },
+    { name = "voxtype", extra = ["parakeet"] },
 ]
 
 [package.dev-dependencies]
@@ -506,27 +501,16 @@ requires-dist = [
     { name = "google-api-python-client", marker = "extra == 'gdocs'", specifier = ">=2.0.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'gdocs'", specifier = ">=1.0.0" },
     { name = "mcp", specifier = ">=1.13.0" },
-    { name = "moonshine-voice", marker = "extra == 'voice'", specifier = ">=0.0.69" },
-    { name = "numba", marker = "extra == 'voice-mlx'", specifier = ">=0.61" },
-    { name = "numpy", marker = "extra == 'voice-mlx'", specifier = ">=1.26.0" },
-    { name = "numpy", marker = "extra == 'voice-parakeet'", specifier = ">=1.26.0" },
-    { name = "parakeet-mlx", marker = "extra == 'voice-mlx'", specifier = ">=0.5.0" },
     { name = "pillow", marker = "extra == 'gdocs'", specifier = ">=10.0.0" },
-    { name = "pynput", marker = "extra == 'voice'", specifier = ">=1.7.7" },
-    { name = "pynput", marker = "extra == 'voice-mlx'", specifier = ">=1.7.7" },
-    { name = "pynput", marker = "extra == 'voice-parakeet'", specifier = ">=1.7.7" },
     { name = "pytest", specifier = ">=9.0.1" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "questionary", specifier = ">=2.0.0" },
     { name = "rich", specifier = ">=13.0.0" },
-    { name = "sherpa-onnx", marker = "extra == 'voice-mlx'", specifier = ">=1.12.0,<1.13" },
-    { name = "sherpa-onnx", marker = "extra == 'voice-parakeet'", specifier = ">=1.12.0,<1.13" },
-    { name = "sherpa-onnx-core", marker = "extra == 'voice-mlx'", specifier = ">=1.12.0,<1.13" },
-    { name = "sherpa-onnx-core", marker = "extra == 'voice-parakeet'", specifier = ">=1.12.0,<1.13" },
-    { name = "sounddevice", marker = "extra == 'voice-mlx'", specifier = ">=0.5.0" },
-    { name = "sounddevice", marker = "extra == 'voice-parakeet'", specifier = ">=0.5.0" },
     { name = "tantivy", specifier = ">=0.22.0" },
     { name = "tqdm", specifier = ">=4.67.1" },
+    { name = "voxtype", marker = "extra == 'voice'", editable = "packages/voxtype" },
+    { name = "voxtype", extras = ["mlx"], marker = "extra == 'voice-mlx'", editable = "packages/voxtype" },
+    { name = "voxtype", extras = ["parakeet"], marker = "extra == 'voice-parakeet'", editable = "packages/voxtype" },
 ]
 
 [package.metadata.requires-dev]
@@ -2869,6 +2853,47 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5e/42/e0e305207bb88c6b8d3061399c6a961ffe5fbb7e2aa63c9234df7259e9cd/uvicorn-0.35.0.tar.gz", hash = "sha256:bc662f087f7cf2ce11a1d7fd70b90c9f98ef2e2831556dd078d131b96cc94a01", size = 78473 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d2/e2/dc81b1bd1dcfe91735810265e9d26bc8ec5da45b4c0f6237e286819194c3/uvicorn-0.35.0-py3-none-any.whl", hash = "sha256:197535216b25ff9b785e29a0b79199f55222193d47f820816e7da751e9bc8d4a", size = 66406 },
+]
+
+[[package]]
+name = "voxtype"
+version = "0.1.0"
+source = { editable = "packages/voxtype" }
+dependencies = [
+    { name = "moonshine-voice" },
+    { name = "pynput" },
+]
+
+[package.optional-dependencies]
+mlx = [
+    { name = "numba" },
+    { name = "numpy" },
+    { name = "parakeet-mlx" },
+    { name = "sherpa-onnx" },
+    { name = "sherpa-onnx-core" },
+    { name = "sounddevice" },
+]
+parakeet = [
+    { name = "numpy" },
+    { name = "sherpa-onnx" },
+    { name = "sherpa-onnx-core" },
+    { name = "sounddevice" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "moonshine-voice", specifier = ">=0.0.69" },
+    { name = "numba", marker = "extra == 'mlx'", specifier = ">=0.61" },
+    { name = "numpy", marker = "extra == 'mlx'", specifier = ">=1.26.0" },
+    { name = "numpy", marker = "extra == 'parakeet'", specifier = ">=1.26.0" },
+    { name = "parakeet-mlx", marker = "extra == 'mlx'", specifier = ">=0.5.0" },
+    { name = "pynput", specifier = ">=1.7.7" },
+    { name = "sherpa-onnx", marker = "extra == 'mlx'", specifier = ">=1.12.0,<1.13" },
+    { name = "sherpa-onnx", marker = "extra == 'parakeet'", specifier = ">=1.12.0,<1.13" },
+    { name = "sherpa-onnx-core", marker = "extra == 'mlx'", specifier = ">=1.12.0,<1.13" },
+    { name = "sherpa-onnx-core", marker = "extra == 'parakeet'", specifier = ">=1.12.0,<1.13" },
+    { name = "sounddevice", marker = "extra == 'mlx'", specifier = ">=0.5.0" },
+    { name = "sounddevice", marker = "extra == 'parakeet'", specifier = ">=0.5.0" },
 ]
 
 [[package]]

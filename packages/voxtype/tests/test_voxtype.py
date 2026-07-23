@@ -1,7 +1,7 @@
-"""Tests for voice-type: config, logic, app state machine, CLI, moonshine.
+"""Tests for voxtype: config, logic, app state machine, CLI, moonshine.
 
 Parakeet engine tests (model install + capture loop) live in
-test_voice_type_engines.py.
+test_voxtype_engines.py.
 """
 
 from __future__ import annotations
@@ -14,14 +14,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_code_tools.voice_type.config import (
+from voxtype.config import (
     Config,
     load_config,
     sample_config,
     write_sample_config,
 )
-from claude_code_tools.voice_type.hotkey import parse_hotkey
-from claude_code_tools.voice_type.logic import (
+from voxtype.hotkey import parse_hotkey
+from voxtype.logic import (
     contains_phrase,
     is_exact_phrase,
     normalize_words,
@@ -144,7 +144,7 @@ def test_parse_hotkey_rejects_unsupported_named_keys(bad: str) -> None:
 def test_every_named_key_has_a_mac_virtual_keycode() -> None:
     """Every documented named key must be suppressible on macOS: a
     gap would make an advertised chord leak into the focused app."""
-    from claude_code_tools.voice_type.hotkey import (
+    from voxtype.hotkey import (
         _NAMED_KEYS,
         _NAMED_VKS,
         _resolve_vk,
@@ -167,10 +167,10 @@ def test_default_config_is_valid() -> None:
 def test_load_config_missing_default_uses_defaults(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Isolate from the developer's real ~/.config/voice-type/config.toml:
+    # Isolate from the developer's real ~/.config/voxtype/config.toml:
     # the default path must be a missing file for this test to mean
     # "missing config falls back to defaults".
-    import claude_code_tools.voice_type.config as config_mod
+    import voxtype.config as config_mod
 
     monkeypatch.setattr(
         config_mod, "DEFAULT_CONFIG_PATH", tmp_path / "absent.toml"
@@ -230,7 +230,7 @@ def test_write_sample_config_refuses_overwrite(tmp_path: Path) -> None:
     with pytest.raises(FileExistsError):
         write_sample_config(path)
     write_sample_config(path, force=True)  # --force succeeds
-    assert "voice-type configuration" in sample_config()
+    assert "voxtype configuration" in sample_config()
 
 
 @pytest.mark.parametrize(
@@ -305,7 +305,7 @@ class FakeClock:
 @pytest.fixture
 def app_factory(monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
     """Build a VoiceTypeApp with a recording typist and a fake clock."""
-    import claude_code_tools.voice_type.app as app_mod
+    import voxtype.app as app_mod
 
     def make(**kw):  # noqa: ANN003, ANN202
         kw.setdefault("sounds", False)
@@ -521,7 +521,7 @@ def test_app_concurrent_toggle_off_commits_utterance_exactly_once(
     so it must be typed (toggle-off means "commit what I said") — once,
     consuming the handoff so later stray speech cannot ride it.
     """
-    import claude_code_tools.voice_type.app as app_mod
+    import voxtype.app as app_mod
 
     app, _ = app_factory(mode="vad")
     reached = threading.Event()
@@ -556,7 +556,7 @@ def test_app_concurrent_toggle_off_still_submits_in_flight_enter(
 ) -> None:  # noqa: ANN001
     """A submit phrase losing the injection race to a toggle-off is the
     in-flight utterance that toggle's grace authorizes: Enter fires."""
-    import claude_code_tools.voice_type.app as app_mod
+    import voxtype.app as app_mod
 
     app, _ = app_factory(mode="vad")
     orig = app_mod.is_exact_phrase
@@ -583,7 +583,7 @@ def test_app_wake_remainder_rides_handoff_when_toggled_off_meanwhile(
 ) -> None:  # noqa: ANN001
     """The wake remainder losing its injection race to a toggle-off is
     committed via that toggle's armed grace handoff, exactly once."""
-    import claude_code_tools.voice_type.app as app_mod
+    import voxtype.app as app_mod
 
     app, _ = app_factory(mode="wake")
 
@@ -603,7 +603,7 @@ def test_app_idle_timeout_effects_suppressed_by_concurrent_toggle(
     """A toggle landing between the idle PASSIVE commit and its
     sound/status must suppress the stale idle effects: the last
     reported status reflects the actual (ACTIVE) state."""
-    import claude_code_tools.voice_type.app as app_mod
+    import voxtype.app as app_mod
 
     app, clock = app_factory(mode="wake", idle_timeout=20.0)
     app.handle_utterance("claude")  # wake word alone: activate
@@ -692,8 +692,8 @@ class FakeEngine:
 
 
 def _lifecycle_app(monkeypatch, engine, sleep=None):  # noqa: ANN001, ANN202
-    import claude_code_tools.voice_type.app as app_mod
-    import claude_code_tools.voice_type.engines as engines_mod
+    import voxtype.app as app_mod
+    import voxtype.engines as engines_mod
 
     monkeypatch.setattr(app_mod, "Typist", RecordingTypist)
     monkeypatch.setattr(
@@ -742,8 +742,8 @@ def test_app_run_returns_1_on_engine_start_runtime_error(monkeypatch) -> None:
 def test_app_run_returns_1_when_engine_construction_fails(
     monkeypatch, capsys
 ) -> None:  # noqa: ANN001
-    import claude_code_tools.voice_type.app as app_mod
-    import claude_code_tools.voice_type.engines as engines_mod
+    import voxtype.app as app_mod
+    import voxtype.engines as engines_mod
 
     monkeypatch.setattr(app_mod, "Typist", RecordingTypist)
 
@@ -771,8 +771,8 @@ def test_app_run_stops_hotkeys_even_if_engine_stop_raises(monkeypatch) -> None:
 
 
 def _run_cli(monkeypatch, tmp_path, app_cls, extra_args=()):  # noqa: ANN001, ANN202
-    import claude_code_tools.voice_type.app as app_mod
-    from claude_code_tools.voice_type.cli import main
+    import voxtype.app as app_mod
+    from voxtype.cli import main
 
     cfg_path = tmp_path / "config.toml"
     cfg_path.write_text("")  # defaults only, isolated from ~/.config
@@ -780,7 +780,7 @@ def _run_cli(monkeypatch, tmp_path, app_cls, extra_args=()):  # noqa: ANN001, AN
     monkeypatch.setattr(
         sys,
         "argv",
-        ["voice-type", "--config", str(cfg_path), *extra_args],
+        ["voxtype", "--config", str(cfg_path), *extra_args],
     )
     return main()
 
@@ -887,7 +887,7 @@ def _start_moonshine(  # noqa: ANN202
     )
     monkeypatch.setitem(sys.modules, "moonshine_voice.transcriber", tr)
 
-    from claude_code_tools.voice_type.engines import MoonshineEngine
+    from voxtype.engines import MoonshineEngine
 
     FakeMicTranscriber.instances.clear()
     statuses: list[str] = []
@@ -1011,7 +1011,7 @@ class _CollectingTypist:
 
 def _grace_app():
     pytest.importorskip("pynput")
-    from claude_code_tools.voice_type.app import VoiceTypeApp
+    from voxtype.app import VoiceTypeApp
 
     app = VoiceTypeApp(Config(mode="vad", sounds=False))
     app.typist = _CollectingTypist()
@@ -1053,7 +1053,7 @@ def test_submit_phrase_in_grace_presses_enter() -> None:
 
 
 def test_toggle_debounce_ignores_rapid_second_press() -> None:
-    from claude_code_tools.voice_type.app import State
+    from voxtype.app import State
 
     app = _grace_app()
     app.toggle()  # ACTIVE -> PAUSED
@@ -1066,7 +1066,7 @@ def test_toggle_debounce_ignores_rapid_second_press() -> None:
 
 def test_wake_word_alias_matches() -> None:
     pytest.importorskip("pynput")
-    from claude_code_tools.voice_type.app import State, VoiceTypeApp
+    from voxtype.app import State, VoiceTypeApp
 
     app = VoiceTypeApp(Config(
         mode="wake", sounds=False,
@@ -1113,7 +1113,7 @@ def test_parakeet_model_validation() -> None:
 
 def test_hold_toggle_uses_hold_requests_and_grace() -> None:
     pytest.importorskip("pynput")
-    from claude_code_tools.voice_type.app import VoiceTypeApp
+    from voxtype.app import VoiceTypeApp
 
     app = VoiceTypeApp(Config(
         mode="toggle", engine="parakeet", segmentation="hold",
@@ -1160,7 +1160,7 @@ def test_mlx_engine_config() -> None:
 
 
 def test_collapse_repeats() -> None:
-    from claude_code_tools.voice_type.logic import collapse_repeats
+    from voxtype.logic import collapse_repeats
 
     assert collapse_repeats("I I I think this is good") == (
         "I think this is good"
@@ -1177,7 +1177,7 @@ def test_collapse_repeats() -> None:
 
 
 def test_fillers_then_repeats_compose() -> None:
-    from claude_code_tools.voice_type.logic import (
+    from voxtype.logic import (
         collapse_repeats,
         strip_fillers,
     )
@@ -1212,7 +1212,7 @@ def test_parse_paste_hotkey_chord() -> None:
 
 def test_session_buffer_and_paste_last() -> None:
     pytest.importorskip("pynput")
-    from claude_code_tools.voice_type.app import VoiceTypeApp
+    from voxtype.app import VoiceTypeApp
 
     app = VoiceTypeApp(Config(mode="vad", sounds=False, overlay=False))
     app.typist = _CollectingTypist()
@@ -1235,7 +1235,7 @@ def test_session_buffer_and_paste_last() -> None:
 
 def test_paste_last_empty_session() -> None:
     pytest.importorskip("pynput")
-    from claude_code_tools.voice_type.app import VoiceTypeApp
+    from voxtype.app import VoiceTypeApp
 
     app = VoiceTypeApp(Config(mode="toggle", sounds=False, overlay=False))
     app.typist = _CollectingTypist()
@@ -1248,7 +1248,7 @@ def test_paste_last_empty_session() -> None:
 
 def test_cancel_discards_recording() -> None:
     pytest.importorskip("pynput")
-    from claude_code_tools.voice_type.app import State, VoiceTypeApp
+    from voxtype.app import State, VoiceTypeApp
 
     app = VoiceTypeApp(Config(
         mode="toggle", engine="parakeet", segmentation="hold",
@@ -1267,7 +1267,7 @@ def test_cancel_discards_recording() -> None:
 
 def test_cancel_noop_when_not_recording() -> None:
     pytest.importorskip("pynput")
-    from claude_code_tools.voice_type.app import State, VoiceTypeApp
+    from voxtype.app import State, VoiceTypeApp
 
     app = VoiceTypeApp(Config(mode="toggle", sounds=False, overlay=False))
     app.typist = _CollectingTypist()
@@ -1286,7 +1286,7 @@ def test_parse_esc_hotkey() -> None:
 
 def test_hold_take_delivered_no_matter_how_slow_decode() -> None:
     pytest.importorskip("pynput")
-    from claude_code_tools.voice_type.app import VoiceTypeApp
+    from voxtype.app import VoiceTypeApp
 
     app = VoiceTypeApp(Config(
         mode="toggle", engine="parakeet", segmentation="hold",
@@ -1313,7 +1313,7 @@ def test_two_outstanding_hold_stops_both_deliver() -> None:
     must not consume the authorization for the second stop request.
     """
     pytest.importorskip("pynput")
-    from claude_code_tools.voice_type.app import VoiceTypeApp
+    from voxtype.app import VoiceTypeApp
 
     app = VoiceTypeApp(Config(
         mode="toggle", engine="parakeet", segmentation="hold",
@@ -1340,7 +1340,7 @@ def test_two_outstanding_hold_stops_both_deliver() -> None:
 
 def test_cancel_clears_pending_hold_delivery() -> None:
     pytest.importorskip("pynput")
-    from claude_code_tools.voice_type.app import VoiceTypeApp
+    from voxtype.app import VoiceTypeApp
 
     app = VoiceTypeApp(Config(
         mode="toggle", engine="parakeet", segmentation="hold",
@@ -1408,23 +1408,23 @@ def test_validate_rejects_bad_overlay_and_mlx_model(
 
 
 def test_cli_init_config_before_subcommand(monkeypatch, tmp_path) -> None:
-    """`voice-type --config X init` must write X, not the default path."""
-    from claude_code_tools.voice_type.cli import main
+    """`voxtype --config X init` must write X, not the default path."""
+    from voxtype.cli import main
 
     dest = tmp_path / "wanted.toml"
     monkeypatch.setattr(
-        sys, "argv", ["voice-type", "--config", str(dest), "init"]
+        sys, "argv", ["voxtype", "--config", str(dest), "init"]
     )
     assert main() == 0
     assert dest.exists()
 
 
 def test_cli_init_config_after_subcommand(monkeypatch, tmp_path) -> None:
-    from claude_code_tools.voice_type.cli import main
+    from voxtype.cli import main
 
     dest = tmp_path / "after.toml"
     monkeypatch.setattr(
-        sys, "argv", ["voice-type", "init", "--config", str(dest)]
+        sys, "argv", ["voxtype", "init", "--config", str(dest)]
     )
     assert main() == 0
     assert dest.exists()
@@ -1434,10 +1434,10 @@ def test_cli_hotkey_missing_dependency_hint(
     monkeypatch, capsys
 ) -> None:
     """The lazy pynput import inside record_hotkey() must be guarded."""
-    from claude_code_tools.voice_type.cli import main
+    from voxtype.cli import main
 
     monkeypatch.setitem(sys.modules, "pynput", None)  # import -> error
-    monkeypatch.setattr(sys, "argv", ["voice-type", "hotkey"])
+    monkeypatch.setattr(sys, "argv", ["voxtype", "hotkey"])
     assert main() == 1
     err = capsys.readouterr().err
     assert "uv tool install" in err
@@ -1475,7 +1475,7 @@ def test_cancel_deactivates_before_engine_reset() -> None:
     """The state must be off (version bumped) BEFORE the async engine
     reset is requested, so nothing in flight can type after cancel."""
     pytest.importorskip("pynput")
-    from claude_code_tools.voice_type.app import State, VoiceTypeApp
+    from voxtype.app import State, VoiceTypeApp
 
     app = VoiceTypeApp(Config(mode="vad", sounds=False, overlay=False))
     app.typist = _CollectingTypist()
@@ -1542,8 +1542,8 @@ def test_stop_phrase_in_flight_is_dropped_not_typed() -> None:
 
 
 def test_invalid_optional_hotkey_keeps_toggle(monkeypatch) -> None:
-    import claude_code_tools.voice_type.app as app_mod
-    import claude_code_tools.voice_type.hotkey as hotkey_mod
+    import voxtype.app as app_mod
+    import voxtype.hotkey as hotkey_mod
 
     monkeypatch.setattr(app_mod, "Typist", RecordingTypist)
     started: dict = {}
@@ -1568,7 +1568,7 @@ def test_invalid_optional_hotkey_keeps_toggle(monkeypatch) -> None:
 
 def test_check_permissions_non_darwin_is_empty(monkeypatch) -> None:
     """Off macOS the preflight is a no-op (and touches no OS APIs)."""
-    from claude_code_tools.voice_type import hotkey as hotkey_mod
+    from voxtype import hotkey as hotkey_mod
 
     monkeypatch.setattr(hotkey_mod.sys, "platform", "linux")
     assert hotkey_mod.check_permissions() == []
@@ -1581,7 +1581,7 @@ def test_check_permissions_reports_missing_grants(monkeypatch) -> None:
     privacy prompt, so the test injects fake Quartz/ApplicationServices
     modules instead of ever invoking the genuine preflight.
     """
-    from claude_code_tools.voice_type import hotkey as hotkey_mod
+    from voxtype import hotkey as hotkey_mod
 
     monkeypatch.setattr(hotkey_mod.sys, "platform", "darwin")
     requested = {"n": 0}
@@ -1622,7 +1622,7 @@ def test_check_permissions_reports_missing_grants(monkeypatch) -> None:
 def test_check_permissions_reports_unverifiable_probes(monkeypatch) -> None:
     """Failed or unavailable probes yield 'could not verify' warnings
     instead of silently reporting that all is well."""
-    from claude_code_tools.voice_type import hotkey as hotkey_mod
+    from voxtype import hotkey as hotkey_mod
 
     monkeypatch.setattr(hotkey_mod.sys, "platform", "darwin")
 
@@ -1690,8 +1690,8 @@ def test_startup_emits_permission_warnings_before_hotkeys(
     Hermetic: check_permissions/start_hotkeys are replaced and Typist
     is stubbed, so no real pynput/Quartz backend is ever imported.
     """
-    import claude_code_tools.voice_type.app as app_mod
-    import claude_code_tools.voice_type.hotkey as hotkey_mod
+    import voxtype.app as app_mod
+    import voxtype.hotkey as hotkey_mod
 
     monkeypatch.setattr(app_mod, "Typist", RecordingTypist)
     events: list[str] = []
@@ -1720,7 +1720,7 @@ def test_startup_emits_permission_warnings_before_hotkeys(
 
 def test_sound_player_constructs_and_plays_safely() -> None:
     """SoundPlayer must never raise, even for bogus/empty sounds."""
-    from claude_code_tools.voice_type.inject import SoundPlayer
+    from voxtype.inject import SoundPlayer
 
     player = SoundPlayer("Glass", "Bottle", "")
     player.play("Glass")          # real system sound (or afplay fallback)
@@ -1761,7 +1761,7 @@ def _fake_questionary(script):
 
 
 def test_toml_value_serialization() -> None:
-    from claude_code_tools.voice_type.setup_wizard import _toml_value
+    from voxtype.setup_wizard import _toml_value
 
     assert _toml_value(True) == "true"
     assert _toml_value("<ctrl>+;") == '"<ctrl>+;"'
@@ -1783,8 +1783,8 @@ def test_setup_wizard_writes_valid_config(monkeypatch, tmp_path) -> None:
             ]
         ),
     )
-    from claude_code_tools.voice_type.config import load_config
-    from claude_code_tools.voice_type.setup_wizard import run_setup
+    from voxtype.config import load_config
+    from voxtype.setup_wizard import run_setup
 
     out = tmp_path / "c.toml"
     assert run_setup(config_path=out, force=True) == 0
@@ -1812,8 +1812,8 @@ def test_setup_wizard_wake_mode(monkeypatch, tmp_path) -> None:
             ]
         ),
     )
-    from claude_code_tools.voice_type.config import load_config
-    from claude_code_tools.voice_type.setup_wizard import run_setup
+    from voxtype.config import load_config
+    from voxtype.setup_wizard import run_setup
 
     out = tmp_path / "c.toml"
     assert run_setup(config_path=out, force=True) == 0
@@ -1826,7 +1826,7 @@ def test_setup_wizard_cancel_leaves_no_file(monkeypatch, tmp_path) -> None:
     monkeypatch.setitem(
         sys.modules, "questionary", _fake_questionary([None])  # engine=None
     )
-    from claude_code_tools.voice_type.setup_wizard import run_setup
+    from voxtype.setup_wizard import run_setup
 
     out = tmp_path / "c.toml"
     assert run_setup(config_path=out, force=True) == 1
@@ -1852,7 +1852,7 @@ def test_setup_wizard_cancel_at_optional_prompt_keeps_file(
             ]
         ),
     )
-    from claude_code_tools.voice_type.setup_wizard import run_setup
+    from voxtype.setup_wizard import run_setup
 
     assert run_setup(config_path=out, force=True) == 1
     assert out.read_text() == 'engine = "moonshine"\n'  # untouched
@@ -1861,8 +1861,8 @@ def test_setup_wizard_cancel_at_optional_prompt_keeps_file(
 def test_setup_config_flag_before_subcommand_preserved(
     monkeypatch, tmp_path
 ) -> None:
-    """`voice-type --config X setup` must target X, not the default."""
-    import claude_code_tools.voice_type.cli as cli_mod
+    """`voxtype --config X setup` must target X, not the default."""
+    import voxtype.cli as cli_mod
 
     target = tmp_path / "chosen.toml"
     seen = {}
@@ -1872,11 +1872,11 @@ def test_setup_config_flag_before_subcommand_preserved(
         return 0
 
     monkeypatch.setattr(
-        "claude_code_tools.voice_type.setup_wizard.run_setup",
+        "voxtype.setup_wizard.run_setup",
         _fake_run_setup,
     )
     monkeypatch.setattr(
-        sys, "argv", ["voice-type", "--config", str(target), "setup"]
+        sys, "argv", ["voxtype", "--config", str(target), "setup"]
     )
     assert cli_mod.main() == 0
     assert seen["path"] == target  # global --config survived the subparser
@@ -1890,7 +1890,7 @@ def test_toml_value_escapes_control_chars() -> None:
     """
     import tomllib
 
-    from claude_code_tools.voice_type.setup_wizard import _toml_value
+    from voxtype.setup_wizard import _toml_value
 
     value = "line1\nline2\ttab\rreturn\x00nul"
     rendered = _toml_value(value)
@@ -1902,7 +1902,7 @@ def test_setup_wizard_rejects_unsupported_recorded_hotkey(
 ) -> None:
     """A recorded chord that ``parse_hotkey`` can't accept is refused,
     falling through to manual entry instead of being written blindly."""
-    import claude_code_tools.voice_type.hotkey as hotkey_mod
+    import voxtype.hotkey as hotkey_mod
 
     monkeypatch.setattr(
         hotkey_mod, "record_hotkey", lambda *a, **k: "<caps_lock>"
@@ -1921,8 +1921,8 @@ def test_setup_wizard_rejects_unsupported_recorded_hotkey(
             ]
         ),
     )
-    from claude_code_tools.voice_type.config import load_config
-    from claude_code_tools.voice_type.setup_wizard import run_setup
+    from voxtype.config import load_config
+    from voxtype.setup_wizard import run_setup
 
     out = tmp_path / "c.toml"
     assert run_setup(config_path=out, force=True) == 0
@@ -1940,7 +1940,7 @@ def test_setup_wizard_atomic_write_preserves_existing_on_failure(
     An fsync failure must leave the pre-existing file byte-for-byte
     intact and leave no temporary litter behind.
     """
-    import claude_code_tools.voice_type.setup_wizard as sw
+    import voxtype.setup_wizard as sw
 
     out = tmp_path / "c.toml"
     out.write_text('engine = "moonshine"\n')

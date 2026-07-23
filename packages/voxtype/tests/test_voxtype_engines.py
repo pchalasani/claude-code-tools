@@ -18,14 +18,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_code_tools.voice_type.config import Config
+from voxtype.config import Config
 
 
 # -- parakeet model install ----------------------------------------------
 
 
 def _make_archive(dest: Path, files, content: bytes = b"model-bytes") -> None:
-    import claude_code_tools.voice_type.engine_parakeet as ep
+    import voxtype.engine_parakeet as ep
 
     with tarfile.open(dest, "w:bz2") as tf:
         for name in files:
@@ -36,7 +36,7 @@ def _make_archive(dest: Path, files, content: bytes = b"model-bytes") -> None:
 
 @pytest.fixture
 def parakeet_cache(monkeypatch, tmp_path):  # noqa: ANN001, ANN201
-    import claude_code_tools.voice_type.engine_parakeet as ep
+    import voxtype.engine_parakeet as ep
 
     monkeypatch.setattr(ep, "CACHE_DIR", tmp_path)
     return ep, tmp_path
@@ -208,7 +208,7 @@ def test_extract_archive_fallback_rejects_traversal(
     monkeypatch, tmp_path
 ) -> None:
     """The no-filter fallback refuses path-traversal archive members."""
-    import claude_code_tools.voice_type.engine_parakeet as ep
+    import voxtype.engine_parakeet as ep
 
     monkeypatch.delattr(tarfile, "data_filter", raising=False)
     archive = tmp_path / "evil.tar.bz2"
@@ -227,7 +227,7 @@ def test_extract_archive_fallback_rejects_links(
     monkeypatch, tmp_path
 ) -> None:
     """The no-filter fallback refuses symlink members outright."""
-    import claude_code_tools.voice_type.engine_parakeet as ep
+    import voxtype.engine_parakeet as ep
 
     monkeypatch.delattr(tarfile, "data_filter", raising=False)
     archive = tmp_path / "links.tar.bz2"
@@ -471,7 +471,7 @@ def _make_parakeet(monkeypatch, texts=("hello",)):  # noqa: ANN001, ANN202
         sys.modules, "sherpa_onnx", types.ModuleType("sherpa_onnx")
     )
 
-    from claude_code_tools.voice_type.engine_parakeet import (
+    from voxtype.engine_parakeet import (
         ParakeetEngine,
     )
 
@@ -817,7 +817,7 @@ def test_parakeet_no_callbacks_after_stop(monkeypatch) -> None:  # noqa: ANN001
 
 def test_autogain_amplifies_quiet_audio() -> None:
     np = pytest.importorskip("numpy")
-    from claude_code_tools.voice_type.engine_parakeet import AutoGain
+    from voxtype.engine_parakeet import AutoGain
 
     agc = AutoGain()
     quiet = (0.005 * np.sin(np.linspace(0, 200, 1600))).astype(np.float32)
@@ -830,7 +830,7 @@ def test_autogain_amplifies_quiet_audio() -> None:
 
 def test_autogain_leaves_normal_audio_alone() -> None:
     np = pytest.importorskip("numpy")
-    from claude_code_tools.voice_type.engine_parakeet import AutoGain
+    from voxtype.engine_parakeet import AutoGain
 
     agc = AutoGain()
     loud = (0.5 * np.sin(np.linspace(0, 200, 1600))).astype(np.float32)
@@ -841,7 +841,7 @@ def test_autogain_leaves_normal_audio_alone() -> None:
 
 def test_autogain_handles_silence_and_empty() -> None:
     np = pytest.importorskip("numpy")
-    from claude_code_tools.voice_type.engine_parakeet import AutoGain
+    from voxtype.engine_parakeet import AutoGain
 
     agc = AutoGain()
     for _ in range(10):
@@ -882,8 +882,8 @@ class _PopInvalidatingVad:
 def test_drain_reads_segment_before_pop() -> None:
     np = pytest.importorskip("numpy")
     pytest.importorskip("sherpa_onnx")
-    from claude_code_tools.voice_type.config import Config
-    from claude_code_tools.voice_type.engine_parakeet import ParakeetEngine
+    from voxtype.config import Config
+    from voxtype.engine_parakeet import ParakeetEngine
 
     eng = ParakeetEngine(Config(engine="parakeet"), lambda m: None)
     eng._vad = _PopInvalidatingVad(
@@ -1013,7 +1013,7 @@ def test_parakeet_hold_cap_bounds_oversized_reads(monkeypatch) -> None:
     """The hold memory cap is enforced per-sample: even one chunk
     larger than the remaining budget cannot blow past the cap."""
     np = pytest.importorskip("numpy")
-    from claude_code_tools.voice_type import engine_parakeet as ep
+    from voxtype import engine_parakeet as ep
 
     eng, statuses, holder = _hold_engine(monkeypatch)
     monkeypatch.setattr(ep, "MAX_HOLD_SECONDS", 1)  # cap = 16000 samples
@@ -1141,7 +1141,7 @@ def test_parakeet_rejects_nonfinite_and_huge_reads(monkeypatch) -> None:
 
 def test_autogain_output_is_finite_and_clipped_for_hostile_input() -> None:
     np = pytest.importorskip("numpy")
-    from claude_code_tools.voice_type.engine_parakeet import AutoGain
+    from voxtype.engine_parakeet import AutoGain
 
     agc = AutoGain()
     hostile = np.array(
@@ -1155,8 +1155,8 @@ def test_autogain_output_is_finite_and_clipped_for_hostile_input() -> None:
 
 def test_report_decode_time_formats(monkeypatch) -> None:
     pytest.importorskip("sherpa_onnx")
-    from claude_code_tools.voice_type.config import Config
-    from claude_code_tools.voice_type.engine_parakeet import ParakeetEngine
+    from voxtype.config import Config
+    from voxtype.engine_parakeet import ParakeetEngine
 
     msgs: list[str] = []
     eng = ParakeetEngine(Config(engine="parakeet"), msgs.append)

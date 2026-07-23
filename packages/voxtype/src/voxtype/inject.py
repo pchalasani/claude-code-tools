@@ -2,7 +2,7 @@
 
 Typing goes through pynput's ``keyboard.Controller``, which synthesizes
 key events into whatever application currently has focus. On macOS the
-process running voice-type (your terminal) needs Accessibility permission
+process running voxtype (your terminal) needs Accessibility permission
 (System Settings > Privacy & Security > Accessibility).
 """
 

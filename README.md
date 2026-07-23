@@ -78,8 +78,8 @@ Click a card to jump to that feature, or
 </a>
 </td>
 <td align="center">
-<a href="https://pchalasani.github.io/claude-code-tools/tools/voice-type/">
-<img src="assets/card-voice-type.svg" alt="voice-type" width="200"/>
+<a href="https://pchalasani.github.io/claude-code-tools/tools/voxtype/">
+<img src="assets/card-voxtype.svg" alt="voxtype" width="200"/>
 </a>
 </td>
 <td align="center">
@@ -202,11 +202,14 @@ See [tmux-cli](https://pchalasani.github.io/claude-code-tools/tools/tmux-cli/) i
 See [Voice](https://pchalasani.github.io/claude-code-tools/plugins-detail/voice/) in the full documentation.
 
 <a id="voice-type"></a>
-## voice-type — Local Voice Dictation
-Fully on-device speech-to-text (Moonshine + VAD) that types wherever your
-cursor is, with a configurable toggle hotkey and optional wake word.
-Install with `uv tool install "claude-code-tools[voice]"`.
-See [voice-type](https://pchalasani.github.io/claude-code-tools/tools/voice-type/) in the full documentation.
+<a id="voxtype"></a>
+## voxtype — Local Voice Dictation
+Fully on-device speech-to-text (Moonshine/Parakeet + VAD) that types wherever
+your cursor is, with a configurable toggle hotkey and optional wake word.
+Now a standalone package: install with `uv tool install voxtype` (no need for
+the full claude-code-tools suite). The `claude-code-tools[voice*]` extras
+still work and pull in voxtype.
+See [voxtype](https://pchalasani.github.io/claude-code-tools/tools/voxtype/) in the full documentation.
 
 <a id="license"></a>
 ## License

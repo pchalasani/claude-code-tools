@@ -1,5 +1,5 @@
 ---
-title: "voice-type — Local Voice Dictation"
+title: "voxtype — Local Voice Dictation"
 description: >
   Fully on-device speech-to-text that types wherever
   your cursor is. Parakeet/Moonshine engines, wake
@@ -10,14 +10,14 @@ description: >
 import { Tabs, TabItem, Steps, Card, CardGrid } from
   "@astrojs/starlight/components";
 
-`voice-type` turns speech into text in whatever app
+`voxtype` turns speech into text in whatever app
 has focus -- your editor, browser, terminal, or a
 coding agent's prompt box. Everything runs on your
 machine: no cloud, no accounts, no audio leaving
 your Mac.
 
 :::caution[macOS only]
-voice-type is built for **macOS**: it types via
+voxtype is built for **macOS**: it types via
 macOS accessibility, suppresses hotkeys at the
 CGEvent tap, and draws its overlay with AppKit. The
 recommended `parakeet-mlx` engine additionally
@@ -30,11 +30,11 @@ no Intel-macOS build).
 :::note[Installation]
 ```bash
 # recommended: Apple-GPU engine (best accuracy AND speed)
-uv tool install "claude-code-tools[voice-mlx]"
-voice-type --engine parakeet-mlx --segmentation hold
+uv tool install "voxtype[mlx]"
+voxtype --engine parakeet-mlx --segmentation hold
 ```
 See [Configuration & CLI](./configuration/) for all
-engines and options, or run `voice-type --help`.
+engines and options, or run `voxtype --help`.
 :::
 
 ## Why it's different
@@ -56,7 +56,7 @@ engines and options, or run `voice-type --help`.
   </Card>
   <Card title="Spoken submit" icon="rocket">
     Say "go", "over", or "submit" as a standalone
-    utterance and voice-type presses Enter -- dictate
+    utterance and voxtype presses Enter -- dictate
     a prompt to a coding agent and send it without
     touching the keyboard.
   </Card>
@@ -86,7 +86,7 @@ engines and options, or run `voice-type --help`.
    [engines](./configuration/#engines)):
 
    ```bash
-   uv tool install "claude-code-tools[voice-mlx]"
+   uv tool install "voxtype[mlx]"
    ```
 
 2. Grant your terminal **Microphone**,
@@ -97,20 +97,20 @@ engines and options, or run `voice-type --help`.
 3. Start dictating:
 
    ```bash
-   voice-type --engine parakeet-mlx --segmentation hold
+   voxtype --engine parakeet-mlx --segmentation hold
    ```
 
    Press `Ctrl+;`, speak (watch the waveform pill),
    press `Ctrl+;` again -- the whole take types at
    your cursor. `Esc` cancels a take.
 
-4. Make it yours: run `voice-type setup` for an
+4. Make it yours: run `voxtype setup` for an
    interactive walkthrough — it asks a handful of
    explained questions (engine, mode, hotkey, ...)
-   and writes your `~/.config/voice-type/config.toml`.
-   (Prefer editing by hand? `voice-type init` drops a
+   and writes your `~/.config/voxtype/config.toml`.
+   (Prefer editing by hand? `voxtype init` drops a
    fully commented sample instead.) After that, plain
-   `voice-type` starts with your settings.
+   `voxtype` starts with your settings.
 
 </Steps>
 
@@ -137,7 +137,7 @@ lives in **[Configuration & CLI](./configuration/)**.
 | Stop dictating | say "stop listening" | `stop_phrase` |
 
 Not sure how to spell a chord for the three hotkey
-settings above? Run `voice-type hotkey`, press the
+settings above? Run `voxtype hotkey`, press the
 combo you want, and it prints the exact line to put
 in your config (e.g. `hotkey = "<ctrl>+;"`).
 

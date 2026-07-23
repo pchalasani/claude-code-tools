@@ -358,7 +358,7 @@ def _check_input_monitoring() -> list[str]:
         "context — hotkeys will NOT work. Grant it in System "
         "Settings > Privacy & Security > Input Monitoring "
         "(to your terminal app, and to tmux if you launched "
-        "inside tmux), then restart voice-type."
+        "inside tmux), then restart voxtype."
     ]
     # Nonfatal: registration just makes the app appear in System
     # Settings so the user can flip the toggle — but a failure is
@@ -399,7 +399,7 @@ def _check_accessibility() -> list[str]:
         "Accessibility permission MISSING for this launch "
         "context — typing into other apps will NOT work. "
         "Grant it in System Settings > Privacy & Security > "
-        "Accessibility, then restart voice-type."
+        "Accessibility, then restart voxtype."
     ]
     # Nonfatal: the prompt request registers the app in System
     # Settings (and may show the system grant dialog) so the user can
@@ -450,7 +450,7 @@ def start_hotkeys(bindings: list[tuple]):  # noqa: ANN201
             return _SuppressingHotKeys(parsed)
         except ValueError as e:
             print(
-                f"[voice-type] {e}; falling back to non-suppressing "
+                f"[voxtype] {e}; falling back to non-suppressing "
                 "hotkeys (chords may leak keystrokes)",
                 file=sys.stderr,
             )

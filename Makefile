@@ -1,4 +1,4 @@
-.PHONY: install release patch minor major dev-install help clean publish all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply update-homebrew docs-dev docs-build docs-preview
+.PHONY: install release patch minor major dev-install help clean publish all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply update-homebrew docs-dev docs-build docs-preview voxtype-version voxtype-test voxtype-install voxtype-build voxtype-release voxtype-publish voxtype-all
 
 GIT_PRIMARY_WORKTREE := $(realpath $(shell git rev-parse \
 	--path-format=absolute --git-common-dir)/..)
@@ -32,6 +32,12 @@ help:
 	@echo "  make fix-session-metadata-apply - Actually fix sessionId mismatches"
 	@echo "  make delete-helper-sessions       - Find helper sessions to delete (dry-run)"
 	@echo "  make delete-helper-sessions-apply - Actually delete helper sessions"
+	@echo "  make voxtype-test    - Run the voxtype test suite"
+	@echo "  make voxtype-install - Install voxtype tool in editable mode"
+	@echo "  make voxtype-build   - Build voxtype wheel + sdist into dist/"
+	@echo "  make voxtype-release [BUMP=patch|minor|major] - Bump, tag voxtype-vX.Y.Z, push, GitHub release, build"
+	@echo "  make voxtype-publish - Publish dist/voxtype-* to PyPI"
+	@echo "  make voxtype-all [BUMP=...] - voxtype-release + voxtype-publish in one shot"
 
 install:
 	uv tool install --force -e .
@@ -269,3 +275,85 @@ docs-build:
 docs-preview:
 	@echo "Previewing docs..."
 	@cd docs-site && npm run preview
+
+# ---------------------------------------------------------------------------
+# voxtype (packages/voxtype) — standalone voice-dictation package
+# ---------------------------------------------------------------------------
+
+VOXTYPE_DIR := packages/voxtype
+VOXTYPE_PYPROJECT := $(VOXTYPE_DIR)/pyproject.toml
+
+define VOXTYPE_BUMP_PY
+import pathlib, re, sys
+
+part = sys.argv[1]
+path = pathlib.Path("packages/voxtype/pyproject.toml")
+text = path.read_text()
+m = re.search(r'^version = "(\d+)\.(\d+)\.(\d+)"', text, re.M)
+major, minor, patch = map(int, m.groups())
+if part == "major":
+    major, minor, patch = major + 1, 0, 0
+elif part == "minor":
+    minor, patch = minor + 1, 0
+else:
+    patch += 1
+new = f"{major}.{minor}.{patch}"
+path.write_text(text[: m.start()] + f'version = "{new}"' + text[m.end():])
+print(new)
+endef
+export VOXTYPE_BUMP_PY
+
+voxtype-version:
+	@grep '^version' $(VOXTYPE_PYPROJECT) | head -1 | cut -d'"' -f2
+
+voxtype-test:
+	uv run pytest $(VOXTYPE_DIR)/tests -q
+
+voxtype-install:
+	uv tool install --force -e $(VOXTYPE_DIR)
+
+voxtype-build:
+	@echo "Cleaning old voxtype builds..."
+	rm -f dist/voxtype-*
+	@echo "Building voxtype..."
+	uv build --package voxtype
+	@echo "Build complete! Ready for: make voxtype-publish"
+
+# Bump (BUMP=patch|minor|major, default patch), commit, tag voxtype-vX.Y.Z,
+# push, create GitHub release, build. Then: make voxtype-publish
+voxtype-release: voxtype-test
+	@BUMP_TYPE=$${BUMP:-patch}; \
+	OLD=$$(grep '^version' $(VOXTYPE_PYPROJECT) | head -1 | cut -d'"' -f2); \
+	NEW=$$(python3 -c "$$VOXTYPE_BUMP_PY" $$BUMP_TYPE); \
+	echo "Bumping voxtype $$OLD -> $$NEW ($$BUMP_TYPE)..."; \
+	uv lock; \
+	git add $(VOXTYPE_PYPROJECT) uv.lock; \
+	git commit -m "bump: voxtype $$OLD → $$NEW"; \
+	git tag "voxtype-v$$NEW"; \
+	echo "Pushing to GitHub..."; \
+	git push && git push --tags; \
+	echo "Creating GitHub release..."; \
+	gh release create "voxtype-v$$NEW" --title "voxtype v$$NEW" \
+		--notes "voxtype $$NEW — install with: uv tool install voxtype" \
+		|| echo "Release voxtype-v$$NEW already exists"
+	$(MAKE) voxtype-build
+
+voxtype-publish:
+	@if ! ls dist/voxtype-*.whl dist/voxtype-*.tar.gz >/dev/null 2>&1; then \
+		echo "Error: dist/ must contain voxtype wheel and sdist (run make voxtype-build)" >&2; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(PYPI_ENV_FILE)" ]; then \
+		echo "Error: PyPI environment file not found: $(PYPI_ENV_FILE)" >&2; \
+		exit 1; \
+	fi
+	@uv run --no-sync --env-file "$(PYPI_ENV_FILE)" -- sh -eu -c '\
+		if [ -z "$${PYPI_TOKEN:-}" ]; then \
+			echo "Error: PYPI_TOKEN is not defined in $(PYPI_ENV_FILE)" >&2; \
+			exit 1; \
+		fi; \
+		UV_PUBLISH_TOKEN="$$PYPI_TOKEN" uv publish dist/voxtype-*'
+
+# One-shot: bump + tag + push + GitHub release + build + publish to PyPI
+voxtype-all: voxtype-release voxtype-publish
+	@echo "voxtype released and published!"

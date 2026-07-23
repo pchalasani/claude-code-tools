@@ -1,0 +1,59 @@
+[project]
+name = "voxtype"
+version = "0.1.0"
+description = "Local, streaming speech-to-text that types wherever your cursor is (macOS)"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Prasad Chalasani", email = "pchalasani@gmail.com" }]
+requires-python = ">=3.11"
+keywords = ["speech-to-text", "dictation", "voice", "whisper", "parakeet", "macos"]
+classifiers = [
+    "Environment :: MacOS X",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+# The default moonshine engine ships in the base install so a plain
+# `uv tool install voxtype` works out of the box.
+dependencies = [
+    "moonshine-voice>=0.0.69",
+    "pynput>=1.7.7",
+]
+
+[project.urls]
+Homepage = "https://github.com/pchalasani/claude-code-tools"
+Documentation = "https://pchalasani.github.io/claude-code-tools/tools/voxtype/"
+
+[project.optional-dependencies]
+parakeet = [
+    # 1.13.x wheels are missing their bundled onnxruntime dylib on
+    # macOS arm64 (dlopen fails); 1.12.x splits the native libs into
+    # sherpa-onnx-core, which some resolvers miss (uv caches wheel
+    # metadata without it) — declare it explicitly.
+    "sherpa-onnx>=1.12.0,<1.13",
+    "sherpa-onnx-core>=1.12.0,<1.13",
+    "sounddevice>=0.5.0",
+    "numpy>=1.26.0",
+]
+mlx = [
+    "parakeet-mlx>=0.5.0",
+    # Resolver guard: without it uv can backtrack through parakeet-mlx
+    # -> librosa -> numba to a 2021 llvmlite that cannot build on
+    # modern Python ("Cannot install on Python version 3.13...").
+    "numba>=0.61",
+    # sherpa-onnx supplies the Silero VAD used for segmentation.
+    "sherpa-onnx>=1.12.0,<1.13",
+    "sherpa-onnx-core>=1.12.0,<1.13",
+    "sounddevice>=0.5.0",
+    "numpy>=1.26.0",
+]
+
+[project.scripts]
+voxtype = "voxtype.cli:main"
+
+[build-system]
+requires = ["hatchling==1.28.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/voxtype"]

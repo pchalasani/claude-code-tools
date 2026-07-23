@@ -1,4 +1,4 @@
-"""voice-type: local, streaming speech-to-text that types where your cursor is.
+"""voxtype: local, streaming speech-to-text that types where your cursor is.
 
 Powered by Moonshine (https://github.com/moonshine-ai/moonshine) for fully
 on-device transcription with built-in voice activity detection, plus a

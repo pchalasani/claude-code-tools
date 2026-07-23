@@ -1,4 +1,4 @@
-"""Floating waveform pill: visible proof that voice-type is listening.
+"""Floating waveform pill: visible proof that voxtype is listening.
 
 A small always-on-top, click-through, non-activating macOS panel at the
 bottom-center of the screen, shown ONLY while recording. It scrolls a

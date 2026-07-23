@@ -1,8 +1,8 @@
-"""Configuration for voice-type.
+"""Configuration for voxtype.
 
-Config lives at ``~/.config/voice-type/config.toml`` (TOML, stdlib
+Config lives at ``~/.config/voxtype/config.toml`` (TOML, stdlib
 ``tomllib``). CLI flags override file values; every field has a sensible
-default so voice-type runs with no config file at all.
+default so voxtype runs with no config file at all.
 """
 
 from __future__ import annotations
@@ -13,7 +13,15 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
-DEFAULT_CONFIG_PATH = Path.home() / ".config" / "voice-type" / "config.toml"
+# Legacy path from when this tool shipped as "voice-type" inside
+# claude-code-tools; still honored so existing configs keep working.
+_LEGACY_CONFIG_PATH = Path.home() / ".config" / "voice-type" / "config.toml"
+_CONFIG_PATH = Path.home() / ".config" / "voxtype" / "config.toml"
+DEFAULT_CONFIG_PATH = (
+    _LEGACY_CONFIG_PATH
+    if _LEGACY_CONFIG_PATH.exists() and not _CONFIG_PATH.exists()
+    else _CONFIG_PATH
+)
 
 VALID_MODES = ("toggle", "vad", "wake")
 
@@ -38,7 +46,7 @@ VALID_MODEL_ARCHS = (
 
 @dataclass
 class Config:
-    """Runtime settings for voice-type.
+    """Runtime settings for voxtype.
 
     Attributes:
         mode: Activation mode. "toggle" starts paused (hotkey starts
@@ -285,7 +293,7 @@ def load_config(
 def sample_config() -> str:
     """Return a commented sample config file as a string."""
     return '''\
-# voice-type configuration (~/.config/voice-type/config.toml)
+# voxtype configuration (~/.config/voxtype/config.toml)
 # Every key is optional; the values below are the defaults.
 
 # Activation mode:
@@ -295,12 +303,12 @@ def sample_config() -> str:
 mode = "toggle"
 
 # Transcription backend:
-#   "moonshine"    - Moonshine streaming models (voice extra)
+#   "moonshine"    - Moonshine streaming models (installed by default)
 #   "parakeet"     - Parakeet-TDT 0.6b v3 on CPU via sherpa-onnx
-#                    (voice-parakeet extra; ~490 MB download)
+#                    (voxtype[parakeet] extra; ~490 MB download)
 #   "parakeet-mlx" - Parakeet-TDT 0.6b v3 on the Apple GPU via MLX:
 #                    fp16 accuracy at ~40x realtime — best accuracy
-#                    AND speed (voice-mlx extra; Apple Silicon only)
+#                    AND speed (voxtype[mlx] extra; Apple Silicon only)
 engine = "moonshine"
 
 # HuggingFace model id for the parakeet-mlx engine.
