@@ -57,11 +57,13 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
     import AppKit
     import objc
     from AppKit import (
+        NSAffineTransform,
         NSApplication,
         NSBackingStoreBuffered,
         NSBezierPath,
         NSColor,
         NSGradient,
+        NSGraphicsContext,
         NSMakeRect,
         NSPanel,
         NSScreen,
@@ -94,6 +96,33 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
             x = cx - gw + u * 2 * gw
             y = hem_y - ha * math.sin(u * math.pi * bumps)
             p.lineToPoint_((x, y))
+        p.closePath()
+        return p
+
+    def _mk_mouth(mx, my, mw, open_, wob):  # noqa: ANN001, ANN202
+        """A lipped mouth that parts open; wider mid-volume, round when loud.
+
+        ``open_`` is 0..1. At rest the lips meet in a thin line; as it
+        opens the upper lip lifts and the lower lip drops along curved
+        beziers (not a plain oval), and the aspect shifts from wide to
+        tall/round so louder speech reads like a different vowel.
+        """
+        import math
+
+        shimmer = 1.0 + 0.06 * math.sin(wob * 3.0)
+        half = mw * (0.55 + 0.20 * open_) / 2.0
+        top = mw * (0.05 + 0.60 * open_) * shimmer   # upper-lip lift
+        bot = mw * (0.03 + 0.82 * open_) * shimmer   # lower-lip drop
+        lx, rx = mx - half, mx + half
+        cxl, cxr = mx - half * 0.5, mx + half * 0.5
+        p = NSBezierPath.bezierPath()
+        p.moveToPoint_((lx, my))
+        p.curveToPoint_controlPoint1_controlPoint2_(
+            (rx, my), (cxl, my + top), (cxr, my + top)
+        )
+        p.curveToPoint_controlPoint1_controlPoint2_(
+            (lx, my), (cxr, my - bot), (cxl, my - bot)
+        )
         p.closePath()
         return p
 
@@ -135,59 +164,94 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
             b = self.bounds()
             cx, cy = b.size.width / 2, b.size.height / 2
             gw = min(b.size.width, b.size.height) * 0.30
-            bob = 3.0 * math.sin(self.phase * 0.5)  # gentle float
+            amp = self.amp
+            ph = self.phase
 
-            # soft halo for presence
-            halo = _mk_ghost(cx, cy, gw * 1.12, bob)
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                0.30, 0.62, 1.0, 0.20
-            ).setFill()
-            halo.fill()
+            # Head motion reacts to speech: it bobs faster/higher and
+            # sways a touch more the louder you talk, and squash-and-
+            # stretches (taller + narrower) as the mouth opens.
+            bob = (2.0 + 5.0 * amp) * math.sin(ph * (0.5 + 0.7 * amp))
+            sway = 3.5 * amp * math.sin(ph * 0.8)
+            dcx, dcy = cx + sway, cy + bob
+            sx = 1.0 - 0.06 * amp
+            sy = 1.0 + 0.13 * amp
 
-            # body: bluish radial gradient + bright rim
-            body = _mk_ghost(cx, cy, gw, bob)
-            core = NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                0.62, 0.86, 1.0, 0.88
-            )
-            edge = NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                0.16, 0.44, 0.98, 0.74
-            )
-            grad = NSGradient.alloc().initWithStartingColor_endingColor_(
-                core, edge
-            )
-            if grad is not None:
-                grad.drawInBezierPath_relativeCenterPosition_(
-                    body, (0.0, 0.35)
+            NSGraphicsContext.currentContext().saveGraphicsState()
+            t = NSAffineTransform.transform()
+            t.translateXBy_yBy_(dcx, dcy)
+            t.scaleXBy_yBy_(sx, sy)
+            t.translateXBy_yBy_(-dcx, -dcy)
+            t.concat()
+            try:
+                # soft halo for presence
+                halo = _mk_ghost(dcx, dcy, gw * 1.12, 0.0)
+                NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    0.30, 0.62, 1.0, 0.20
+                ).setFill()
+                halo.fill()
+
+                # body: bluish radial gradient + bright rim
+                body = _mk_ghost(dcx, dcy, gw, 0.0)
+                core = NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    0.62, 0.86, 1.0, 0.88
                 )
-            else:  # pragma: no cover
-                edge.setFill()
-                body.fill()
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                0.80, 0.94, 1.0, 0.9
-            ).setStroke()
-            body.setLineWidth_(2.0)
-            body.stroke()
+                edge = NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    0.16, 0.44, 0.98, 0.74
+                )
+                grad = (
+                    NSGradient.alloc().initWithStartingColor_endingColor_(
+                        core, edge
+                    )
+                )
+                if grad is not None:
+                    grad.drawInBezierPath_relativeCenterPosition_(
+                        body, (0.0, 0.35)
+                    )
+                else:  # pragma: no cover
+                    edge.setFill()
+                    body.fill()
+                NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    0.80, 0.94, 1.0, 0.9
+                ).setStroke()
+                body.setLineWidth_(2.0)
+                body.stroke()
 
-            # --- face (dark, translucent "holes" like the ghost emoji) ---
-            dark = NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                0.05, 0.10, 0.26, 0.9
-            )
-            dark.setFill()
-            eye_y = cy + gw * 0.45 + bob
-            eye_dx = gw * 0.42
-            blinking = (self.frame_no % _BLINK_EVERY) < _BLINK_FRAMES
-            eye_w = gw * 0.26
-            eye_h = gw * 0.06 if blinking else gw * 0.36
-            for sx in (-1, 1):
-                _mk_oval(cx + sx * eye_dx, eye_y, eye_w, eye_h).fill()
-            # tiny nose
-            _mk_oval(cx, cy + gw * 0.05 + bob, gw * 0.10, gw * 0.12).fill()
-            # mouth: opens with volume (a small line at rest -> wide oval)
-            mouth_h = gw * (0.08 + 0.80 * self.amp)
-            mouth_w = gw * (0.34 + 0.18 * self.amp)
-            _mk_oval(
-                cx, cy - gw * 0.42 + bob, mouth_w, mouth_h
-            ).fill()
+                # --- face (dark translucent "holes", ghost-emoji style) --
+                dark = NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    0.05, 0.10, 0.26, 0.92
+                )
+                dark.setFill()
+                eye_y = dcy + gw * 0.45
+                eye_dx = gw * 0.42
+                blinking = (
+                    self.frame_no % _BLINK_EVERY
+                ) < _BLINK_FRAMES
+                eye_w = gw * 0.26
+                eye_h = gw * 0.06 if blinking else gw * 0.36
+                for s in (-1, 1):
+                    _mk_oval(
+                        dcx + s * eye_dx, eye_y, eye_w, eye_h
+                    ).fill()
+                _mk_oval(dcx, dcy + gw * 0.05, gw * 0.10, gw * 0.12).fill()
+
+                # mouth: parting lips (see _mk_mouth)
+                mouth_y = dcy - gw * 0.40
+                mouth = _mk_mouth(dcx, mouth_y, gw * 0.62, amp, ph)
+                dark.setFill()
+                mouth.fill()
+                # a hint of tongue when the mouth is well open
+                if amp > 0.35:
+                    NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                        0.45, 0.65, 1.0, 0.55 * amp
+                    ).setFill()
+                    _mk_oval(
+                        dcx,
+                        mouth_y - gw * 0.30 * amp,
+                        gw * 0.30,
+                        gw * 0.34 * amp,
+                    ).fill()
+            finally:
+                NSGraphicsContext.currentContext().restoreGraphicsState()
 
     class Driver(AppKit.NSObject):
         """NSTimer target: samples audio, ticks the app, ends the loop.
