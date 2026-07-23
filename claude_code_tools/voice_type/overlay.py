@@ -25,9 +25,11 @@ _WIDTH = 184.0
 _HEIGHT = 184.0
 _MARGIN_BOTTOM = 120.0
 _TICK_SECONDS = 0.033  # ~30 fps
+# Master animation speed: small = slow, gentle, gradual motion.
+_PHASE_SPEED = 0.05
 # Idle blink: every ~_BLINK_EVERY frames the eyes close for a few.
-_BLINK_EVERY = 108
-_BLINK_FRAMES = 5
+_BLINK_EVERY = 130
+_BLINK_FRAMES = 6
 
 
 def overlay_available() -> bool:
@@ -99,30 +101,34 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
         p.closePath()
         return p
 
-    def _mk_mouth(mx, my, mw, open_, wob):  # noqa: ANN001, ANN202
-        """A lipped mouth that parts open; wider mid-volume, round when loud.
+    def _mk_mouth(mx, lip_y, gw, open_, ph):  # noqa: ANN001, ANN202
+        """An organic mouth-hole that opens downward (jaw) and morphs.
 
-        ``open_`` is 0..1. At rest the lips meet in a thin line; as it
-        opens the upper lip lifts and the lower lip drops along curved
-        beziers (not a plain oval), and the aspect shifts from wide to
-        tall/round so louder speech reads like a different vowel.
+        Not a scaling oval: the rim is perturbed by slow low harmonics
+        so it wobbles/changes shape, it opens mostly DOWNWARD from a
+        fixed upper-lip line (like a dropping jaw), and it stays a thin
+        slit at rest. ``open_`` is 0..1; ``ph`` is the slow master phase.
         """
         import math
 
-        shimmer = 1.0 + 0.06 * math.sin(wob * 3.0)
-        half = mw * (0.55 + 0.20 * open_) / 2.0
-        top = mw * (0.05 + 0.60 * open_) * shimmer   # upper-lip lift
-        bot = mw * (0.03 + 0.82 * open_) * shimmer   # lower-lip drop
-        lx, rx = mx - half, mx + half
-        cxl, cxr = mx - half * 0.5, mx + half * 0.5
+        rx = gw * (0.40 + 0.10 * open_)
+        ry = gw * (0.05 + 0.55 * open_)
+        cy = lip_y - ry * 0.7  # grows downward from the lip line
+        deform = 0.05 + 0.13 * open_
+        n = 44
         p = NSBezierPath.bezierPath()
-        p.moveToPoint_((lx, my))
-        p.curveToPoint_controlPoint1_controlPoint2_(
-            (rx, my), (cxl, my + top), (cxr, my + top)
-        )
-        p.curveToPoint_controlPoint1_controlPoint2_(
-            (lx, my), (cxr, my - bot), (cxl, my - bot)
-        )
+        for i in range(n + 1):
+            a = 2.0 * math.pi * i / n
+            wob = 1.0 + deform * (
+                math.sin(3 * a + ph * 0.6)
+                + 0.5 * math.sin(5 * a - ph * 0.4)
+            )
+            x = mx + rx * wob * math.cos(a)
+            y = cy + ry * wob * math.sin(a)
+            if i == 0:
+                p.moveToPoint_((x, y))
+            else:
+                p.lineToPoint_((x, y))
         p.closePath()
         return p
 
@@ -149,11 +155,11 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
         def push_(self, sample):  # noqa: ANN001, ANN201, N802
             _label, recording, level = sample
             level = max(0.0, min(1.0, float(level)))
-            # Fast attack, slow release: the mouth pops open on speech
-            # and eases shut.
-            k = 0.6 if level > self.amp else 0.18
+            # Gentle attack, slow release so the mouth and motion change
+            # gradually rather than twitching frame-to-frame.
+            k = 0.4 if level > self.amp else 0.10
             self.amp += k * (level - self.amp)
-            self.phase += 0.16
+            self.phase += _PHASE_SPEED
             self.frame_no += 1
             self.recording = bool(recording)
             self.setNeedsDisplay_(True)
@@ -167,18 +173,24 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
             amp = self.amp
             ph = self.phase
 
-            # Head motion reacts to speech: it bobs faster/higher and
-            # sways a touch more the louder you talk, and squash-and-
-            # stretches (taller + narrower) as the mouth opens.
-            bob = (2.0 + 5.0 * amp) * math.sin(ph * (0.5 + 0.7 * amp))
-            sway = 3.5 * amp * math.sin(ph * 0.8)
+            # Slow, gentle motion — a gradual drift, not a vibration.
+            # Bob and sway run at DIFFERENT slow frequencies so the
+            # ghost describes a lazy figure-eight rather than a rigid
+            # vertical bounce; both grow only mildly with volume.
+            bob = (3.0 + 3.5 * amp) * math.sin(ph * 0.9)
+            sway = (3.0 + 5.0 * amp) * math.sin(ph * 0.6 + 0.8)
             dcx, dcy = cx + sway, cy + bob
-            sx = 1.0 - 0.06 * amp
-            sy = 1.0 + 0.13 * amp
+            # Gentle slow "breathing" flex plus a soft lean, so the head
+            # feels soft/flexible without any fast squash.
+            breathe = 1.0 + 0.03 * math.sin(ph * 0.7)
+            sx = breathe * (1.0 - 0.04 * amp)
+            sy = breathe * (1.0 + 0.06 * amp)
+            lean = (2.5 + 3.0 * amp) * math.sin(ph * 0.45)  # degrees
 
             NSGraphicsContext.currentContext().saveGraphicsState()
             t = NSAffineTransform.transform()
             t.translateXBy_yBy_(dcx, dcy)
+            t.rotateByDegrees_(lean)
             t.scaleXBy_yBy_(sx, sy)
             t.translateXBy_yBy_(-dcx, -dcy)
             t.concat()
@@ -234,22 +246,10 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
                     ).fill()
                 _mk_oval(dcx, dcy + gw * 0.05, gw * 0.10, gw * 0.12).fill()
 
-                # mouth: parting lips (see _mk_mouth)
-                mouth_y = dcy - gw * 0.40
-                mouth = _mk_mouth(dcx, mouth_y, gw * 0.62, amp, ph)
+                # mouth: organic hole opening downward (see _mk_mouth)
+                lip_y = dcy - gw * 0.28
                 dark.setFill()
-                mouth.fill()
-                # a hint of tongue when the mouth is well open
-                if amp > 0.35:
-                    NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                        0.45, 0.65, 1.0, 0.55 * amp
-                    ).setFill()
-                    _mk_oval(
-                        dcx,
-                        mouth_y - gw * 0.30 * amp,
-                        gw * 0.30,
-                        gw * 0.34 * amp,
-                    ).fill()
+                _mk_mouth(dcx, lip_y, gw, amp, ph).fill()
             finally:
                 NSGraphicsContext.currentContext().restoreGraphicsState()
 
