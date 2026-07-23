@@ -1726,3 +1726,108 @@ def test_sound_player_constructs_and_plays_safely() -> None:
     player.play("Glass")          # real system sound (or afplay fallback)
     player.play("")               # empty: no-op
     player.play("/no/such.aiff")  # missing file: no-op, no raise
+
+
+# -- setup wizard ---------------------------------------------------------
+
+
+def _fake_questionary(script):
+    """Build a fake questionary module that returns scripted answers."""
+    it = iter(script)
+
+    class _Ans:
+        def __init__(self, v):
+            self._v = v
+
+        def ask(self):
+            return self._v
+
+    def _select(msg, choices=None, default=None):  # noqa: ANN001, ANN202
+        return _Ans(next(it))
+
+    def _confirm(msg, default=None):  # noqa: ANN001, ANN202
+        return _Ans(next(it))
+
+    def _text(msg, default="", validate=None):  # noqa: ANN001, ANN202
+        return _Ans(next(it))
+
+    class _Choice:
+        def __init__(self, title, value=None):  # noqa: ANN001
+            self.title, self.value = title, value
+
+    return types.SimpleNamespace(
+        select=_select, confirm=_confirm, text=_text, Choice=_Choice
+    )
+
+
+def test_toml_value_serialization() -> None:
+    from claude_code_tools.voice_type.setup_wizard import _toml_value
+
+    assert _toml_value(True) == "true"
+    assert _toml_value("<ctrl>+;") == '"<ctrl>+;"'
+    assert _toml_value(["a", "b"]) == '["a", "b"]'
+    assert _toml_value('say "go"') == '"say \\"go\\""'
+
+
+def test_setup_wizard_writes_valid_config(monkeypatch, tmp_path) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "questionary",
+        _fake_questionary(
+            [
+                "parakeet-mlx",             # engine
+                "toggle",                   # mode
+                "hold",                     # segmentation
+                "Keep default (<ctrl>+;)",  # hotkey
+                False,                      # extras?
+            ]
+        ),
+    )
+    from claude_code_tools.voice_type.config import load_config
+    from claude_code_tools.voice_type.setup_wizard import run_setup
+
+    out = tmp_path / "c.toml"
+    assert run_setup(config_path=out, force=True) == 0
+    cfg = load_config(out)
+    assert (cfg.engine, cfg.mode, cfg.segmentation) == (
+        "parakeet-mlx",
+        "toggle",
+        "hold",
+    )
+
+
+def test_setup_wizard_wake_mode(monkeypatch, tmp_path) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "questionary",
+        _fake_questionary(
+            [
+                "moonshine",                # engine
+                "medium-streaming",         # model_arch
+                "wake",                     # mode
+                "Keep default (<ctrl>+;)",  # hotkey
+                "claude",                   # wake word
+                "hey cloud, claud",         # aliases
+                False,                      # extras?
+            ]
+        ),
+    )
+    from claude_code_tools.voice_type.config import load_config
+    from claude_code_tools.voice_type.setup_wizard import run_setup
+
+    out = tmp_path / "c.toml"
+    assert run_setup(config_path=out, force=True) == 0
+    cfg = load_config(out)
+    assert cfg.mode == "wake"
+    assert cfg.wake_word_aliases == ["hey cloud", "claud"]
+
+
+def test_setup_wizard_cancel_leaves_no_file(monkeypatch, tmp_path) -> None:
+    monkeypatch.setitem(
+        sys.modules, "questionary", _fake_questionary([None])  # engine=None
+    )
+    from claude_code_tools.voice_type.setup_wizard import run_setup
+
+    out = tmp_path / "c.toml"
+    assert run_setup(config_path=out, force=True) == 1
+    assert not out.exists()

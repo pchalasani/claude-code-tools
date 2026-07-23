@@ -205,10 +205,16 @@ overlay_speed = 1.0  # animation speed (lower = slower/gentler)
 
 ```
 voice-type [flags]           run with config + flag overrides
-voice-type init [--force]    write the commented sample config
+voice-type setup [--force]   interactive walkthrough -> writes config
+voice-type init [--force]    write the commented sample config to edit
 voice-type hotkey            press a chord; prints the config line
 voice-type --help            full flag reference
 ```
+
+New here? `voice-type setup` asks a handful of questions (engine,
+mode, hotkey, ...) — each explained, with sensible defaults — and
+writes a valid config for you. `init` instead drops a fully commented
+sample file to edit by hand.
 
 Flags mirror the config keys: `--mode`, `--engine`,
 `--segmentation`, `--parakeet-model`, `--model-arch`,
