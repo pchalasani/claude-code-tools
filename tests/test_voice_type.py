@@ -1542,10 +1542,10 @@ def test_stop_phrase_in_flight_is_dropped_not_typed() -> None:
 
 
 def test_invalid_optional_hotkey_keeps_toggle(monkeypatch) -> None:
-    pytest.importorskip("pynput")
+    import claude_code_tools.voice_type.app as app_mod
     import claude_code_tools.voice_type.hotkey as hotkey_mod
-    from claude_code_tools.voice_type.app import VoiceTypeApp
 
+    monkeypatch.setattr(app_mod, "Typist", RecordingTypist)
     started: dict = {}
 
     def fake_start_hotkeys(bindings):  # noqa: ANN001, ANN202
@@ -1553,7 +1553,10 @@ def test_invalid_optional_hotkey_keeps_toggle(monkeypatch) -> None:
         return SimpleNamespace(stop=lambda: None)
 
     monkeypatch.setattr(hotkey_mod, "start_hotkeys", fake_start_hotkeys)
-    app = VoiceTypeApp(Config(
+    # Never let the test hit real Quartz/ApplicationServices probes
+    # (CGRequestListenEventAccess can open a system privacy prompt).
+    monkeypatch.setattr(hotkey_mod, "check_permissions", lambda: [])
+    app = app_mod.VoiceTypeApp(Config(
         mode="toggle", sounds=False, overlay=False,
         cancel_hotkey="escape", paste_hotkey="<cmd>+<ctrl>+v",
     ))
@@ -1588,8 +1591,13 @@ def test_check_permissions_reports_missing_grants(monkeypatch) -> None:
             "n", requested["n"] + 1
         ),
     )
+    ax_prompts: list[dict] = []
     fake_appserv = types.SimpleNamespace(
-        AXIsProcessTrusted=lambda: False
+        AXIsProcessTrusted=lambda: False,
+        AXIsProcessTrustedWithOptions=lambda opts: bool(
+            ax_prompts.append(opts)
+        ),
+        kAXTrustedCheckOptionPrompt="AXTrustedCheckOptionPrompt",
     )
     monkeypatch.setitem(sys.modules, "Quartz", fake_quartz)
     monkeypatch.setitem(
@@ -1600,8 +1608,111 @@ def test_check_permissions_reports_missing_grants(monkeypatch) -> None:
     assert "Input Monitoring" in warnings[0]
     assert "Accessibility" in warnings[1]
     assert requested["n"] == 1  # registration was requested
+    # the Accessibility prompt/registration was requested too
+    assert ax_prompts == [{"AXTrustedCheckOptionPrompt": True}]
 
-    # granted context: no warnings
+    # granted context: no warnings, and no fresh registration request
     fake_quartz.CGPreflightListenEventAccess = lambda: True
     fake_appserv.AXIsProcessTrusted = lambda: True
     assert hotkey_mod.check_permissions() == []
+    assert requested["n"] == 1  # unchanged: not re-requested
+    assert len(ax_prompts) == 1  # unchanged: not re-prompted
+
+
+def test_check_permissions_reports_unverifiable_probes(monkeypatch) -> None:
+    """Failed or unavailable probes yield 'could not verify' warnings
+    instead of silently reporting that all is well."""
+    from claude_code_tools.voice_type import hotkey as hotkey_mod
+
+    monkeypatch.setattr(hotkey_mod.sys, "platform", "darwin")
+
+    def boom() -> bool:
+        raise RuntimeError("kaput")
+
+    fake_appserv = types.SimpleNamespace(AXIsProcessTrusted=boom)
+    monkeypatch.setitem(
+        sys.modules,
+        "Quartz",
+        types.SimpleNamespace(CGPreflightListenEventAccess=boom),
+    )
+    monkeypatch.setitem(sys.modules, "ApplicationServices", fake_appserv)
+    warnings = hotkey_mod.check_permissions()
+    assert len(warnings) == 2
+    assert "could not verify Input Monitoring" in warnings[0]
+    assert "could not verify Accessibility" in warnings[1]
+
+    # a Quartz build lacking the preflight symbol is loud too, never
+    # treated as "granted"
+    monkeypatch.setitem(sys.modules, "Quartz", types.SimpleNamespace())
+    warnings = hotkey_mod.check_permissions()
+    assert "could not verify Input Monitoring" in warnings[0]
+
+    # a failed registration request is reported alongside the missing
+    # grant, not suppressed
+    monkeypatch.setitem(
+        sys.modules,
+        "Quartz",
+        types.SimpleNamespace(
+            CGPreflightListenEventAccess=lambda: False,
+            CGRequestListenEventAccess=boom,
+        ),
+    )
+    warnings = hotkey_mod.check_permissions()
+    assert "Input Monitoring permission MISSING" in warnings[0]
+    assert "registration failed" in warnings[1]
+
+    # same for Accessibility: a failed prompt/registration request is
+    # reported alongside the missing grant, not suppressed (the stub
+    # lacks AXIsProcessTrustedWithOptions, so the request fails)
+    monkeypatch.setitem(
+        sys.modules,
+        "Quartz",
+        types.SimpleNamespace(
+            CGPreflightListenEventAccess=lambda: True
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "ApplicationServices",
+        types.SimpleNamespace(AXIsProcessTrusted=lambda: False),
+    )
+    warnings = hotkey_mod.check_permissions()
+    assert "Accessibility permission MISSING" in warnings[0]
+    assert "requesting Accessibility registration failed" in warnings[1]
+
+
+def test_startup_emits_permission_warnings_before_hotkeys(
+    monkeypatch,
+) -> None:
+    """Startup surfaces every preflight warning via _status with the
+    documented "WARNING: " prefix, before starting the hotkeys.
+
+    Hermetic: check_permissions/start_hotkeys are replaced and Typist
+    is stubbed, so no real pynput/Quartz backend is ever imported.
+    """
+    import claude_code_tools.voice_type.app as app_mod
+    import claude_code_tools.voice_type.hotkey as hotkey_mod
+
+    monkeypatch.setattr(app_mod, "Typist", RecordingTypist)
+    events: list[str] = []
+    monkeypatch.setattr(
+        hotkey_mod,
+        "check_permissions",
+        lambda: ["no input monitoring", "no accessibility"],
+    )
+
+    def fake_start_hotkeys(bindings):  # noqa: ANN001, ANN202
+        events.append("start_hotkeys")
+        return SimpleNamespace(stop=lambda: None)
+
+    monkeypatch.setattr(hotkey_mod, "start_hotkeys", fake_start_hotkeys)
+    app = app_mod.VoiceTypeApp(
+        Config(mode="toggle", sounds=False, overlay=False)
+    )
+    app._status = events.append  # instance attr shadows the staticmethod
+    assert app._start_hotkey_listener() is not None
+    assert events[:2] == [
+        "WARNING: no input monitoring",
+        "WARNING: no accessibility",
+    ]
+    assert events[-1] == "start_hotkeys"
