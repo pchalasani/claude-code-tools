@@ -79,25 +79,41 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
             NSMakeRect(cx - w / 2, cy - h / 2, w, h)
         )
 
-    def _mk_ghost(cx, cy, gw, bob):  # noqa: ANN001, ANN202
-        """Classic ghost silhouette: domed head, wavy hem."""
+    def _mk_ghost(cx, cy, gw, jelly, ph):  # noqa: ANN001, ANN202
+        """Ghost silhouette (domed head, wavy hem) with a soft jelly flex.
+
+        Built from points so a gentle, slow, spatially-coherent
+        displacement can wobble the whole outline — the head is
+        non-rigid (flexes shape), but the amplitude is small and smooth
+        so it never turns into a lumpy blob. ``jelly`` is the wobble
+        amplitude in points; ``ph`` the slow master phase.
+        """
         import math
 
-        p = NSBezierPath.bezierPath()
-        dome_y = cy + gw * 0.55 + bob
-        hem_y = cy - gw * 0.95 + bob
-        p.moveToPoint_((cx + gw, hem_y))
-        p.lineToPoint_((cx + gw, dome_y))
-        p.appendBezierPathWithArcWithCenter_radius_startAngle_endAngle_(
-            (cx, dome_y), gw, 0, 180
-        )
-        p.lineToPoint_((cx - gw, hem_y))
-        segs, bumps, ha = 36, 3, gw * 0.16
+        dome_y = cy + gw * 0.55
+        hem_y = cy - gw * 0.95
+        pts = [(cx + gw, hem_y), (cx + gw, dome_y)]
+        nd = 26
+        for i in range(1, nd):
+            a = math.pi * i / nd
+            pts.append((cx + gw * math.cos(a), dome_y + gw * math.sin(a)))
+        pts.append((cx - gw, dome_y))
+        pts.append((cx - gw, hem_y))
+        segs, bumps, ha = 30, 3, gw * 0.16
         for i in range(1, segs + 1):
             u = i / segs
             x = cx - gw + u * 2 * gw
-            y = hem_y - ha * math.sin(u * math.pi * bumps)
-            p.lineToPoint_((x, y))
+            pts.append((x, hem_y - ha * math.sin(u * math.pi * bumps)))
+
+        p = NSBezierPath.bezierPath()
+        for i, (x, y) in enumerate(pts):
+            dx = jelly * math.sin(0.028 * y + ph * 0.8)
+            dy = jelly * math.sin(0.028 * x - ph * 0.6)
+            pt = (x + dx, y + dy)
+            if i == 0:
+                p.moveToPoint_(pt)
+            else:
+                p.lineToPoint_(pt)
         p.closePath()
         return p
 
@@ -111,17 +127,22 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
         """
         import math
 
-        rx = gw * (0.40 + 0.10 * open_)
-        ry = gw * (0.05 + 0.58 * open_)
+        rx = gw * (0.38 + 0.08 * open_)
+        ry = gw * (0.05 + 0.42 * open_)
         cy = lip_y - ry * 0.7  # grows downward from the lip line
-        # Constrained flex: ONE gentle low harmonic, small amplitude —
-        # a softly rounded mouth, never a lumpy blob.
-        deform = 0.03 + 0.05 * open_
+        # Constrained flex: two gentle low harmonics at small amplitude
+        # so the mouth has organic life without becoming a lumpy blob.
+        # (It is also clipped to the face by the caller, so it can never
+        # spill past the ghost's silhouette.)
+        deform = 0.04 + 0.06 * open_
         n = 44
         p = NSBezierPath.bezierPath()
         for i in range(n + 1):
             a = 2.0 * math.pi * i / n
-            wob = 1.0 + deform * math.sin(2 * a + ph * 0.5)
+            wob = 1.0 + deform * (
+                math.sin(2 * a + ph * 0.5)
+                + 0.4 * math.sin(3 * a - ph * 0.4)
+            )
             x = mx + rx * wob * math.cos(a)
             y = cy + ry * wob * math.sin(a)
             if i == 0:
@@ -194,15 +215,19 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
             t.translateXBy_yBy_(-dcx, -dcy)
             t.concat()
             try:
-                # soft halo for presence
-                halo = _mk_ghost(dcx, dcy, gw * 1.10, 0.0)
+                # Slow, small, spatially-coherent jelly flex so the head
+                # is non-rigid; a touch more when talking.
+                jelly = 1.6 + 2.4 * amp
+
+                # soft halo for presence (flexes WITH the body)
+                halo = _mk_ghost(dcx, dcy, gw * 1.10, jelly, ph)
                 NSColor.colorWithCalibratedRed_green_blue_alpha_(
                     0.30, 0.62, 1.0, 0.20
                 ).setFill()
                 halo.fill()
 
                 # body: bluish radial gradient + bright rim
-                body = _mk_ghost(dcx, dcy, gw, 0.0)
+                body = _mk_ghost(dcx, dcy, gw, jelly, ph)
                 core = NSColor.colorWithCalibratedRed_green_blue_alpha_(
                     0.62, 0.86, 1.0, 0.88
                 )
@@ -227,7 +252,11 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
                 body.setLineWidth_(2.0)
                 body.stroke()
 
-                # --- face (dark translucent "holes", ghost-emoji style) --
+                # --- face features, CLIPPED to the body so nothing (the
+                # mouth in particular) can ever spill past the silhouette
+                gc = NSGraphicsContext.currentContext()
+                gc.saveGraphicsState()
+                body.addClip()
                 dark = NSColor.colorWithCalibratedRed_green_blue_alpha_(
                     0.05, 0.10, 0.26, 0.92
                 )
@@ -244,11 +273,9 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
                         dcx + s * eye_dx, eye_y, eye_w, eye_h
                     ).fill()
                 _mk_oval(dcx, dcy + gw * 0.05, gw * 0.10, gw * 0.12).fill()
-
-                # mouth: organic hole opening downward (see _mk_mouth)
-                lip_y = dcy - gw * 0.28
-                dark.setFill()
+                lip_y = dcy - gw * 0.30
                 _mk_mouth(dcx, lip_y, gw, amp, ph).fill()
+                gc.restoreGraphicsState()
             finally:
                 NSGraphicsContext.currentContext().restoreGraphicsState()
 
