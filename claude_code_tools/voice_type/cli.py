@@ -157,6 +157,12 @@ def _cmd_hotkey() -> int:
     return 0
 
 
+def _cmd_setup(args: argparse.Namespace) -> int:
+    from .setup_wizard import run_setup
+
+    return run_setup(config_path=args.config, force=args.force)
+
+
 def _cmd_init(args: argparse.Namespace) -> int:
     try:
         path = write_sample_config(args.config, force=args.force)
@@ -164,6 +170,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
         print(f"voice-type: {e}", file=sys.stderr)
         return 1
     print(f"wrote {path}")
+    print("(tip: `voice-type setup` walks you through it interactively)")
     return 0
 
 
@@ -179,6 +186,7 @@ examples:
   voice-type --engine parakeet-mlx --segmentation hold
                                  # best accuracy: whole-take dictation
   voice-type --mode wake         # hands-free with wake word "claude"
+  voice-type setup               # interactive walkthrough -> config
   voice-type init                # write a commented sample config
   voice-type hotkey              # record a chord, print the config line
 
@@ -218,12 +226,29 @@ Accessibility (to type), Input Monitoring (global hotkeys).
         "hotkey",
         help="press a key combo and print the matching config line",
     )
+    p_setup = sub.add_parser(
+        "setup",
+        help="interactive walkthrough that writes your config",
+    )
+    p_setup.add_argument(
+        "--config",
+        type=Path,
+        # SUPPRESS so a --config given BEFORE the subcommand is not
+        # clobbered by the subparser's default (see the init parser).
+        default=argparse.SUPPRESS,
+        help="destination path",
+    )
+    p_setup.add_argument(
+        "--force", action="store_true", help="overwrite existing config"
+    )
 
     args = parser.parse_args()
     if args.command == "init":
         return _cmd_init(args)
     if args.command == "hotkey":
         return _cmd_hotkey()
+    if args.command == "setup":
+        return _cmd_setup(args)
     return _cmd_run(args)
 
 

@@ -1726,3 +1726,243 @@ def test_sound_player_constructs_and_plays_safely() -> None:
     player.play("Glass")          # real system sound (or afplay fallback)
     player.play("")               # empty: no-op
     player.play("/no/such.aiff")  # missing file: no-op, no raise
+
+
+# -- setup wizard ---------------------------------------------------------
+
+
+def _fake_questionary(script):
+    """Build a fake questionary module that returns scripted answers."""
+    it = iter(script)
+
+    class _Ans:
+        def __init__(self, v):
+            self._v = v
+
+        def ask(self):
+            return self._v
+
+    def _select(msg, choices=None, default=None):  # noqa: ANN001, ANN202
+        return _Ans(next(it))
+
+    def _confirm(msg, default=None):  # noqa: ANN001, ANN202
+        return _Ans(next(it))
+
+    def _text(msg, default="", validate=None):  # noqa: ANN001, ANN202
+        return _Ans(next(it))
+
+    class _Choice:
+        def __init__(self, title, value=None):  # noqa: ANN001
+            self.title, self.value = title, value
+
+    return types.SimpleNamespace(
+        select=_select, confirm=_confirm, text=_text, Choice=_Choice
+    )
+
+
+def test_toml_value_serialization() -> None:
+    from claude_code_tools.voice_type.setup_wizard import _toml_value
+
+    assert _toml_value(True) == "true"
+    assert _toml_value("<ctrl>+;") == '"<ctrl>+;"'
+    assert _toml_value(["a", "b"]) == '["a", "b"]'
+    assert _toml_value('say "go"') == '"say \\"go\\""'
+
+
+def test_setup_wizard_writes_valid_config(monkeypatch, tmp_path) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "questionary",
+        _fake_questionary(
+            [
+                "parakeet-mlx",             # engine
+                "toggle",                   # mode
+                "hold",                     # segmentation
+                "Keep default (<ctrl>+;)",  # hotkey
+                False,                      # extras?
+            ]
+        ),
+    )
+    from claude_code_tools.voice_type.config import load_config
+    from claude_code_tools.voice_type.setup_wizard import run_setup
+
+    out = tmp_path / "c.toml"
+    assert run_setup(config_path=out, force=True) == 0
+    cfg = load_config(out)
+    assert (cfg.engine, cfg.mode, cfg.segmentation) == (
+        "parakeet-mlx",
+        "toggle",
+        "hold",
+    )
+
+
+def test_setup_wizard_wake_mode(monkeypatch, tmp_path) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "questionary",
+        _fake_questionary(
+            [
+                "moonshine",                # engine
+                "medium-streaming",         # model_arch
+                "wake",                     # mode
+                "Keep default (<ctrl>+;)",  # hotkey
+                "claude",                   # wake word
+                "hey cloud, claud",         # aliases
+                False,                      # extras?
+            ]
+        ),
+    )
+    from claude_code_tools.voice_type.config import load_config
+    from claude_code_tools.voice_type.setup_wizard import run_setup
+
+    out = tmp_path / "c.toml"
+    assert run_setup(config_path=out, force=True) == 0
+    cfg = load_config(out)
+    assert cfg.mode == "wake"
+    assert cfg.wake_word_aliases == ["hey cloud", "claud"]
+
+
+def test_setup_wizard_cancel_leaves_no_file(monkeypatch, tmp_path) -> None:
+    monkeypatch.setitem(
+        sys.modules, "questionary", _fake_questionary([None])  # engine=None
+    )
+    from claude_code_tools.voice_type.setup_wizard import run_setup
+
+    out = tmp_path / "c.toml"
+    assert run_setup(config_path=out, force=True) == 1
+    assert not out.exists()
+
+
+def test_setup_wizard_cancel_at_optional_prompt_keeps_file(
+    monkeypatch, tmp_path
+) -> None:
+    """Aborting an OPTIONAL prompt cancels — never overwrites a config."""
+    out = tmp_path / "c.toml"
+    out.write_text('engine = "moonshine"\n')  # pre-existing config
+    monkeypatch.setitem(
+        sys.modules,
+        "questionary",
+        _fake_questionary(
+            [
+                "parakeet-mlx",             # engine
+                "toggle",                   # mode
+                "hold",                     # segmentation
+                "Keep default (<ctrl>+;)",  # hotkey
+                None,                       # extras? -> CANCEL (Ctrl-C)
+            ]
+        ),
+    )
+    from claude_code_tools.voice_type.setup_wizard import run_setup
+
+    assert run_setup(config_path=out, force=True) == 1
+    assert out.read_text() == 'engine = "moonshine"\n'  # untouched
+
+
+def test_setup_config_flag_before_subcommand_preserved(
+    monkeypatch, tmp_path
+) -> None:
+    """`voice-type --config X setup` must target X, not the default."""
+    import claude_code_tools.voice_type.cli as cli_mod
+
+    target = tmp_path / "chosen.toml"
+    seen = {}
+
+    def _fake_run_setup(config_path=None, force=False):  # noqa: ANN001
+        seen["path"] = config_path
+        return 0
+
+    monkeypatch.setattr(
+        "claude_code_tools.voice_type.setup_wizard.run_setup",
+        _fake_run_setup,
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["voice-type", "--config", str(target), "setup"]
+    )
+    assert cli_mod.main() == 0
+    assert seen["path"] == target  # global --config survived the subparser
+
+
+def test_toml_value_escapes_control_chars() -> None:
+    """A string with newlines/tabs/etc. serializes to valid TOML.
+
+    The old serializer escaped only backslashes and quotes, so a value
+    with a control character produced a document tomllib rejected.
+    """
+    import tomllib
+
+    from claude_code_tools.voice_type.setup_wizard import _toml_value
+
+    value = "line1\nline2\ttab\rreturn\x00nul"
+    rendered = _toml_value(value)
+    assert tomllib.loads(f"x = {rendered}")["x"] == value
+
+
+def test_setup_wizard_rejects_unsupported_recorded_hotkey(
+    monkeypatch, tmp_path
+) -> None:
+    """A recorded chord that ``parse_hotkey`` can't accept is refused,
+    falling through to manual entry instead of being written blindly."""
+    import claude_code_tools.voice_type.hotkey as hotkey_mod
+
+    monkeypatch.setattr(
+        hotkey_mod, "record_hotkey", lambda *a, **k: "<caps_lock>"
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "questionary",
+        _fake_questionary(
+            [
+                "parakeet-mlx",                      # engine
+                "toggle",                            # mode
+                "hold",                              # segmentation
+                "Record one now (press the combo)",  # hotkey: record
+                "<ctrl>+<alt>+d",                    # manual fallback
+                False,                               # extras?
+            ]
+        ),
+    )
+    from claude_code_tools.voice_type.config import load_config
+    from claude_code_tools.voice_type.setup_wizard import run_setup
+
+    out = tmp_path / "c.toml"
+    assert run_setup(config_path=out, force=True) == 0
+    cfg = load_config(out)
+    # The unsupported recorded <caps_lock> was refused; the manually
+    # typed chord was written instead.
+    assert cfg.hotkey == "<ctrl>+<alt>+d"
+
+
+def test_setup_wizard_atomic_write_preserves_existing_on_failure(
+    monkeypatch, tmp_path
+) -> None:
+    """A write interrupted mid-flight never truncates the old config.
+
+    An fsync failure must leave the pre-existing file byte-for-byte
+    intact and leave no temporary litter behind.
+    """
+    import claude_code_tools.voice_type.setup_wizard as sw
+
+    out = tmp_path / "c.toml"
+    out.write_text('engine = "moonshine"\n')
+    monkeypatch.setitem(
+        sys.modules,
+        "questionary",
+        _fake_questionary(
+            [
+                "parakeet-mlx",             # engine
+                "toggle",                   # mode
+                "hold",                     # segmentation
+                "Keep default (<ctrl>+;)",  # hotkey
+                False,                      # extras?
+            ]
+        ),
+    )
+
+    def boom(_fd: int) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(sw.os, "fsync", boom)
+    with pytest.raises(OSError):
+        sw.run_setup(config_path=out, force=True)
+    assert out.read_text() == 'engine = "moonshine"\n'  # untouched
+    assert list(tmp_path.glob(".config-*")) == []  # temp cleaned up
