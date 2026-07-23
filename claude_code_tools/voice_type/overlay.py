@@ -21,11 +21,14 @@ from typing import Callable
 SampleFn = Callable[[], tuple[str, bool, float]]
 TickFn = Callable[[], None]
 
-_WIDTH = 280.0
-_HEIGHT = 46.0
-_MARGIN_BOTTOM = 96.0
-_BARS = 64
-_TICK_SECONDS = 0.05
+_WIDTH = 460.0
+_HEIGHT = 92.0
+_MARGIN_BOTTOM = 110.0
+# Recent audio-level history (drives the local vibration envelope) and
+# the number of points the string is rendered with (smoothness).
+_HISTORY = 96
+_RENDER = 190
+_TICK_SECONDS = 0.033  # ~30 fps, smooth string motion
 
 
 def overlay_available() -> bool:
@@ -66,60 +69,94 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
     )
 
     class WaveView(AppKit.NSView):  # noqa: D401
-        """Draws the pill background, state dot, and scrolling bars."""
+        """A translucent string that lies flat and vibrates with the voice.
+
+        The line is pinned at both ends (like a plucked string) and its
+        oscillation amplitude tracks the live, gain-adjusted mic level:
+        silence reads as a near-flat line, speech makes it ripple. The
+        recent-level history modulates the amplitude ALONG the string
+        (and scrolls), so the shape reflects the actual audio rather
+        than a fixed animation.
+        """
 
         def initWithFrame_(self, frame):  # noqa: ANN001, ANN201, N802
             self = objc.super(WaveView, self).initWithFrame_(frame)
             if self is None:
                 return None
-            self.levels = [0.0] * _BARS
+            self.levels = [0.0] * _HISTORY
+            self.phase = 0.0
             self.recording = False
-            self.label = ""
             return self
 
         def push_(self, sample):  # noqa: ANN001, ANN201, N802
-            label, recording, level = sample
-            self.levels = self.levels[1:] + [max(0.0, min(1.0, level))]
+            _label, recording, level = sample
+            level = max(0.0, min(1.0, float(level)))
+            # Mild smoothing so the string settles rather than jitters.
+            prev = self.levels[-1]
+            smoothed = prev + 0.5 * (level - prev)
+            self.levels = self.levels[1:] + [smoothed]
+            self.phase += 0.42  # advance the travelling wave each frame
             self.recording = bool(recording)
-            self.label = str(label)
             self.setNeedsDisplay_(True)
+
+        def _string_path(self, width, mid, max_amp):  # noqa: ANN001, ANN202
+            import math
+
+            path = NSBezierPath.bezierPath()
+            path.setLineJoinStyle_(AppKit.NSLineJoinStyleRound)
+            path.setLineCapStyle_(AppKit.NSLineCapStyleRound)
+            n = len(self.levels)
+            for i in range(_RENDER + 1):
+                u = i / _RENDER  # 0..1 along the string
+                # local amplitude from the level history at this point
+                fpos = u * (n - 1)
+                lo = int(fpos)
+                frac = fpos - lo
+                lvl = self.levels[lo]
+                if lo + 1 < n:
+                    lvl += frac * (self.levels[lo + 1] - lvl)
+                window = math.sin(math.pi * u)  # pin both ends to flat
+                amp = lvl * max_amp * window
+                disp = amp * (
+                    math.sin(u * 7.0 * math.pi + self.phase)
+                    + 0.4 * math.sin(u * 13.0 * math.pi - 1.7 * self.phase)
+                ) / 1.4
+                x = u * width
+                y = mid + disp
+                if i == 0:
+                    path.moveToPoint_((x, y))
+                else:
+                    path.lineToPoint_((x, y))
+            return path
 
         def drawRect_(self, rect):  # noqa: ANN001, ANN201, N802
             b = self.bounds()
-            pill = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-                b, b.size.height / 2, b.size.height / 2
+            # Ultra-faint rounded backdrop: just enough to read the
+            # string over any wallpaper, without looking like a panel.
+            pad = 6.0
+            back = NSMakeRect(
+                pad, pad, b.size.width - 2 * pad, b.size.height - 2 * pad
             )
-            NSColor.colorWithCalibratedWhite_alpha_(0.08, 0.82).setFill()
-            pill.fill()
-            if self.recording:
-                bar_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                    1.0, 0.27, 0.23, 1.0
-                )
-            else:
-                bar_color = NSColor.colorWithCalibratedWhite_alpha_(
-                    0.62, 0.9
-                )
-            bar_color.setFill()
-            # state dot on the left
-            dot = 8.0
-            dot_rect = NSMakeRect(
-                14.0, (b.size.height - dot) / 2, dot, dot
-            )
-            NSBezierPath.bezierPathWithOvalInRect_(dot_rect).fill()
-            # scrolling waveform bars, mirrored around the centerline
-            left = 30.0
-            right = 14.0
-            span = b.size.width - left - right
-            bw = span / _BARS
+            r = back.size.height / 2
+            NSColor.colorWithCalibratedWhite_alpha_(0.0, 0.16).setFill()
+            NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+                back, r, r
+            ).fill()
+
             mid = b.size.height / 2
-            max_half = b.size.height / 2 - 7.0
-            for i, level in enumerate(self.levels):
-                half = max(1.0, level * max_half)
-                x = left + i * bw
-                bar = NSMakeRect(x, mid - half, max(1.0, bw - 2.0), 2 * half)
-                NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-                    bar, 1.0, 1.0
-                ).fill()
+            max_amp = b.size.height / 2 - 16.0
+            path = self._string_path(b.size.width, mid, max_amp)
+            # soft glow behind, then the crisp translucent string
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                1.0, 0.30, 0.26, 0.16
+            ).setStroke()
+            path.setLineWidth_(7.0)
+            path.stroke()
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                1.0, 0.42, 0.38, 0.55
+            ).setStroke()
+            path.setLineWidth_(2.0)
+            path.stroke()
 
     class Driver(AppKit.NSObject):
         """NSTimer target: samples audio, ticks the app, ends the loop.

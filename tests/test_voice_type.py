@@ -1716,3 +1716,13 @@ def test_startup_emits_permission_warnings_before_hotkeys(
         "WARNING: no accessibility",
     ]
     assert events[-1] == "start_hotkeys"
+
+
+def test_sound_player_constructs_and_plays_safely() -> None:
+    """SoundPlayer must never raise, even for bogus/empty sounds."""
+    from claude_code_tools.voice_type.inject import SoundPlayer
+
+    player = SoundPlayer("Glass", "Bottle", "")
+    player.play("Glass")          # real system sound (or afplay fallback)
+    player.play("")               # empty: no-op
+    player.play("/no/such.aiff")  # missing file: no-op, no raise
