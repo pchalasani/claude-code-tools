@@ -21,9 +21,9 @@ from typing import Callable
 SampleFn = Callable[[], tuple[str, bool, float]]
 TickFn = Callable[[], None]
 
-_WIDTH = 184.0
-_HEIGHT = 184.0
-_MARGIN_BOTTOM = 120.0
+_WIDTH = 210.0
+_HEIGHT = 230.0  # generous headroom so the halo never clips when moving
+_MARGIN_BOTTOM = 110.0
 _TICK_SECONDS = 0.033  # ~30 fps
 # Master animation speed: small = slow, gentle, gradual motion.
 _PHASE_SPEED = 0.05
@@ -112,17 +112,16 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
         import math
 
         rx = gw * (0.40 + 0.10 * open_)
-        ry = gw * (0.05 + 0.55 * open_)
+        ry = gw * (0.05 + 0.58 * open_)
         cy = lip_y - ry * 0.7  # grows downward from the lip line
-        deform = 0.05 + 0.13 * open_
+        # Constrained flex: ONE gentle low harmonic, small amplitude —
+        # a softly rounded mouth, never a lumpy blob.
+        deform = 0.03 + 0.05 * open_
         n = 44
         p = NSBezierPath.bezierPath()
         for i in range(n + 1):
             a = 2.0 * math.pi * i / n
-            wob = 1.0 + deform * (
-                math.sin(3 * a + ph * 0.6)
-                + 0.5 * math.sin(5 * a - ph * 0.4)
-            )
+            wob = 1.0 + deform * math.sin(2 * a + ph * 0.5)
             x = mx + rx * wob * math.cos(a)
             y = cy + ry * wob * math.sin(a)
             if i == 0:
@@ -169,7 +168,7 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
 
             b = self.bounds()
             cx, cy = b.size.width / 2, b.size.height / 2
-            gw = min(b.size.width, b.size.height) * 0.30
+            gw = min(b.size.width, b.size.height) * 0.24
             amp = self.amp
             ph = self.phase
 
@@ -177,14 +176,14 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
             # Bob and sway run at DIFFERENT slow frequencies so the
             # ghost describes a lazy figure-eight rather than a rigid
             # vertical bounce; both grow only mildly with volume.
-            bob = (3.0 + 3.5 * amp) * math.sin(ph * 0.9)
-            sway = (3.0 + 5.0 * amp) * math.sin(ph * 0.6 + 0.8)
+            bob = (3.0 + 3.0 * amp) * math.sin(ph * 0.9)
+            sway = (3.0 + 4.5 * amp) * math.sin(ph * 0.6 + 0.8)
             dcx, dcy = cx + sway, cy + bob
-            # Gentle slow "breathing" flex plus a soft lean, so the head
-            # feels soft/flexible without any fast squash.
-            breathe = 1.0 + 0.03 * math.sin(ph * 0.7)
-            sx = breathe * (1.0 - 0.04 * amp)
-            sy = breathe * (1.0 + 0.06 * amp)
+            # The whole face gently breathes and EXPANDS with volume
+            # (uniform scale — grows/shrinks, no shape distortion), plus
+            # a soft left/right lean. That is the head's audio reaction.
+            scale = (1.0 + 0.03 * math.sin(ph * 0.7)) * (1.0 + 0.11 * amp)
+            sx = sy = scale
             lean = (2.5 + 3.0 * amp) * math.sin(ph * 0.45)  # degrees
 
             NSGraphicsContext.currentContext().saveGraphicsState()
@@ -196,7 +195,7 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
             t.concat()
             try:
                 # soft halo for presence
-                halo = _mk_ghost(dcx, dcy, gw * 1.12, 0.0)
+                halo = _mk_ghost(dcx, dcy, gw * 1.10, 0.0)
                 NSColor.colorWithCalibratedRed_green_blue_alpha_(
                     0.30, 0.62, 1.0, 0.20
                 ).setFill()
