@@ -1848,7 +1848,7 @@ def test_setup_wizard_cancel_at_optional_prompt_keeps_file(
                 "toggle",                   # mode
                 "hold",                     # segmentation
                 "Keep default (<ctrl>+;)",  # hotkey
-                None,                       # extras? -> CANCEL (Esc)
+                None,                       # extras? -> CANCEL (Ctrl-C)
             ]
         ),
     )
@@ -1880,3 +1880,89 @@ def test_setup_config_flag_before_subcommand_preserved(
     )
     assert cli_mod.main() == 0
     assert seen["path"] == target  # global --config survived the subparser
+
+
+def test_toml_value_escapes_control_chars() -> None:
+    """A string with newlines/tabs/etc. serializes to valid TOML.
+
+    The old serializer escaped only backslashes and quotes, so a value
+    with a control character produced a document tomllib rejected.
+    """
+    import tomllib
+
+    from claude_code_tools.voice_type.setup_wizard import _toml_value
+
+    value = "line1\nline2\ttab\rreturn\x00nul"
+    rendered = _toml_value(value)
+    assert tomllib.loads(f"x = {rendered}")["x"] == value
+
+
+def test_setup_wizard_rejects_unsupported_recorded_hotkey(
+    monkeypatch, tmp_path
+) -> None:
+    """A recorded chord that ``parse_hotkey`` can't accept is refused,
+    falling through to manual entry instead of being written blindly."""
+    import claude_code_tools.voice_type.hotkey as hotkey_mod
+
+    monkeypatch.setattr(
+        hotkey_mod, "record_hotkey", lambda *a, **k: "<caps_lock>"
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "questionary",
+        _fake_questionary(
+            [
+                "parakeet-mlx",                      # engine
+                "toggle",                            # mode
+                "hold",                              # segmentation
+                "Record one now (press the combo)",  # hotkey: record
+                "<ctrl>+<alt>+d",                    # manual fallback
+                False,                               # extras?
+            ]
+        ),
+    )
+    from claude_code_tools.voice_type.config import load_config
+    from claude_code_tools.voice_type.setup_wizard import run_setup
+
+    out = tmp_path / "c.toml"
+    assert run_setup(config_path=out, force=True) == 0
+    cfg = load_config(out)
+    # The unsupported recorded <caps_lock> was refused; the manually
+    # typed chord was written instead.
+    assert cfg.hotkey == "<ctrl>+<alt>+d"
+
+
+def test_setup_wizard_atomic_write_preserves_existing_on_failure(
+    monkeypatch, tmp_path
+) -> None:
+    """A write interrupted mid-flight never truncates the old config.
+
+    An fsync failure must leave the pre-existing file byte-for-byte
+    intact and leave no temporary litter behind.
+    """
+    import claude_code_tools.voice_type.setup_wizard as sw
+
+    out = tmp_path / "c.toml"
+    out.write_text('engine = "moonshine"\n')
+    monkeypatch.setitem(
+        sys.modules,
+        "questionary",
+        _fake_questionary(
+            [
+                "parakeet-mlx",             # engine
+                "toggle",                   # mode
+                "hold",                     # segmentation
+                "Keep default (<ctrl>+;)",  # hotkey
+                False,                      # extras?
+            ]
+        ),
+    )
+
+    def boom(_fd: int) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(sw.os, "fsync", boom)
+    with pytest.raises(OSError):
+        sw.run_setup(config_path=out, force=True)
+    assert out.read_text() == 'engine = "moonshine"\n'  # untouched
+    assert list(tmp_path.glob(".config-*")) == []  # temp cleaned up
