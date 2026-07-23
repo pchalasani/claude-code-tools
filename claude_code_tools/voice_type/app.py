@@ -536,7 +536,11 @@ class VoiceTypeApp:
                     return state.value, state is State.ACTIVE, level
 
                 overlay.run_overlay(
-                    sample, tick, self._stop.is_set
+                    sample,
+                    tick,
+                    self._stop.is_set,
+                    flex=self.cfg.overlay_flex,
+                    speed=self.cfg.overlay_speed,
                 )
                 return result["code"]
             self._status("overlay unavailable; running without it")

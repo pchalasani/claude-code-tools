@@ -21,12 +21,15 @@ from typing import Callable
 SampleFn = Callable[[], tuple[str, bool, float]]
 TickFn = Callable[[], None]
 
-_WIDTH = 200.0
-_HEIGHT = 150.0
-_MARGIN_BOTTOM = 120.0
-# Points around the blob's rim (smoothness) and frame rate.
-_BLOB_POINTS = 108
-_TICK_SECONDS = 0.033  # ~30 fps, smooth wobble
+_WIDTH = 210.0
+_HEIGHT = 240.0  # generous headroom so the halo never clips when moving
+_MARGIN_BOTTOM = 110.0
+_TICK_SECONDS = 0.033  # ~30 fps
+# Master animation speed: small = slow, gentle, gradual motion.
+_PHASE_SPEED = 0.05
+# Idle blink: every ~_BLINK_EVERY frames the eyes close for a few.
+_BLINK_EVERY = 130
+_BLINK_FRAMES = 6
 
 
 def overlay_available() -> bool:
@@ -39,8 +42,14 @@ def overlay_available() -> bool:
         return False
 
 
-def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> None:
-    """Show the pill and block until ``stopped()`` returns True.
+def run_overlay(  # noqa: PLR0913
+    sample: SampleFn,
+    tick: TickFn,
+    stopped: Callable[[], bool],
+    flex: float = 1.0,
+    speed: float = 1.0,
+) -> None:
+    """Show the ghost and block until ``stopped()`` returns True.
 
     Args:
         sample: Returns (state_label, is_recording, level) each frame.
@@ -48,6 +57,8 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
             checks); exceptions are swallowed so the UI never dies.
         stopped: Polled each frame; True ends the loop and closes the
             panel.
+        flex: Face shape-flex multiplier (config overlay_flex).
+        speed: Animation speed multiplier (config overlay_speed).
 
     SIGINT is redirected to a flag-friendly handler while the loop
     runs (AppKit's run loop would otherwise swallow Ctrl+C), and
@@ -56,108 +67,226 @@ def run_overlay(sample: SampleFn, tick: TickFn, stopped: Callable[[], bool]) -> 
     import AppKit
     import objc
     from AppKit import (
+        NSAffineTransform,
         NSApplication,
         NSBackingStoreBuffered,
         NSBezierPath,
         NSColor,
         NSGradient,
+        NSGraphicsContext,
         NSMakeRect,
         NSPanel,
         NSScreen,
         NSTimer,
     )
 
-    class WaveView(AppKit.NSView):  # noqa: D401
-        """A glowing blue blob that wobbles and swells with the voice.
+    # Plain helpers (NOT NSView methods — pyobjc would try to bridge
+    # underscored methods as selectors and reject the extra arguments).
+    def _mk_oval(cx, cy, w, h):  # noqa: ANN001, ANN202
+        return NSBezierPath.bezierPathWithOvalInRect_(
+            NSMakeRect(cx - w / 2, cy - h / 2, w, h)
+        )
 
-        A soft orb sits at the bottom of the screen: it breathes gently
-        in silence and, as the live gain-adjusted mic level rises, its
-        rim deforms (organic multi-harmonic wobble) and the whole blob
-        swells — so its shape reflects the actual audio. Bluish, with a
-        radial gradient core, a rim highlight, and an outer halo for
-        presence.
+    def _mk_ghost(cx, cy, gw, jelly, ph):  # noqa: ANN001, ANN202
+        """Ghost silhouette (domed head, wavy hem) with a soft jelly flex.
+
+        Built from points so a gentle, slow, spatially-coherent
+        displacement can wobble the whole outline — the head is
+        non-rigid (flexes shape), but the amplitude is small and smooth
+        so it never turns into a lumpy blob. ``jelly`` is the wobble
+        amplitude in points; ``ph`` the slow master phase.
+        """
+        import math
+
+        dome_y = cy + gw * 0.55
+        hem_y = cy - gw * 0.95
+        pts = [(cx + gw, hem_y), (cx + gw, dome_y)]
+        nd = 26
+        for i in range(1, nd):
+            a = math.pi * i / nd
+            pts.append((cx + gw * math.cos(a), dome_y + gw * math.sin(a)))
+        pts.append((cx - gw, dome_y))
+        pts.append((cx - gw, hem_y))
+        segs, bumps, ha = 30, 3, gw * 0.16
+        for i in range(1, segs + 1):
+            u = i / segs
+            x = cx - gw + u * 2 * gw
+            pts.append((x, hem_y - ha * math.sin(u * math.pi * bumps)))
+
+        p = NSBezierPath.bezierPath()
+        for i, (x, y) in enumerate(pts):
+            dx = jelly * math.sin(0.028 * y + ph * 0.8)
+            dy = jelly * math.sin(0.028 * x - ph * 0.6)
+            pt = (x + dx, y + dy)
+            if i == 0:
+                p.moveToPoint_(pt)
+            else:
+                p.lineToPoint_(pt)
+        p.closePath()
+        return p
+
+    def _mk_mouth(mx, lip_y, gw, open_, ph):  # noqa: ANN001, ANN202
+        """An organic mouth-hole that opens downward (jaw) and morphs.
+
+        Not a scaling oval: the rim is perturbed by slow low harmonics
+        so it wobbles/changes shape, it opens mostly DOWNWARD from a
+        fixed upper-lip line (like a dropping jaw), and it stays a thin
+        slit at rest. ``open_`` is 0..1; ``ph`` is the slow master phase.
+        """
+        import math
+
+        rx = gw * (0.36 + 0.08 * open_)
+        ry = gw * (0.05 + 0.34 * open_)
+        cy = lip_y - ry * 0.6  # grows downward from the lip line
+        # Constrained flex: two gentle low harmonics at small amplitude
+        # so the mouth has organic life without becoming a lumpy blob.
+        # (It is also clipped to the face by the caller, so it can never
+        # spill past the ghost's silhouette.)
+        deform = 0.04 + 0.06 * open_
+        n = 44
+        p = NSBezierPath.bezierPath()
+        for i in range(n + 1):
+            a = 2.0 * math.pi * i / n
+            wob = 1.0 + deform * (
+                math.sin(2 * a + ph * 0.5)
+                + 0.4 * math.sin(3 * a - ph * 0.4)
+            )
+            x = mx + rx * wob * math.cos(a)
+            y = cy + ry * wob * math.sin(a)
+            if i == 0:
+                p.moveToPoint_((x, y))
+            else:
+                p.lineToPoint_((x, y))
+        p.closePath()
+        return p
+
+    class WaveView(AppKit.NSView):  # noqa: D401
+        """A little glowing-blue ghost whose mouth opens with your voice.
+
+        A friendly translucent ghost floats at the bottom of the screen:
+        it bobs and blinks on its own so it feels alive, and its mouth
+        opens wider the louder you speak (driven by the live,
+        gain-adjusted mic level) -- the Animoji-style talking face that
+        makes the tool fun to use.
         """
 
         def initWithFrame_(self, frame):  # noqa: ANN001, ANN201, N802
             self = objc.super(WaveView, self).initWithFrame_(frame)
             if self is None:
                 return None
-            self.amp = 0.0  # smoothed audio level driving the wobble
+            self.amp = 0.0  # smoothed level -> mouth opening
             self.phase = 0.0
+            self.frame_no = 0
             self.recording = False
             return self
 
         def push_(self, sample):  # noqa: ANN001, ANN201, N802
             _label, recording, level = sample
             level = max(0.0, min(1.0, float(level)))
-            # Fast attack, slow release: pops on speech, settles gently.
-            k = 0.55 if level > self.amp else 0.15
+            # Gentle attack, slow release so the mouth and motion change
+            # gradually rather than twitching frame-to-frame.
+            k = 0.4 if level > self.amp else 0.10
             self.amp += k * (level - self.amp)
-            self.phase += 0.16
+            self.phase += _PHASE_SPEED * speed
+            self.frame_no += 1
             self.recording = bool(recording)
             self.setNeedsDisplay_(True)
 
-        def _blob_path(self, cx, cy, base_r):  # noqa: ANN001, ANN202
+        def drawRect_(self, rect):  # noqa: ANN001, ANN201, N802
             import math
 
-            path = NSBezierPath.bezierPath()
-            wob = 0.09 + 0.42 * self.amp      # rim deformation depth
-            breathe = 0.05 * math.sin(self.phase * 0.5)
-            swell = 1.0 + 0.24 * self.amp     # overall growth with volume
-            for i in range(_BLOB_POINTS + 1):
-                a = 2.0 * math.pi * i / _BLOB_POINTS
-                shape = (
-                    math.sin(3 * a + self.phase)
-                    + 0.6 * math.sin(5 * a - 1.3 * self.phase)
-                    + 0.3 * math.sin(7 * a + 1.7 * self.phase)
-                ) / 1.9
-                r = base_r * swell * (1.0 + breathe + wob * shape)
-                x = cx + r * math.cos(a)
-                y = cy + r * math.sin(a)
-                if i == 0:
-                    path.moveToPoint_((x, y))
-                else:
-                    path.lineToPoint_((x, y))
-            path.closePath()
-            return path
-
-        def drawRect_(self, rect):  # noqa: ANN001, ANN201, N802
             b = self.bounds()
             cx, cy = b.size.width / 2, b.size.height / 2
-            base_r = min(b.size.width, b.size.height) * 0.26
+            gw = min(b.size.width, b.size.height) * 0.22
+            amp = self.amp
+            ph = self.phase
 
-            # outer halo for presence
-            halo = self._blob_path(cx, cy, base_r * 1.28)
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                0.30, 0.62, 1.0, 0.20
-            ).setFill()
-            halo.fill()
+            # Slow, gentle motion — a gradual drift, not a vibration.
+            # Bob and sway run at DIFFERENT slow frequencies so the
+            # ghost describes a lazy figure-eight rather than a rigid
+            # vertical bounce; both grow only mildly with volume.
+            bob = (3.0 + 3.0 * amp) * math.sin(ph * 0.9)
+            sway = (3.0 + 4.5 * amp) * math.sin(ph * 0.6 + 0.8)
+            dcx, dcy = cx + sway, cy + bob
+            # The whole face gently breathes and EXPANDS with volume
+            # (uniform scale — grows/shrinks, no shape distortion), plus
+            # a soft left/right lean. That is the head's audio reaction.
+            scale = (1.0 + 0.03 * math.sin(ph * 0.7)) * (1.0 + 0.11 * amp)
+            sx = sy = scale
+            lean = (2.5 + 3.0 * amp) * math.sin(ph * 0.45)  # degrees
 
-            # the blob: radial gradient core -> deeper blue rim
-            blob = self._blob_path(cx, cy, base_r)
-            core = NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                0.60, 0.85, 1.0, 0.85
-            )
-            edge = NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                0.16, 0.44, 0.98, 0.70
-            )
-            grad = NSGradient.alloc().initWithStartingColor_endingColor_(
-                core, edge
-            )
-            if grad is not None:
-                grad.drawInBezierPath_relativeCenterPosition_(
-                    blob, (0.0, 0.28)
+            NSGraphicsContext.currentContext().saveGraphicsState()
+            t = NSAffineTransform.transform()
+            t.translateXBy_yBy_(dcx, dcy)
+            t.rotateByDegrees_(lean)
+            t.scaleXBy_yBy_(sx, sy)
+            t.translateXBy_yBy_(-dcx, -dcy)
+            t.concat()
+            try:
+                # Slow, spatially-coherent jelly flex so the head is
+                # visibly non-rigid; more when talking, and scaled by the
+                # user's overlay_flex.
+                jelly = (2.6 + 5.0 * amp) * flex
+
+                # soft halo for presence (flexes WITH the body)
+                halo = _mk_ghost(dcx, dcy, gw * 1.10, jelly, ph)
+                NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    0.30, 0.62, 1.0, 0.20
+                ).setFill()
+                halo.fill()
+
+                # body: bluish radial gradient + bright rim
+                body = _mk_ghost(dcx, dcy, gw, jelly, ph)
+                core = NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    0.62, 0.86, 1.0, 0.88
                 )
-            else:  # pragma: no cover - gradient unavailable
-                edge.setFill()
-                blob.fill()
+                edge = NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    0.16, 0.44, 0.98, 0.74
+                )
+                grad = (
+                    NSGradient.alloc().initWithStartingColor_endingColor_(
+                        core, edge
+                    )
+                )
+                if grad is not None:
+                    grad.drawInBezierPath_relativeCenterPosition_(
+                        body, (0.0, 0.35)
+                    )
+                else:  # pragma: no cover
+                    edge.setFill()
+                    body.fill()
+                NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    0.80, 0.94, 1.0, 0.9
+                ).setStroke()
+                body.setLineWidth_(2.0)
+                body.stroke()
 
-            # bright rim
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                0.75, 0.92, 1.0, 0.9
-            ).setStroke()
-            blob.setLineWidth_(2.0)
-            blob.stroke()
+                # --- face features, CLIPPED to the body so nothing (the
+                # mouth in particular) can ever spill past the silhouette
+                gc = NSGraphicsContext.currentContext()
+                gc.saveGraphicsState()
+                body.addClip()
+                dark = NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    0.05, 0.10, 0.26, 0.92
+                )
+                dark.setFill()
+                eye_y = dcy + gw * 0.45
+                eye_dx = gw * 0.42
+                blinking = (
+                    self.frame_no % _BLINK_EVERY
+                ) < _BLINK_FRAMES
+                eye_w = gw * 0.26
+                eye_h = gw * 0.06 if blinking else gw * 0.36
+                for s in (-1, 1):
+                    _mk_oval(
+                        dcx + s * eye_dx, eye_y, eye_w, eye_h
+                    ).fill()
+                _mk_oval(dcx, dcy + gw * 0.05, gw * 0.10, gw * 0.12).fill()
+                lip_y = dcy - gw * 0.18
+                _mk_mouth(dcx, lip_y, gw, amp, ph).fill()
+                gc.restoreGraphicsState()
+            finally:
+                NSGraphicsContext.currentContext().restoreGraphicsState()
 
     class Driver(AppKit.NSObject):
         """NSTimer target: samples audio, ticks the app, ends the loop.

@@ -55,9 +55,13 @@ class Config:
             fastest for v3-int8 on Apple Silicon; 8 helps v2-fp16).
         strip_fillers: Drop standalone filler words (uh, um, ...) from
             typed text.
-        overlay: Show the floating waveform pill while recording
-            (macOS only; ignored elsewhere). The pill is hidden while
+        overlay: Show the floating ghost indicator while recording
+            (macOS only; ignored elsewhere). The ghost is hidden while
             paused/passive — its presence IS the recording indicator.
+        overlay_flex: How much the ghost's face flexes/wobbles its
+            shape (1.0 = default; higher = more flexible, calmer < 1.0).
+        overlay_speed: Overall animation speed multiplier (1.0 =
+            default; lower = slower/gentler motion).
         model_arch: Moonshine model architecture name (moonshine engine
             only).
         language: Language tag understood by Moonshine (e.g. "en").
@@ -98,6 +102,8 @@ class Config:
     mlx_model: str = "mlx-community/parakeet-tdt-0.6b-v3"
     strip_fillers: bool = True
     overlay: bool = True
+    overlay_flex: float = 1.0
+    overlay_speed: float = 1.0
     model_arch: str = "medium-streaming"
     language: str = "en"
     hotkey: str = "<ctrl>+;"
@@ -180,6 +186,16 @@ class Config:
             if not isinstance(value, str):
                 raise ValueError(
                     f"{name} must be a string, got {value!r}"
+                )
+        for name in ("overlay_flex", "overlay_speed"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(
+                value, (int, float)
+            ):
+                raise ValueError(f"{name} must be a number, got {value!r}")
+            if not 0.0 <= value <= 5.0:
+                raise ValueError(
+                    f"{name} must be between 0 and 5, got {value!r}"
                 )
         if self.mode == "wake" and not self.wake_word.strip():
             raise ValueError('mode "wake" requires a non-empty wake_word')
@@ -304,10 +320,14 @@ parakeet_model = "v3-int8"
 # Apple Silicon (~32x realtime); v2-fp16 benefits from 8 (~16x).
 parakeet_threads = 4
 
-# Floating waveform pill (macOS): shown ONLY while recording — red
-# waves as you speak; hidden when paused/waiting. Click-through; never
-# steals focus.
+# Floating ghost indicator (macOS): shown ONLY while recording — a
+# little blue ghost whose mouth opens with your voice; hidden when
+# paused/waiting. Click-through; never steals focus.
 overlay = true
+# How much the ghost's face flexes its shape (higher = more flexible).
+overlay_flex = 1.0
+# Overall animation speed (lower = slower, gentler motion).
+overlay_speed = 1.0
 
 # Remove standalone filler words (uh, um, ...) from typed text.
 strip_fillers = true
