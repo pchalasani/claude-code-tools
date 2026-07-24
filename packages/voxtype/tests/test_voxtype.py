@@ -1464,6 +1464,86 @@ def test_validate_rejects_bad_overlay_and_mlx_model(
 # -- CLI: --config placement and hotkey dependency guard ------------------
 
 
+def _fake_agents(monkeypatch, present, exit_codes=None):  # noqa: ANN001, ANN202
+    """Stub shutil.which + subprocess.run for skill_install.
+
+    ``present`` is the set of agent names on PATH; ``exit_codes`` maps a
+    full argv tuple to a return code (default 0). Returns the list of
+    argv lists actually run.
+    """
+    import voxtype.skill_install as si
+
+    exit_codes = exit_codes or {}
+    runs: list[list[str]] = []
+
+    monkeypatch.setattr(
+        si.shutil, "which", lambda name: name if name in present else None
+    )
+
+    def fake_run(argv):  # noqa: ANN001, ANN202
+        runs.append(argv)
+        code = exit_codes.get(tuple(argv), 0)
+        return SimpleNamespace(returncode=code)
+
+    monkeypatch.setattr(si.subprocess, "run", fake_run)
+    return runs
+
+
+def test_skill_install_targets_both_agents(monkeypatch, capsys) -> None:
+    """With both agents present, each gets marketplace-add + install."""
+    from voxtype.skill_install import install_skill
+
+    runs = _fake_agents(monkeypatch, present={"claude", "codex"})
+    assert install_skill() == 0
+    assert [
+        "claude", "plugin", "install", "voxtype@cctools-plugins",
+    ] in runs
+    # Codex has its own marketplace name (different manifest/CLI verb).
+    assert [
+        "codex", "plugin", "add", "voxtype@cctools-codex-plugins",
+    ] in runs
+    # marketplace add ran for both, from the repo
+    adds = [r for r in runs if "marketplace" in r]
+    assert all("pchalasani/claude-code-tools" in r for r in adds)
+    assert len(adds) == 2
+
+
+def test_skill_install_skips_absent_agent(monkeypatch) -> None:
+    """Only the installed agent is driven; the missing one is skipped."""
+    from voxtype.skill_install import install_skill
+
+    runs = _fake_agents(monkeypatch, present={"claude"})
+    assert install_skill() == 0
+    assert not any(r[0] == "codex" for r in runs)
+
+
+def test_skill_install_no_agents_errors(monkeypatch, capsys) -> None:
+    """No claude and no codex → exit 1 with guidance, no subprocesses."""
+    from voxtype.skill_install import install_skill
+
+    runs = _fake_agents(monkeypatch, present=set())
+    assert install_skill() == 1
+    assert runs == []
+    assert "neither" in capsys.readouterr().out
+
+
+def test_skill_install_survives_already_added_marketplace(
+    monkeypatch,
+) -> None:
+    """A non-zero marketplace-add (already added) still installs."""
+    from voxtype.skill_install import install_skill
+
+    add = ("claude", "plugin", "marketplace", "add",
+           "pchalasani/claude-code-tools")
+    runs = _fake_agents(
+        monkeypatch, present={"claude"}, exit_codes={add: 1}
+    )
+    assert install_skill() == 0  # install still ran and succeeded
+    assert [
+        "claude", "plugin", "install", "voxtype@cctools-plugins",
+    ] in runs
+
+
 def test_warn_if_unsupported_platform(monkeypatch, capsys) -> None:
     """Non-macOS launches warn (hotkey won't suppress); macOS is silent."""
     import voxtype.cli as cli_mod

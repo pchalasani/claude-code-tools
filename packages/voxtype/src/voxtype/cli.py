@@ -187,6 +187,12 @@ def _cmd_setup(args: argparse.Namespace) -> int:
     return run_setup(config_path=args.config, force=args.force)
 
 
+def _cmd_skill() -> int:
+    from .skill_install import install_skill
+
+    return install_skill()
+
+
 def _cmd_init(args: argparse.Namespace) -> int:
     try:
         path = write_sample_config(args.config, force=args.force)
@@ -213,6 +219,7 @@ examples:
   voxtype setup               # interactive walkthrough -> config
   voxtype init                # write a commented sample config
   voxtype hotkey              # record a chord, print the config line
+  voxtype skill               # install the voxtype skill in Claude + Codex
 
 while recording:
   <hotkey> again  stop and type the take     Esc      cancel (discard)
@@ -265,6 +272,11 @@ Accessibility (to type), Input Monitoring (global hotkeys).
     p_setup.add_argument(
         "--force", action="store_true", help="overwrite existing config"
     )
+    sub.add_parser(
+        "skill",
+        help="install the voxtype skill into Claude Code and Codex "
+        "(from the cctools-plugins marketplace)",
+    )
 
     args = parser.parse_args()
     if args.command == "init":
@@ -273,6 +285,8 @@ Accessibility (to type), Input Monitoring (global hotkeys).
         return _cmd_hotkey()
     if args.command == "setup":
         return _cmd_setup(args)
+    if args.command == "skill":
+        return _cmd_skill()
     return _cmd_run(args)
 
 

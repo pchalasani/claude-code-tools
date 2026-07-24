@@ -1,7 +1,7 @@
 {
   "name": "voice",
-  "version": "1.15.0",
-  "description": "Audio feedback when Claude Code agent completes tasks (pocket-tts), plus a voxtype-install skill for local voice dictation",
+  "version": "1.16.0",
+  "description": "Audio feedback when Claude Code agent completes tasks using pocket-tts",
   "author": {
     "name": "pchalasani"
   }

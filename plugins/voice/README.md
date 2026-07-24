@@ -19,7 +19,9 @@ voxtype setup             # interactive config wizard
 voxtype                    # launch; Ctrl+; to dictate
 ```
 
-Ask this plugin's `voxtype-install` skill to walk you through it. The slight
+Get it in one step with `voxtype skill` (installs the `voxtype` plugin —
+which carries the install-guide skill — into Claude and Codex), or run
+`uv tool install voxtype` directly. The slight
 accuracy drop compared to larger models is immaterial when talking to an AI.
 **Pro tip**: Ask the agent to restate what it understood - this confirms
 understanding and helps keep the CLI agent on track.
