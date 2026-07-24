@@ -31,13 +31,28 @@ Intel-macOS build).
 
 :::note[Installation]
 ```bash
-uv tool install voxtype
+uv tool install voxtype                    # install
+uv tool install --force --refresh voxtype  # upgrade to the latest
 ```
 That's it — the install picks the best engine for
 your machine (Apple-GPU `parakeet-mlx` on Apple
 Silicon, CPU `parakeet` elsewhere) and it's the
-default at runtime too. See
-[Configuration & CLI](./configuration/) for all
+default at runtime too.
+
+**Using Claude Code or Codex?** Then run:
+
+```bash
+voxtype skill
+```
+
+It adds a voxtype guide skill to **both** agents, so
+you can just ask your agent *"help me install
+voxtype"* and it walks you through install,
+configuration, and the macOS permissions. See
+[Set it up from your coding agent](#set-it-up-from-your-coding-agent)
+below.
+
+See [Configuration & CLI](./configuration/) for all
 engines and options, or run `voxtype --help`.
 :::
 
@@ -102,12 +117,12 @@ engines and options, or run `voxtype --help`.
 3. Start dictating:
 
    ```bash
-   voxtype --segmentation hold
+   voxtype
    ```
 
-   Press `Ctrl+;`, speak (watch the ghost),
-   press `Ctrl+;` again -- the whole take types at
-   your cursor. `Esc` cancels a take.
+   Press `Ctrl+;` to start, speak (watch the ghost),
+   press `Ctrl+;` again to stop -- your speech is typed
+   at the cursor. `Esc` cancels a take.
 
 4. Make it yours: run `voxtype setup` for an
    interactive walkthrough — it asks a handful of
