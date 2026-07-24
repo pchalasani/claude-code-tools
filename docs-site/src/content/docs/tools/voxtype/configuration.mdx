@@ -27,7 +27,7 @@ voxtype init          # write a fully commented sample to edit by hand
 voxtype init --force  # overwrite an existing sample
 ```
 
-`voice-type setup` is the quickest start: it asks a
+`voxtype setup` is the quickest start: it asks a
 short series of explained questions (engine, mode,
 segmentation, hotkey, wake word, and optional extras),
 validates your choices, and writes a ready-to-use
@@ -141,9 +141,13 @@ on-device.
 
 | Engine | Runs on | Speed* | Notes |
 |--------|---------|--------|-------|
-| `parakeet-mlx` | Apple GPU (MLX) | ~40x realtime | **Recommended.** fp16 Parakeet-TDT v3: best accuracy and speed. Apple Silicon only; weights from HuggingFace on first run. Extra: `mlx` |
-| `parakeet` | CPU (sherpa-onnx) | ~32x realtime | int8 Parakeet-TDT v3 (or fp16 v2 via `parakeet_model`); ~490 MB download. Extra: `parakeet` |
-| `moonshine` | CPU (ONNX) | streaming | Moonshine streaming models; smallest footprint. Installed by default |
+| `parakeet-mlx` | Apple GPU (MLX) | ~40x realtime | **Default on Apple Silicon.** fp16 Parakeet-TDT v3: best accuracy and speed. Weights from HuggingFace on first run. |
+| `parakeet` | CPU (sherpa-onnx) | ~32x realtime | **Default on other machines.** int8 Parakeet-TDT v3 (or fp16 v2 via `parakeet_model`); ~490 MB download. |
+| `moonshine` | CPU (ONNX) | streaming | Moonshine streaming models; smallest footprint. Opt-in: `uv tool install "voxtype[moonshine]"` (no Intel-macOS build). |
+
+Both parakeet engines ship with the base install; the
+default is chosen for your machine, so most people
+never set `engine` at all.
 
 *measured on an M-series Mac; see `parakeet_threads`
 for CPU tuning.
@@ -156,8 +160,9 @@ for CPU tuning.
 # Activation: "toggle" (hotkey), "vad" (hands-free), "wake" (wake word)
 mode = "toggle"
 
-# Engine: "moonshine" | "parakeet" | "parakeet-mlx"
-engine = "moonshine"
+# Engine: "parakeet-mlx" | "parakeet" | "moonshine"
+# (default: parakeet-mlx on Apple Silicon, parakeet elsewhere)
+engine = "parakeet-mlx"
 
 # "vad" types each utterance when you pause; "hold" records everything
 # between toggle-on/off and transcribes the whole take at once
@@ -222,7 +227,7 @@ voxtype hotkey            press a chord; prints the config line
 voxtype --help            full flag reference
 ```
 
-New here? `voice-type setup` asks a handful of questions (engine,
+New here? `voxtype setup` asks a handful of questions (engine,
 mode, hotkey, ...) — each explained, with sensible defaults — and
 writes a valid config for you. `init` instead drops a fully commented
 sample file to edit by hand.

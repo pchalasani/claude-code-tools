@@ -21,6 +21,62 @@ import pytest
 from voxtype.config import Config
 
 
+# -- download progress ----------------------------------------------------
+
+
+def test_copy_with_progress_copies_all_bytes() -> None:
+    """The progress-drawing copier must move every byte intact and
+    report the exact count (the bar is cosmetic; the copy is not)."""
+    import voxtype.engine_parakeet as ep
+
+    payload = bytes(range(256)) * 900  # ~230 KB, spans several chunks
+    src = io.BytesIO(payload)
+    dst = io.BytesIO()
+    n = ep._copy_with_progress(src, dst, total=len(payload), label="test")
+    assert n == len(payload)
+    assert dst.getvalue() == payload
+
+
+def test_copy_with_progress_handles_unknown_total() -> None:
+    """A missing Content-Length (total=0) still copies everything."""
+    import voxtype.engine_parakeet as ep
+
+    payload = b"x" * 5000
+    dst = io.BytesIO()
+    n = ep._copy_with_progress(io.BytesIO(payload), dst, total=0, label="t")
+    assert n == len(payload)
+    assert dst.getvalue() == payload
+
+
+def test_hf_model_cached_detects_snapshot(monkeypatch, tmp_path) -> None:
+    """A populated HF snapshot dir reads as cached; an empty cache does not."""
+    import voxtype.engine_parakeet as ep
+
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+    model_id = "mlx-community/parakeet-tdt-0.6b-v3"
+    assert ep._hf_model_cached(model_id) is False
+
+    snap = (
+        tmp_path
+        / "models--mlx-community--parakeet-tdt-0.6b-v3"
+        / "snapshots"
+        / "abc123"
+    )
+    snap.mkdir(parents=True)
+    (snap / "config.json").write_text("{}")
+    assert ep._hf_model_cached(model_id) is True
+
+
+def test_activity_spinner_is_a_noop_context_off_tty() -> None:
+    """Off a TTY the spinner must still run the wrapped block exactly once."""
+    import voxtype.engine_parakeet as ep
+
+    ran = []
+    with ep._activity("loading"):
+        ran.append(True)
+    assert ran == [True]
+
+
 # -- parakeet model install ----------------------------------------------
 
 

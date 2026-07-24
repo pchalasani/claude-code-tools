@@ -767,6 +767,49 @@ def test_app_run_stops_hotkeys_even_if_engine_stop_raises(monkeypatch) -> None:
     assert hotkeys.stopped
 
 
+def test_overlay_path_starts_hotkeys_from_inside_run_loop(monkeypatch) -> None:
+    """With the overlay, the hotkey tap must be installed from INSIDE the
+    AppKit loop (via on_ready) — after engine.start and after the loop is
+    up — not before, which raced the loop and killed the tap."""
+    import voxtype.app as app_mod
+    import voxtype.engines as engines_mod
+    import voxtype.overlay as overlay_mod
+
+    engine = FakeEngine()
+    hotkeys = FakeHotkeys()
+    order: list[str] = []
+
+    monkeypatch.setattr(app_mod, "Typist", RecordingTypist)
+    monkeypatch.setattr(
+        engines_mod, "create_engine", lambda cfg, status: engine
+    )
+
+    def fake_start_listener(self):  # noqa: ANN001, ANN202
+        order.append("hotkeys")
+        return hotkeys
+
+    monkeypatch.setattr(
+        app_mod.VoiceTypeApp, "_start_hotkey_listener", fake_start_listener
+    )
+    monkeypatch.setattr(overlay_mod, "overlay_available", lambda: True)
+
+    def fake_run_overlay(  # noqa: ANN001, ANN202
+        sample, tick, stopped, on_ready=None, flex=1.0, speed=1.0
+    ):
+        order.append("overlay_loop")
+        on_ready()  # the one-shot timer firing inside the live loop
+        return None
+
+    monkeypatch.setattr(overlay_mod, "run_overlay", fake_run_overlay)
+
+    app = app_mod.VoiceTypeApp(Config(sounds=False, overlay=True))
+    assert app.run() == 0
+    assert engine.started
+    # The listener started only after the overlay loop was up.
+    assert order == ["overlay_loop", "hotkeys"]
+    assert hotkeys.stopped  # and it is still cleaned up
+
+
 # -- CLI ------------------------------------------------------------------
 
 
@@ -1059,9 +1102,23 @@ def test_toggle_debounce_ignores_rapid_second_press() -> None:
     app.toggle()  # ACTIVE -> PAUSED
     app.toggle()  # re-fire within debounce window: ignored
     assert app._state is State.PAUSED
-    app._last_toggle = 0.0
-    app.toggle()  # a real later press works
-    assert app._state is State.ACTIVE
+
+
+def test_toggle_ignored_until_engine_ready() -> None:
+    """A toggle during model load is a no-op: it must not flip the
+    state machine into ACTIVE against an engine that cannot record
+    yet (the stuck-overlay glitch)."""
+    from voxtype.app import State
+
+    app = _grace_app()
+    app._set_state(State.PAUSED)  # start from the off state
+    app._ready.clear()  # simulate the engine still loading
+    app.toggle()
+    assert app._state is State.PAUSED  # press swallowed
+    assert app._engine.resets == 0  # engine was never asked to arm
+    app._ready.set()  # engine finishes loading
+    app.toggle()
+    assert app._state is State.ACTIVE  # now it works
 
 
 def test_wake_word_alias_matches() -> None:

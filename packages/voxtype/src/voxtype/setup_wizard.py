@@ -18,6 +18,7 @@ from .config import (
     DEFAULT_CONFIG_PATH,
     VALID_MODEL_ARCHS,
     Config,
+    default_engine,
 )
 
 
@@ -241,19 +242,21 @@ def run_setup(config_path: Path | None = None, force: bool = False) -> int:
             "Transcription engine:",
             choices=[
                 q.Choice(
-                    "parakeet-mlx — best accuracy + speed (Apple GPU; "
-                    "needs the voice-mlx extra)",
+                    "parakeet-mlx — best accuracy + speed "
+                    "(Apple GPU; Apple Silicon only)",
                     value="parakeet-mlx",
                 ),
                 q.Choice(
-                    "parakeet — Parakeet on CPU (needs voice-parakeet)",
+                    "parakeet — Parakeet on CPU (works everywhere)",
                     value="parakeet",
                 ),
                 q.Choice(
-                    "moonshine — small streaming models (needs voice)",
+                    "moonshine — small streaming models (needs the "
+                    "voxtype[moonshine] extra)",
                     value="moonshine",
                 ),
             ],
+            default=default_engine(),
         ))
         ans["engine"] = engine
         is_parakeet = engine in ("parakeet", "parakeet-mlx")

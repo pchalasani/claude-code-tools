@@ -8,11 +8,20 @@ was accomplished.
 ## Recommended: Speech-to-Text Companion
 
 For a complete voice workflow, pair this TTS plugin with
-[Handy](https://github.com/cjpais/Handy) (open-source) using the **Parakeet V3**
-model for speech-to-text. It's stunningly fast with near-instant transcription.
+[**voxtype**](https://pchalasani.github.io/claude-code-tools/tools/voxtype/) —
+local, on-device dictation that types wherever your cursor is, using the
+**Parakeet V3** model (on the Apple GPU via MLX, or CPU). It's stunningly fast
+with near-instant transcription.
 
-The slight accuracy drop compared to larger models is immaterial when talking to
-an AI. **Pro tip**: Ask the agent to restate what it understood - this confirms
+```bash
+uv tool install voxtype   # best engine for your machine, included
+voxtype setup             # interactive config wizard
+voxtype                    # launch; Ctrl+; to dictate
+```
+
+Ask this plugin's `voxtype-install` skill to walk you through it. The slight
+accuracy drop compared to larger models is immaterial when talking to an AI.
+**Pro tip**: Ask the agent to restate what it understood - this confirms
 understanding and helps keep the CLI agent on track.
 
 ## Requirements

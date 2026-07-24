@@ -29,7 +29,7 @@ gdocs = [
 # Voice dictation now lives in the standalone `voxtype` package
 # (packages/voxtype); these extras delegate to it so existing
 # `claude-code-tools[voice*]` installs keep working.
-voice = ["voxtype>=0.1.0"]
+voice = ["voxtype[moonshine]>=0.1.0"]
 voice-parakeet = ["voxtype[parakeet]>=0.1.0"]
 voice-mlx = ["voxtype[mlx]>=0.1.0"]
 

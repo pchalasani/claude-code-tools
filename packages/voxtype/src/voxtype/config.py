@@ -8,10 +8,24 @@ default so voxtype runs with no config file at all.
 from __future__ import annotations
 
 import math
+import platform
+import sys
 import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
+
+
+def default_engine() -> str:
+    """Best engine this machine can run out of the box.
+
+    Apple Silicon gets the Apple-GPU MLX engine (best accuracy AND
+    speed); everything else gets the CPU Parakeet engine (moonshine
+    ships no Intel-macOS wheels, so it can't be the fallback).
+    """
+    if sys.platform == "darwin" and platform.machine() == "arm64":
+        return "parakeet-mlx"
+    return "parakeet"
 
 # Legacy path from when this tool shipped as "voice-type" inside
 # claude-code-tools; still honored so existing configs keep working.
@@ -52,7 +66,9 @@ class Config:
         mode: Activation mode. "toggle" starts paused (hotkey starts
             dictation), "vad" starts dictating immediately, "wake" starts
             passive and activates on the wake word.
-        engine: Transcription backend, "moonshine" or "parakeet".
+        engine: Transcription backend: "parakeet-mlx" (default on
+            Apple Silicon), "parakeet" (default elsewhere), or
+            "moonshine" (requires the voxtype[moonshine] extra).
         segmentation: "vad" types each utterance when you pause;
             "hold" records everything between toggle-on and toggle-off
             and transcribes the whole take at once (full context, no
@@ -103,7 +119,7 @@ class Config:
     """
 
     mode: str = "toggle"
-    engine: str = "moonshine"
+    engine: str = field(default_factory=default_engine)
     segmentation: str = "vad"
     parakeet_model: str = "v3-int8"
     parakeet_threads: int = 4
@@ -292,7 +308,7 @@ def load_config(
 
 def sample_config() -> str:
     """Return a commented sample config file as a string."""
-    return '''\
+    return f'''\
 # voxtype configuration (~/.config/voxtype/config.toml)
 # Every key is optional; the values below are the defaults.
 
@@ -302,14 +318,15 @@ def sample_config() -> str:
 #   "wake"   - start passive; saying the wake word starts dictation
 mode = "toggle"
 
-# Transcription backend:
-#   "moonshine"    - Moonshine streaming models (installed by default)
-#   "parakeet"     - Parakeet-TDT 0.6b v3 on CPU via sherpa-onnx
-#                    (voxtype[parakeet] extra; ~490 MB download)
+# Transcription backend (default: the best this machine can run):
 #   "parakeet-mlx" - Parakeet-TDT 0.6b v3 on the Apple GPU via MLX:
 #                    fp16 accuracy at ~40x realtime — best accuracy
-#                    AND speed (voxtype[mlx] extra; Apple Silicon only)
-engine = "moonshine"
+#                    AND speed (default on Apple Silicon)
+#   "parakeet"     - Parakeet-TDT 0.6b v3 on CPU via sherpa-onnx
+#                    (default elsewhere; ~490 MB download)
+#   "moonshine"    - Moonshine streaming models (needs the
+#                    voxtype[moonshine] extra; no Intel-macOS build)
+engine = "{default_engine()}"
 
 # HuggingFace model id for the parakeet-mlx engine.
 mlx_model = "mlx-community/parakeet-tdt-0.6b-v3"

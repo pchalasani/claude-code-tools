@@ -19,21 +19,22 @@ your Mac.
 :::caution[macOS only]
 voxtype is built for **macOS**: it types via
 macOS accessibility, suppresses hotkeys at the
-CGEvent tap, and draws its overlay with AppKit. The
-recommended `parakeet-mlx` engine additionally
-requires **Apple Silicon** (M1 or later), where it
-runs on the GPU via MLX; Intel Macs can use the
-`parakeet` CPU engine instead (`moonshine` ships
-no Intel-macOS build).
+CGEvent tap, and draws its overlay with AppKit. On
+**Apple Silicon** (M1 or later) it defaults to the
+`parakeet-mlx` Apple-GPU engine; Intel Macs
+automatically fall back to the `parakeet` CPU
+engine (`moonshine` ships no Intel-macOS build).
 :::
 
 :::note[Installation]
 ```bash
-# recommended: Apple-GPU engine (best accuracy AND speed)
-uv tool install "voxtype[mlx]"
-voxtype --engine parakeet-mlx --segmentation hold
+uv tool install voxtype
 ```
-See [Configuration & CLI](./configuration/) for all
+That's it — the install picks the best engine for
+your machine (Apple-GPU `parakeet-mlx` on Apple
+Silicon, CPU `parakeet` elsewhere) and it's the
+default at runtime too. See
+[Configuration & CLI](./configuration/) for all
 engines and options, or run `voxtype --help`.
 :::
 
@@ -82,11 +83,12 @@ engines and options, or run `voxtype --help`.
 
 <Steps>
 
-1. Install with the engine of your choice (see
+1. Install (the best engine for your machine is
+   included automatically — see
    [engines](./configuration/#engines)):
 
    ```bash
-   uv tool install "voxtype[mlx]"
+   uv tool install voxtype
    ```
 
 2. Grant your terminal **Microphone**,
@@ -97,7 +99,7 @@ engines and options, or run `voxtype --help`.
 3. Start dictating:
 
    ```bash
-   voxtype --engine parakeet-mlx --segmentation hold
+   voxtype --segmentation hold
    ```
 
    Press `Ctrl+;`, speak (watch the waveform pill),

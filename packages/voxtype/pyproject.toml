@@ -13,19 +13,19 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
-# The default moonshine engine ships in the base install so a plain
-# `uv tool install voxtype` works out of the box.
+# A plain `uv tool install voxtype` gets the best engine for the
+# machine: parakeet-mlx (Apple GPU) on Apple Silicon, parakeet CPU
+# (sherpa-onnx) everywhere else. Markers gate the arm64-only MLX stack.
 dependencies = [
-    "moonshine-voice>=0.0.69",
     "pynput>=1.7.7",
-]
-
-[project.urls]
-Homepage = "https://github.com/pchalasani/claude-code-tools"
-Documentation = "https://pchalasani.github.io/claude-code-tools/tools/voxtype/"
-
-[project.optional-dependencies]
-parakeet = [
+    # Apple-GPU engine (Apple Silicon Macs only; wheels are arm64).
+    "parakeet-mlx>=0.5.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    # Resolver guard: without it uv can backtrack through parakeet-mlx
+    # -> librosa -> numba to a 2021 llvmlite that cannot build on
+    # modern Python ("Cannot install on Python version 3.13...").
+    "numba>=0.61; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    # sherpa-onnx: the parakeet CPU engine AND the Silero VAD used by
+    # parakeet-mlx segmentation.
     # 1.13.x wheels are missing their bundled onnxruntime dylib on
     # macOS arm64 (dlopen fails); 1.12.x splits the native libs into
     # sherpa-onnx-core, which some resolvers miss (uv caches wheel
@@ -35,18 +35,19 @@ parakeet = [
     "sounddevice>=0.5.0",
     "numpy>=1.26.0",
 ]
-mlx = [
-    "parakeet-mlx>=0.5.0",
-    # Resolver guard: without it uv can backtrack through parakeet-mlx
-    # -> librosa -> numba to a 2021 llvmlite that cannot build on
-    # modern Python ("Cannot install on Python version 3.13...").
-    "numba>=0.61",
-    # sherpa-onnx supplies the Silero VAD used for segmentation.
-    "sherpa-onnx>=1.12.0,<1.13",
-    "sherpa-onnx-core>=1.12.0,<1.13",
-    "sounddevice>=0.5.0",
-    "numpy>=1.26.0",
-]
+
+[project.urls]
+Homepage = "https://github.com/pchalasani/claude-code-tools"
+Documentation = "https://pchalasani.github.io/claude-code-tools/tools/voxtype/"
+
+[project.optional-dependencies]
+# The moonshine streaming engine, for those who want it (no
+# Intel-macOS wheels exist, hence opt-in).
+moonshine = ["moonshine-voice>=0.0.69"]
+# Back-compat aliases from when the engines were opt-in extras; both
+# engines now ship in the base install (mlx marker-gated to arm64).
+parakeet = []
+mlx = []
 
 [project.scripts]
 voxtype = "voxtype.cli:main"

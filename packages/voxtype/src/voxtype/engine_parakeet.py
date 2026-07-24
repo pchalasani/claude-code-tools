@@ -117,22 +117,153 @@ class AutoGain:
         return np.clip(samples * self._gain, -1.0, 1.0).astype(np.float32)
 
 
+def _copy_with_progress(resp, f, total: int, label: str) -> int:  # noqa: ANN001
+    """Stream ``resp`` into ``f``, drawing an in-place progress bar.
+
+    On a TTY, redraws a single ``\\r`` line (bar, percent, MB, speed) so
+    the user can see a large first-run model download advancing instead
+    of a frozen-looking prompt. When stderr is not a TTY (piped/logged),
+    the bar is skipped — only the caller's start/end lines appear.
+
+    Args:
+        resp: An open, readable response (``.read(n)``).
+        f: The destination binary file object.
+        total: Expected byte count (0 if unknown; percent is then hidden).
+        label: Human label, e.g. ``"downloading model.tar.bz2"``.
+
+    Returns:
+        The number of bytes copied.
+    """
+    import sys
+
+    tty = sys.stderr.isatty()
+    downloaded = 0
+    start = last = time.monotonic()
+
+    def render(final: bool = False) -> None:
+        now = time.monotonic()
+        speed = downloaded / max(now - start, 1e-6) / 1e6  # MB/s
+        if total > 0:
+            frac = min(downloaded / total, 1.0)
+            filled = int(frac * 24)
+            bar = "#" * filled + "-" * (24 - filled)
+            line = (
+                f"\r[voxtype] {label} [{bar}] {frac * 100:4.0f}%  "
+                f"{downloaded / 1e6:6.1f}/{total / 1e6:.1f} MB  "
+                f"{speed:4.1f} MB/s"
+            )
+        else:
+            line = (
+                f"\r[voxtype] {label}  {downloaded / 1e6:6.1f} MB  "
+                f"{speed:4.1f} MB/s"
+            )
+        sys.stderr.write(line + ("\n" if final else ""))
+        sys.stderr.flush()
+
+    while True:
+        buf = resp.read(1 << 16)  # 64 KiB
+        if not buf:
+            break
+        f.write(buf)
+        downloaded += len(buf)
+        now = time.monotonic()
+        if tty and now - last >= 0.1:
+            last = now
+            render()
+    if tty:
+        render(final=True)
+    return downloaded
+
+
+@contextlib.contextmanager
+def _activity(label: str):  # noqa: ANN201
+    """Show a live elapsed-time spinner on a TTY while a blocking step runs.
+
+    Wraps opaque, multi-second calls that have no progress hook of their
+    own — loading model weights onto the GPU — so the terminal shows the
+    app is working rather than frozen. A no-op when stderr is not a TTY
+    (piped/logged); the spinner is cosmetic, never load-bearing.
+    """
+    import itertools
+    import sys
+
+    if not sys.stderr.isatty():
+        yield
+        return
+    stop = threading.Event()
+    start = time.monotonic()
+    frames = itertools.cycle("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+
+    def spin() -> None:
+        while not stop.wait(0.1):
+            elapsed = time.monotonic() - start
+            sys.stderr.write(
+                f"\r[voxtype] {next(frames)} {label}… {elapsed:4.1f}s "
+            )
+            sys.stderr.flush()
+
+    thread = threading.Thread(target=spin, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join(timeout=1.0)
+        elapsed = time.monotonic() - start
+        sys.stderr.write(f"\r[voxtype] {label} — done in {elapsed:.1f}s\n")
+        sys.stderr.flush()
+
+
+def _hf_model_cached(model_id: str) -> bool:
+    """Best-effort: True if ``model_id`` is already in the HuggingFace cache.
+
+    Lets callers tell "load from disk" (show our own spinner) apart from
+    "download then load" (let huggingface_hub draw its own progress bars,
+    so the two never fight over the terminal). Honors HF_HUB_CACHE /
+    HF_HOME; falls back to the default ``~/.cache/huggingface/hub``.
+    """
+    import os
+
+    hub = os.environ.get("HF_HUB_CACHE")
+    home = os.environ.get("HF_HOME")
+    if hub:
+        base = Path(hub)
+    elif home:
+        base = Path(home) / "hub"
+    else:
+        base = Path.home() / ".cache" / "huggingface" / "hub"
+    model_dir = base / ("models--" + model_id.replace("/", "--"))
+    try:
+        return model_dir.is_dir() and any(model_dir.glob("snapshots/*/*"))
+    except OSError:
+        return False
+
+
 def _download(url: str, dest: Path, status: StatusFn) -> None:
     """Download ``url`` to ``dest`` atomically via a unique temp file.
 
     The temp file name is unique per process (``mkstemp``), so concurrent
     downloaders never write to the same path; whoever finishes publishes
-    with an atomic rename.
+    with an atomic rename. A progress bar is drawn while streaming (see
+    ``_copy_with_progress``).
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
-    status(f"downloading {url.rsplit('/', 1)[-1]} ...")
+    name = url.rsplit("/", 1)[-1]
+    status(f"downloading {name} ...")
     fd, tmp_name = tempfile.mkstemp(
         dir=dest.parent, prefix=dest.name + ".", suffix=".part"
     )
     tmp = Path(tmp_name)
     try:
         with open(fd, "wb") as f, urllib.request.urlopen(url) as resp:
-            shutil.copyfileobj(resp, f)
+            headers = getattr(resp, "headers", None)
+            total = 0
+            if headers is not None:
+                try:
+                    total = int(headers.get("Content-Length") or 0)
+                except (TypeError, ValueError):
+                    total = 0
+            _copy_with_progress(resp, f, total, f"downloading {name}")
         if tmp.stat().st_size == 0:
             raise RuntimeError(f"downloaded file is empty: {url}")
         tmp.replace(dest)

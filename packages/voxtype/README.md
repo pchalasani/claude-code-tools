@@ -5,25 +5,23 @@ browser, terminal, or a coding agent's prompt box. Everything runs on your
 machine: no cloud, no accounts, no audio leaving your Mac.
 
 > **macOS only.** voxtype types via macOS accessibility, suppresses hotkeys
-> at the CGEvent tap, and draws its overlay with AppKit. The recommended
-> `parakeet-mlx` engine additionally requires Apple Silicon (M1 or later);
-> Intel Macs can use the `parakeet` CPU engine.
+> at the CGEvent tap, and draws its overlay with AppKit. On Apple Silicon
+> (M1 or later) it defaults to the `parakeet-mlx` Apple-GPU engine; Intel
+> Macs automatically fall back to the `parakeet` CPU engine.
 
 ## Install
 
 ```bash
-# default (Moonshine streaming engine, works out of the box)
 uv tool install voxtype
-
-# recommended on Apple Silicon: Apple-GPU engine (best accuracy AND speed)
-uv tool install "voxtype[mlx]"
-voxtype --engine parakeet-mlx --segmentation hold
-
-# CPU Parakeet engine (e.g. Intel Macs)
-uv tool install "voxtype[parakeet]"
 ```
 
-Or run without installing: `uvx voxtype`.
+That's it. The install includes the best engine for your machine — the
+Apple-GPU `parakeet-mlx` engine on Apple Silicon (best accuracy AND
+speed), the CPU `parakeet` engine everywhere else — and that engine is
+the runtime default too, so no flags are needed.
+
+Or run without installing: `uvx voxtype`. (No `uv`? `pipx install
+voxtype` works too.)
 
 ## Why it's different
 
@@ -56,15 +54,17 @@ Or run without installing: `uvx voxtype`.
 2. Start dictating:
 
    ```bash
-   voxtype --engine parakeet-mlx --segmentation hold
+   voxtype --segmentation hold
    ```
 
    Press `Ctrl+;`, speak (watch the waveform pill), press `Ctrl+;` again —
    the whole take types at your cursor. `Esc` cancels a take.
 
-3. Make it yours: `voxtype init` writes a fully commented config to
-   `~/.config/voxtype/config.toml`; after that, plain `voxtype` starts with
-   your settings.
+3. Make it yours: run `voxtype setup` for an interactive walkthrough — it
+   asks a handful of explained questions (engine, mode, hotkey, ...) and
+   writes your `~/.config/voxtype/config.toml`. (Prefer editing by hand?
+   `voxtype init` drops a fully commented sample instead.) After that,
+   plain `voxtype` starts with your settings.
 
 ## Hotkey & voice vocabulary
 
@@ -82,11 +82,11 @@ want, and it prints the exact line to put in your config
 
 ## Engines
 
-| Engine | Install | Notes |
-|--------|---------|-------|
-| `moonshine` (default) | `voxtype` | Streaming Moonshine models, built-in VAD |
-| `parakeet-mlx` | `voxtype[mlx]` | Parakeet-TDT 0.6b v3 on the Apple GPU via MLX: fp16 accuracy at ~40x realtime — best accuracy AND speed (Apple Silicon only) |
-| `parakeet` | `voxtype[parakeet]` | Parakeet-TDT 0.6b v3 on CPU via sherpa-onnx (~490 MB download) |
+| Engine | Availability | Notes |
+|--------|--------------|-------|
+| `parakeet-mlx` | included (default on Apple Silicon) | Parakeet-TDT 0.6b v3 on the Apple GPU via MLX: fp16 accuracy at ~40x realtime — best accuracy AND speed |
+| `parakeet` | included (default elsewhere) | Parakeet-TDT 0.6b v3 on CPU via sherpa-onnx (~490 MB download) |
+| `moonshine` | opt-in: `voxtype[moonshine]` | Streaming Moonshine models, smallest footprint (no Intel-macOS build) |
 
 ## Documentation
 

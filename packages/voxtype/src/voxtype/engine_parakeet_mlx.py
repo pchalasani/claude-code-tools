@@ -22,6 +22,8 @@ from .engine_parakeet import (
     MIN_SILENCE,
     SAMPLE_RATE,
     ParakeetEngine,
+    _activity,
+    _hf_model_cached,
     _install_lock,
     _remove_cache_entry,
     ensure_vad,
@@ -109,11 +111,19 @@ class ParakeetMlxEngine(ParakeetEngine):
         model_id = getattr(
             self.cfg, "mlx_model", "mlx-community/parakeet-tdt-0.6b-v3"
         )
-        self._status(
-            f"loading {model_id} on the GPU (first run downloads "
-            "from HuggingFace)..."
-        )
-        self._model = from_pretrained(model_id)
+        if _hf_model_cached(model_id):
+            # Cached: the delay is loading ~2 GB of weights onto the GPU,
+            # not a download — show a live spinner so it doesn't look hung.
+            with _activity("loading Parakeet onto the GPU"):
+                self._model = from_pretrained(model_id)
+        else:
+            # First run: huggingface_hub draws its own download progress
+            # bars, so stay out of its way (no competing spinner).
+            self._status(
+                f"downloading {model_id} from HuggingFace "
+                "(first run, ~2 GB)..."
+            )
+            self._model = from_pretrained(model_id)
 
         for attempt in (1, 2):
             vad_path = ensure_vad(self._status)

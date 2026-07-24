@@ -33,7 +33,7 @@
     {
       "name": "voice",
       "source": "./plugins/voice",
-      "description": "Audio feedback when Claude Code agent completes tasks using pocket-tts"
+      "description": "Audio feedback when Claude Code agent completes tasks (pocket-tts), plus a voxtype-install skill for local voice dictation"
     },
     {
       "name": "msg",

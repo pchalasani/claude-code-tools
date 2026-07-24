@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """voxtype: local speech-to-text that types wherever your cursor is.
 
-Fully on-device (Moonshine models with built-in VAD). Three activation
-modes: a global toggle hotkey, hands-free VAD, or a configurable wake
-word ("claude ..."). Configure via ~/.config/voxtype/config.toml.
+Fully on-device (Parakeet on the Apple GPU or CPU, or Moonshine).
+Three activation modes: a global toggle hotkey, hands-free VAD, or a
+configurable wake word ("claude ..."). Configure via
+~/.config/voxtype/config.toml.
 """
 
 from __future__ import annotations
@@ -24,10 +25,10 @@ from .config import (
 )
 
 _INSTALL_HINT = (
-    "voxtype needs its optional dependencies. Install with:\n"
+    "voxtype needs its dependencies. Install with:\n"
     "  uv tool install voxtype\n"
-    '(parakeet engine: "voxtype[parakeet]"; Apple-GPU MLX engine: '
-    '"voxtype[mlx]")\n'
+    "(both parakeet engines are included; the moonshine engine needs\n"
+    'the "voxtype[moonshine]" extra)\n'
     "or run directly:\n"
     "  uvx voxtype"
 )
