@@ -1,4 +1,4 @@
-"""Transcription engine backends for voice-type.
+"""Transcription engine backends for voxtype.
 
 An engine captures microphone audio, segments it into utterances (VAD),
 transcribes each utterance locally, and invokes a callback with the final

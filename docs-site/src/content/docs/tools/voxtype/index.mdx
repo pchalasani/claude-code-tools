@@ -1,5 +1,5 @@
 ---
-title: "voice-type — Local Voice Dictation"
+title: "voxtype — Local Voice Dictation"
 description: >
   Fully on-device speech-to-text that types wherever
   your cursor is. Parakeet/Moonshine engines, wake
@@ -10,31 +10,35 @@ description: >
 import { Tabs, TabItem, Steps, Card, CardGrid } from
   "@astrojs/starlight/components";
 
-`voice-type` turns speech into text in whatever app
+`voxtype` turns speech into text in whatever app
 has focus -- your editor, browser, terminal, or a
 coding agent's prompt box. Everything runs on your
 machine: no cloud, no accounts, no audio leaving
 your Mac.
 
-:::caution[macOS only]
-voice-type is built for **macOS**: it types via
-macOS accessibility, suppresses hotkeys at the
-CGEvent tap, and draws its overlay with AppKit. The
-recommended `parakeet-mlx` engine additionally
-requires **Apple Silicon** (M1 or later), where it
-runs on the GPU via MLX; Intel Macs can use the
-`parakeet` CPU engine instead (`moonshine` ships
-no Intel-macOS build).
+:::caution[macOS only — Intel and Apple Silicon]
+voxtype relies on macOS APIs for typing (accessibility),
+hotkey suppression (the CGEvent tap), and its overlay
+(AppKit). **It is not supported on Linux or Windows** —
+there the toggle hotkey can't be suppressed (it leaks
+into your text), there is no overlay, and it is
+untested. On Macs it works on both **Intel** and
+**Apple Silicon**: Apple Silicon (M1 or later) defaults
+to the `parakeet-mlx` Apple-GPU engine; Intel Macs use
+the `parakeet` CPU engine (`moonshine` ships no
+Intel-macOS build).
 :::
 
 :::note[Installation]
 ```bash
-# recommended: Apple-GPU engine (best accuracy AND speed)
-uv tool install "claude-code-tools[voice-mlx]"
-voice-type --engine parakeet-mlx --segmentation hold
+uv tool install voxtype
 ```
-See [Configuration & CLI](./configuration/) for all
-engines and options, or run `voice-type --help`.
+That's it — the install picks the best engine for
+your machine (Apple-GPU `parakeet-mlx` on Apple
+Silicon, CPU `parakeet` elsewhere) and it's the
+default at runtime too. See
+[Configuration & CLI](./configuration/) for all
+engines and options, or run `voxtype --help`.
 :::
 
 ## Why it's different
@@ -56,7 +60,7 @@ engines and options, or run `voice-type --help`.
   </Card>
   <Card title="Spoken submit" icon="rocket">
     Say "go", "over", or "submit" as a standalone
-    utterance and voice-type presses Enter -- dictate
+    utterance and voxtype presses Enter -- dictate
     a prompt to a coding agent and send it without
     touching the keyboard.
   </Card>
@@ -82,11 +86,12 @@ engines and options, or run `voice-type --help`.
 
 <Steps>
 
-1. Install with the engine of your choice (see
+1. Install (the best engine for your machine is
+   included automatically — see
    [engines](./configuration/#engines)):
 
    ```bash
-   uv tool install "claude-code-tools[voice-mlx]"
+   uv tool install voxtype
    ```
 
 2. Grant your terminal **Microphone**,
@@ -97,20 +102,20 @@ engines and options, or run `voice-type --help`.
 3. Start dictating:
 
    ```bash
-   voice-type --engine parakeet-mlx --segmentation hold
+   voxtype --segmentation hold
    ```
 
    Press `Ctrl+;`, speak (watch the waveform pill),
    press `Ctrl+;` again -- the whole take types at
    your cursor. `Esc` cancels a take.
 
-4. Make it yours: run `voice-type setup` for an
+4. Make it yours: run `voxtype setup` for an
    interactive walkthrough — it asks a handful of
    explained questions (engine, mode, hotkey, ...)
-   and writes your `~/.config/voice-type/config.toml`.
-   (Prefer editing by hand? `voice-type init` drops a
+   and writes your `~/.config/voxtype/config.toml`.
+   (Prefer editing by hand? `voxtype init` drops a
    fully commented sample instead.) After that, plain
-   `voice-type` starts with your settings.
+   `voxtype` starts with your settings.
 
 </Steps>
 
@@ -137,7 +142,7 @@ lives in **[Configuration & CLI](./configuration/)**.
 | Stop dictating | say "stop listening" | `stop_phrase` |
 
 Not sure how to spell a chord for the three hotkey
-settings above? Run `voice-type hotkey`, press the
+settings above? Run `voxtype hotkey`, press the
 combo you want, and it prints the exact line to put
 in your config (e.g. `hotkey = "<ctrl>+;"`).
 

@@ -13,7 +13,7 @@
     </linearGradient>
   </defs>
   <rect width="200" height="100" rx="8" fill="url(#bg)"/>
-  <text x="100" y="34" font-family="monospace" font-size="24" font-weight="bold" fill="#ff5347" text-anchor="middle" filter="url(#glow)">voice-type</text>
+  <text x="100" y="34" font-family="monospace" font-size="24" font-weight="bold" fill="#ff5347" text-anchor="middle" filter="url(#glow)">voxtype</text>
   <g fill="#ff7b6e">
     <rect x="30" y="52" width="3" height="4" rx="1.5"/>
     <rect x="37" y="49" width="3" height="10" rx="1.5"/>

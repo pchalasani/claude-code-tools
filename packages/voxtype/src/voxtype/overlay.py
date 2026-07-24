@@ -1,4 +1,4 @@
-"""Floating waveform pill: visible proof that voice-type is listening.
+"""Floating waveform pill: visible proof that voxtype is listening.
 
 A small always-on-top, click-through, non-activating macOS panel at the
 bottom-center of the screen, shown ONLY while recording. It scrolls a
@@ -46,6 +46,7 @@ def run_overlay(  # noqa: PLR0913
     sample: SampleFn,
     tick: TickFn,
     stopped: Callable[[], bool],
+    on_ready: Callable[[], None] | None = None,
     flex: float = 1.0,
     speed: float = 1.0,
 ) -> None:
@@ -57,6 +58,9 @@ def run_overlay(  # noqa: PLR0913
             checks); exceptions are swallowed so the UI never dies.
         stopped: Polled each frame; True ends the loop and closes the
             panel.
+        on_ready: Called ONCE from inside the run loop, just after it
+            starts pumping. Used to install the keyboard event tap only
+            after AppKit is fully up, so the loop can't race and kill it.
         flex: Face shape-flex multiplier (config overlay_flex).
         speed: Animation speed multiplier (config overlay_speed).
 
@@ -305,6 +309,17 @@ def run_overlay(  # noqa: PLR0913
             self.shown = False
             return self
 
+        def fireReady_(self, _timer):  # noqa: ANN001, ANN201, N802
+            # One-shot: install the hotkey listener now that the run loop
+            # is pumping (see run_overlay's on_ready), so its keyboard tap
+            # sits on top of AppKit instead of racing it at startup.
+            cb = getattr(self, "on_ready", None)
+            if cb is not None:
+                try:
+                    cb()
+                except Exception:
+                    pass
+
         def tick_(self, _timer):  # noqa: ANN001, ANN201, N802
             try:
                 tick()
@@ -370,12 +385,23 @@ def run_overlay(  # noqa: PLR0913
     # Hidden at startup; the driver shows it only while recording.
 
     driver = Driver.alloc().initWithView_panel_(view, panel)
+    driver.on_ready = on_ready
     timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(  # noqa: E501
         _TICK_SECONDS, driver, b"tick:", None, True
     )
     AppKit.NSRunLoop.currentRunLoop().addTimer_forMode_(
         timer, AppKit.NSRunLoopCommonModes
     )
+    # Fire on_ready once, shortly after app.run() below starts pumping —
+    # a non-repeating timer only fires from within the live run loop, so
+    # the keyboard tap is guaranteed to be installed after AppKit is up.
+    if on_ready is not None:
+        ready_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(  # noqa: E501
+            0.05, driver, b"fireReady:", None, False
+        )
+        AppKit.NSRunLoop.currentRunLoop().addTimer_forMode_(
+            ready_timer, AppKit.NSRunLoopCommonModes
+        )
 
     # Ctrl+C: AppKit's run loop doesn't deliver KeyboardInterrupt on
     # its own. Record the signal in a flag the timer polls (the timer

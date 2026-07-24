@@ -26,34 +26,9 @@ gdocs = [
     "google-auth-oauthlib>=1.0.0",
     "Pillow>=10.0.0",
 ]
-voice = [
-    "moonshine-voice>=0.0.69",
-    "pynput>=1.7.7",
-]
-voice-parakeet = [
-    "pynput>=1.7.7",
-    # 1.13.x wheels are missing their bundled onnxruntime dylib on
-    # macOS arm64 (dlopen fails); 1.12.x splits the native libs into
-    # sherpa-onnx-core, which some resolvers miss (uv caches wheel
-    # metadata without it) — declare it explicitly.
-    "sherpa-onnx>=1.12.0,<1.13",
-    "sherpa-onnx-core>=1.12.0,<1.13",
-    "sounddevice>=0.5.0",
-    "numpy>=1.26.0",
-]
-voice-mlx = [
-    "pynput>=1.7.7",
-    "parakeet-mlx>=0.5.0",
-    # Resolver guard: without it uv can backtrack through parakeet-mlx
-    # -> librosa -> numba to a 2021 llvmlite that cannot build on
-    # modern Python ("Cannot install on Python version 3.13...").
-    "numba>=0.61",
-    # sherpa-onnx supplies the Silero VAD used for segmentation.
-    "sherpa-onnx>=1.12.0,<1.13",
-    "sherpa-onnx-core>=1.12.0,<1.13",
-    "sounddevice>=0.5.0",
-    "numpy>=1.26.0",
-]
+# Voice dictation is the standalone `voxtype` package — install it
+# directly: `uv tool install voxtype` (see packages/voxtype). It is not
+# an extra of this suite.
 
 [dependency-groups]
 dev = ["hatchling==1.28.0"]
@@ -79,7 +54,12 @@ agent-tunnel = "claude_code_tools.agent_tunnel.cli:main"
 codex-server = "claude_code_tools.codex_server_cli:server_main"
 codex-dynamic = "claude_code_tools.codex_server_cli:dynamic_main"
 codex-workflows = "claude_code_tools.workflow_cli:main"
-voice-type = "claude_code_tools.voice_type.cli:main"
+
+# voxtype (packages/voxtype) is a workspace member so it builds and tests
+# alongside the suite, but the umbrella does NOT depend on it — voice
+# dictation is installed separately via `uv tool install voxtype`.
+[tool.uv.workspace]
+members = ["packages/*"]
 
 [build-system]
 requires = ["hatchling==1.28.0"]

@@ -1,9 +1,9 @@
-"""Interactive setup wizard for voice-type (``voice-type setup``).
+"""Interactive setup wizard for voxtype (``voxtype setup``).
 
 Walks a new user through the handful of choices that matter — engine,
 activation mode, segmentation, hotkey, wake word, and a few niceties —
 explaining each, then writes a valid ``config.toml`` and prints the
-command to run. Unlike ``voice-type init`` (which drops a fully
+command to run. Unlike ``voxtype init`` (which drops a fully
 commented sample file to edit by hand), this asks questions.
 """
 
@@ -18,6 +18,7 @@ from .config import (
     DEFAULT_CONFIG_PATH,
     VALID_MODEL_ARCHS,
     Config,
+    default_engine,
 )
 
 
@@ -126,15 +127,15 @@ def _atomic_write(path: Path, text: str, overwrite: bool) -> None:
 
 def _write_config(path: Path, answers: dict, overwrite: bool) -> None:
     lines = [
-        "# voice-type configuration — written by `voice-type setup`.",
-        "# Run `voice-type init --force` for a fully commented sample.",
+        "# voxtype configuration — written by `voxtype setup`.",
+        "# Run `voxtype init --force` for a fully commented sample.",
         "",
     ]
     for key, value in answers.items():
         lines.append(f"{key} = {_toml_value(value)}")
     text = "\n".join(lines) + "\n"
     # Guard: never replace the destination with a document tomllib can't
-    # read back (the loader that voice-type itself uses).
+    # read back (the loader that voxtype itself uses).
     tomllib.loads(text)
     _atomic_write(path, text, overwrite)
 
@@ -216,7 +217,7 @@ def run_setup(config_path: Path | None = None, force: bool = False) -> int:
     try:
         import questionary as q
     except ImportError as e:  # pragma: no cover - questionary is a base dep
-        print(f"voice-type: {e}; setup needs questionary")
+        print(f"voxtype: {e}; setup needs questionary")
         return 1
 
     path = config_path or DEFAULT_CONFIG_PATH
@@ -235,25 +236,27 @@ def run_setup(config_path: Path | None = None, force: bool = False) -> int:
                 return 1
             overwrite_ok = True
 
-        print("voice-type setup — a few questions, then you're ready.\n")
+        print("voxtype setup — a few questions, then you're ready.\n")
 
         engine = _ask(q.select(
             "Transcription engine:",
             choices=[
                 q.Choice(
-                    "parakeet-mlx — best accuracy + speed (Apple GPU; "
-                    "needs the voice-mlx extra)",
+                    "parakeet-mlx — best accuracy + speed "
+                    "(Apple GPU; Apple Silicon only)",
                     value="parakeet-mlx",
                 ),
                 q.Choice(
-                    "parakeet — Parakeet on CPU (needs voice-parakeet)",
+                    "parakeet — Parakeet on CPU (works everywhere)",
                     value="parakeet",
                 ),
                 q.Choice(
-                    "moonshine — small streaming models (needs voice)",
+                    "moonshine — small streaming models (needs the "
+                    "voxtype[moonshine] extra)",
                     value="moonshine",
                 ),
             ],
+            default=default_engine(),
         ))
         ans["engine"] = engine
         is_parakeet = engine in ("parakeet", "parakeet-mlx")
@@ -339,7 +342,7 @@ def run_setup(config_path: Path | None = None, force: bool = False) -> int:
     try:
         Config(**ans).validate()
     except (ValueError, TypeError) as e:
-        print(f"\nvoice-type: those choices don't combine ({e}).")
+        print(f"\nvoxtype: those choices don't combine ({e}).")
         return 1
 
     try:
@@ -348,10 +351,10 @@ def run_setup(config_path: Path | None = None, force: bool = False) -> int:
         # A config appeared after the initial existence check and the user
         # never authorized an overwrite; refuse rather than clobber it.
         print(
-            f"\nvoice-type: {path} was created while setup was running; "
+            f"\nvoxtype: {path} was created while setup was running; "
             "not overwriting it. Re-run with --force to replace it."
         )
         return 1
     print(f"\n✓ wrote {path}")
-    print("\nStart dictating with:\n  voice-type")
+    print("\nStart dictating with:\n  voxtype")
     return 0

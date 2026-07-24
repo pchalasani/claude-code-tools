@@ -1,4 +1,4 @@
-"""The voice-type runtime: mic transcription -> state machine -> keystrokes.
+"""The voxtype runtime: mic transcription -> state machine -> keystrokes.
 
 Wires Moonshine's ``MicTranscriber`` (streaming transcription with built-in
 voice activity detection) to a small activation state machine and the
@@ -76,10 +76,23 @@ class VoiceTypeApp:
         self._expect_hold = 0
         self._last_toggle = 0.0
         self._engine = None
+        # Set once _start_hotkey_listener runs — in run() (no overlay) or
+        # from inside the overlay loop (see _start_hotkeys_from_loop); the
+        # finally block stops it. May be None if no valid hotkeys.
+        self._hotkeys = None
         # Text of the current/most recent dictation session, for the
         # clipboard option and the paste-again hotkey.
         self._session_texts: list[str] = []
         self._stop = threading.Event()
+        # Cleared while the engine loads (run() clears then sets it),
+        # so the toggle hotkey is a no-op — with feedback — until audio
+        # capture actually exists. Without this, a toggle pressed during
+        # the seconds-long model load flipped the state machine to ACTIVE
+        # against an engine that could not yet record, leaving a stuck
+        # overlay and an app that looked hung. Set by default so unit
+        # tests that drive the state machine directly still toggle.
+        self._ready = threading.Event()
+        self._ready.set()
 
     # -- state transitions ------------------------------------------------
 
@@ -174,6 +187,11 @@ class VoiceTypeApp:
         audio state so stale pre-activation speech never leaks into the
         first utterance.
         """
+        if not self._ready.is_set():
+            # Engine still loading: swallow the press (with feedback)
+            # rather than arm a recording the engine cannot fulfill yet.
+            self._status("still starting up — wait for the 'ready' message")
+            return
         now = time.monotonic()
         with self._lock:
             if now - self._last_toggle < self.TOGGLE_DEBOUNCE:
@@ -464,22 +482,37 @@ class VoiceTypeApp:
             ImportError: If the engine's optional dependencies are
                 missing (cli.py turns this into an install hint).
         """
+        from . import overlay as overlay_mod
         from .engines import create_engine
 
         engine = None
-        hotkeys = None
         exit_code = 0
         try:
+            self._ready.clear()
+            # The overlay runs AppKit's event loop, which races the
+            # keyboard event tap: a tap installed BEFORE that loop starts
+            # is intermittently killed by it (hotkey silently dead). So
+            # with the overlay we defer the listener to on_ready, fired
+            # from INSIDE the running loop (see _main_loop); without it
+            # there is no such loop, so we start early — which also gives
+            # "still starting up" feedback during the model load.
+            use_overlay = (
+                self.cfg.overlay and overlay_mod.overlay_available()
+            )
+            if self.cfg.overlay and not use_overlay:
+                self._status("overlay unavailable; running without it")
             engine = create_engine(self.cfg, self._status)
             self._engine = engine
-            hotkeys = self._start_hotkey_listener()
+            if not use_overlay:
+                self._hotkeys = self._start_hotkey_listener()
             engine.start(self.handle_utterance, self.note_activity)
+            self._ready.set()
             self._status(
                 f"ready — engine={self.cfg.engine}, mode={self.cfg.mode}, "
                 f"hotkey={self.cfg.hotkey}, Ctrl+C to quit"
             )
             self._status(self._state.value)
-            exit_code = self._main_loop(engine)
+            exit_code = self._main_loop(engine, use_overlay)
         except KeyboardInterrupt:
             pass
         except ImportError:
@@ -495,20 +528,32 @@ class VoiceTypeApp:
                     engine.stop()
                 except Exception as e:
                     self._status(f"error stopping engine: {e}")
-            if hotkeys is not None:
+            if self._hotkeys is not None:
                 try:
-                    hotkeys.stop()
+                    self._hotkeys.stop()
                 except Exception as e:
                     self._status(f"error stopping hotkey listener: {e}")
             self._status("stopped")
         return exit_code
 
-    def _main_loop(self, engine) -> int:  # noqa: ANN001
+    def _start_hotkeys_from_loop(self) -> None:
+        """Install the hotkey listener; fired from inside the overlay loop.
+
+        Running here — after AppKit's event loop is already up — means
+        the keyboard event tap is installed on top of it, so the loop
+        can't race and silently kill it (the intermittent dead-hotkey
+        bug when the tap was installed first).
+        """
+        self._hotkeys = self._start_hotkey_listener()
+
+    def _main_loop(self, engine, use_overlay: bool) -> int:  # noqa: ANN001
         """Run the housekeeping loop until stop; returns the exit code.
 
         With the overlay enabled (macOS), AppKit's run loop drives the
-        ticks (the waveform pill needs the main thread); otherwise a
-        plain sleep loop does. Housekeeping is identical either way.
+        ticks (the waveform pill needs the main thread) and the hotkey
+        listener is started from inside it (see
+        ``_start_hotkeys_from_loop``); otherwise a plain sleep loop does
+        and the listener was already started in ``run``.
         """
         result = {"code": 0}
 
@@ -520,30 +565,28 @@ class VoiceTypeApp:
                 result["code"] = 1
                 self._stop.set()
 
-        if self.cfg.overlay:
+        if use_overlay:
             from . import overlay
 
-            if overlay.overlay_available():
+            def sample() -> tuple[str, bool, float]:
+                with self._lock:
+                    state = self._state
+                level = getattr(engine, "level", 0.0)
+                try:
+                    level = float(level)
+                except (TypeError, ValueError):
+                    level = 0.0
+                return state.value, state is State.ACTIVE, level
 
-                def sample() -> tuple[str, bool, float]:
-                    with self._lock:
-                        state = self._state
-                    level = getattr(engine, "level", 0.0)
-                    try:
-                        level = float(level)
-                    except (TypeError, ValueError):
-                        level = 0.0
-                    return state.value, state is State.ACTIVE, level
-
-                overlay.run_overlay(
-                    sample,
-                    tick,
-                    self._stop.is_set,
-                    flex=self.cfg.overlay_flex,
-                    speed=self.cfg.overlay_speed,
-                )
-                return result["code"]
-            self._status("overlay unavailable; running without it")
+            overlay.run_overlay(
+                sample,
+                tick,
+                self._stop.is_set,
+                on_ready=self._start_hotkeys_from_loop,
+                flex=self.cfg.overlay_flex,
+                speed=self.cfg.overlay_speed,
+            )
+            return result["code"]
         while not self._stop.is_set():
             time.sleep(0.25)
             tick()
@@ -637,4 +680,4 @@ class VoiceTypeApp:
 
     @staticmethod
     def _status(msg: str) -> None:
-        print(f"[voice-type] {msg}", file=sys.stderr, flush=True)
+        print(f"[voxtype] {msg}", file=sys.stderr, flush=True)

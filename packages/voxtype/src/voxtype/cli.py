@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""voice-type: local speech-to-text that types wherever your cursor is.
+"""voxtype: local speech-to-text that types wherever your cursor is.
 
-Fully on-device (Moonshine models with built-in VAD). Three activation
-modes: a global toggle hotkey, hands-free VAD, or a configurable wake
-word ("claude ..."). Configure via ~/.config/voice-type/config.toml.
+Fully on-device (Parakeet on the Apple GPU or CPU, or Moonshine).
+Three activation modes: a global toggle hotkey, hands-free VAD, or a
+configurable wake word ("claude ..."). Configure via
+~/.config/voxtype/config.toml.
 """
 
 from __future__ import annotations
@@ -24,11 +25,12 @@ from .config import (
 )
 
 _INSTALL_HINT = (
-    "voice-type needs its optional dependencies. Install with:\n"
-    '  uv tool install "claude-code-tools[voice]"\n'
-    '(add the parakeet engine with "claude-code-tools[voice,voice-parakeet]")\n'
+    "voxtype needs its dependencies. Install with:\n"
+    "  uv tool install voxtype\n"
+    "(both parakeet engines are included; the moonshine engine needs\n"
+    'the "voxtype[moonshine]" extra)\n'
     "or run directly:\n"
-    '  uvx --from "claude-code-tools[voice]" voice-type'
+    "  uvx voxtype"
 )
 
 
@@ -79,7 +81,7 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
         "--hotkey",
         default=None,
         help='toggle chord, e.g. "<ctrl>+;" or "ctrl+;" '
-        "(run `voice-type hotkey` to record one)",
+        "(run `voxtype hotkey` to record one)",
     )
     parser.add_argument(
         "--wake-word",
@@ -103,7 +105,29 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _warn_if_unsupported_platform() -> None:
+    """Warn loudly when not on macOS; voxtype is macOS-only.
+
+    The core may partly run elsewhere via the CPU engine, but hotkey
+    suppression and the overlay are macOS-only and it is untested — so a
+    non-Mac launch gets a clear heads-up rather than a silently degraded
+    (hotkey-leaking) experience.
+    """
+    if sys.platform == "darwin":
+        return
+    print(
+        "voxtype: WARNING — voxtype is supported on macOS only "
+        "(Intel and Apple Silicon).\n"
+        f"  You are on {sys.platform!r}: the toggle hotkey will NOT be "
+        "suppressed (it leaks into\n"
+        "  your text), there is no overlay, and this is untested. "
+        "Continuing anyway.",
+        file=sys.stderr,
+    )
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
+    _warn_if_unsupported_platform()
     overrides = {
         "mode": args.mode,
         "engine": args.engine,
@@ -122,7 +146,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     try:
         cfg = load_config(args.config, overrides)
     except (ValueError, FileNotFoundError) as e:
-        print(f"voice-type: {e}", file=sys.stderr)
+        print(f"voxtype: {e}", file=sys.stderr)
         return 1
     # The optional deps (pynput, moonshine-voice, sherpa-onnx) are
     # imported lazily at construction/run time, so the ImportError guard
@@ -132,7 +156,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
         return VoiceTypeApp(cfg).run()
     except ImportError as e:
-        print(f"voice-type: {e}\n\n{_INSTALL_HINT}", file=sys.stderr)
+        print(f"voxtype: {e}\n\n{_INSTALL_HINT}", file=sys.stderr)
         return 1
 
 
@@ -147,10 +171,10 @@ def _cmd_hotkey() -> int:
         )
         chord = record_hotkey()
     except ImportError as e:
-        print(f"voice-type: {e}\n\n{_INSTALL_HINT}", file=sys.stderr)
+        print(f"voxtype: {e}\n\n{_INSTALL_HINT}", file=sys.stderr)
         return 1
     if chord is None:
-        print("voice-type: no key combo detected", file=sys.stderr)
+        print("voxtype: no key combo detected", file=sys.stderr)
         return 1
     print(f"\nAdd this to {DEFAULT_CONFIG_PATH}:\n")
     print(f'hotkey = "{chord}"')
@@ -167,38 +191,38 @@ def _cmd_init(args: argparse.Namespace) -> int:
     try:
         path = write_sample_config(args.config, force=args.force)
     except FileExistsError as e:
-        print(f"voice-type: {e}", file=sys.stderr)
+        print(f"voxtype: {e}", file=sys.stderr)
         return 1
     print(f"wrote {path}")
-    print("(tip: `voice-type setup` walks you through it interactively)")
+    print("(tip: `voxtype setup` walks you through it interactively)")
     return 0
 
 
 def main() -> int:
-    """Entry point for the voice-type CLI."""
+    """Entry point for the voxtype CLI."""
     parser = argparse.ArgumentParser(
-        prog="voice-type",
+        prog="voxtype",
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 examples:
-  voice-type                     # run with ~/.config/voice-type/config.toml
-  voice-type --engine parakeet-mlx --segmentation hold
+  voxtype                     # run with ~/.config/voxtype/config.toml
+  voxtype --engine parakeet-mlx --segmentation hold
                                  # best accuracy: whole-take dictation
-  voice-type --mode wake         # hands-free with wake word "claude"
-  voice-type setup               # interactive walkthrough -> config
-  voice-type init                # write a commented sample config
-  voice-type hotkey              # record a chord, print the config line
+  voxtype --mode wake         # hands-free with wake word "claude"
+  voxtype setup               # interactive walkthrough -> config
+  voxtype init                # write a commented sample config
+  voxtype hotkey              # record a chord, print the config line
 
 while recording:
   <hotkey> again  stop and type the take     Esc      cancel (discard)
   say "go"/"over"/"submit" alone -> press Enter
   say "stop listening" -> stop dictating (vad segmentation only)
 
-config file: ~/.config/voice-type/config.toml (all flags + more:
+config file: ~/.config/voxtype/config.toml (all flags + more:
 wake_word_aliases, submit_phrases, sounds, copy_to_clipboard,
 paste_hotkey, cancel_hotkey, overlay, parakeet_threads, ...)
-docs: https://pchalasani.github.io/claude-code-tools/tools/voice-type/
+docs: https://pchalasani.github.io/claude-code-tools/tools/voxtype/
 
 macOS permissions (grant to your terminal, one time): Microphone,
 Accessibility (to type), Input Monitoring (global hotkeys).

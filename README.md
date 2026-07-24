@@ -78,8 +78,8 @@ Click a card to jump to that feature, or
 </a>
 </td>
 <td align="center">
-<a href="https://pchalasani.github.io/claude-code-tools/tools/voice-type/">
-<img src="assets/card-voice-type.svg" alt="voice-type" width="200"/>
+<a href="https://pchalasani.github.io/claude-code-tools/tools/voxtype/">
+<img src="assets/card-voxtype.svg" alt="voxtype" width="200"/>
 </a>
 </td>
 <td align="center">
@@ -202,11 +202,21 @@ See [tmux-cli](https://pchalasani.github.io/claude-code-tools/tools/tmux-cli/) i
 See [Voice](https://pchalasani.github.io/claude-code-tools/plugins-detail/voice/) in the full documentation.
 
 <a id="voice-type"></a>
-## voice-type — Local Voice Dictation
-Fully on-device speech-to-text (Moonshine + VAD) that types wherever your
-cursor is, with a configurable toggle hotkey and optional wake word.
-Install with `uv tool install "claude-code-tools[voice]"`.
-See [voice-type](https://pchalasani.github.io/claude-code-tools/tools/voice-type/) in the full documentation.
+<a id="voxtype"></a>
+## voxtype — Local Voice Dictation
+**macOS only** (Intel and Apple Silicon). Fully on-device speech-to-text
+(Parakeet on the Apple GPU or CPU, or Moonshine; + VAD) that types wherever
+your cursor is, with a configurable toggle hotkey and optional wake word.
+It is its own standalone package — install it directly, no need for the
+rest of this suite:
+
+```bash
+uv tool install voxtype
+```
+
+That picks the best engine for your machine automatically (Apple-GPU
+`parakeet-mlx` on Apple Silicon, CPU `parakeet` on Intel).
+See [voxtype](https://pchalasani.github.io/claude-code-tools/tools/voxtype/) in the full documentation.
 
 <a id="license"></a>
 ## License
