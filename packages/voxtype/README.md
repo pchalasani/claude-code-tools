@@ -4,10 +4,13 @@
 browser, terminal, or a coding agent's prompt box. Everything runs on your
 machine: no cloud, no accounts, no audio leaving your Mac.
 
-> **macOS only.** voxtype types via macOS accessibility, suppresses hotkeys
-> at the CGEvent tap, and draws its overlay with AppKit. On Apple Silicon
-> (M1 or later) it defaults to the `parakeet-mlx` Apple-GPU engine; Intel
-> Macs automatically fall back to the `parakeet` CPU engine.
+> **macOS only (Intel and Apple Silicon).** voxtype relies on macOS APIs
+> for typing (accessibility), hotkey suppression (the CGEvent tap), and its
+> overlay (AppKit). **It is not supported on Linux or Windows** — the toggle
+> hotkey can't be suppressed there (it leaks into your text), there is no
+> overlay, and it is untested. On Apple Silicon (M1 or later) it defaults to
+> the `parakeet-mlx` Apple-GPU engine; Intel Macs use the `parakeet` CPU
+> engine.
 
 ## Install
 

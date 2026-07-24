@@ -18,6 +18,10 @@ classifiers = [
 # (sherpa-onnx) everywhere else. Markers gate the arm64-only MLX stack.
 dependencies = [
     "pynput>=1.7.7",
+    # The `voxtype setup` onboarding wizard uses questionary; it is the
+    # advertised first-run path, so it ships in the base install (not an
+    # extra) — otherwise `voxtype setup` would fail on a clean install.
+    "questionary>=2.0.0",
     # Apple-GPU engine (Apple Silicon Macs only; wheels are arm64).
     "parakeet-mlx>=0.5.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
     # Resolver guard: without it uv can backtrack through parakeet-mlx

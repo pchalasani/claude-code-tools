@@ -307,7 +307,7 @@ voxtype-version:
 	@grep '^version' $(VOXTYPE_PYPROJECT) | head -1 | cut -d'"' -f2
 
 voxtype-test:
-	uv run pytest $(VOXTYPE_DIR)/tests -q
+	uv run --package voxtype pytest $(VOXTYPE_DIR)/tests -q
 
 voxtype-install:
 	uv tool install --force -e $(VOXTYPE_DIR)

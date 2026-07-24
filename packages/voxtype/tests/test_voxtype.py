@@ -1464,6 +1464,20 @@ def test_validate_rejects_bad_overlay_and_mlx_model(
 # -- CLI: --config placement and hotkey dependency guard ------------------
 
 
+def test_warn_if_unsupported_platform(monkeypatch, capsys) -> None:
+    """Non-macOS launches warn (hotkey won't suppress); macOS is silent."""
+    import voxtype.cli as cli_mod
+
+    monkeypatch.setattr(cli_mod.sys, "platform", "linux")
+    cli_mod._warn_if_unsupported_platform()
+    err = capsys.readouterr().err
+    assert "macOS only" in err
+
+    monkeypatch.setattr(cli_mod.sys, "platform", "darwin")
+    cli_mod._warn_if_unsupported_platform()
+    assert capsys.readouterr().err == ""
+
+
 def test_cli_init_config_before_subcommand(monkeypatch, tmp_path) -> None:
     """`voxtype --config X init` must write X, not the default path."""
     from voxtype.cli import main

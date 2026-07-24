@@ -204,13 +204,18 @@ See [Voice](https://pchalasani.github.io/claude-code-tools/plugins-detail/voice/
 <a id="voice-type"></a>
 <a id="voxtype"></a>
 ## voxtype — Local Voice Dictation
-Fully on-device speech-to-text (Parakeet on the Apple GPU or CPU, or
-Moonshine; + VAD) that types wherever your cursor is, with a configurable
-toggle hotkey and optional wake word.
-Now a standalone package: `uv tool install voxtype` (no need for the full
-claude-code-tools suite) picks the best engine for your machine
-automatically. The `claude-code-tools[voice*]` extras still work and pull
-in voxtype.
+**macOS only** (Intel and Apple Silicon). Fully on-device speech-to-text
+(Parakeet on the Apple GPU or CPU, or Moonshine; + VAD) that types wherever
+your cursor is, with a configurable toggle hotkey and optional wake word.
+It is its own standalone package — install it directly, no need for the
+rest of this suite:
+
+```bash
+uv tool install voxtype
+```
+
+That picks the best engine for your machine automatically (Apple-GPU
+`parakeet-mlx` on Apple Silicon, CPU `parakeet` on Intel).
 See [voxtype](https://pchalasani.github.io/claude-code-tools/tools/voxtype/) in the full documentation.
 
 <a id="license"></a>

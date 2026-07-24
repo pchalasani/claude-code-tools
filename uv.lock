@@ -475,15 +475,6 @@ gdocs = [
     { name = "google-auth-oauthlib" },
     { name = "pillow" },
 ]
-voice = [
-    { name = "voxtype", extra = ["moonshine"] },
-]
-voice-mlx = [
-    { name = "voxtype" },
-]
-voice-parakeet = [
-    { name = "voxtype" },
-]
 
 [package.dev-dependencies]
 dev = [
@@ -508,9 +499,6 @@ requires-dist = [
     { name = "rich", specifier = ">=13.0.0" },
     { name = "tantivy", specifier = ">=0.22.0" },
     { name = "tqdm", specifier = ">=4.67.1" },
-    { name = "voxtype", extras = ["mlx"], marker = "extra == 'voice-mlx'", editable = "packages/voxtype" },
-    { name = "voxtype", extras = ["moonshine"], marker = "extra == 'voice'", editable = "packages/voxtype" },
-    { name = "voxtype", extras = ["parakeet"], marker = "extra == 'voice-parakeet'", editable = "packages/voxtype" },
 ]
 
 [package.metadata.requires-dev]
@@ -2691,6 +2679,7 @@ dependencies = [
     { name = "numpy" },
     { name = "parakeet-mlx", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
     { name = "pynput" },
+    { name = "questionary" },
     { name = "sherpa-onnx" },
     { name = "sherpa-onnx-core" },
     { name = "sounddevice" },
@@ -2708,6 +2697,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "parakeet-mlx", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.5.0" },
     { name = "pynput", specifier = ">=1.7.7" },
+    { name = "questionary", specifier = ">=2.0.0" },
     { name = "sherpa-onnx", specifier = ">=1.12.0,<1.13" },
     { name = "sherpa-onnx-core", specifier = ">=1.12.0,<1.13" },
     { name = "sounddevice", specifier = ">=0.5.0" },

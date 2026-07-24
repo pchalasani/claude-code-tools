@@ -105,7 +105,29 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _warn_if_unsupported_platform() -> None:
+    """Warn loudly when not on macOS; voxtype is macOS-only.
+
+    The core may partly run elsewhere via the CPU engine, but hotkey
+    suppression and the overlay are macOS-only and it is untested — so a
+    non-Mac launch gets a clear heads-up rather than a silently degraded
+    (hotkey-leaking) experience.
+    """
+    if sys.platform == "darwin":
+        return
+    print(
+        "voxtype: WARNING — voxtype is supported on macOS only "
+        "(Intel and Apple Silicon).\n"
+        f"  You are on {sys.platform!r}: the toggle hotkey will NOT be "
+        "suppressed (it leaks into\n"
+        "  your text), there is no overlay, and this is untested. "
+        "Continuing anyway.",
+        file=sys.stderr,
+    )
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
+    _warn_if_unsupported_platform()
     overrides = {
         "mode": args.mode,
         "engine": args.engine,
