@@ -2672,7 +2672,7 @@ wheels = [
 
 [[package]]
 name = "voxtype"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "packages/voxtype" }
 dependencies = [
     { name = "numba", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
