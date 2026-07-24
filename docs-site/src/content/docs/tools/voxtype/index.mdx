@@ -8,7 +8,7 @@ description: >
   recording indicator.
 ---
 
-import { Tabs, TabItem, Steps, Card, CardGrid } from
+import { Steps, Card, CardGrid } from
   "@astrojs/starlight/components";
 
 `voxtype` turns speech into text in whatever app
@@ -30,32 +30,48 @@ the `parakeet` CPU engine (`moonshine` ships no
 Intel-macOS build).
 :::
 
-:::note[Installation]
-```bash
-uv tool install voxtype    # install
-uv tool upgrade voxtype     # upgrade to the latest (keeps any extras)
-```
-That's it — the install picks the best engine for
-your machine (Apple-GPU `parakeet-mlx` on Apple
-Silicon, CPU `parakeet` elsewhere) and it's the
-default at runtime too.
+## Quick start
 
-**Using Claude Code or Codex?** Then run:
+<Steps>
 
-```bash
-voxtype skill
-```
+1. Install — the best engine for your machine comes
+   bundled automatically (Apple-GPU `parakeet-mlx` on
+   Apple Silicon, CPU `parakeet` on Intel):
 
-It adds a voxtype guide skill to **both** agents, so
-you can just ask your agent *"help me install
-voxtype"* and it walks you through install,
-configuration, and the macOS permissions. See
+   ```bash
+   uv tool install voxtype
+   ```
+
+   Upgrade later with `uv tool upgrade voxtype` (it
+   keeps any extras).
+
+2. Grant your terminal **Microphone**,
+   **Accessibility**, and **Input Monitoring**
+   permissions (System Settings → Privacy &
+   Security) when prompted.
+
+3. Start dictating:
+
+   ```bash
+   voxtype
+   ```
+
+   Press `Ctrl+;` to start, speak (watch the ghost),
+   press `Ctrl+;` again to stop -- your speech is typed
+   at the cursor. `Esc` cancels a take.
+
+4. Configure it: run `voxtype setup` for an
+   interactive walkthrough — it asks a handful of
+   explained questions (engine, mode, hotkey, ...) and
+   writes your `~/.config/voxtype/config.toml`. (Prefer
+   editing by hand? `voxtype init` drops a fully
+   commented sample instead.)
+
+</Steps>
+
+Rather have your coding agent do all of this? See
 [Set it up from your coding agent](#set-it-up-from-your-coding-agent)
 below.
-
-See [Configuration & CLI](./configuration/) for all
-engines and options, or run `voxtype --help`.
-:::
 
 ## Why it's different
 
@@ -67,7 +83,7 @@ engines and options, or run `voxtype --help`.
     and typed in one go (a single edit to undo, in
     most apps). No chopping at pauses; sub-second
     results after a one-time warmup (the first take
-    loads the model onto the GPU).
+    loads the model).
   </Card>
   <Card title="Or go hands-free" icon="comment">
     Prefer no keys at all? Say "hey claude"
@@ -89,70 +105,25 @@ engines and options, or run `voxtype --help`.
   <Card title="Visible when it matters" icon="magnifier">
     A little glowing-blue ghost appears ONLY while
     recording -- its mouth opens as you speak. Ghost
-    on screen = mic live; no ghost = not listening.
+    on screen = actively recording; no ghost = not
+    recording (paused, or waiting for the wake word).
   </Card>
   <Card title="Nothing is ever lost" icon="random">
-    Dictated into the wrong window? A paste-again
-    hotkey re-types the last session's transcript at
-    the cursor; optional clipboard mirroring too.
-    Escape cancels a recording outright.
+    `Esc` cancels a recording outright (the default
+    `cancel_hotkey`). Two optional rescues, **both off
+    by default**: bind a
+    paste-again hotkey (`paste_hotkey`) to re-type the
+    last session's transcript at your cursor, and/or
+    enable clipboard mirroring (`copy_to_clipboard`) to
+    echo each session to the clipboard.
   </Card>
 </CardGrid>
 
-## Quick start
-
-<Steps>
-
-1. Install (the best engine for your machine is
-   included automatically — see
-   [engines](./configuration/#engines)):
-
-   ```bash
-   uv tool install voxtype
-   ```
-
-2. Grant your terminal **Microphone**,
-   **Accessibility**, and **Input Monitoring**
-   permissions (System Settings → Privacy &
-   Security) when prompted.
-
-3. Start dictating:
-
-   ```bash
-   voxtype
-   ```
-
-   Press `Ctrl+;` to start, speak (watch the ghost),
-   press `Ctrl+;` again to stop -- your speech is typed
-   at the cursor. `Esc` cancels a take.
-
-4. Make it yours: run `voxtype setup` for an
-   interactive walkthrough — it asks a handful of
-   explained questions (engine, mode, hotkey, ...)
-   and writes your `~/.config/voxtype/config.toml`.
-   (Prefer editing by hand? `voxtype init` drops a
-   fully commented sample instead.) After that, plain
-   `voxtype` starts with your settings.
-
-</Steps>
-
-## Make it yours
-
-Everything above is a choice, not a default you're
-stuck with: how dictation activates (hotkey, wake
-word, or always-on), how speech becomes text
-(whole-take vs. per-pause), which local engine runs
-it (Apple-GPU Parakeet, CPU Parakeet, or Moonshine),
-plus hotkeys, sounds, clipboard behavior, and more.
-The complete reference -- every config key with its
-default, the engine comparison, and all CLI flags --
-lives in **[Configuration & CLI](./configuration/)**.
-
 ## Set it up from your coding agent
 
-Prefer to have your agent do the install? `voxtype skill`
-installs a short guide skill into **both** Claude Code
-and Codex (each reads its own marketplace in this repo):
+`voxtype skill` installs a short guide skill into your
+coding agents — Claude Code, Codex, or both (each reads
+its own marketplace in this repo):
 
 ```bash
 voxtype skill
@@ -165,6 +136,18 @@ dictation"*) and it walks you through
 `uv tool install voxtype` → `voxtype setup` → launch,
 including the macOS permission steps.
 
+## Make it yours
+
+Almost everything is a choice: how dictation activates
+(hotkey, wake word, or always-on), how speech becomes
+text (whole-take vs. per-pause), which local engine
+runs it (Apple-GPU Parakeet, CPU Parakeet, or
+Moonshine), plus hotkeys, sounds, optional clipboard
+mirroring, and more. The complete reference -- every
+config key with its default, the engine comparison, and
+all CLI flags -- lives in
+**[Configuration & CLI](./configuration/)**.
+
 ## Hotkey & voice vocabulary
 
 | Action | Default | Configurable as |
@@ -173,11 +156,16 @@ including the macOS permission steps.
 | Cancel recording (discard) | `Esc` (only while recording) | `cancel_hotkey` |
 | Re-type last transcript | off | `paste_hotkey` |
 | Submit (press Enter) | say "go" / "over" / "submit" | `submit_phrases` |
-| Stop dictating | say "stop listening" | `stop_phrase` |
+| Stop dictating (vad segmentation) | say "stop listening" | `stop_phrase` |
 
-Not sure how to spell a chord for the three hotkey
-settings above? Run `voxtype hotkey`, press the
-combo you want, and it prints the exact line to put
-in your config (e.g. `hotkey = "<ctrl>+;"`).
+In the default toggle + `hold` setup you stop by pressing the toggle
+hotkey again; the spoken `stop_phrase` only applies to per-utterance
+(vad) transcription — i.e. wake mode or `segmentation = "vad"`.
+
+Not sure how to spell a chord for the hotkey settings
+above? Run `voxtype hotkey`, press the combo you want,
+and it prints a ready-to-paste `hotkey = "..."` line
+(use the same chord string for `cancel_hotkey` /
+`paste_hotkey`).
 
 Full reference: [Configuration & CLI](./configuration/).
