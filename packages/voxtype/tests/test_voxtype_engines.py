@@ -532,8 +532,11 @@ def _make_parakeet(monkeypatch, texts=("hello",)):  # noqa: ANN001, ANN202
     )
 
     statuses: list[str] = []
+    # These tests exercise the per-utterance VAD capture loop, so pin
+    # segmentation=vad (parakeet+toggle now defaults to hold, which has
+    # its own tests).
     eng = ParakeetEngine(
-        Config(engine="parakeet"), statuses.append
+        Config(engine="parakeet", segmentation="vad"), statuses.append
     )
     eng._recognizer = FakeRecognizer(texts)
     eng._vad = FakeVad()

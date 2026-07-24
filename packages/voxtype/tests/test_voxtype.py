@@ -164,6 +164,31 @@ def test_default_config_is_valid() -> None:
     Config().validate()
 
 
+def test_segmentation_smart_default() -> None:
+    """segmentation defaults to 'hold' for parakeet+toggle, else 'vad',
+    and never resolves to an invalid engine/mode combo."""
+    from voxtype.config import default_segmentation
+
+    assert default_segmentation("parakeet-mlx", "toggle") == "hold"
+    assert default_segmentation("parakeet", "toggle") == "hold"
+    assert default_segmentation("moonshine", "toggle") == "vad"
+    assert default_segmentation("parakeet", "wake") == "vad"
+    assert default_segmentation("parakeet", "vad") == "vad"
+
+    # Config resolves the "auto" sentinel from the resolved engine/mode.
+    assert Config(engine="parakeet", mode="toggle").segmentation == "hold"
+    assert Config(engine="moonshine", mode="toggle").segmentation == "vad"
+    assert Config(engine="parakeet", mode="wake").segmentation == "vad"
+    # An explicit choice is left untouched...
+    assert Config(
+        engine="parakeet", mode="toggle", segmentation="vad"
+    ).segmentation == "vad"
+    # ...and every resolved default validates.
+    Config(engine="parakeet", mode="toggle").validate()
+    Config(engine="moonshine", mode="toggle").validate()
+    Config(engine="parakeet", mode="wake").validate()
+
+
 def test_load_config_missing_default_uses_defaults(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
