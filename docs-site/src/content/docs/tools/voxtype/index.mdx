@@ -3,8 +3,8 @@ title: "voxtype — Local Voice Dictation"
 description: >
   Fully on-device speech-to-text that types wherever
   your cursor is. Parakeet/Moonshine engines, wake
-  word, spoken submit, filler removal, and a live
-  waveform recording indicator.
+  word, spoken submit, filler removal, and a
+  talking-ghost recording indicator.
 ---
 
 import { Tabs, TabItem, Steps, Card, CardGrid } from
@@ -70,9 +70,9 @@ engines and options, or run `voxtype --help`.
     "I think") -- on-device regex, no LLM involved.
   </Card>
   <Card title="Visible when it matters" icon="magnifier">
-    A floating waveform pill appears ONLY while
-    recording -- red waves as you speak. Pill on
-    screen = mic live; no pill = not listening.
+    A little glowing-blue ghost appears ONLY while
+    recording -- its mouth opens as you speak. Ghost
+    on screen = mic live; no ghost = not listening.
   </Card>
   <Card title="Nothing is ever lost" icon="random">
     Dictated into the wrong window? A paste-again
@@ -105,7 +105,7 @@ engines and options, or run `voxtype --help`.
    voxtype --segmentation hold
    ```
 
-   Press `Ctrl+;`, speak (watch the waveform pill),
+   Press `Ctrl+;`, speak (watch the ghost),
    press `Ctrl+;` again -- the whole take types at
    your cursor. `Esc` cancels a take.
 
