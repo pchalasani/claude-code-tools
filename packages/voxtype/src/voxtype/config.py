@@ -43,6 +43,29 @@ VALID_ENGINES = ("moonshine", "parakeet", "parakeet-mlx")
 
 VALID_SEGMENTATIONS = ("vad", "hold")
 
+# Parakeet engines support the "hold" (whole-take) segmentation; the
+# moonshine streaming engine does not.
+_PARAKEET_ENGINES = ("parakeet", "parakeet-mlx")
+
+# Sentinel `segmentation` default; resolved per engine/mode by
+# default_segmentation() in Config.__post_init__.
+_AUTO_SEGMENTATION = "auto"
+
+
+def default_segmentation(engine: str, mode: str) -> str:
+    """Best segmentation for an ``engine``/``mode`` combo.
+
+    "hold" (record the whole take, transcribe on toggle-off — maximum
+    accuracy, a single edit to undo) is the recommended default, but it
+    only works with a parakeet engine in toggle mode; every other
+    combination falls back to "vad" (per-pause typing), which is what the
+    moonshine, wake, and vad paths require anyway.
+    """
+    if engine in _PARAKEET_ENGINES and mode == "toggle":
+        return "hold"
+    return "vad"
+
+
 # Parakeet model builds published by k2-fsa (see engine_parakeet.MODELS).
 VALID_PARAKEET_MODELS = ("v3-int8", "v2-fp16")
 
@@ -72,7 +95,9 @@ class Config:
         segmentation: "vad" types each utterance when you pause;
             "hold" records everything between toggle-on and toggle-off
             and transcribes the whole take at once (full context, no
-            mid-sentence chopping; parakeet + toggle mode only).
+            mid-sentence chopping; parakeet + toggle mode only). Defaults
+            to "hold" when the engine is parakeet-family and mode is
+            "toggle" (see default_segmentation), else "vad".
         parakeet_model: Parakeet build: "v3-int8" (multilingual,
             ~490 MB) or "v2-fp16" (English, ~1.1 GB, higher precision).
         parakeet_threads: CPU threads for decoding (4 benchmarks
@@ -120,7 +145,10 @@ class Config:
 
     mode: str = "toggle"
     engine: str = field(default_factory=default_engine)
-    segmentation: str = "vad"
+    # "auto" is a sentinel resolved in __post_init__ to the best
+    # segmentation for the resolved engine/mode (hold for parakeet +
+    # toggle, else vad). An explicit "vad"/"hold" is left untouched.
+    segmentation: str = _AUTO_SEGMENTATION
     parakeet_model: str = "v3-int8"
     parakeet_threads: int = 4
     mlx_model: str = "mlx-community/parakeet-tdt-0.6b-v3"
@@ -146,6 +174,13 @@ class Config:
     paste_hotkey: str = ""
     cancel_hotkey: str = "<esc>"
 
+    def __post_init__(self) -> None:
+        # Resolve the smart segmentation default now that engine and mode
+        # are known (either may have been overridden). Leaves an explicit
+        # "vad"/"hold" from the config file or a flag untouched.
+        if self.segmentation == _AUTO_SEGMENTATION:
+            self.segmentation = default_segmentation(self.engine, self.mode)
+
     def validate(self) -> None:
         """Raise ``ValueError`` if any field has an invalid type or value.
 
@@ -168,7 +203,7 @@ class Config:
                 f"must be one of {VALID_SEGMENTATIONS}"
             )
         if self.segmentation == "hold" and (
-            self.engine not in ("parakeet", "parakeet-mlx")
+            self.engine not in _PARAKEET_ENGINES
             or self.mode != "toggle"
         ):
             raise ValueError(
@@ -332,10 +367,11 @@ engine = "{default_engine()}"
 mlx_model = "mlx-community/parakeet-tdt-0.6b-v3"
 
 # How speech becomes text (parakeet engine, toggle mode only):
-#   "vad"  - each utterance types when you pause (default)
+#   "vad"  - each utterance types when you pause
 #   "hold" - record from toggle-on to toggle-off, transcribe the whole
 #            take at once: full context, no mid-sentence chopping
-segmentation = "vad"
+#            (the default with a parakeet engine in toggle mode)
+segmentation = "{default_segmentation(default_engine(), "toggle")}"
 
 # Parakeet build: "v3-int8" (multilingual, ~490 MB download) or
 # "v2-fp16" (English-only, ~1.1 GB, higher precision = better accuracy)

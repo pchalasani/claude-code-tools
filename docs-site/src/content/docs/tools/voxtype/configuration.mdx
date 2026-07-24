@@ -89,13 +89,19 @@ least immediate:
    transcription.
 
 Wake and vad **modes** always use per-pause typing
-(2); toggle mode lets you pick between (2) and (3).
+(2); toggle mode lets you pick between (2) and (3),
+and **defaults to (3), whole-take**, with a parakeet
+engine — so out of the box you get maximum-accuracy
+push-to-talk. Set `segmentation = "vad"` if you'd
+rather see text appear as you pause.
 
 ## Common setups
 
-**Push-to-talk dictation (recommended daily driver).**
-No wake word involved at all; maximum accuracy; text
-lands in one go (a single edit to undo, in most apps):
+**Push-to-talk dictation (the default, and the
+recommended daily driver).** No wake word involved at
+all; maximum accuracy; text lands in one go (a single
+edit to undo, in most apps). This is what you get out
+of the box on a parakeet engine — no config needed:
 
 ```toml
 mode = "toggle"
@@ -165,9 +171,10 @@ mode = "toggle"
 engine = "parakeet-mlx"
 
 # "vad" types each utterance when you pause; "hold" records everything
-# between toggle-on/off and transcribes the whole take at once
-# (parakeet engines + toggle mode only)
-segmentation = "vad"
+# between toggle-on/off and transcribes the whole take at once (parakeet
+# engines + toggle mode only). Default: "hold" with a parakeet engine in
+# toggle mode (the common case), otherwise "vad".
+segmentation = "hold"
 
 # parakeet (CPU) build: "v3-int8" | "v2-fp16"; and decode threads
 parakeet_model = "v3-int8"
