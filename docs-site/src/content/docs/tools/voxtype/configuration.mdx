@@ -5,10 +5,16 @@ description: >
   hotkey — the complete reference.
 ---
 
-Configuration lives at `~/.config/voxtype/config.toml`.
+Configuration lives at `~/.config/voxtype/config.toml`
+(voxtype also reads a legacy
+`~/.config/voice-type/config.toml` if it exists and the
+voxtype one doesn't — a carryover from when the tool
+shipped as `voice-type`).
 
-**You never need CLI flags.** Every flag is just an
-override of a config key, so the intended workflow
+**You rarely need CLI flags.** Every *runtime* flag is
+just an override of a config key (the exceptions are
+`--config`, which points at a different file, and the
+`setup`/`init` `--force` flag), so the intended workflow
 is: put your preferences in the config once, then
 your daily command is plain `voxtype` — flags
 exist for one-off experiments (e.g. trying another
@@ -32,8 +38,8 @@ short series of explained questions (engine, mode,
 segmentation, hotkey, wake word, and optional extras),
 validates your choices, and writes a ready-to-use
 config — you can record the hotkey live during the
-walkthrough. `init` instead drops the fully commented
-template below for hand-editing.
+walkthrough. `init` instead drops a fully commented
+sample (like the reference below) for hand-editing.
 
 ## The three independent axes
 
@@ -48,7 +54,9 @@ behaves, and they answer different questions:
 - **`segmentation`** — *when does text appear?* See
   ["When does the text appear?"](#when-does-the-text-appear)
   below — this is the axis people mean when they ask
-  about "streaming" dictation.
+  about "streaming" dictation. (Mostly independent, with
+  one tie: `hold` needs a parakeet engine in toggle mode;
+  otherwise voxtype uses `vad`.)
 - **`engine`** — *what transcribes it?* Pure
   speed/accuracy/platform trade-off; see the
   [engine table](#engines) below. Any engine works
@@ -100,13 +108,17 @@ rather see text appear as you pause.
 **Push-to-talk dictation (the default, and the
 recommended daily driver).** No wake word involved at
 all; maximum accuracy; text lands in one go (a single
-edit to undo, in most apps). This is what you get out
-of the box on a parakeet engine — no config needed:
+edit to undo, in most apps). This is exactly what you
+get out of the box — **no config needed** — since
+`mode` defaults to `toggle`, the engine is auto-selected
+(a parakeet engine), and `segmentation` then defaults to
+`hold`. Spelled out, that is:
 
 ```toml
 mode = "toggle"
 segmentation = "hold"
-engine = "parakeet-mlx"
+# engine is auto-selected: parakeet-mlx on Apple Silicon,
+# parakeet on Intel — you normally leave it unset
 ```
 
 **Toggle with live feedback.** Same hotkey workflow,
@@ -117,7 +129,6 @@ dictating something long, at some cost in accuracy:
 ```toml
 mode = "toggle"
 segmentation = "vad"
-engine = "parakeet-mlx"
 ```
 
 **Hands-free with a wake word.** Say "hey claude
@@ -127,7 +138,6 @@ Per-pause typing is inherent to this mode:
 
 ```toml
 mode = "wake"
-engine = "parakeet-mlx"
 wake_word_aliases = ["hey cloud"]  # add what the model mishears
 ```
 
@@ -137,8 +147,11 @@ short bursts of use:
 
 ```toml
 mode = "vad"
-engine = "parakeet-mlx"
 ```
+
+(These recipes leave `engine` unset so it auto-selects
+for your machine; set it explicitly only to force a
+specific engine.)
 
 ## Engines
 
@@ -161,13 +174,15 @@ for CPU tuning.
 ## Config reference
 
 ```toml
-# ~/.config/voxtype/config.toml — all keys optional; these are defaults
+# ~/.config/voxtype/config.toml — all keys optional; the values shown
+# are the defaults (except `engine`, which is auto-selected per machine)
 
 # Activation: "toggle" (hotkey), "vad" (hands-free), "wake" (wake word)
 mode = "toggle"
 
-# Engine: "parakeet-mlx" | "parakeet" | "moonshine"
-# (default: parakeet-mlx on Apple Silicon, parakeet elsewhere)
+# Engine: "parakeet-mlx" | "parakeet" | "moonshine". Auto-selected when
+# unset: parakeet-mlx on Apple Silicon, parakeet on Intel. Set it only to
+# force a choice; the value below is just the Apple-Silicon case.
 engine = "parakeet-mlx"
 
 # "vad" types each utterance when you pause; "hold" records everything
@@ -229,18 +244,13 @@ overlay_speed = 1.0  # animation speed (lower = slower/gentler)
 ## CLI
 
 ```
-voxtype [flags]           run with config + flag overrides
-voxtype setup [--force]   interactive walkthrough -> writes config
-voxtype init [--force]    write the commented sample config to edit
-voxtype hotkey            press a chord; prints the config line
-voxtype skill             install the voxtype skill into Claude + Codex
-voxtype --help            full flag reference
+voxtype [flags]                    run with config + flag overrides
+voxtype setup [--config PATH] [--force]  interactive walkthrough -> writes config
+voxtype init  [--config PATH] [--force]  write the commented sample config to edit
+voxtype hotkey                     press a chord; prints the config line
+voxtype skill                      install the voxtype skill into Claude + Codex
+voxtype --help                     full flag reference (per-subcommand: e.g. voxtype setup --help)
 ```
-
-New here? `voxtype setup` asks a handful of questions (engine,
-mode, hotkey, ...) — each explained, with sensible defaults — and
-writes a valid config for you. `init` instead drops a fully commented
-sample file to edit by hand.
 
 Flags mirror the config keys: `--mode`, `--engine`,
 `--segmentation`, `--parakeet-model`, `--model-arch`,
