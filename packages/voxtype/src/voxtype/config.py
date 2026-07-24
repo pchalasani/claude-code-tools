@@ -370,8 +370,12 @@ mlx_model = "mlx-community/parakeet-tdt-0.6b-v3"
 #   "vad"  - each utterance types when you pause
 #   "hold" - record from toggle-on to toggle-off, transcribe the whole
 #            take at once: full context, no mid-sentence chopping
-#            (the default with a parakeet engine in toggle mode)
-segmentation = "{default_segmentation(default_engine(), "toggle")}"
+# Left UNSET so the smart default applies: "hold" for a parakeet engine
+# in toggle mode, otherwise "vad" — this stays valid if you later change
+# mode/engine below. Uncomment one to pin it ("hold" needs a parakeet
+# engine + toggle mode):
+# segmentation = "hold"
+# segmentation = "vad"
 
 # Parakeet build: "v3-int8" (multilingual, ~490 MB download) or
 # "v2-fp16" (English-only, ~1.1 GB, higher precision = better accuracy)
