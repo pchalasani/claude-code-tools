@@ -43,6 +43,26 @@ This must run in the user's own terminal (it is interactive); do not
 run it through an agent shell. Alternative for hand-editors:
 `voxtype init` writes a fully commented sample config instead.
 
+### Editing the config directly
+
+All settings live in `~/.config/voxtype/config.toml` — every key is
+optional and the file `voxtype init` writes is fully commented. You (the
+agent) can open and edit this file to help the user tune specific
+options; common ones:
+
+- `engine` — `parakeet-mlx` (Apple GPU), `parakeet` (CPU), or `moonshine`.
+- `mode` — `toggle` (hotkey), `wake` (wake word), or `vad` (always on).
+- `segmentation` — `hold` (whole take on toggle-off) or `vad` (per pause).
+- `hotkey` — toggle chord, e.g. `"<ctrl>+;"` (run `voxtype hotkey` to
+  record one).
+- `sounds` — set `false` to silence the start/stop chimes.
+- `wake_word` / `wake_word_aliases`, `submit_phrases`, `overlay`,
+  `paste_hotkey`, `cancel_hotkey`, `copy_to_clipboard`, and more.
+
+For the full list — every key, its default, and the engine comparison —
+read the **Configuration & CLI** reference:
+<https://pchalasani.github.io/claude-code-tools/tools/voxtype/configuration/>
+
 ## Launch
 
 ```bash
@@ -65,5 +85,10 @@ First-run notes for the user:
 
 ## Reference
 
+- Config file: `~/.config/voxtype/config.toml` (fully commented; edit to
+  tune any setting)
 - `voxtype --help` — all flags and subcommands
-- Full docs: https://pchalasani.github.io/claude-code-tools/tools/voxtype/
+- Config reference (every key + defaults):
+  https://pchalasani.github.io/claude-code-tools/tools/voxtype/configuration/
+- Overview & full docs:
+  https://pchalasani.github.io/claude-code-tools/tools/voxtype/

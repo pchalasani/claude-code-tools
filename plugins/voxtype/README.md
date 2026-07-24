@@ -12,13 +12,15 @@ macOS permission steps.
 ## Installing this plugin
 
 The quickest way is the voxtype CLI, which sets the skill up in **both**
-Claude Code and Codex from the `cctools-plugins` marketplace:
+Claude Code and Codex (each has its own marketplace in this repo):
 
 ```bash
 voxtype skill
 ```
 
-Or add it manually per agent:
+Or add it manually per agent — note the marketplace name differs
+(Claude reads `.claude-plugin/marketplace.json`, Codex reads
+`.agents/plugins/marketplace.json`):
 
 ```bash
 # Claude Code
@@ -27,5 +29,5 @@ claude plugin install voxtype@cctools-plugins
 
 # Codex
 codex plugin marketplace add pchalasani/claude-code-tools
-codex plugin add voxtype@cctools-plugins
+codex plugin add voxtype@cctools-codex-plugins
 ```

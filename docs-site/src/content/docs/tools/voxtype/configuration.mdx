@@ -202,8 +202,10 @@ strip_fillers = true
 
 trailing_space = true        # append a space after each typed utterance
 
-# Sounds: system-sound names (/System/Library/Sounds) or file paths
-sounds = true
+# Toggle chimes. sounds = false silences the start/stop chime entirely
+# (or run with --no-sounds). Names are system sounds
+# (/System/Library/Sounds) or file paths.
+sounds = true            # false = no chime when recording toggles on/off
 sound_start = "Glass"
 sound_stop = "Bottle"
 

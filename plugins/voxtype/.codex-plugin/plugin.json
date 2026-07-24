@@ -1,0 +1,22 @@
+{
+  "name": "voxtype",
+  "version": "0.1.0",
+  "description": "Install and set up voxtype — local, on-device voice dictation for macOS",
+  "author": {
+    "name": "Prasad Chalasani"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "voxtype",
+    "shortDescription": "Install and set up voxtype voice dictation",
+    "longDescription": "Guides you through installing, configuring (via the voxtype setup wizard), and launching voxtype — local, fully on-device speech-to-text for macOS that types wherever your cursor is.",
+    "developerName": "Prasad Chalasani",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Install voxtype via uv",
+      "Configure with the setup wizard",
+      "macOS permission guidance"
+    ],
+    "defaultPrompt": "Use $voxtype to install and set up voxtype voice dictation."
+  }
+}

@@ -12,22 +12,24 @@ from __future__ import annotations
 import shutil
 import subprocess
 
-# The GitHub repo whose .claude-plugin/marketplace.json defines the
-# `cctools-plugins` marketplace, and the plugin/marketplace to install.
+# The GitHub repo that carries both marketplaces, and the plugin name.
 _MARKETPLACE_REPO = "pchalasani/claude-code-tools"
-_MARKETPLACE = "cctools-plugins"
 _PLUGIN = "voxtype"
 
-# Per-agent commands: (marketplace-add, plugin-install). Each agent uses
-# its own CLI verbs but the same repo/plugin selector.
+# Claude and Codex use SEPARATE marketplaces in this repo, with different
+# names and manifests: Claude reads .claude-plugin/marketplace.json
+# (`cctools-plugins`); Codex reads .agents/plugins/marketplace.json
+# (`cctools-codex-plugins`). Each agent also has its own install verb
+# (`plugin install` vs `plugin add`), so the selector must name that
+# agent's own marketplace or the install can't resolve the plugin.
 _AGENTS: dict[str, dict[str, list[str]]] = {
     "claude": {
         "add": ["plugin", "marketplace", "add", _MARKETPLACE_REPO],
-        "install": ["plugin", "install", f"{_PLUGIN}@{_MARKETPLACE}"],
+        "install": ["plugin", "install", f"{_PLUGIN}@cctools-plugins"],
     },
     "codex": {
         "add": ["plugin", "marketplace", "add", _MARKETPLACE_REPO],
-        "install": ["plugin", "add", f"{_PLUGIN}@{_MARKETPLACE}"],
+        "install": ["plugin", "add", f"{_PLUGIN}@cctools-codex-plugins"],
     },
 }
 
@@ -85,7 +87,7 @@ def install_skill() -> int:
             "PATH.\nInstall one of them first, then re-run 'voxtype skill'.\n"
             "Or add it manually:\n"
             f"  claude plugin marketplace add {_MARKETPLACE_REPO}\n"
-            f"  claude plugin install {_PLUGIN}@{_MARKETPLACE}"
+            f"  claude plugin install {_PLUGIN}@cctools-plugins"
         )
         return 1
     for agent in _AGENTS:

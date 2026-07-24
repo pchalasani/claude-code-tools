@@ -396,10 +396,12 @@ idle_timeout = 20.0
 # Append a space after each typed utterance.
 trailing_space = true
 
-# Play a sound when dictation starts/stops (macOS only). Names are
-# system sounds from /System/Library/Sounds (Glass, Hero, Ping, Tink,
-# Bottle, ...) or absolute paths to audio files.
-sounds = true
+# Chimes when recording toggles on/off (macOS only). Set sounds = false
+# to turn the toggle chimes off entirely (or run with --no-sounds). The
+# sound_start/sound_stop names are system sounds from
+# /System/Library/Sounds (Glass, Hero, Ping, Tink, Bottle, ...) or
+# absolute paths to audio files.
+sounds = true          # false = silent (no chime on start/stop)
 sound_start = "Glass"
 sound_stop = "Bottle"
 

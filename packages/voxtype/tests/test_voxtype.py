@@ -1498,7 +1498,10 @@ def test_skill_install_targets_both_agents(monkeypatch, capsys) -> None:
     assert [
         "claude", "plugin", "install", "voxtype@cctools-plugins",
     ] in runs
-    assert ["codex", "plugin", "add", "voxtype@cctools-plugins"] in runs
+    # Codex has its own marketplace name (different manifest/CLI verb).
+    assert [
+        "codex", "plugin", "add", "voxtype@cctools-codex-plugins",
+    ] in runs
     # marketplace add ran for both, from the repo
     adds = [r for r in runs if "marketplace" in r]
     assert all("pchalasani/claude-code-tools" in r for r in adds)

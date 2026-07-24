@@ -131,6 +131,23 @@ The complete reference -- every config key with its
 default, the engine comparison, and all CLI flags --
 lives in **[Configuration & CLI](./configuration/)**.
 
+## Set it up from your coding agent
+
+Prefer to have your agent do the install? `voxtype skill`
+installs a short guide skill into **both** Claude Code
+and Codex (each reads its own marketplace in this repo):
+
+```bash
+voxtype skill
+```
+
+It sets up whichever of the two agents is on your
+machine and skips the other. Afterwards, just ask your
+agent *"help me install voxtype"* (or *"set up voice
+dictation"*) and it walks you through
+`uv tool install voxtype` → `voxtype setup` → launch,
+including the macOS permission steps.
+
 ## Hotkey & voice vocabulary
 
 | Action | Default | Configurable as |
