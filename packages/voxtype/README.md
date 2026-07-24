@@ -91,6 +91,19 @@ want, and it prints the exact line to put in your config
 | `parakeet` | included (default elsewhere) | Parakeet-TDT 0.6b v3 on CPU via sherpa-onnx (~490 MB download) |
 | `moonshine` | opt-in: `voxtype[moonshine]` | Streaming Moonshine models, smallest footprint (no Intel-macOS build) |
 
+## Agent skill (Claude Code + Codex)
+
+`voxtype skill` installs a guide skill into both Claude Code and Codex (from
+the `cctools-plugins` marketplace), so you can just ask your agent
+"help me install voxtype" and it walks you through everything:
+
+```bash
+voxtype skill
+```
+
+It sets up whichever of the two agents is on your machine and skips the
+other.
+
 ## Documentation
 
 Full reference — every config key with its default, the engine comparison,

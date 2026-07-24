@@ -33,7 +33,12 @@
     {
       "name": "voice",
       "source": "./plugins/voice",
-      "description": "Audio feedback when Claude Code agent completes tasks (pocket-tts), plus a voxtype-install skill for local voice dictation"
+      "description": "Audio feedback when Claude Code agent completes tasks using pocket-tts"
+    },
+    {
+      "name": "voxtype",
+      "source": "./plugins/voxtype",
+      "description": "Install and set up voxtype \u2014 local on-device voice dictation for macOS"
     },
     {
       "name": "msg",
