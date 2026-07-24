@@ -1503,9 +1503,14 @@ def test_skill_install_targets_both_agents(monkeypatch, capsys) -> None:
         "codex", "plugin", "add", "voxtype@cctools-codex-plugins",
     ] in runs
     # marketplace add ran for both, from the repo
-    adds = [r for r in runs if "marketplace" in r]
+    adds = [r for r in runs if r[2:4] == ["marketplace", "add"]]
     assert all("pchalasani/claude-code-tools" in r for r in adds)
     assert len(adds) == 2
+    # and each cached marketplace was refreshed before install
+    assert ["claude", "plugin", "marketplace", "update",
+            "cctools-plugins"] in runs
+    assert ["codex", "plugin", "marketplace", "upgrade",
+            "cctools-codex-plugins"] in runs
 
 
 def test_skill_install_skips_absent_agent(monkeypatch) -> None:

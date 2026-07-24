@@ -25,9 +25,15 @@ Or add it manually per agent — note the marketplace name differs
 ```bash
 # Claude Code
 claude plugin marketplace add pchalasani/claude-code-tools
+claude plugin marketplace update cctools-plugins   # refresh if already added
 claude plugin install voxtype@cctools-plugins
 
 # Codex
 codex plugin marketplace add pchalasani/claude-code-tools
+codex plugin marketplace upgrade cctools-codex-plugins  # refresh if already added
 codex plugin add voxtype@cctools-codex-plugins
 ```
+
+If you already had the marketplace added before voxtype was published,
+the `update`/`upgrade` step is what refreshes the cached snapshot so the
+plugin shows up (`voxtype skill` does this automatically).

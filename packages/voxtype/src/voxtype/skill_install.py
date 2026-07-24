@@ -22,13 +22,20 @@ _PLUGIN = "voxtype"
 # (`cctools-codex-plugins`). Each agent also has its own install verb
 # (`plugin install` vs `plugin add`), so the selector must name that
 # agent's own marketplace or the install can't resolve the plugin.
+# Each agent caches a marketplace snapshot, so an already-added
+# marketplace is NOT re-fetched by `add` — without an explicit refresh a
+# machine that added the marketplace before voxtype was published can't
+# see the plugin. So we always refresh after add (Claude: `marketplace
+# update`; Codex: `marketplace upgrade`) before installing.
 _AGENTS: dict[str, dict[str, list[str]]] = {
     "claude": {
         "add": ["plugin", "marketplace", "add", _MARKETPLACE_REPO],
+        "refresh": ["plugin", "marketplace", "update", "cctools-plugins"],
         "install": ["plugin", "install", f"{_PLUGIN}@cctools-plugins"],
     },
     "codex": {
         "add": ["plugin", "marketplace", "add", _MARKETPLACE_REPO],
+        "refresh": ["plugin", "marketplace", "upgrade", "cctools-codex-plugins"],
         "install": ["plugin", "add", f"{_PLUGIN}@cctools-codex-plugins"],
     },
 }
@@ -47,11 +54,12 @@ def _run(argv: list[str]) -> int:
 
 
 def _install_for(agent: str) -> bool:
-    """Add the marketplace and install the voxtype plugin for ``agent``.
+    """Add + refresh the marketplace and install the plugin for ``agent``.
 
-    The marketplace-add is best-effort (it commonly "fails" only because
-    the marketplace is already added); success is decided by the install
-    step, which is what actually places the skill.
+    The add and refresh steps are best-effort (add commonly "fails" only
+    because the marketplace is already registered; refresh only matters
+    when it was); success is decided by the install step, which is what
+    actually places the skill.
     """
     verbs = _AGENTS[agent]
     print(f"voxtype: setting up the voxtype skill in {agent}…")
@@ -60,8 +68,11 @@ def _install_for(agent: str) -> bool:
         # Non-fatal: most often the marketplace is already registered.
         print(
             f"voxtype: '{agent} plugin marketplace add' returned {add_rc} "
-            "(already added?); continuing to install"
+            "(already added?); refreshing it"
         )
+    # Refresh the cached marketplace snapshot so a machine that added it
+    # before voxtype was published can see the plugin (non-fatal).
+    _run([agent, *verbs["refresh"]])
     install_rc = _run([agent, *verbs["install"]])
     if install_rc == 0:
         print(f"voxtype: installed the voxtype skill for {agent} ✓")
