@@ -1,3 +1,3 @@
 """Claude Code Tools - Collection of utilities for Claude Code."""
 
-__version__ = "1.19.8"
+__version__ = "1.20.0"
