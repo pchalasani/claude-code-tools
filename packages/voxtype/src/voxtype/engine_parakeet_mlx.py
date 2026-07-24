@@ -89,6 +89,7 @@ class ParakeetMlxEngine(ParakeetEngine):
     ) -> None:
         try:
             self._load_models_with_repair()
+            self._warmup()
         except Exception as e:
             self.fatal_error = f"model load failed: {e}"
             self._report(self.fatal_error)
@@ -96,6 +97,28 @@ class ParakeetMlxEngine(ParakeetEngine):
         finally:
             self._ready.set()
         self._loop(on_utterance, on_activity)
+
+    def _warmup(self) -> None:
+        """Compile MLX kernels at startup, not on the first real take.
+
+        The first decode on a fresh process compiles the model's Metal
+        kernels — measured ~3-10s — while every decode after is
+        sub-second (verified: decode 0 ~3s, decodes 1+ ~0.12s). Doing a
+        throwaway decode of a short silent clip HERE, on the worker
+        thread while the user still sees "loading ...", moves that
+        one-time cost off their first dictation. Warming up on one
+        length makes other lengths fast too. Non-fatal: on any failure
+        the first real decode simply pays the cost as before.
+        """
+        import numpy as np
+
+        try:
+            self._status("warming up the GPU decoder...")
+            self.transcribe(
+                np.zeros(SAMPLE_RATE * 2, dtype=np.float32), SAMPLE_RATE
+            )
+        except Exception:
+            pass
 
     def _load_models_with_repair(self) -> None:
         """Load the MLX model (HF-cached) and the Silero VAD.
