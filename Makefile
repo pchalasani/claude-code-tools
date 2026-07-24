@@ -1,4 +1,4 @@
-.PHONY: install release patch minor major dev-install help clean publish all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply update-homebrew docs-dev docs-build docs-preview voxtype-version voxtype-test voxtype-install voxtype-build voxtype-release voxtype-publish voxtype-all
+.PHONY: install release patch minor major dev-install help clean publish all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply update-homebrew docs-dev docs-build docs-preview voxtype-version voxtype-test voxtype-install voxtype-build voxtype-release voxtype-publish voxtype-all voxtype-all-patch voxtype-all-minor voxtype-all-major
 
 GIT_PRIMARY_WORKTREE := $(realpath $(shell git rev-parse \
 	--path-format=absolute --git-common-dir)/..)
@@ -36,6 +36,7 @@ help:
 	@echo "  make voxtype-install - Install voxtype tool in editable mode"
 	@echo "  make voxtype-build   - Build voxtype wheel + sdist into dist/"
 	@echo "  make voxtype-release [BUMP=patch|minor|major] - Bump, tag voxtype-vX.Y.Z, push, GitHub release, build"
+	@echo "  make voxtype-all-patch / -minor / -major - Bump that part, push, GitHub release, build (then: make voxtype-publish)"
 	@echo "  make voxtype-publish - Publish dist/voxtype-* to PyPI"
 	@echo "  make voxtype-all [BUMP=...] - voxtype-release + voxtype-publish in one shot"
 
@@ -357,3 +358,15 @@ voxtype-publish:
 # One-shot: bump + tag + push + GitHub release + build + publish to PyPI
 voxtype-all: voxtype-release voxtype-publish
 	@echo "voxtype released and published!"
+
+# Named bump aliases mirroring the umbrella's all-patch/minor/major:
+# bump that version part, tag, push, GitHub release, build — then run
+# `make voxtype-publish` to upload (matches `make all-patch && make publish`).
+voxtype-all-patch:
+	@$(MAKE) voxtype-release BUMP=patch
+
+voxtype-all-minor:
+	@$(MAKE) voxtype-release BUMP=minor
+
+voxtype-all-major:
+	@$(MAKE) voxtype-release BUMP=major
