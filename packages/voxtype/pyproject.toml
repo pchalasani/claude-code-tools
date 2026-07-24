@@ -1,6 +1,6 @@
 [project]
 name = "voxtype"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local, streaming speech-to-text that types wherever your cursor is (macOS)"
 readme = "README.md"
 license = { file = "LICENSE" }
