@@ -15,8 +15,20 @@ MAX_QUEUE_RECORD_BYTES = 128 * 1024
 SIGNALS = frozenset({"too-dense", "show-evidence", "go-deeper", "skip"})
 
 
-def build_question_record(data: dict[str, Any]) -> dict[str, str]:
+def build_question_record(
+    data: dict[str, Any],
+) -> dict[str, str | None]:
     """Build a validated question record."""
+    parent_id = data.get("parent_id")
+    if parent_id is not None:
+        if not isinstance(parent_id, str) or not parent_id.strip():
+            raise ValueError("Field 'parent_id' must be non-empty text")
+        parent_id = parent_id.strip()
+        if len(parent_id) > MAX_ANCHOR_LENGTH:
+            raise ValueError(
+                f"Field 'parent_id' must be at most "
+                f"{MAX_ANCHOR_LENGTH} characters"
+            )
     return {
         "timestamp": _timestamp(),
         "type": "question",
@@ -26,6 +38,7 @@ def build_question_record(data: dict[str, Any]) -> dict[str, str]:
             MAX_ANCHOR_LENGTH,
         ),
         "text": _required_text(data, "text", MAX_QUESTION_LENGTH),
+        "parent_id": parent_id,
     }
 
 
@@ -45,7 +58,7 @@ def build_signal_record(data: dict[str, Any]) -> dict[str, str]:
 
 def append_record(
     run_dir: Path,
-    record: dict[str, str],
+    record: dict[str, str | None],
     lock: threading.Lock,
 ) -> None:
     """Append one JSON record durably to a contained run queue."""

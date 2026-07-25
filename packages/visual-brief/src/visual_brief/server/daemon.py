@@ -26,7 +26,6 @@ HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 MAX_BODY_BYTES = 64 * 1024
 
-
 class VisualBriefServer(ThreadingHTTPServer):
     """HTTP server carrying the shared runs root."""
 
@@ -52,7 +51,6 @@ class VisualBriefServer(ThreadingHTTPServer):
             ) from error
         self.queue_lock = threading.Lock()
         super().__init__((host, port), VisualBriefHandler)
-
 
 class VisualBriefHandler(BaseHTTPRequestHandler):
     """Serve all registered briefs and accept inert questions."""
@@ -262,7 +260,7 @@ class VisualBriefHandler(BaseHTTPRequestHandler):
     def _append_queue_record(
         self,
         run_dir: Path,
-        record: dict[str, str],
+        record: dict[str, str | None],
     ) -> None:
         """Append one JSON record to a run's reverse-channel queue."""
         try:
@@ -370,7 +368,6 @@ def _contained_run_file(run_dir: Path, name: str) -> Path | None:
         return None
     return path
 
-
 def runs_root_id(runs_root: Path) -> str:
     """Return a stable identity for a normalized runs root."""
     normalized = str(runs_root.expanduser().resolve()).encode(
@@ -378,7 +375,6 @@ def runs_root_id(runs_root: Path) -> str:
         errors="surrogateescape",
     )
     return hashlib.sha256(normalized).hexdigest()
-
 
 def create_server(runs_root: Path, port: int = DEFAULT_PORT) -> VisualBriefServer:
     """Create a daemon bound to loopback.
@@ -393,7 +389,6 @@ def create_server(runs_root: Path, port: int = DEFAULT_PORT) -> VisualBriefServe
     if not 0 <= port <= 65_535:
         raise ValueError("port must be between 0 and 65535")
     return VisualBriefServer((HOST, port), runs_root)
-
 
 def serve(runs_root: Path, port: int = DEFAULT_PORT) -> None:
     """Serve briefs until interrupted."""

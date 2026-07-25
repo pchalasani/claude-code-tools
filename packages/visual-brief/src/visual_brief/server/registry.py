@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from visual_brief.server.queue import MAX_QUEUE_RECORD_BYTES
+from visual_brief.server.counting import count_unanswered_questions
 
 
 RUN_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$")
@@ -130,26 +130,6 @@ def discover_runs(runs_root: Path) -> list[RunInfo]:
     )
 
 
-def count_unanswered_questions(run_dir: Path) -> int:
-    """Count queued questions without matching answers.
-
-    Matching is intentionally centralized here for iteration 1. A queued
-    question is answered only when content contains a non-empty answer at the
-    same anchor and with the same question text.
-
-    Args:
-        run_dir: One resolved run directory.
-
-    Returns:
-        The number of valid question records lacking an answer.
-    """
-    try:
-        root = run_dir.expanduser().resolve()
-    except (OSError, RuntimeError):
-        return 0
-    return _count_queued_questions(root, _read_answered_questions(root))
-
-
 def _read_run(run_path: Path, run_id: str) -> RunInfo:
     """Read one run, degrading missing or malformed metadata."""
     metadata = _read_json_object(run_path, "meta.json")
@@ -180,121 +160,6 @@ def _read_run(run_path: Path, run_id: str) -> RunInfo:
         unanswered_count=count_unanswered_questions(run_path),
         degraded=degraded,
     )
-
-
-def _count_queued_questions(
-    run_dir: Path,
-    answered: set[tuple[str, str]],
-) -> int:
-    """Count valid unanswered queue records using bounded memory."""
-    path = _contained_child(run_dir, "questions.jsonl")
-    if path is None:
-        return 0
-    try:
-        with path.open("rb") as queue:
-            return _count_queue_stream(queue, answered)
-    except OSError:
-        return 0
-
-
-def _count_queue_stream(
-    queue: Any,
-    answered: set[tuple[str, str]],
-) -> int:
-    """Count valid records from a binary JSONL stream."""
-    count = 0
-    while line := queue.readline(MAX_QUEUE_RECORD_BYTES + 1):
-        complete = line.endswith(b"\n")
-        oversized = len(line) > MAX_QUEUE_RECORD_BYTES
-        if oversized and not complete:
-            complete = _discard_record_remainder(queue)
-        if oversized or not complete:
-            continue
-        try:
-            record = json.loads(line.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            continue
-        if not isinstance(record, dict):
-            continue
-        if record.get("type", "question") != "question":
-            continue
-        anchor = record.get("anchor_id")
-        text = record.get("text")
-        if (
-            isinstance(anchor, str)
-            and isinstance(text, str)
-            and (anchor, text) not in answered
-        ):
-            count += 1
-    return count
-
-
-def _discard_record_remainder(queue: Any) -> bool:
-    """Discard a long record in bounded chunks and report completeness."""
-    while chunk := queue.readline(MAX_QUEUE_RECORD_BYTES + 1):
-        if chunk.endswith(b"\n"):
-            return True
-    return False
-
-
-def _read_answered_questions(run_dir: Path) -> set[tuple[str, str]]:
-    """Read anchor-and-text keys for answered questions in content."""
-    content = _read_json_object(run_dir, "content.json")
-    if content is None:
-        return set()
-    updates = content.get("updates")
-    if not isinstance(updates, list):
-        return set()
-
-    answered: set[tuple[str, str]] = set()
-    for update in updates:
-        if not isinstance(update, dict):
-            continue
-        update_id = update.get("id")
-        lanes = update.get("lanes")
-        if not isinstance(update_id, str) or not isinstance(lanes, list):
-            continue
-        for lane in lanes:
-            if not isinstance(lane, dict):
-                continue
-            lane_id = lane.get("id")
-            if not isinstance(lane_id, str):
-                continue
-            lane_anchor = f"{update_id}/{lane_id}"
-            _collect_answers(answered, lane.get("questions"), lane_anchor)
-            items = lane.get("items")
-            if not isinstance(items, list):
-                continue
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                item_id = item.get("id")
-                if not isinstance(item_id, str):
-                    continue
-                anchor = f"{lane_anchor}/{item_id}"
-                _collect_answers(answered, item.get("questions"), anchor)
-    return answered
-
-
-def _collect_answers(
-    destination: set[tuple[str, str]],
-    questions: Any,
-    anchor: str,
-) -> None:
-    """Add well-formed answered question keys to a set."""
-    if not isinstance(questions, list):
-        return
-    for question in questions:
-        if not isinstance(question, dict):
-            continue
-        text = question.get("question")
-        answer = question.get("answer")
-        if (
-            isinstance(text, str)
-            and isinstance(answer, str)
-            and answer.strip()
-        ):
-            destination.add((anchor, text))
 
 
 def _read_json_object(run_dir: Path, name: str) -> dict[str, Any] | None:

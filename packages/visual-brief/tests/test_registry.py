@@ -195,6 +195,98 @@ def test_unanswered_questions_match_anchor_and_text(tmp_path: Path) -> None:
     assert count_unanswered_questions(run) == 2
 
 
+def test_awaiting_count_combines_threads_and_unfolded_queue(
+    tmp_path: Path,
+) -> None:
+    """Count thread states, deduplicate follow-ups, and skip folded lines."""
+    run = _make_run(tmp_path, "thread-run", "Threads")
+    content = {
+        "updates": [
+            {
+                "id": "update",
+                "lanes": [
+                    {
+                        "id": "lane",
+                        "items": [
+                            {
+                                "id": "item",
+                                "questions": [
+                                    {
+                                        "id": "q-answered",
+                                        "anchor": {
+                                            "kind": "element",
+                                            "path": "update/lane/item",
+                                        },
+                                        "turns": [
+                                            {
+                                                "author": "human",
+                                                "text": "First?",
+                                                "at": "2026-07-25T19:00:00Z",
+                                            },
+                                            {
+                                                "author": "agent",
+                                                "text": "First answer.",
+                                                "at": "2026-07-25T19:01:00Z",
+                                            },
+                                        ],
+                                    },
+                                    {
+                                        "id": "q-waiting",
+                                        "anchor": {
+                                            "kind": "element",
+                                            "path": "update/lane/item",
+                                        },
+                                        "turns": [
+                                            {
+                                                "author": "human",
+                                                "text": "Waiting?",
+                                                "at": "2026-07-25T19:02:00Z",
+                                            }
+                                        ],
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+    (run / "content.json").write_text(json.dumps(content), encoding="utf-8")
+    records = [
+        {
+            "type": "question",
+            "anchor_id": "update/lane/item",
+            "text": "Waiting?",
+            "parent_id": None,
+        },
+        {
+            "type": "question",
+            "anchor_id": "update/lane/item",
+            "text": "Follow-up one?",
+            "parent_id": "q-answered",
+        },
+        {
+            "type": "question",
+            "anchor_id": "update/lane/item",
+            "text": "Follow-up two?",
+            "parent_id": "q-answered",
+        },
+        {
+            "type": "question",
+            "anchor_id": "update/lane",
+            "text": "Brand new?",
+            "parent_id": None,
+        },
+    ]
+    (run / "questions.jsonl").write_text(
+        "".join(f"{json.dumps(record)}\n" for record in records),
+        encoding="utf-8",
+    )
+
+    assert count_unanswered_questions(run) == 3
+
+
 def test_queue_keeps_valid_lines_before_incomplete_utf8(tmp_path: Path) -> None:
     """An incomplete UTF-8 record does not hide earlier questions."""
     run = _make_run(tmp_path, "partial-run", "Partial")

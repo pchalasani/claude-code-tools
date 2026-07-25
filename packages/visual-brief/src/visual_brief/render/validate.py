@@ -60,18 +60,63 @@ def _validate_unique_ids(values: list[Any], location: str) -> None:
         raise ValueError(f"{location} ids must be unique")
 
 
-def _validate_questions(questions: Any, location: str) -> None:
-    """Validate optional answered question-and-answer pairs."""
+def _validate_anchor(anchor: Any, location: str, expected_path: str) -> None:
+    """Validate the currently supported tagged anchor union."""
+    if not isinstance(anchor, dict):
+        raise ValueError(f"{location} must be an object")
+    kind = require_text(anchor.get("kind"), f"{location}.kind")
+    if kind != "element":
+        raise ValueError(
+            f"{location}.kind has unknown anchor kind {kind!r}; "
+            "only 'element' is supported"
+        )
+    path = require_text(anchor.get("path"), f"{location}.path")
+    if path != expected_path:
+        raise ValueError(f"{location}.path must be {expected_path!r}")
+
+
+def _validate_turns(turns: Any, location: str) -> None:
+    """Validate a non-empty chronological turn collection."""
+    if not isinstance(turns, list) or not turns:
+        raise ValueError(f"{location} must be a non-empty list")
+    for index, turn in enumerate(turns):
+        turn_location = f"{location}[{index}]"
+        if not isinstance(turn, dict):
+            raise ValueError(f"{turn_location} must be an object")
+        author = require_text(turn.get("author"), f"{turn_location}.author")
+        if author not in {"human", "agent"}:
+            raise ValueError(
+                f"{turn_location}.author must be 'human' or 'agent'"
+            )
+        require_text(turn.get("text"), f"{turn_location}.text")
+        require_text(turn.get("at"), f"{turn_location}.at")
+
+
+def _validate_questions(
+    questions: Any,
+    location: str,
+    expected_path: str,
+) -> list[str]:
+    """Validate optional threaded questions and return their identifiers."""
     if questions is None:
-        return
+        return []
     if not isinstance(questions, list):
         raise ValueError(f"{location} must be a list")
-    for index, pair in enumerate(questions):
-        pair_location = f"{location}[{index}]"
-        if not isinstance(pair, dict):
-            raise ValueError(f"{pair_location} must be an object")
-        require_text(pair.get("question"), f"{pair_location}.question")
-        require_text(pair.get("answer"), f"{pair_location}.answer")
+    thread_ids: list[str] = []
+    for index, thread in enumerate(questions):
+        thread_location = f"{location}[{index}]"
+        if not isinstance(thread, dict):
+            raise ValueError(f"{thread_location} must be an object")
+        thread_ids.append(
+            identifier(thread.get("id"), f"{thread_location}.id")
+        )
+        _validate_anchor(
+            thread.get("anchor"),
+            f"{thread_location}.anchor",
+            expected_path,
+        )
+        _validate_turns(thread.get("turns"), f"{thread_location}.turns")
+    return thread_ids
 
 
 def _validate_nested(node: Any, location: str) -> None:
@@ -105,7 +150,7 @@ def _validate_table(table: Any, location: str) -> None:
             )
 
 
-def _validate_item(item: Any, location: str) -> None:
+def _validate_item(item: Any, location: str, path: str) -> list[str]:
     """Validate one lane item."""
     if not isinstance(item, dict):
         raise ValueError(f"{location} must be an object")
@@ -127,10 +172,14 @@ def _validate_item(item: Any, location: str) -> None:
         raise ValueError(f"{location}.tables must be a list")
     for index, table in enumerate(tables):
         _validate_table(table, f"{location}.tables[{index}]")
-    _validate_questions(item.get("questions"), f"{location}.questions")
+    return _validate_questions(
+        item.get("questions"),
+        f"{location}.questions",
+        path,
+    )
 
 
-def _validate_lane(lane: Any, location: str) -> None:
+def _validate_lane(lane: Any, location: str, update_id: str) -> list[str]:
     """Validate one independently collapsible lane."""
     if not isinstance(lane, dict):
         raise ValueError(f"{location} must be an object")
@@ -140,12 +189,26 @@ def _validate_lane(lane: Any, location: str) -> None:
     if not isinstance(items, list):
         raise ValueError(f"{location}.items must be a list")
     _validate_unique_ids(items, f"{location}.items")
+    lane_id = lane["id"]
+    lane_path = f"{update_id}/{lane_id}"
+    thread_ids = _validate_questions(
+        lane.get("questions"),
+        f"{location}.questions",
+        lane_path,
+    )
     for index, item in enumerate(items):
-        _validate_item(item, f"{location}.items[{index}]")
-    _validate_questions(lane.get("questions"), f"{location}.questions")
+        item_id = item.get("id") if isinstance(item, dict) else ""
+        thread_ids.extend(
+            _validate_item(
+                item,
+                f"{location}.items[{index}]",
+                f"{lane_path}/{item_id}",
+            )
+        )
+    return thread_ids
 
 
-def _validate_update(update: Any, location: str) -> None:
+def _validate_update(update: Any, location: str) -> list[str]:
     """Validate one timeline update."""
     if not isinstance(update, dict):
         raise ValueError(f"{location} must be an object")
@@ -157,8 +220,16 @@ def _validate_update(update: Any, location: str) -> None:
     if not isinstance(lanes, list):
         raise ValueError(f"{location}.lanes must be a list")
     _validate_unique_ids(lanes, f"{location}.lanes")
+    thread_ids: list[str] = []
     for index, lane in enumerate(lanes):
-        _validate_lane(lane, f"{location}.lanes[{index}]")
+        thread_ids.extend(
+            _validate_lane(
+                lane,
+                f"{location}.lanes[{index}]",
+                update["id"],
+            )
+        )
+    return thread_ids
 
 
 def validate_document(data: Any) -> dict[str, Any]:
@@ -181,6 +252,9 @@ def validate_document(data: Any) -> dict[str, Any]:
     if not isinstance(updates, list) or not updates:
         raise ValueError("updates must be a non-empty list")
     _validate_unique_ids(updates, "updates")
+    thread_ids: list[str] = []
     for index, update in enumerate(updates):
-        _validate_update(update, f"updates[{index}]")
+        thread_ids.extend(_validate_update(update, f"updates[{index}]"))
+    if len(thread_ids) != len(set(thread_ids)):
+        raise ValueError("question thread ids must be unique")
     return data

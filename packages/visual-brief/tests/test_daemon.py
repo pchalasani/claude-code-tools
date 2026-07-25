@@ -203,6 +203,59 @@ def test_post_ask_appends_one_inert_line(
     assert not marker.exists()
 
 
+def test_post_ask_records_optional_parent_id(
+    live_server: tuple[VisualBriefServer, Path],
+) -> None:
+    """Distinguish a follow-up from a new queued thread."""
+    server, run_dir = live_server
+    payload = {
+        "anchor_id": "update/lane/item",
+        "text": "Follow-up?",
+        "parent_id": "q-stable-thread",
+    }
+
+    status, _ = request(
+        server,
+        "POST",
+        "/r/demo-run/ask",
+        body=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert status == 202
+    record = json.loads(
+        (run_dir / "questions.jsonl").read_text(encoding="utf-8")
+    )
+    assert record["anchor_id"] == payload["anchor_id"]
+    assert record["text"] == payload["text"]
+    assert record["parent_id"] == payload["parent_id"]
+    assert record["type"] == "question"
+    assert "timestamp" in record
+
+
+def test_post_new_question_records_null_parent_id(
+    live_server: tuple[VisualBriefServer, Path],
+) -> None:
+    """Keep the added queue field even when a new thread has no parent."""
+    server, run_dir = live_server
+    payload = {"anchor_id": "update/lane", "text": "New thread?"}
+
+    status, _ = request(
+        server,
+        "POST",
+        "/r/demo-run/ask",
+        body=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert status == 202
+    record = json.loads(
+        (run_dir / "questions.jsonl").read_text(encoding="utf-8")
+    )
+    assert "parent_id" in record
+    assert record["parent_id"] is None
+
+
 @pytest.mark.parametrize(
     ("path", "payload"),
     [

@@ -131,6 +131,21 @@ def test_new_succeeds_when_git_is_unavailable(
     }
 
 
+def test_new_does_not_claim_the_daemon_uses_default_port(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Print both route forms without hardcoding an unrelated daemon port."""
+    assert new_command(tmp_path / "runs", "Elsewhere", "elsewhere") == 0
+
+    output = capsys.readouterr().out.splitlines()
+    assert output == [
+        "http://elsewhere.localhost/",
+        "http://localhost/r/elsewhere/",
+    ]
+    assert "8765" not in "\n".join(output)
+
+
 def test_new_cleans_temporary_run_after_initialization_failure(
     tmp_path: Path,
 ) -> None:

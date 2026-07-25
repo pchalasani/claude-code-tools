@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .page import render_page
+from .threads import normalize_document
 from .validate import validate_document
 
 __all__ = ["render_content", "render_document"]
@@ -22,7 +23,8 @@ def render_content(data: Any) -> str:
     Raises:
         ValueError: If the content does not match the visual brief schema.
     """
-    return render_page(validate_document(data))
+    normalized = normalize_document(data)
+    return render_page(validate_document(normalized))
 
 
 def render_document(data: Any) -> str:

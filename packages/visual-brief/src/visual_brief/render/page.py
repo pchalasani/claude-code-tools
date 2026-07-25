@@ -6,78 +6,43 @@ from typing import Any
 
 from .css import CSS
 from .html import escape, render_timeline
+from .script import JS
 from .validate import TRUST_LABELS
 
-JS = """
-(() => {
-  const forms = document.querySelectorAll(".question-box");
-  document.querySelectorAll(".ask-button").forEach((button) => {
-    button.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      const form = document.getElementById(button.dataset.target);
-      if (!form) return;
-      form.classList.toggle("open");
-      if (form.classList.contains("open")) form.querySelector("textarea").focus();
-    });
-  });
-  forms.forEach((form) => {
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const textarea = form.querySelector("textarea");
-      const text = textarea.value.trim();
-      const status = form.querySelector(".status");
-      if (!text) return;
-      status.textContent = "Sending…";
-      try {
-        const response = await fetch("ask", {
-          method: "POST", headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({anchor_id: form.dataset.anchorId, text})
-        });
-        if (!response.ok) throw new Error("not accepted");
-        const pending = document.createElement("p");
-        pending.className = "pending";
-        pending.textContent = "You asked: " + text + " — awaiting an answer";
-        form.insertAdjacentElement("afterend", pending);
-        textarea.value = "";
-        form.classList.remove("open");
-      } catch (error) {
-        status.textContent = "Could not send. Is the local server running?";
-      }
-    });
-  });
-  document.querySelectorAll(".signal").forEach((button) => {
-    button.addEventListener("click", async () => {
-      const status = button.parentElement.nextElementSibling;
-      try {
-        const response = await fetch("signal", {
-          method: "POST", headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({
-            anchor_id: button.dataset.anchorId,
-            signal: button.dataset.signal
-          })
-        });
-        if (!response.ok) throw new Error("not accepted");
-        status.textContent = "Feedback received: " + button.textContent;
-      } catch (error) {
-        status.textContent = "Could not send feedback.";
-      }
-    });
-  });
-  let version = null;
-  async function checkVersion() {
-    try {
-      const response = await fetch("render-version", {cache: "no-store"});
-      const current = await response.text();
-      if (version !== null && current !== version) location.reload();
-      version = current;
-    } catch (error) {
-      // The static document remains usable when the local server is absent.
-    }
-  }
-  checkVersion();
-  setInterval(checkVersion, 5000);
-})();
+CONTROLS = """
+<nav class="key-controls" aria-label="Keyboard and page controls">
+  <button class="key-control" data-action="previous-item">k · Previous item</button>
+  <button class="key-control" data-action="next-item">j · Next item</button>
+  <button class="key-control" data-action="previous-lane">K · Previous lane</button>
+  <button class="key-control" data-action="next-lane">J · Next lane</button>
+  <button class="key-control" data-action="next-awaiting">n · Awaiting</button>
+  <button class="key-control" data-action="search">/ · Search</button>
+  <button class="key-control" data-action="top">g · Top</button>
+  <button class="key-control" data-action="bottom">G · Bottom</button>
+  <button class="key-control help-control" data-action="help"
+    aria-haspopup="dialog">? · Keys</button>
+</nav>
+<div class="search-panel" id="search-panel" hidden>
+  <label for="page-search">Search items</label>
+  <input id="page-search" type="search" autocomplete="off">
+  <span id="match-count" role="status"></span>
+  <button id="close-search" type="button">Escape · Close</button>
+</div>
+<dialog id="key-help" aria-labelledby="key-help-title">
+  <h2 id="key-help-title">Keyboard controls</h2>
+  <dl>
+    <dt>j / k</dt><dd>Next / previous item</dd>
+    <dt>J / K</dt><dd>Next / previous lane</dd>
+    <dt>Space</dt><dd>Expand or collapse the focused disclosure</dd>
+    <dt>a</dt><dd>Ask about the focused item or lane</dd>
+    <dt>n</dt><dd>Next thread awaiting an answer</dd>
+    <dt>/</dt><dd>Search items</dd>
+    <dt>g / G</dt><dd>Top / bottom</dd>
+    <dt>?</dt><dd>Show this key list</dd>
+    <dt>Escape</dt><dd>Close or leave a text box</dd>
+  </dl>
+  <button id="close-help" type="button">Escape · Close</button>
+</dialog>
 """
 
 
@@ -103,6 +68,7 @@ def render_page(data: dict[str, Any]) -> str:
         '<body><main class="page"><div class="eyebrow">Session briefing</div>'
         f'<h1>{escape(data["title"])}</h1>'
         f'<p class="deck">{escape(data["summary"])}</p>'
+        f"{CONTROLS}"
         f'<aside class="legend"><span class="legend-label">TRUST</span>{legend}'
         f'</aside><section aria-label="Session timeline">{timeline}</section>'
         f"</main><script>{JS}</script></body></html>"

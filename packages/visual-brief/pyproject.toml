@@ -26,3 +26,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/visual_brief"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"SKILL.md" = "visual_brief/SKILL.md"

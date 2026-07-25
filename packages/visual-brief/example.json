@@ -37,8 +37,23 @@
               ],
               "questions": [
                 {
-                  "question": "Why is UNSUPPORTED not just another failure?",
-                  "answer": "Because the input may be perfectly valid Cedar. Treating it as malformed would send the repair loop after syntax that does not need repair."
+                  "id": "q-unsupported-valid",
+                  "anchor": {
+                    "kind": "element",
+                    "path": "review-round-four/round-four-change/three-verdict-contract"
+                  },
+                  "turns": [
+                    {
+                      "author": "human",
+                      "text": "Why is UNSUPPORTED not just another failure?",
+                      "at": "2026-07-25T19:08:29Z"
+                    },
+                    {
+                      "author": "agent",
+                      "text": "Because the input may be perfectly valid Cedar. Treating it as malformed would send the repair loop after syntax that does not need repair.",
+                      "at": "2026-07-25T19:11:02Z"
+                    }
+                  ]
                 }
               ]
             },
@@ -153,8 +168,23 @@
               "trust": "verified-by-me",
               "questions": [
                 {
-                  "question": "What could go wrong if a malformed policy returns UNSUPPORTED?",
-                  "answer": "The loop may try to simplify features in text that is not a policy at all, instead of first repairing its syntax."
+                  "id": "q-malformed-unsupported",
+                  "anchor": {
+                    "kind": "element",
+                    "path": "current-update/why-it-matters/repair-loop-routing"
+                  },
+                  "turns": [
+                    {
+                      "author": "human",
+                      "text": "What could go wrong if a malformed policy returns UNSUPPORTED?",
+                      "at": "2026-07-25T19:12:00Z"
+                    },
+                    {
+                      "author": "agent",
+                      "text": "The loop may try to simplify features in text that is not a policy at all, instead of first repairing its syntax.",
+                      "at": "2026-07-25T19:13:00Z"
+                    }
+                  ]
                 }
               ]
             }
@@ -165,8 +195,23 @@
           "name": "What I verified",
           "questions": [
             {
-              "question": "Does twelve clean cases prove full parser parity?",
-              "answer": "No. It proves agreement only on the focused differential set. The permanent per-policy cross-check is still missing."
+              "id": "q-parser-parity",
+              "anchor": {
+                "kind": "element",
+                "path": "current-update/what-i-verified"
+              },
+              "turns": [
+                {
+                  "author": "human",
+                  "text": "Does twelve clean cases prove full parser parity?",
+                  "at": "2026-07-25T19:14:00Z"
+                },
+                {
+                  "author": "agent",
+                  "text": "No. It proves agreement only on the focused differential set. The permanent per-policy cross-check is still missing.",
+                  "at": "2026-07-25T19:15:00Z"
+                }
+              ]
             }
           ],
           "items": [
