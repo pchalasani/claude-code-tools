@@ -138,6 +138,15 @@ The full list of `aichat` subcommands:
   </TabItem>
   <TabItem label="Export & info">
 
+    The session argument of `info`, `export`, `copy`, `move`, `query`,
+    `clone`, `rollover`, `lineage`, and `smart-trim` accepts a full session
+    id, a partial id (prefix, middle, or suffix fragment), a session name
+    (set with `/rename`), a rollout filename fragment (e.g.
+    `2026-03-25T14-50`), or a session file path. An ambiguous query fails
+    with the list of matching sessions rather than picking one, and
+    `--agent` restricts which agent home is searched. `delete` retains its
+    legacy id-or-path lookup.
+
     | Command | Description |
     |---------|-------------|
     | `aichat info [id]` | Show session metadata |
