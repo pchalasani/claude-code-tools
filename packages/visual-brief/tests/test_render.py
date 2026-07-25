@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +84,63 @@ def test_legacy_pair_without_answer_is_awaiting_and_opens_ancestors() -> None:
     assert '<details class="item" open>' in rendered
     assert 'class="lane" open' in rendered
     assert "Awaiting answer" in rendered
+
+
+def test_legacy_pair_with_missing_answer_is_awaiting() -> None:
+    """Treat an omitted legacy answer the same as an unanswered pair."""
+    data = _example()
+    _first_item(data)["questions"] = [{"question": "No answer field?"}]
+
+    rendered = render_content(data)
+
+    assert "No answer field?" in rendered
+    assert "Awaiting answer" in rendered
+
+
+def test_multiple_legacy_pairs_on_one_item_get_distinct_stable_ids() -> None:
+    """Convert every pair on an item without collisions or reordering."""
+    data = _example()
+    _first_item(data)["questions"] = [
+        {"question": "Repeated?", "answer": "First answer."},
+        {"question": "Repeated?", "answer": "Second answer."},
+        {"question": "Third?", "answer": ""},
+    ]
+
+    first = render_content(data)
+    second = render_content(data)
+    thread_ids = re.findall(
+        r'data-focus-id="[^"]+#(q-[0-9a-f]{12})"',
+        first,
+    )
+
+    assert first == second
+    assert len(thread_ids) == 3
+    assert len(set(thread_ids)) == 3
+    assert first.index("First answer.") < first.index("Second answer.")
+    assert first.index("Second answer.") < first.index("Third?")
+
+
+def test_lane_legacy_pairs_convert_alongside_new_threads() -> None:
+    """Support lane pairs and mixed legacy/new thread collections."""
+    data = _example()
+    lane = data["updates"][0]["lanes"][0]
+    new_thread = copy.deepcopy(_first_item(data)["questions"][0])
+    new_thread["id"] = "q-existing"
+    new_thread["anchor"]["path"] = (
+        f'{data["updates"][0]["id"]}/{lane["id"]}'
+    )
+    lane["questions"] = [
+        {"question": "Legacy lane?", "answer": "Lane answer."},
+        new_thread,
+    ]
+
+    rendered = render_content(data)
+
+    assert "Legacy lane?" in rendered
+    assert "Lane answer." in rendered
+    assert 'data-focus-id="review-round-four/round-four-change#q-existing"' in (
+        rendered
+    )
 
 
 def test_thread_turns_render_oldest_first_with_reply_after_newest() -> None:
@@ -187,7 +245,42 @@ def test_help_is_modal_mouse_reachable_and_disclosures_have_aria() -> None:
     assert 'aria-controls="item-body-' in rendered
     assert 'aria-controls="lane-body-' in rendered
     assert 'aria-expanded="' in rendered
+    assert all(
+        "aria-expanded" not in summary
+        for summary in re.findall(r"<summary[^>]*>", rendered)
+    )
     assert ":focus, .nav-focus" in rendered
+
+
+def test_update_summaries_have_stable_focus_identity() -> None:
+    """Allow focus restoration to stop at a surviving update."""
+    rendered = render_content(_example())
+
+    assert '<summary data-focus-id="current-update"' in rendered
+    assert '<summary data-focus-id="review-round-four"' in rendered
+
+
+def test_unused_deeply_nested_field_does_not_break_rendering() -> None:
+    """Ignore an unknown field without recursively copying its contents."""
+    data = _example()
+    nested: list[Any] = []
+    for _ in range(1_500):
+        nested = [nested]
+    data["unused"] = nested
+
+    assert render_content(data).startswith("<!doctype html>")
+
+
+def test_thread_identifier_surrounding_whitespace_is_rejected() -> None:
+    """Keep saved IDs identical to stripped queue parent IDs."""
+    data = _example()
+    _first_item(data)["questions"][0]["id"] = " q-spaced "
+
+    with pytest.raises(
+        ValueError,
+        match=r"questions\[0\]\.id must not contain whitespace",
+    ):
+        render_content(data)
 
 
 def test_forensics_must_be_a_list_with_precise_path() -> None:

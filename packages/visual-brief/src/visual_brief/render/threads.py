@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import hashlib
 from typing import Any
 
@@ -18,37 +17,52 @@ def normalize_document(data: Any) -> Any:
     Returns:
         An independent value whose recognized legacy pairs are threads.
     """
-    normalized = copy.deepcopy(data)
-    if not isinstance(normalized, dict):
-        return normalized
-    updates = normalized.get("updates")
+    if not isinstance(data, dict):
+        return data
+    normalized = dict(data)
+    updates = data.get("updates")
     if not isinstance(updates, list):
         return normalized
-    for update in updates:
+    normalized_updates = list(updates)
+    normalized["updates"] = normalized_updates
+    for update_index, update in enumerate(updates):
         if not isinstance(update, dict):
             continue
+        normalized_update = dict(update)
+        normalized_updates[update_index] = normalized_update
         update_id = update.get("id")
         lanes = update.get("lanes")
         if not isinstance(update_id, str) or not isinstance(lanes, list):
             continue
-        for lane in lanes:
+        normalized_lanes = list(lanes)
+        normalized_update["lanes"] = normalized_lanes
+        for lane_index, lane in enumerate(lanes):
             if not isinstance(lane, dict):
                 continue
+            normalized_lane = dict(lane)
+            normalized_lanes[lane_index] = normalized_lane
             lane_id = lane.get("id")
             if not isinstance(lane_id, str):
                 continue
             lane_path = f"{update_id}/{lane_id}"
-            _normalize_questions(lane, lane_path)
+            _normalize_questions(normalized_lane, lane_path)
             items = lane.get("items")
             if not isinstance(items, list):
                 continue
-            for item in items:
+            normalized_items = list(items)
+            normalized_lane["items"] = normalized_items
+            for item_index, item in enumerate(items):
                 if not isinstance(item, dict):
                     continue
+                normalized_item = dict(item)
+                normalized_items[item_index] = normalized_item
                 item_id = item.get("id")
                 if not isinstance(item_id, str):
                     continue
-                _normalize_questions(item, f"{lane_path}/{item_id}")
+                _normalize_questions(
+                    normalized_item,
+                    f"{lane_path}/{item_id}",
+                )
     return normalized
 
 

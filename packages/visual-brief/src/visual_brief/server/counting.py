@@ -84,7 +84,7 @@ def _count_queue_stream(
             continue
         if parent is None:
             new_threads += 1
-        else:
+        elif parent in states:
             awaiting.add(parent)
     return len(awaiting) + new_threads
 

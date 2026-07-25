@@ -55,7 +55,7 @@ def _render_nested(node: dict[str, Any], control_id: str) -> str:
         for index, child in enumerate(node.get("children", []))
     )
     return (
-        '<details class="nested"><summary aria-expanded="false" '
+        '<details class="nested"><summary '
         f'aria-controls="{escape(control_id)}">{escape(node["title"])}</summary>'
         f'<div class="nested-body" id="{escape(control_id)}">'
         f'{escape(node["body"])}{nested}</div></details>'
@@ -120,8 +120,7 @@ def _render_questions(
             f'<details class="thread"{open_attr}{awaiting_attr}>'
             f'<summary data-nav-kind="thread" '
             f'data-focus-id="{escape(focus_id)}" '
-            f'aria-controls="{escape(body_id)}" '
-            f'aria-expanded="{"true" if awaiting else "false"}">'
+            f'aria-controls="{escape(body_id)}">'
             f'<span class="thread-title">{escape(first_human)}</span>'
             f"{badge}</summary>"
             f'<div class="thread-body" id="{escape(body_id)}">'
@@ -157,7 +156,7 @@ def _render_item(
         ]
         evidence_id = f"{anchor_id}-forensics"
         evidence = (
-            '<details class="forensics"><summary aria-expanded="false" '
+            '<details class="forensics"><summary '
             f'aria-controls="{escape(evidence_id)}">Raw evidence and deeper '
             f'forensics</summary><div id="{escape(evidence_id)}">'
             f"{''.join(parts)}</div></details>"
@@ -187,8 +186,7 @@ def _render_item(
         f'<div class="item-shell" id="{escape(anchor_id)}">'
         f'<details class="item"{item_open}>'
         f'<summary data-nav-kind="item" data-focus-id="{escape(anchor_id)}" '
-        f'aria-controls="{escape(body_id)}" '
-        f'aria-expanded="{"true" if awaiting else "false"}">'
+        f'aria-controls="{escape(body_id)}">'
         f'<span class="item-head"><span class="glance">{escape(glance)}</span>'
         f"{waiting_badge}"
         f'<span class="chip {trust}">{TRUST_LABELS[trust]}</span>'
@@ -225,8 +223,7 @@ def _render_lane(
         f'<section class="lane-shell" id="{escape(anchor_id)}"><details '
         f'class="lane"{open_attr}><summary data-nav-kind="lane" '
         f'data-focus-id="{escape(anchor_id)}" '
-        f'aria-controls="{escape(body_id)}" '
-        f'aria-expanded="{"true" if open_attr else "false"}">'
+        f'aria-controls="{escape(body_id)}">'
         f'<span class="lane-name">{escape(name)}</span></summary>'
         f'<div class="lane-body" id="{escape(body_id)}">'
         f"{rendered_items}{questions}</div></details>"
@@ -254,8 +251,8 @@ def _render_update(update: dict[str, Any], newest: bool) -> str:
     return (
         f'<details class="update" id="{escape(update_id)}"'
         f'{" open" if opened else ""}><summary '
-        f'aria-controls="{escape(body_id)}" '
-        f'aria-expanded="{"true" if opened else "false"}">'
+        f'data-focus-id="{escape(update_id)}" '
+        f'aria-controls="{escape(body_id)}">'
         '<span class="update-head">'
         f'<span class="update-title">{escape(update["headline"])}</span>'
         f'<time class="time">{escape(update["timestamp"])}</time>'

@@ -17,7 +17,11 @@ JS = r"""
       target.closest("[contenteditable]") !== null
     );
   }
-
+  function isInteractive(target) {
+    return target instanceof Element && (
+      target.closest("button,a,select,summary") !== null
+    );
+  }
   function visible(elements) {
     return elements.filter((element) => !element.closest("[hidden]"));
   }
@@ -46,7 +50,15 @@ JS = r"""
   function move(kind, delta) {
     const elements = nav(kind);
     if (!elements.length) return;
-    const current = elements.indexOf(document.activeElement);
+    const focused = document.activeElement;
+    let relative = focused;
+    if (focused instanceof HTMLElement) {
+      const shell = focused.closest(`.${kind}-shell`);
+      const selector = `:scope > details > summary[data-nav-kind="${kind}"]`;
+      const summary = shell && $(selector, shell);
+      if (summary) relative = summary;
+    }
+    const current = elements.indexOf(relative);
     const start = delta > 0 ? 0 : elements.length - 1;
     const next = current < 0
       ? start
@@ -75,7 +87,12 @@ JS = r"""
     const focusId = focused.dataset.focusId;
     const shell = focusId && document.getElementById(focusId);
     const button = shell && $(":scope > .ask-button", shell);
-    if (button) button.click();
+    const form = button && document.getElementById(button.dataset.target);
+    const textarea = form && $("textarea", form);
+    if (!button || !form || !textarea) return;
+    form.classList.add("open");
+    button.setAttribute("aria-expanded", "true");
+    textarea.focus();
   }
 
   function nextAwaiting() {
@@ -171,7 +188,6 @@ JS = r"""
     };
     if (actions[action]) actions[action]();
   }
-
   function handleKey(event) {
     if (help.open) {
       if (event.key === "Escape") {
@@ -191,6 +207,10 @@ JS = r"""
     if (event.key === "Escape" && !searchPanel.hidden) {
       event.preventDefault();
       closeSearch();
+      return;
+    }
+    if (event.key === " " && isInteractive(event.target)
+        && !event.target.matches("summary")) {
       return;
     }
     const actions = {
@@ -335,7 +355,7 @@ JS = r"""
         const focused = document.activeElement;
         if (focused instanceof HTMLElement) {
           const thread = focused.closest("details.thread");
-          const shell = focused.closest(".item-shell,.lane-shell");
+          const shell = focused.closest(".item-shell,.lane-shell,.update");
           const identity = focused.dataset.focusId ||
             (thread && $(":scope > summary", thread).dataset.focusId) ||
             (shell && shell.id);

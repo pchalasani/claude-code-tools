@@ -44,7 +44,11 @@ def identifier(value: Any, location: str) -> str:
         ValueError: If the identifier is empty or contains unsafe separators.
     """
     text = require_text(value, location)
-    if "/" in text or any(character.isspace() for character in text):
+    if (
+        value != text
+        or "/" in text
+        or any(character.isspace() for character in text)
+    ):
         raise ValueError(f"{location} must not contain whitespace or '/'")
     return text
 

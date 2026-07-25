@@ -131,19 +131,70 @@ def test_new_succeeds_when_git_is_unavailable(
     }
 
 
-def test_new_does_not_claim_the_daemon_uses_default_port(
+def test_new_prints_port_neutral_route_forms(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Print both route forms without hardcoding an unrelated daemon port."""
+    """Avoid claiming a port when new cannot know the daemon's port."""
     assert new_command(tmp_path / "runs", "Elsewhere", "elsewhere") == 0
 
     output = capsys.readouterr().out.splitlines()
     assert output == [
-        "http://elsewhere.localhost/",
-        "http://localhost/r/elsewhere/",
+        "host route: elsewhere.localhost",
+        "path route: /r/elsewhere/",
     ]
-    assert "8765" not in "\n".join(output)
+
+
+def test_cli_render_keeps_legacy_content_bytes_unchanged(
+    tmp_path: Path,
+) -> None:
+    """Render legacy content in place without migrating its source file."""
+    runs_root = tmp_path / "runs"
+    assert new_command(runs_root, "Legacy", "legacy-run") == 0
+    content_path = runs_root / "legacy-run" / "content.json"
+    legacy = {
+        "title": "Legacy",
+        "summary": "Old pairs",
+        "updates": [
+            {
+                "id": "update",
+                "timestamp": "Then",
+                "headline": "Legacy update",
+                "summary": "Still readable",
+                "lanes": [
+                    {
+                        "id": "lane",
+                        "name": "Lane",
+                        "items": [
+                            {
+                                "id": "item",
+                                "glance": "Legacy question",
+                                "explanation": "Must render",
+                                "trust": "unverified",
+                                "questions": [
+                                    {
+                                        "question": "Old question?",
+                                        "answer": "Old answer.",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    source_bytes = (
+        json.dumps(legacy, ensure_ascii=False, indent=3) + "\n"
+    ).encode()
+    content_path.write_bytes(source_bytes)
+
+    assert render_command(runs_root, "legacy-run") == 0
+
+    assert content_path.read_bytes() == source_bytes
+    index = (runs_root / "legacy-run" / "index.html").read_text()
+    assert "Old question?" in index
+    assert "Old answer." in index
 
 
 def test_new_cleans_temporary_run_after_initialization_failure(

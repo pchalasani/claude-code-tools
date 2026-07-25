@@ -116,7 +116,7 @@ def serve_command(runs_root: Path, port: int) -> int:
 
 
 def new_command(runs_root: Path, label: str, run_id: str | None) -> int:
-    """Create a run directory and print port-neutral access URLs."""
+    """Create a run directory and print port-neutral route forms."""
     label = label.strip()
     if not label:
         raise CliError("--label must not be empty")
@@ -138,8 +138,8 @@ def new_command(runs_root: Path, label: str, run_id: str | None) -> int:
         identity = selected_id or "generated run"
         raise CliError(f"could not initialize run {identity}: {error}") from error
 
-    print(f"http://{selected_id}.localhost/")
-    print(f"http://localhost/r/{selected_id}/")
+    print(f"host route: {selected_id}.localhost")
+    print(f"path route: /r/{selected_id}/")
     return 0
 
 
