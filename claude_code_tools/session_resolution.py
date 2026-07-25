@@ -10,13 +10,14 @@ Symlinked in-home transcripts are only partially handled. One discovered link
 to an external transcript is preserved and several are ambiguous, but exotic
 topologies may resolve to the canonical target. This is a known, accepted
 limitation because agent homes are not expected to contain such links.
+Fast-candidate validation also retains legacy unbounded physical-line reads.
 """
 
 from __future__ import annotations
 
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, cast
 
@@ -567,6 +568,98 @@ def _fast_candidate_ambiguity(
     )
 
 
+def _result_tier(result: ResolveResult, query: str) -> int:
+    """Return the global precedence tier for one agent resolver result."""
+    matched_by = result.records[0].matched_by
+    if matched_by == "id":
+        return 0
+    if matched_by == "name":
+        name = result.records[0].name
+        if name is not None and name.casefold() == query.casefold():
+            return 1
+        return 5
+    return {
+        "partial-id": 2,
+        "id-substring": 3,
+        "filename": 4,
+    }[matched_by]
+
+
+def _retain_winning_tier(
+    results: list[ResolveResult], query: str
+) -> list[ResolveResult]:
+    """Discard cross-agent results weaker than the best resolver tier."""
+    if not results:
+        return results
+    winning_tier = min(_result_tier(result, query) for result in results)
+    return [
+        result
+        for result in results
+        if _result_tier(result, query) == winning_tier
+    ]
+
+
+def _validate_resolver_content_ids(
+    result: ResolveResult,
+    claude_home: str | None,
+    codex_home: str | None,
+    *,
+    fast_candidates_overflowed: bool,
+) -> ResolveResult | None:
+    """Remove resolver records whose content contradicts their filename."""
+    valid_records = []
+    for record in result.records:
+        path = Path(record.session_file)
+        discovered_path = _restore_discovered_path(
+            result.query,
+            record.agent,
+            path,
+            claude_home,
+            codex_home,
+        )
+        content_id = _session_id_from_content(record.agent, path)
+        filename_id = get_session_uuid(discovered_path.stem)
+        if (
+            content_id is not None
+            and content_id.casefold() != filename_id.casefold()
+        ):
+            continue
+        valid_records.append(record)
+
+    removed_count = len(result.records) - len(valid_records)
+    remaining_count = (
+        result.match_count - removed_count
+        if result.kind == "ambiguous"
+        else len(valid_records)
+    )
+    if remaining_count <= 0:
+        if fast_candidates_overflowed:
+            return replace(
+                result,
+                kind="ambiguous",
+                match_count=_MAX_FAST_PATH_CANDIDATES + 1,
+            )
+        return None
+    if not valid_records:
+        # ResolveResult retains at most 25 ambiguity records. If additional
+        # records were truncated, their content identities are unknown here,
+        # so preserve the ambiguity rather than reporting a false not-found.
+        return result
+    if remaining_count == 1:
+        return replace(
+            result,
+            kind="single",
+            records=(valid_records[0],),
+            match_count=0,
+        )
+    return replace(
+        result,
+        kind="ambiguous",
+        records=tuple(valid_records),
+        match_count=remaining_count,
+    )
+
+
 def resolve_session_query(
     session: str,
     *,
@@ -588,6 +681,13 @@ def resolve_session_query(
     Raises:
         SessionQueryError: If no unique eligible session can be selected.
     """
+    for home_name, home in (
+        ("Claude", claude_home),
+        ("Codex", codex_home),
+    ):
+        if home is not None and not home.strip():
+            raise SessionQueryError(f"{home_name} home must not be empty.")
+
     try:
         input_path: Path | None = Path(session).expanduser()
         is_direct_file = input_path.is_file()
@@ -598,6 +698,15 @@ def resolve_session_query(
         detected = _detect_direct_path_agent(
             input_path, claude_home, codex_home
         )
+        if detected == "codex":
+            from claude_code_tools.resolve_session import (
+                _is_legacy_codex_rollout,
+            )
+
+            if not is_valid_session(input_path) and not (
+                _is_legacy_codex_rollout(input_path)
+            ):
+                detected = None
         if detected not in ("claude", "codex"):
             raise SessionQueryError(
                 f"Could not detect agent for session file: {input_path}"
@@ -614,15 +723,27 @@ def resolve_session_query(
         )
 
     fast_candidates: list[_ValidatedFastCandidate] = []
+    fast_candidates_overflowed = False
     if _ID_FRAGMENT_RE.fullmatch(session):
         bounded = _validated_fast_candidates(
             session, agent, claude_home, codex_home
         )
+        fast_candidates_overflowed = bounded is None
         if bounded is not None:
             fast_candidates = bounded
             if len(fast_candidates) == 1:
                 if _FULL_ID_RE.fullmatch(session):
-                    return fast_candidates[0].resolved
+                    database_conflict = (
+                        _codex_has_outranking_id(
+                            session,
+                            fast_candidates[0],
+                            codex_home,
+                        )
+                        if agent in (None, "codex")
+                        else False
+                    )
+                    if database_conflict is False:
+                        return fast_candidates[0].resolved
                 conflict = _has_fast_path_conflict(
                     session,
                     fast_candidates[0],
@@ -645,21 +766,22 @@ def resolve_session_query(
             session, agent_name, home, resolver_errors
         )
         if result is not None and result.kind != "not_found":
-            results.append(result)
+            validated_result = _validate_resolver_content_ids(
+                result,
+                claude_home,
+                codex_home,
+                fast_candidates_overflowed=fast_candidates_overflowed,
+            )
+            if validated_result is not None:
+                results.append(validated_result)
 
+    results = _retain_winning_tier(results, session)
     if len(results) == 1 and results[0].kind == "single":
         record = results[0].records[0]
         path = Path(record.session_file)
         discovered_path = _restore_discovered_path(
             session, record.agent, path, claude_home, codex_home
         )
-        content_id = _session_id_from_content(record.agent, path)
-        if (
-            content_id is not None
-            and content_id.casefold()
-            != get_session_uuid(discovered_path.stem).casefold()
-        ):
-            raise SessionQueryError(f"Session not found: {session}")
         _, branch = _metadata_for_path(record.agent, path)
         return ResolvedSessionQuery(
             record.agent, discovered_path, record.directory, branch

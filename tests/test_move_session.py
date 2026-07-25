@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import stat
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -98,6 +99,7 @@ def test_move_claude_session_by_name(
         "".join(f"{json.dumps(record)}\n" for record in records),
         encoding="utf-8",
     )
+    source.chmod(0o640)
     new_project = tmp_path / "new.project_name"
     new_project.mkdir()
 
@@ -122,6 +124,7 @@ def test_move_claude_session_by_name(
         / source.name
     )
     assert destination.is_file()
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o640
     assert not source.exists()
     moved_records = _json_lines(destination)
     assert len(moved_records) == len(records)
@@ -228,6 +231,7 @@ def test_move_codex_session_by_name_updates_in_place(
         "".join(f"{json.dumps(record)}\n" for record in records),
         encoding="utf-8",
     )
+    source.chmod(0o640)
     original_rollouts = set(
         (codex_home.path / "sessions").rglob("*.jsonl")
     )
@@ -249,6 +253,7 @@ def test_move_codex_session_by_name_updates_in_place(
 
     assert result.exit_code == 0, result.output
     assert source.is_file()
+    assert stat.S_IMODE(source.stat().st_mode) == 0o640
     assert set((codex_home.path / "sessions").rglob("*.jsonl")) == (
         original_rollouts
     )
@@ -407,7 +412,7 @@ def test_move_claude_symlink_preserves_target(
         claude_home.path
         / "projects"
         / encode_claude_project_path(str(new_project.resolve()))
-        / symlink.name
+        / f"{target.stem}.jsonl"
     )
     assert destination.is_file()
     assert not symlink.exists()
@@ -624,3 +629,256 @@ def test_move_rejects_direct_path_outside_agent_constraint(
     assert source.read_bytes() == source_contents
     encoded = encode_claude_project_path(str(new_project.resolve()))
     assert not (claude_home.path / "projects" / encoded).exists()
+
+
+def test_move_preserves_pathologically_nested_line(
+    tmp_path: Path,
+    runner: CliRunner,
+    claude_home: FakeHome,
+    codex_home: FakeHome,
+) -> None:
+    """Unparseable nested JSON is preserved while valid metadata is moved."""
+    session_id = "11111111-1111-4111-8111-111111111111"
+    nested = "[" * 1100 + "]" * 1100 + "\n"
+    metadata = json.dumps(
+        {
+            "type": "session_meta",
+            "payload": {"id": session_id, "cwd": "/tmp"},
+        }
+    )
+    source = tmp_path / f"{session_id}.jsonl"
+    source.write_text(nested + metadata + "\n", encoding="utf-8")
+    new_project = tmp_path / "nested-target"
+    new_project.mkdir()
+
+    result = runner.invoke(
+        main,
+        _move_args(
+            claude_home,
+            codex_home,
+            str(source),
+            new_project,
+        ),
+        catch_exceptions=False,
+        input="n\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert source.read_text(encoding="utf-8").startswith(nested)
+    moved_records = source.read_text(encoding="utf-8").splitlines()
+    assert json.loads(moved_records[1])["payload"]["cwd"] == str(
+        new_project.resolve()
+    )
+
+
+def test_move_preserves_undecodable_line_byte_for_byte(
+    tmp_path: Path,
+    runner: CliRunner,
+    claude_home: FakeHome,
+    codex_home: FakeHome,
+) -> None:
+    """Moving a transcript round-trips an undecodable line unchanged."""
+    session_id = "11111111-1111-4111-8111-111111111111"
+    source = tmp_path / f"{session_id}.jsonl"
+    valid_record = json.dumps(
+        {
+            "type": "user",
+            "sessionId": session_id,
+            "cwd": "/tmp/old",
+            "message": {"role": "user", "content": "x"},
+        }
+    ).encode()
+    source.write_bytes(b"\xff\n" + valid_record + b"\n")
+    new_project = tmp_path / "new-project"
+    new_project.mkdir()
+
+    result = runner.invoke(
+        main,
+        _move_args(
+            claude_home,
+            codex_home,
+            str(source),
+            new_project,
+        ),
+        catch_exceptions=False,
+        input="n\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    encoded = encode_claude_project_path(str(new_project.resolve()))
+    moved = claude_home.path / "projects" / encoded / source.name
+    assert moved.read_bytes().startswith(b"\xff\n")
+    assert str(new_project.resolve()).encode() in moved.read_bytes()
+
+
+def test_move_updates_parseable_line_containing_undecodable_byte(
+    tmp_path: Path,
+    runner: CliRunner,
+    claude_home: FakeHome,
+    codex_home: FakeHome,
+) -> None:
+    """Moving rewrites cwd without changing an undecodable string byte."""
+    session_id = "11111111-1111-4111-8111-111111111111"
+    source = tmp_path / f"{session_id}.jsonl"
+    source.write_bytes(
+        b'{"type":"user","sessionId":"'
+        + session_id.encode()
+        + b'","cwd":"/tmp/old","message":{"role":"user",'
+        + b'"content":"bad \xff byte"},'
+        + b'"legit":"\\u005f\\u005faichat_raw_byte_dcff_0'
+        + b'\\u005f\\u005f"}\n'
+    )
+    new_project = tmp_path / "new-project"
+    new_project.mkdir()
+
+    result = runner.invoke(
+        main,
+        _move_args(
+            claude_home,
+            codex_home,
+            str(source),
+            new_project,
+        ),
+        catch_exceptions=False,
+        input="n\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    encoded = encode_claude_project_path(str(new_project.resolve()))
+    moved = claude_home.path / "projects" / encoded / source.name
+    contents = moved.read_bytes()
+    assert b"bad \xff byte" in contents
+    assert b'"legit": "__aichat_raw_byte_dcff_0__"' in contents
+    assert str(new_project.resolve()).encode() in contents
+    assert b"/tmp/old" not in contents
+
+
+def test_move_preserves_escaped_lone_surrogate_as_valid_json(
+    tmp_path: Path,
+    runner: CliRunner,
+    claude_home: FakeHome,
+    codex_home: FakeHome,
+) -> None:
+    """Moving leaves an escaped surrogate encoded as valid UTF-8 JSON."""
+    session_id = "11111111-1111-4111-8111-111111111111"
+    source = tmp_path / f"{session_id}.jsonl"
+    source.write_bytes(
+        b'{"type":"user","sessionId":"'
+        + session_id.encode()
+        + b'","cwd":"/tmp/old","message":{"role":"user",'
+        + b'"content":"escaped \\udcff"}}\n'
+    )
+    new_project = tmp_path / "new-project"
+    new_project.mkdir()
+
+    result = runner.invoke(
+        main,
+        _move_args(
+            claude_home,
+            codex_home,
+            str(source),
+            new_project,
+        ),
+        catch_exceptions=False,
+        input="n\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    encoded = encode_claude_project_path(str(new_project.resolve()))
+    moved = claude_home.path / "projects" / encoded / source.name
+    contents = moved.read_bytes()
+    parsed = json.loads(contents.decode("utf-8"))
+    assert parsed["message"]["content"] == "escaped \udcff"
+    assert b"escaped \\udcff" in contents
+    assert b"\xff" not in contents
+
+
+def test_move_uses_claude_content_id_for_destination_and_resume(
+    tmp_path: Path,
+    runner: CliRunner,
+    claude_home: FakeHome,
+    codex_home: FakeHome,
+) -> None:
+    """Claude move uses transcript identity when the supplied name differs."""
+    session_id = "11111111-1111-4111-8111-111111111111"
+    source = tmp_path / "backup.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "type": "user",
+                "sessionId": session_id,
+                "cwd": "/tmp/old",
+                "message": {"role": "user", "content": "hello"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    new_project = tmp_path / "content-id-target"
+    new_project.mkdir()
+
+    result = runner.invoke(
+        main,
+        _move_args(
+            claude_home,
+            codex_home,
+            str(source),
+            new_project,
+        ),
+        catch_exceptions=False,
+        input="n\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    destination = (
+        claude_home.path
+        / "projects"
+        / encode_claude_project_path(str(new_project.resolve()))
+        / f"{session_id}.jsonl"
+    )
+    assert destination.is_file()
+    assert not source.exists()
+    assert not destination.with_name("backup.jsonl").exists()
+    assert "claude --resume" in result.output
+    assert session_id in result.output
+
+
+def test_move_rejects_unsafe_claude_content_id(
+    tmp_path: Path,
+    runner: CliRunner,
+    claude_home: FakeHome,
+    codex_home: FakeHome,
+) -> None:
+    """Claude move rejects a content identity that is unsafe as a filename."""
+    source = tmp_path / "backup.jsonl"
+    source_contents = (
+        json.dumps(
+            {
+                "type": "user",
+                "sessionId": "../../escaped",
+                "cwd": "/tmp/old",
+                "message": {"role": "user", "content": "hello"},
+            }
+        )
+        + "\n"
+    )
+    source.write_text(source_contents, encoding="utf-8")
+    new_project = tmp_path / "unsafe-id-target"
+    new_project.mkdir()
+
+    result = runner.invoke(
+        main,
+        _move_args(
+            claude_home,
+            codex_home,
+            str(source),
+            new_project,
+        ),
+        catch_exceptions=False,
+        input="n\n",
+    )
+
+    assert result.exit_code != 0
+    assert "Invalid sessionId in Claude transcript" in result.output
+    assert source.read_text(encoding="utf-8") == source_contents
+    assert not (claude_home.path / "escaped.jsonl").exists()

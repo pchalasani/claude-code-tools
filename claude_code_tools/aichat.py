@@ -45,8 +45,12 @@ def _resolve_cli_session(
     )
 
     root_claude_home, root_codex_home = _session_homes()
-    effective_claude_home = claude_home or root_claude_home
-    effective_codex_home = codex_home or root_codex_home
+    effective_claude_home = (
+        root_claude_home if claude_home is None else claude_home
+    )
+    effective_codex_home = (
+        root_codex_home if codex_home is None else codex_home
+    )
     try:
         return resolve_session_query(
             session,
@@ -352,6 +356,9 @@ def _find_and_run_session_ui(
     results_title: str | None = None,
     direct_action: str | None = None,
     action_kwargs: dict | None = None,
+    *,
+    claude_home: str | None = None,
+    codex_home: str | None = None,
 ) -> None:
     """
     Find session(s) and run Node UI for the specified action.
@@ -367,6 +374,8 @@ def _find_and_run_session_ui(
         results_title: Title for selection screen
         direct_action: If set, execute this action directly instead of showing UI
         action_kwargs: Optional kwargs to pass to action
+        claude_home: Optional Claude home override
+        codex_home: Optional Codex home override
     """
     import os
     import subprocess
@@ -377,7 +386,11 @@ def _find_and_run_session_ui(
     from claude_code_tools.search_index import SessionIndex
     from claude_code_tools.session_menu_cli import execute_action
     from claude_code_tools.session_utils import default_export_path
-    claude_home, codex_home = _session_homes()
+    root_claude_home, root_codex_home = _session_homes()
+    if claude_home is None:
+        claude_home = root_claude_home
+    if codex_home is None:
+        codex_home = root_codex_home
 
     if session_id:
         if direct_action:
@@ -394,7 +407,12 @@ def _find_and_run_session_ui(
                 if agent_constraint in ("claude", "codex")
                 else None
             )
-            resolved = _resolve_cli_session(session_id, constraint)
+            resolved = _resolve_cli_session(
+                session_id,
+                constraint,
+                claude_home=claude_home,
+                codex_home=codex_home,
+            )
             agent = resolved.agent
             session_file = resolved.session_file
             project_path = resolved.directory or str(session_file.parent)
@@ -447,11 +465,28 @@ def _find_and_run_session_ui(
             return
 
         # Normal mode (no direct_action): route through session_menu_cli
-        sys.argv = [
+        constraint = (
+            agent_constraint
+            if agent_constraint in ("claude", "codex")
+            else None
+        )
+        resolved = _resolve_cli_session(
+            session_id,
+            constraint,
+            claude_home=claude_home,
+            codex_home=codex_home,
+        )
+        menu_args = [
             sys.argv[0].replace('aichat', 'session-menu'),
             '--start-screen', start_screen,
-            session_id,
+            '--agent', resolved.agent,
+            str(resolved.session_file),
         ]
+        if claude_home:
+            menu_args.extend(["--claude-home", claude_home])
+        if codex_home:
+            menu_args.extend(["--codex-home", codex_home])
+        sys.argv = menu_args
         from claude_code_tools.session_menu_cli import main as menu_main
         menu_main()
         return
@@ -799,8 +834,14 @@ def trim(session, tools, threshold, trim_assistant, output_dir, agent, claude_ho
             print("Use 'aichat trim' without options for interactive mode", file=sys.stderr)
             sys.exit(1)
 
+        resolved = _resolve_cli_session(
+            session,
+            agent,
+            claude_home=claude_home,
+        )
+
         # Build args for trim-session CLI
-        args = [session]
+        args = [str(resolved.session_file)]
         if tools:
             args.extend(["--tools", tools])
         if threshold != 500:
@@ -809,8 +850,7 @@ def trim(session, tools, threshold, trim_assistant, output_dir, agent, claude_ho
             args.extend(["--trim-assistant-messages", str(trim_assistant)])
         if output_dir:
             args.extend(["--output-dir", output_dir])
-        if agent:
-            args.extend(["--agent", agent])
+        args.extend(["--agent", resolved.agent])
         if claude_home:
             args.extend(["--claude-home", claude_home])
 
@@ -821,10 +861,11 @@ def trim(session, tools, threshold, trim_assistant, output_dir, agent, claude_ho
 
     _find_and_run_session_ui(
         session_id=session,
-        agent_constraint='both',
+        agent_constraint=agent or 'both',
         start_screen='trim_menu',
         select_target='trim_menu',
         results_title=' Which session to trim? ',
+        claude_home=claude_home,
     )
 
 
@@ -982,8 +1023,22 @@ def trim_in_place_cmd(session, tools, threshold, trim_assistant, dry_run,
 @click.option("--dry-run", "-n", is_flag=True,
               help="Show what would be trimmed without doing it")
 @click.option("--claude-home", help="Path to Claude home directory")
-def smart_trim(session, instructions, exclude_types, preserve_recent, content_threshold,
-               output_dir, dry_run, claude_home):
+@click.option(
+    "--agent",
+    type=click.Choice(["claude", "codex"], case_sensitive=False),
+    help="Restrict the search to this agent's home",
+)
+def smart_trim(
+    session,
+    instructions,
+    exclude_types,
+    preserve_recent,
+    content_threshold,
+    output_dir,
+    dry_run,
+    claude_home,
+    agent,
+):
     """Smart trim using Claude SDK agents (EXPERIMENTAL).
 
     Uses an LLM to intelligently analyze the session and decide what can
@@ -1021,9 +1076,12 @@ def smart_trim(session, instructions, exclude_types, preserve_recent, content_th
     # If --instructions provided, use the handler function (same as TUI)
     if instructions and session:
         root_claude_home, root_codex_home = _session_homes()
-        effective_claude_home = claude_home or root_claude_home
+        effective_claude_home = (
+            root_claude_home if claude_home is None else claude_home
+        )
         resolved = _resolve_cli_session(
             session,
+            agent,
             claude_home=effective_claude_home,
             codex_home=root_codex_home,
         )
@@ -1057,9 +1115,12 @@ def smart_trim(session, instructions, exclude_types, preserve_recent, content_th
             sys.exit(1)
 
         root_claude_home, root_codex_home = _session_homes()
-        effective_claude_home = claude_home or root_claude_home
+        effective_claude_home = (
+            root_claude_home if claude_home is None else claude_home
+        )
         resolved = _resolve_cli_session(
             session,
+            agent,
             claude_home=effective_claude_home,
             codex_home=root_codex_home,
         )
@@ -1088,10 +1149,11 @@ def smart_trim(session, instructions, exclude_types, preserve_recent, content_th
     # (whether session provided or not - find latest if not)
     _find_and_run_session_ui(
         session_id=session,
-        agent_constraint='both',
+        agent_constraint=agent or 'both',
         start_screen='smart_trim_form',
         select_target='smart_trim_form',
         results_title=' Which session to smart-trim? ',
+        claude_home=claude_home,
     )
 
 
@@ -1286,7 +1348,8 @@ def info(session, agent, json_output):
     mod_time = datetime.fromtimestamp(session_file.stat().st_mtime)
     create_time = datetime.fromtimestamp(session_file.stat().st_ctime)
     file_size = session_file.stat().st_size
-    line_count = sum(1 for _ in open(session_file))
+    with session_file.open("rb") as transcript:
+        line_count = sum(1 for _ in transcript)
 
     # Extract metadata from session
     from claude_code_tools.export_session import extract_session_metadata
@@ -1413,6 +1476,7 @@ def move_session(
     """
     import json
     import sys
+    import uuid
     from pathlib import Path
 
     from claude_code_tools.session_utils import (
@@ -1439,15 +1503,34 @@ def move_session(
     print(f"Reading session: {session_file}")
     lines = []
     old_cwd = None
-    with open(session_file, "r") as f:
+    content_session_id = None
+    with open(
+        session_file,
+        "r",
+        encoding="utf-8",
+        errors="surrogateescape",
+    ) as f:
         for line in f:
             try:
-                data = json.loads(line)
+                parseable_line, raw_byte_markers = (
+                    _protect_surrogateescape_bytes(
+                        line,
+                        reserved_text=str(new_project_path),
+                    )
+                )
+                data = json.loads(parseable_line)
                 if not isinstance(data, dict):
                     lines.append(line)
                     continue
                 if detected_agent == "claude":
                     # Claude: cwd is at top level
+                    record_session_id = data.get("sessionId")
+                    if (
+                        content_session_id is None
+                        and isinstance(record_session_id, str)
+                        and record_session_id.strip()
+                    ):
+                        content_session_id = record_session_id.strip()
                     if old_cwd is None and "cwd" in data:
                         old_cwd = data["cwd"]
                     if "cwd" in data:
@@ -1472,8 +1555,11 @@ def move_session(
                     ):
                         if "cwd" in payload:
                             payload["cwd"] = str(new_project_path)
-                lines.append(json.dumps(data) + "\n")
-            except json.JSONDecodeError:
+                serialized = json.dumps(data)
+                for marker, raw_byte in raw_byte_markers.items():
+                    serialized = serialized.replace(marker, raw_byte)
+                lines.append(serialized + "\n")
+            except (ValueError, RecursionError):
                 lines.append(line)
 
     if detected_agent == "claude":
@@ -1484,8 +1570,20 @@ def move_session(
         configured_claude_home, _ = _session_homes()
         claude_home = get_claude_home(cli_arg=configured_claude_home)
         new_project_dir = claude_home / "projects" / encoded_path
+        if content_session_id is not None:
+            try:
+                session_id = str(uuid.UUID(content_session_id))
+            except ValueError:
+                print(
+                    "Error: Invalid sessionId in Claude transcript: "
+                    f"{content_session_id}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+        else:
+            session_id = session_file.stem
         new_project_dir.mkdir(parents=True, exist_ok=True)
-        new_file_path = new_project_dir / session_file.name
+        new_file_path = new_project_dir / f"{session_id}.jsonl"
 
         # Check if destination already exists
         if new_file_path.exists() and new_file_path != session_file:
@@ -1495,7 +1593,11 @@ def move_session(
 
         # Write updated content to new location
         print(f"Moving session to: {new_file_path}")
-        _write_lines_atomically(new_file_path, lines)
+        _write_lines_atomically(
+            new_file_path,
+            lines,
+            mode_source=session_file,
+        )
 
         # Remove old file if different location
         if new_file_path != session_file:
@@ -1505,7 +1607,6 @@ def move_session(
         print(f"\n[green]Session moved successfully![/green]")
         print(f"  From: {old_cwd}")
         print(f"  To:   {new_project_path}")
-        session_id = session_file.stem
         resume_cmd = f"cd {new_project_path} && claude --resume {session_id}"
     else:
         # Codex: just update file in place (sessions organized by date, not project)
@@ -1538,16 +1639,78 @@ def move_session(
         console.print(f"  [cyan]{resume_cmd}[/cyan]")
 
 
-def _write_lines_atomically(path: "Path", lines: list[str]) -> None:
+def _protect_surrogateescape_bytes(
+    line: str,
+    *,
+    reserved_text: str,
+) -> tuple[str, dict[str, str]]:
+    """Replace raw undecodable bytes with JSON-safe temporary markers.
+
+    Args:
+        line: Transcript line decoded with ``surrogateescape``.
+        reserved_text: Replacement text that markers must not collide with.
+
+    Returns:
+        The parseable line and a mapping from markers to surrogate characters.
+    """
+    import json
+
+    protected = line
+    markers: dict[str, str] = {}
+    decoded_serialization = json.dumps(json.loads(line))
+    raw_bytes = sorted(
+        {
+            character
+            for character in line
+            if "\udc80" <= character <= "\udcff"
+        }
+    )
+    for index, raw_byte in enumerate(raw_bytes):
+        marker = f"__aichat_raw_byte_{ord(raw_byte):04x}_{index}__"
+        while (
+            marker in protected
+            or marker in decoded_serialization
+            or marker in reserved_text
+        ):
+            marker = f"_{marker}"
+        protected = protected.replace(raw_byte, marker)
+        markers[marker] = raw_byte
+    return protected, markers
+
+
+def _write_lines_atomically(
+    path: "Path",
+    lines: list[str],
+    *,
+    mode_source: "Path | None" = None,
+) -> None:
     """Atomically replace a path with the supplied transcript lines.
 
     Args:
         path: Destination transcript path.
         lines: Complete serialized transcript lines.
+        mode_source: Existing transcript whose mode should be preserved when
+            the destination does not exist.
     """
     import os
+    import stat
     import tempfile
     from pathlib import Path
+
+    existing_mode = None
+    try:
+        existing_status = path.lstat()
+        if stat.S_ISREG(existing_status.st_mode):
+            existing_mode = stat.S_IMODE(existing_status.st_mode)
+    except FileNotFoundError:
+        pass
+    if existing_mode is None and mode_source is not None:
+        try:
+            source_status = mode_source.stat()
+            if stat.S_ISREG(source_status.st_mode):
+                existing_mode = stat.S_IMODE(source_status.st_mode)
+        except FileNotFoundError:
+            pass
 
     descriptor, temporary_name = tempfile.mkstemp(
         dir=path.parent,
@@ -1556,7 +1719,14 @@ def _write_lines_atomically(path: "Path", lines: list[str]) -> None:
     )
     temporary_path = Path(temporary_name)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as transcript:
+        if existing_mode is not None:
+            os.fchmod(descriptor, existing_mode)
+        with os.fdopen(
+            descriptor,
+            "w",
+            encoding="utf-8",
+            errors="surrogateescape",
+        ) as transcript:
             transcript.writelines(lines)
             transcript.flush()
             os.fsync(transcript.fileno())
@@ -1799,6 +1969,7 @@ def clone_session_cmd(session, agent):
             cwd,
             shell_mode=False,
             claude_home=claude_home,
+            source_path=session_file,
         )
     else:
         from claude_code_tools.find_codex_session import clone_session
@@ -1846,7 +2017,7 @@ def rollover(session, quick, prompt, agent):
     from claude_code_tools.session_utils import continue_with_options
 
     # If CLI options provided, use direct handler (backward compatible)
-    if quick or prompt or (agent and session):
+    if quick or prompt:
         if not session:
             print("Error: --quick or --prompt require a session ID",
                   file=sys.stderr)
@@ -1978,8 +2149,13 @@ def lineage(session, agent, json_output):
     type=click.Path(exists=True, file_okay=False, dir_okay=True),
     help='Codex home directory (default: ~/.codex or CODEX_HOME)',
 )
+@click.option(
+    "--agent",
+    type=click.Choice(["claude", "codex"], case_sensitive=False),
+    help="Restrict the search to this agent's home",
+)
 @click.pass_context
-def resume_session(ctx, claude_home, codex_home):
+def resume_session(ctx, claude_home, codex_home, agent):
     """Resume a session with various options (resume, clone, trim, continue).
 
     If no session ID provided, finds latest session for current project/branch.
@@ -1992,17 +2168,21 @@ def resume_session(ctx, claude_home, codex_home):
         CODEX_HOME         - Default Codex home (overridden by --codex-home)
     """
     # Merge with parent context options (CLI arg takes precedence)
-    claude_home = claude_home or (ctx.obj or {}).get('claude_home')
-    codex_home = codex_home or (ctx.obj or {}).get('codex_home')
+    if claude_home is None:
+        claude_home = (ctx.obj or {}).get('claude_home')
+    if codex_home is None:
+        codex_home = (ctx.obj or {}).get('codex_home')
 
-    args = ctx.args
+    agent, args = _consume_export_agent(ctx.args, agent)
     session_id = args[0] if args and not args[0].startswith('-') else None
     _find_and_run_session_ui(
         session_id=session_id,
-        agent_constraint='both',
+        agent_constraint=agent or 'both',
         start_screen='resume',
         select_target='resume',
         results_title=' Which session to resume? ',
+        claude_home=claude_home,
+        codex_home=codex_home,
     )
 
 
