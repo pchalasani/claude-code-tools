@@ -14,7 +14,9 @@ import pytest
 from visual_brief.cli import list_command
 from visual_brief.render import render_content
 from visual_brief.server.daemon import HOST, VisualBriefServer, create_server
+from visual_brief.server.counting import merge_pending_followups
 from visual_brief.server.registry import count_unanswered_questions
+from visual_brief.server.served_page import read_served_page
 
 EXAMPLE_PATH = Path(__file__).parents[1] / "example.json"
 RUN_ID = "pending-run"
@@ -232,3 +234,75 @@ def test_cross_anchor_follow_up_does_not_change_saved_thread_state(
     )
 
     assert count_unanswered_questions(run) == 0
+
+
+def test_reverse_queue_order_renders_follow_ups_chronologically(
+    tmp_path: Path,
+) -> None:
+    """Sort concurrent queued replies by timestamp before rendering."""
+    root = tmp_path / "runs"
+    run = _make_run(root)
+    records = [
+        {
+            "timestamp": "2026-07-25T20:03:00Z",
+            "type": "question",
+            "anchor_id": ANCHOR_ID,
+            "text": "Later concurrent reply",
+            "parent_id": THREAD_ID,
+        },
+        {
+            "timestamp": "2026-07-25T20:02:00Z",
+            "type": "question",
+            "anchor_id": ANCHOR_ID,
+            "text": "Earlier concurrent reply",
+            "parent_id": THREAD_ID,
+        },
+    ]
+    (run / "questions.jsonl").write_text(
+        "".join(f"{json.dumps(record)}\n" for record in records),
+        encoding="utf-8",
+    )
+
+    page = read_served_page(run)
+
+    assert page is not None
+    assert page.index(b"Earlier concurrent reply") < page.index(
+        b"Later concurrent reply"
+    )
+
+
+def test_agent_first_human_reply_is_recognized_as_folded(
+    tmp_path: Path,
+) -> None:
+    """Classify the first human in an agent-first thread as a reply."""
+    root = tmp_path / "runs"
+    run = _make_run(root)
+    content = json.loads((run / "content.json").read_text(encoding="utf-8"))
+    thread = content["updates"][1]["lanes"][1]["items"][0]["questions"][0]
+    thread["turns"] = [
+        {
+            "author": "agent",
+            "text": "Anything else?",
+            "at": "2026-07-25T20:00:00Z",
+        },
+        {
+            "author": "human",
+            "text": "One more thing.",
+            "at": "2026-07-25T20:01:00Z",
+        },
+    ]
+    (run / "content.json").write_text(json.dumps(content), encoding="utf-8")
+    record = {
+        "timestamp": "2026-07-25T20:01:00Z",
+        "type": "question",
+        "anchor_id": ANCHOR_ID,
+        "text": "One more thing.",
+        "parent_id": THREAD_ID,
+    }
+    (run / "questions.jsonl").write_text(
+        f"{json.dumps(record)}\n",
+        encoding="utf-8",
+    )
+
+    assert merge_pending_followups(run) is None
+    assert count_unanswered_questions(run) == 1

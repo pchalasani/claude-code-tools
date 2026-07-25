@@ -8,11 +8,16 @@ from typing import Any
 LEGACY_TIMESTAMP = "1970-01-01T00:00:00Z"
 
 
-def normalize_document(data: Any) -> Any:
+def normalize_document(
+    data: Any,
+    legacy_unknown_ids: set[str] | None = None,
+) -> Any:
     """Return a deep copy with legacy question pairs converted to threads.
 
     Args:
         data: Parsed content that may contain iteration-1 question pairs.
+        legacy_unknown_ids: Optional collector for converted pairs without an
+            original ``asked_at`` timestamp.
 
     Returns:
         An independent value whose recognized legacy pairs are threads.
@@ -45,7 +50,11 @@ def normalize_document(data: Any) -> Any:
             if not isinstance(lane_id, str):
                 continue
             lane_path = f"{update_id}/{lane_id}"
-            _normalize_questions(normalized_lane, lane_path)
+            _normalize_questions(
+                normalized_lane,
+                lane_path,
+                legacy_unknown_ids,
+            )
             items = lane.get("items")
             if not isinstance(items, list):
                 continue
@@ -62,6 +71,7 @@ def normalize_document(data: Any) -> Any:
                 _normalize_questions(
                     normalized_item,
                     f"{lane_path}/{item_id}",
+                    legacy_unknown_ids,
                 )
     return normalized
 
@@ -77,7 +87,11 @@ def thread_is_awaiting(thread: Any) -> bool:
     return isinstance(newest, dict) and newest.get("author") == "human"
 
 
-def _normalize_questions(owner: dict[str, Any], path: str) -> None:
+def _normalize_questions(
+    owner: dict[str, Any],
+    path: str,
+    legacy_unknown_ids: set[str] | None,
+) -> None:
     """Convert recognized legacy entries on one lane or item."""
     questions = owner.get("questions")
     if not isinstance(questions, list):
@@ -91,7 +105,14 @@ def _normalize_questions(owner: dict[str, Any], path: str) -> None:
         question = entry["question"]
         occurrence = occurrences.get(question, 0)
         occurrences[question] = occurrence + 1
-        converted.append(_legacy_thread(entry, path, occurrence))
+        thread = _legacy_thread(entry, path, occurrence)
+        converted.append(thread)
+        asked_at = entry.get("asked_at")
+        if (
+            legacy_unknown_ids is not None
+            and (not isinstance(asked_at, str) or not asked_at.strip())
+        ):
+            legacy_unknown_ids.add(thread["id"])
     owner["questions"] = converted
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -104,15 +105,14 @@ def _consume_folded(
     folded: Counter[FoldedKey],
     key: FoldedKey,
 ) -> bool:
-    """Consume an exact folded record, with legacy fallback if undated."""
+    """Consume an exact folded record, matching only unknown timestamps loosely."""
     if folded[key]:
         folded[key] -= 1
         return True
-    if key[3] is not None:
-        return False
     prefix = key[:3]
     for candidate, count in folded.items():
-        if count and candidate[:3] == prefix:
+        timestamps_match_loosely = key[3] is None or candidate[3] is None
+        if count and candidate[:3] == prefix and timestamps_match_loosely:
             folded[candidate] -= 1
             return True
     return False
@@ -133,13 +133,15 @@ def _read_thread_state(
     content = _read_json_object(run_dir, "content.json")
     if content is None:
         return {}, Counter()
-    normalized = normalize_document(content)
-    states, folded, _ = _collect_thread_state(normalized)
+    legacy_unknown_ids: set[str] = set()
+    normalized = normalize_document(content, legacy_unknown_ids)
+    states, folded, _ = _collect_thread_state(normalized, legacy_unknown_ids)
     return states, folded
 
 
 def _collect_thread_state(
     normalized: Any,
+    legacy_unknown_ids: set[str] | None = None,
 ) -> tuple[
     dict[str, ThreadState],
     Counter[FoldedKey],
@@ -155,6 +157,7 @@ def _collect_thread_state(
     states: dict[str, ThreadState] = {}
     folded: Counter[FoldedKey] = Counter()
     threads: dict[str, dict[str, Any]] = {}
+    legacy_ids = legacy_unknown_ids or set()
     for update in updates:
         if not isinstance(update, dict):
             continue
@@ -163,7 +166,7 @@ def _collect_thread_state(
         if not isinstance(update_id, str) or not isinstance(lanes, list):
             continue
         for lane in lanes:
-            _collect_lane(states, folded, threads, update_id, lane)
+            _collect_lane(states, folded, threads, update_id, lane, legacy_ids)
     return states, folded, threads
 
 
@@ -173,6 +176,7 @@ def _collect_lane(
     threads: dict[str, dict[str, Any]],
     update_id: str,
     lane: Any,
+    legacy_unknown_ids: set[str],
 ) -> None:
     """Collect threads from a recognized lane and its items."""
     if not isinstance(lane, dict):
@@ -187,6 +191,7 @@ def _collect_lane(
         threads,
         lane.get("questions"),
         lane_anchor,
+        legacy_unknown_ids,
     )
     items = lane.get("items")
     if not isinstance(items, list):
@@ -204,6 +209,7 @@ def _collect_lane(
             threads,
             item.get("questions"),
             anchor,
+            legacy_unknown_ids,
         )
 
 
@@ -213,6 +219,7 @@ def _collect_threads(
     threads: dict[str, dict[str, Any]],
     questions: Any,
     anchor: str,
+    legacy_unknown_ids: set[str],
 ) -> None:
     """Collect valid newest authors and human turns from one owner."""
     if not isinstance(questions, list):
@@ -236,7 +243,13 @@ def _collect_threads(
             continue
         states[thread_id] = (anchor, author == "human")
         threads[thread_id] = thread
-        _collect_human_turns(folded, thread_id, turns, anchor)
+        _collect_human_turns(
+            folded,
+            thread_id,
+            turns,
+            anchor,
+            thread_id in legacy_unknown_ids,
+        )
 
 
 def _collect_human_turns(
@@ -244,10 +257,10 @@ def _collect_human_turns(
     thread_id: str,
     turns: list[Any],
     anchor: str,
+    legacy_timestamp_unknown: bool,
 ) -> None:
     """Collect queue identities for human turns already saved."""
-    human_index = 0
-    for turn in turns:
+    for turn_index, turn in enumerate(turns):
         if not isinstance(turn, dict) or turn.get("author") != "human":
             continue
         text = turn.get("text")
@@ -256,9 +269,10 @@ def _collect_human_turns(
         timestamp = turn.get("at")
         if not isinstance(timestamp, str):
             timestamp = None
-        parent = None if human_index == 0 else thread_id
+        if legacy_timestamp_unknown and turn_index == 0:
+            timestamp = None
+        parent = None if turn_index == 0 else thread_id
         folded[(parent, anchor, text, timestamp)] += 1
-        human_index += 1
 
 
 def thread_anchor_for_reply(run_dir: Path, parent_id: str) -> str | None:
@@ -289,12 +303,16 @@ def merge_pending_followups(run_dir: Path) -> dict[str, Any] | None:
     content = _read_json_object(run_dir, "content.json")
     if content is None:
         return None
-    normalized = normalize_document(content)
-    states, folded, threads = _collect_thread_state(normalized)
+    legacy_unknown_ids: set[str] = set()
+    normalized = normalize_document(content, legacy_unknown_ids)
+    states, folded, threads = _collect_thread_state(
+        normalized, legacy_unknown_ids
+    )
     path = _contained_child(run_dir, "questions.jsonl")
     if path is None:
         return None
     changed = False
+    pending: dict[str, list[dict[str, str]]] = {}
     try:
         with path.open("rb") as queue:
             for record in _question_records(queue):
@@ -316,20 +334,45 @@ def merge_pending_followups(run_dir: Path) -> dict[str, Any] | None:
                 thread = threads.get(parent)
                 if state is None or state[0] != anchor or thread is None:
                     continue
-                turns = thread.get("turns")
-                if not isinstance(turns, list):
+                if _parse_timestamp(timestamp) is None:
                     continue
-                thread["turns"] = [
-                    *turns,
-                    {"author": "human", "text": text, "at": timestamp},
-                ]
-                states[parent] = (anchor, True)
-                changed = True
+                pending.setdefault(parent, []).append(
+                    {"author": "human", "text": text, "at": timestamp}
+                )
     except OSError:
         return None
+    for parent, pending_turns in pending.items():
+        thread = threads[parent]
+        turns = thread.get("turns")
+        if not isinstance(turns, list):
+            continue
+        combined = [*turns, *pending_turns]
+        if any(_turn_timestamp(turn) is None for turn in combined):
+            continue
+        combined.sort(key=_turn_timestamp)
+        thread["turns"] = combined
+        changed = True
     if not changed or not isinstance(normalized, dict):
         return None
     return normalized
+
+
+def _turn_timestamp(turn: Any) -> datetime | None:
+    """Return one valid timezone-aware turn timestamp."""
+    if not isinstance(turn, dict):
+        return None
+    return _parse_timestamp(turn.get("at"))
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    """Parse one timezone-aware ISO 8601 timestamp."""
+    if not isinstance(value, str):
+        return None
+    try:
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return timestamp if timestamp.tzinfo is not None else None
 
 
 def _read_json_object(run_dir: Path, name: str) -> dict[str, Any] | None:

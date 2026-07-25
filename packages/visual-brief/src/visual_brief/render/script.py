@@ -11,7 +11,6 @@ JS = r"""
   const pageVersion = $('meta[name="visual-brief-render-version"]').content;
   let focusBeforeOverlay = null;
   let awaitingIndex = -1;
-
   function isTyping(target) {
     return target instanceof Element && (
       target.matches("textarea,input,[contenteditable]") ||
@@ -26,11 +25,9 @@ JS = r"""
   function visible(elements) {
     return elements.filter((element) => !element.closest("[hidden]"));
   }
-
   function nav(kind) {
     return visible($$(`[data-nav-kind="${kind}"]`));
   }
-
   function openAncestors(element) {
     let parent = element.parentElement;
     while (parent) {
@@ -38,7 +35,6 @@ JS = r"""
       parent = parent.parentElement;
     }
   }
-
   function focusElement(element) {
     if (!element) return;
     openAncestors(element);
@@ -47,7 +43,6 @@ JS = r"""
     element.focus({preventScroll: true});
     element.scrollIntoView({block: "nearest"});
   }
-
   function move(kind, delta) {
     const elements = nav(kind);
     if (!elements.length) return;
@@ -66,7 +61,6 @@ JS = r"""
       : Math.max(0, Math.min(elements.length - 1, current + delta));
     focusElement(elements[next]);
   }
-
   function toggleFocused() {
     const focused = document.activeElement;
     if (!(focused instanceof HTMLElement)) return;
@@ -75,7 +69,6 @@ JS = r"""
       details.open = !details.open;
     }
   }
-
   function askFocused() {
     const focused = document.activeElement;
     if (!(focused instanceof HTMLElement)) return;
@@ -95,7 +88,6 @@ JS = r"""
     button.setAttribute("aria-expanded", "true");
     textarea.focus();
   }
-
   function nextAwaiting() {
     const threads = $$("details.thread[data-awaiting]");
     if (!threads.length) return;
@@ -104,7 +96,6 @@ JS = r"""
     threads[awaitingIndex].open = true;
     focusElement(summary);
   }
-
   function openSearch() {
     if (!searchPanel.hidden) {
       searchInput.focus();
@@ -114,7 +105,6 @@ JS = r"""
     searchPanel.hidden = false;
     searchInput.focus();
   }
-
   function closeSearch() {
     searchInput.value = "";
     filterItems("");
@@ -151,6 +141,16 @@ JS = r"""
     }
   }
 
+  function leaveTextBox(target) {
+    const form = target.closest("form.question-box");
+    const thread = form && form.closest("details.thread");
+    const owner = thread
+      ? $(":scope > summary", thread)
+      : form && document.querySelector(
+        `.ask-button[data-target="${CSS.escape(form.id)}"]`,
+      );
+    focusElement(owner || nav("item")[0] || nav("lane")[0]);
+  }
   function trapHelpFocus(event) {
     if (event.key !== "Tab") return;
     const elements = visible($$(
@@ -174,7 +174,6 @@ JS = r"""
     if (!elements.length) return;
     focusElement(edge === "top" ? elements[0] : elements[elements.length - 1]);
   }
-
   function runAction(action) {
     const actions = {
       "next-item": () => move("item", 1),
@@ -189,6 +188,7 @@ JS = r"""
     };
     if (actions[action]) actions[action]();
   }
+
   function handleKey(event) {
     if (help.open) {
       if (event.key === "Escape") {
@@ -201,7 +201,7 @@ JS = r"""
       if (event.key === "Escape") {
         event.preventDefault();
         if (event.target === searchInput) closeSearch();
-        else event.target.blur();
+        else leaveTextBox(event.target);
       }
       return;
     }

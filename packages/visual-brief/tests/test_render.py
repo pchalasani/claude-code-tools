@@ -237,7 +237,9 @@ def test_keyboard_script_protects_typing_and_restores_focus() -> None:
 
     assert 'target.matches("textarea,input,[contenteditable]")' in rendered
     assert 'event.target === searchInput' in rendered
-    assert 'event.target.blur()' in rendered
+    assert "else leaveTextBox(event.target)" in rendered
+    assert 'form.closest("details.thread")' in rendered
+    assert "focusElement(owner || nav(" in rendered
     assert 'sessionStorage.setItem(' in rendered
     assert 'saved.split("/").slice(0, -1).join("/")' in rendered
     assert "openAncestors(element)" in rendered

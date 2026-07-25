@@ -25,6 +25,7 @@ def test_typing_contexts_keep_every_binding_inert(browser: Browser) -> None:
         (() => {{
           const form = document.querySelector(".question-box:not(.reply-box)");
           form.classList.add("open");
+          const searchOwner = document.activeElement;
           document.querySelector(
             '.key-control[data-action="search"]'
           ).click();
@@ -33,23 +34,34 @@ def test_typing_contexts_keep_every_binding_inert(browser: Browser) -> None:
           editable.contentEditable = "true";
           editable.tabIndex = 0;
           document.body.append(editable);
+          const question = form.querySelector("textarea");
+          const reply = document.querySelector(
+            ".thread[data-awaiting] textarea");
+          const replyOwner = reply.closest("details.thread").querySelector(
+            ":scope > summary");
           const targets = [
-            form.querySelector("textarea"),
-            document.querySelector("#page-search"),
-            editable,
+            [question, document.querySelector(
+              `.ask-button[data-target="${{CSS.escape(form.id)}}"]`
+            )],
+            [reply, replyOwner],
+            [document.querySelector("#page-search"), searchOwner],
+            [editable, document.querySelector('[data-nav-kind="item"]')],
           ];
           const keys = {json.dumps(KEYS + ["Escape"])};
-          return targets.map((target) => keys.map((key) => {{
+          return targets.map(([target, owner]) => keys.map((key) => {{
             target.focus();
             const event = new KeyboardEvent(
               "keydown",
               {{key, bubbles: true, cancelable: true}},
             );
             target.dispatchEvent(event);
+            const style = getComputedStyle(document.activeElement);
             return {{
               key,
               prevented: event.defaultPrevented,
               active: document.activeElement === target,
+              ownerFocused: document.activeElement === owner,
+              outline: [style.outlineStyle, Number.parseFloat(style.outlineWidth)],
             }};
           }}));
         }})()
@@ -64,6 +76,8 @@ def test_typing_contexts_keep_every_binding_inert(browser: Browser) -> None:
             "key": "Escape",
             "prevented": True,
             "active": False,
+            "ownerFocused": True,
+            "outline": ["solid", 3],
         }
 
     browser.batch(
