@@ -1,0 +1,28 @@
+[project]
+name = "visual-brief"
+version = "0.1.0"
+description = "Local multi-session visual brief dashboard"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Prasad Chalasani", email = "pchalasani@gmail.com" }]
+requires-python = ">=3.11"
+keywords = ["briefing", "dashboard", "local", "agents"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/pchalasani/claude-code-tools"
+
+[project.scripts]
+visual-brief = "visual_brief.cli:main"
+
+[build-system]
+requires = ["hatchling==1.28.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/visual_brief"]

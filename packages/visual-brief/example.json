@@ -1,0 +1,246 @@
+{
+  "title": "Cedar reader parity is close — and now measurable",
+  "summary": "The Cedar reader now agrees with Amazon's own parser on a focused differential test after four review rounds. The checker can distinguish valid-but-unsupported Cedar from malformed Cedar, which keeps the repair loop on the right path. A later cold review found four remaining edge cases; those fixes are in progress.",
+  "updates": [
+    {
+      "id": "review-round-four",
+      "timestamp": "Review round 4",
+      "headline": "The core PASS / UNSUPPORTED / FAIL contract survived four reviews",
+      "summary": "The reader's basic contract was clarified and seven earlier blocking defects were reported fixed, but parser parity was still a recurring manual review activity.",
+      "lanes": [
+        {
+          "id": "round-four-change",
+          "name": "What changed",
+          "items": [
+            {
+              "id": "three-verdict-contract",
+              "glance": "The checker now has three verdicts with distinct meanings.",
+              "explanation": "PASS means the policy is valid Cedar and inside the declared subset. UNSUPPORTED means valid Cedar outside the subset. FAIL means the input is not valid Cedar at all. The repair loop depends on preserving that distinction.",
+              "trust": "verified-by-me",
+              "forensics": [
+                {
+                  "title": "Why two error buckets are necessary",
+                  "body": "The repair loop should not rewrite valid Cedar merely because this implementation supports a smaller language.",
+                  "children": [
+                    {
+                      "title": "Decision boundary",
+                      "body": "Syntax validity belongs to Cedar; subset support belongs to this profile.",
+                      "children": [
+                        {
+                          "title": "Operational effect",
+                          "body": "FAIL triggers syntax repair, while UNSUPPORTED triggers a subset-aware rewrite."
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "questions": [
+                {
+                  "question": "Why is UNSUPPORTED not just another failure?",
+                  "answer": "Because the input may be perfectly valid Cedar. Treating it as malformed would send the repair loop after syntax that does not need repair."
+                }
+              ]
+            },
+            {
+              "id": "seven-root-fixes",
+              "glance": "An agent reports that all seven earlier blocking defects were fixed at the root.",
+              "explanation": "This is useful progress, but it has not been independently rechecked in this briefing. It is intentionally kept separate from the evidence I ran myself.",
+              "trust": "reported-by-agent"
+            }
+          ]
+        },
+        {
+          "id": "round-four-next",
+          "name": "What is next",
+          "items": [
+            {
+              "id": "manual-parity-review",
+              "glance": "Parser parity still depended on recurring review.",
+              "explanation": "Each review round could rediscover another boundary mismatch because agreement with Amazon's parser was not yet a permanent build gate.",
+              "trust": "unverified"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "current-update",
+      "timestamp": "Current update",
+      "headline": "The Cedar reader now agrees with Amazon's own Cedar parser, after four review rounds",
+      "summary": "A twelve-input differential test found no disagreement in the targeted cases, and all eleven build gates pass. A later cold review then widened the edge-case set and found four concrete mismatches that are being fixed now.",
+      "lanes": [
+        {
+          "id": "what-changed",
+          "name": "What changed",
+          "open": true,
+          "items": [
+            {
+              "id": "differential-reader-check",
+              "glance": "The reader now separates malformed Cedar from valid Cedar outside our subset.",
+              "explanation": "Against Amazon Cedar CLI 4.11.2, every tested input Amazon accepted returned UNSUPPORTED, while every input Amazon rejected returned FAIL. That is the distinction the repair loop needs.",
+              "trust": "verified-by-me",
+              "tables": [
+                {
+                  "caption": "Focused parser comparison",
+                  "columns": [
+                    "Input",
+                    "Amazon Cedar",
+                    "Our reader",
+                    "Result"
+                  ],
+                  "rows": [
+                    [
+                      "1 + }",
+                      "rejects",
+                      "FAIL",
+                      "correct"
+                    ],
+                    [
+                      "1 + 2",
+                      "accepts",
+                      "UNSUPPORTED",
+                      "correct"
+                    ],
+                    [
+                      "-9223372036854775808",
+                      "accepts",
+                      "UNSUPPORTED",
+                      "correct"
+                    ],
+                    [
+                      "9223372036854775808",
+                      "rejects",
+                      "FAIL",
+                      "correct"
+                    ],
+                    [
+                      "truncated permit(principal in",
+                      "rejects",
+                      "UNSUPPORTED",
+                      "WRONG — being fixed"
+                    ],
+                    [
+                      "\"a\" like \"a\\*\"",
+                      "accepts",
+                      "FAIL",
+                      "WRONG — being fixed"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "four-cold-review-defects",
+              "glance": "A later cold review found four further defects; fixes are underway.",
+              "explanation": "The remaining cases are a truncated policy misclassified as UNSUPPORTED, an escaped wildcard rejected, duplicate record keys accepted, and declared profile size limits left unenforced.",
+              "trust": "reported-by-agent",
+              "forensics": [
+                "truncated permit(principal in\nAmazon: reject\nours: UNSUPPORTED",
+                "1,001 policies\nprofile limit: 1,000\nours: PASS"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "why-it-matters",
+          "name": "Why it matters",
+          "items": [
+            {
+              "id": "repair-loop-routing",
+              "glance": "The repair loop makes different decisions for UNSUPPORTED and FAIL.",
+              "explanation": "UNSUPPORTED should lead to a subset-preserving rewrite. FAIL should lead to syntax repair. Collapsing them can make a valid policy worse or leave malformed input untouched.",
+              "trust": "verified-by-me",
+              "questions": [
+                {
+                  "question": "What could go wrong if a malformed policy returns UNSUPPORTED?",
+                  "answer": "The loop may try to simplify features in text that is not a policy at all, instead of first repairing its syntax."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "what-i-verified",
+          "name": "What I verified",
+          "questions": [
+            {
+              "question": "Does twelve clean cases prove full parser parity?",
+              "answer": "No. It proves agreement only on the focused differential set. The permanent per-policy cross-check is still missing."
+            }
+          ],
+          "items": [
+            {
+              "id": "twelve-inputs",
+              "glance": "Twelve differential inputs produced no disagreement in either direction.",
+              "explanation": "Everything accepted by Amazon's Cedar CLI 4.11.2 was classified as valid-but-unsupported; everything Amazon rejected was classified as malformed.",
+              "trust": "verified-by-me",
+              "forensics": [
+                "cedar CLI: 4.11.2\ndifferential cases: 12\ndisagreements: 0",
+                {
+                  "title": "Agreement rule",
+                  "body": "Amazon accepts must map to UNSUPPORTED for out-of-profile test expressions; Amazon rejects must map to FAIL.",
+                  "children": [
+                    {
+                      "title": "Direction one",
+                      "body": "No Amazon-accepted input in the focused set was called malformed."
+                    },
+                    {
+                      "title": "Direction two",
+                      "body": "No Amazon-rejected input in the focused set was called valid."
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "eleven-build-gates",
+              "glance": "All eleven build gates pass.",
+              "explanation": "The existing project checks are green after the reviewed changes.",
+              "trust": "verified-by-me",
+              "forensics": [
+                "build gates: 11 passed, 0 failed"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "still-unknown",
+          "name": "What is still unknown",
+          "items": [
+            {
+              "id": "parity-gate-missing",
+              "glance": "The permanent per-policy parser cross-check is not built yet.",
+              "explanation": "The documentation now says explicitly that the reader does not automatically require our result and Amazon's result to agree for every policy.",
+              "trust": "known-limitation"
+            },
+            {
+              "id": "edge-case-fixes-unverified",
+              "glance": "The four new edge-case fixes are not verified yet.",
+              "explanation": "They are being implemented now, so this page does not claim that the truncated policy, escaped wildcard, duplicate key, or profile-limit cases are resolved.",
+              "trust": "unverified"
+            }
+          ]
+        },
+        {
+          "id": "what-is-next",
+          "name": "What is next",
+          "items": [
+            {
+              "id": "finish-four-fixes",
+              "glance": "Finish and independently test the four cold-review fixes.",
+              "explanation": "The immediate work is to correct the two parser classifications, reject duplicate record keys, and enforce both 1,000-policy and 200 KB combined-text limits.",
+              "trust": "reported-by-agent"
+            },
+            {
+              "id": "automate-parity",
+              "glance": "Make parity a permanent automated gate.",
+              "explanation": "Four review rounds each found the same class of defect. Turning the Amazon comparison into a repeatable gate should make future drift visible immediately instead of during another review.",
+              "trust": "known-limitation"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

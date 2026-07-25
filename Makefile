@@ -1,4 +1,4 @@
-.PHONY: install release patch minor major dev-install help clean publish all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply update-homebrew docs-dev docs-build docs-preview voxtype-version voxtype-test voxtype-install voxtype-build voxtype-release voxtype-publish voxtype-all voxtype-all-patch voxtype-all-minor voxtype-all-major
+.PHONY: install release patch minor major dev-install help clean publish all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply update-homebrew docs-dev docs-build docs-preview voxtype-version voxtype-test voxtype-install voxtype-build voxtype-release voxtype-publish voxtype-all voxtype-all-patch voxtype-all-minor voxtype-all-major visual-brief-test visual-brief-install visual-brief-build visual-brief-release visual-brief-publish
 
 GIT_PRIMARY_WORKTREE := $(realpath $(shell git rev-parse \
 	--path-format=absolute --git-common-dir)/..)
@@ -39,6 +39,11 @@ help:
 	@echo "  make voxtype-all-patch / -minor / -major - Bump that part, push, GitHub release, build (then: make voxtype-publish)"
 	@echo "  make voxtype-publish - Publish dist/voxtype-* to PyPI"
 	@echo "  make voxtype-all [BUMP=...] - voxtype-release + voxtype-publish in one shot"
+	@echo "  make visual-brief-test    - Run the visual-brief test suite"
+	@echo "  make visual-brief-install - Install visual-brief in editable mode"
+	@echo "  make visual-brief-build   - Build visual-brief wheel and sdist"
+	@echo "  make visual-brief-release [BUMP=patch|minor|major] - Release visual-brief"
+	@echo "  make visual-brief-publish - Publish visual-brief artifacts to PyPI"
 
 install:
 	uv tool install --force -e .
@@ -370,3 +375,86 @@ voxtype-all-minor:
 
 voxtype-all-major:
 	@$(MAKE) voxtype-release BUMP=major
+
+# ---------------------------------------------------------------------------
+# visual-brief (packages/visual-brief) — local multi-session briefing server
+# ---------------------------------------------------------------------------
+
+VISUAL_BRIEF_DIR := packages/visual-brief
+VISUAL_BRIEF_PYPROJECT := $(VISUAL_BRIEF_DIR)/pyproject.toml
+VISUAL_BRIEF_INIT := $(VISUAL_BRIEF_DIR)/src/visual_brief/__init__.py
+
+define VISUAL_BRIEF_BUMP_PY
+import pathlib, re, sys
+
+part = sys.argv[1]
+path = pathlib.Path("packages/visual-brief/pyproject.toml")
+text = path.read_text()
+m = re.search(r'^version = "(\d+)\.(\d+)\.(\d+)"', text, re.M)
+major, minor, patch = map(int, m.groups())
+if part == "major":
+    major, minor, patch = major + 1, 0, 0
+elif part == "minor":
+    minor, patch = minor + 1, 0
+else:
+    patch += 1
+new = f"{major}.{minor}.{patch}"
+path.write_text(text[: m.start()] + f'version = "{new}"' + text[m.end():])
+init_path = pathlib.Path("packages/visual-brief/src/visual_brief/__init__.py")
+init_text = init_path.read_text()
+init_text = re.sub(
+    r'^__version__ = "[^"]+"',
+    f'__version__ = "{new}"',
+    init_text,
+    count=1,
+    flags=re.M,
+)
+init_path.write_text(init_text)
+print(new)
+endef
+export VISUAL_BRIEF_BUMP_PY
+
+visual-brief-test:
+	uv run --package visual-brief pytest $(VISUAL_BRIEF_DIR)/tests -q
+
+visual-brief-install:
+	uv tool install --force -e $(VISUAL_BRIEF_DIR)
+
+visual-brief-build:
+	@echo "Cleaning old visual-brief builds..."
+	rm -f dist/visual_brief-*
+	@echo "Building visual-brief..."
+	uv build --package visual-brief
+	@echo "Build complete! Ready for: make visual-brief-publish"
+
+visual-brief-release: visual-brief-test
+	@BUMP_TYPE=$${BUMP:-patch}; \
+	OLD=$$(grep '^version' $(VISUAL_BRIEF_PYPROJECT) | head -1 | cut -d'"' -f2); \
+	NEW=$$(python3 -c "$$VISUAL_BRIEF_BUMP_PY" $$BUMP_TYPE); \
+	echo "Bumping visual-brief $$OLD -> $$NEW ($$BUMP_TYPE)..."; \
+	uv lock; \
+	git add $(VISUAL_BRIEF_PYPROJECT) $(VISUAL_BRIEF_INIT) uv.lock; \
+	git commit -m "bump: visual-brief $$OLD → $$NEW"; \
+	git tag "visual-brief-v$$NEW"; \
+	git push && git push --tags; \
+	gh release create "visual-brief-v$$NEW" --title "visual-brief v$$NEW" \
+		--notes "visual-brief $$NEW — install: uv tool install visual-brief" \
+		|| echo "Release visual-brief-v$$NEW already exists"
+	$(MAKE) visual-brief-build
+
+visual-brief-publish:
+	@if ! ls dist/visual_brief-*.whl \
+		dist/visual_brief-*.tar.gz >/dev/null 2>&1; then \
+		echo "Error: build visual-brief before publishing" >&2; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(PYPI_ENV_FILE)" ]; then \
+		echo "Error: PyPI environment file not found: $(PYPI_ENV_FILE)" >&2; \
+		exit 1; \
+	fi
+	@uv run --no-sync --env-file "$(PYPI_ENV_FILE)" -- sh -eu -c '\
+		if [ -z "$${PYPI_TOKEN:-}" ]; then \
+			echo "Error: PYPI_TOKEN is not defined" >&2; \
+			exit 1; \
+		fi; \
+		UV_PUBLISH_TOKEN="$$PYPI_TOKEN" uv publish dist/visual_brief-*'
