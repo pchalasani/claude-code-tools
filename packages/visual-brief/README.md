@@ -15,9 +15,9 @@ uv tool install visual-brief
 Create and render a run, then start the shared daemon:
 
 ```bash
-visual-brief new --label "Review parser changes"
+visual-brief new --label "Review parser changes" --port 8765
 visual-brief render review-parser-changes-a1b2
-visual-brief serve
+visual-brief serve --port 8765
 ```
 
 Runs are stored below `$VISUAL_BRIEF_HOME`, which defaults to
@@ -32,5 +32,8 @@ pages are self-contained and remain readable without JavaScript.
 ```bash
 uv run --package visual-brief pytest packages/visual-brief/tests -q
 ```
+
+The verification suite requires the `agent-browser` executable and fails
+loudly, rather than skipping browser regressions, when it is unavailable.
 
 MIT license.

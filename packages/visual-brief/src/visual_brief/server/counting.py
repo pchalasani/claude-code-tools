@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from visual_brief.render.threads import normalize_document
 from visual_brief.server.queue import MAX_QUEUE_RECORD_BYTES
 
-FoldedKey = tuple[str | None, str, str]
+FoldedKey = tuple[str | None, str, str, str | None]
+ThreadState = tuple[str, bool]
 
 
 def count_unanswered_questions(run_dir: Path) -> int:
@@ -32,30 +33,55 @@ def count_unanswered_questions(run_dir: Path) -> int:
 
 def _count_queued_questions(
     run_dir: Path,
-    states: dict[str, bool],
+    states: dict[str, ThreadState],
     folded: Counter[FoldedKey],
 ) -> int:
     """Combine saved thread states with a bounded queue scan."""
     path = _contained_child(run_dir, "questions.jsonl")
     if path is None:
-        return sum(states.values())
+        return sum(state[1] for state in states.values())
     try:
         with path.open("rb") as queue:
             return _count_queue_stream(queue, states, folded)
     except OSError:
-        return sum(states.values())
+        return sum(state[1] for state in states.values())
 
 
 def _count_queue_stream(
     queue: Any,
-    states: dict[str, bool],
+    states: dict[str, ThreadState],
     folded: Counter[FoldedKey],
 ) -> int:
     """Count thread states while ignoring malformed queue records."""
     awaiting = {
-        thread_id for thread_id, is_awaiting in states.items() if is_awaiting
+        thread_id
+        for thread_id, (_, is_awaiting) in states.items()
+        if is_awaiting
     }
     new_threads = 0
+    for record in _question_records(queue):
+        anchor = record.get("anchor_id")
+        text = record.get("text")
+        parent = record.get("parent_id")
+        timestamp = record.get("timestamp")
+        if not isinstance(anchor, str) or not isinstance(text, str):
+            continue
+        if parent is not None and not isinstance(parent, str):
+            continue
+        if timestamp is not None and not isinstance(timestamp, str):
+            continue
+        folded_key = (parent, anchor, text, timestamp)
+        if _consume_folded(folded, folded_key):
+            continue
+        if parent is None:
+            new_threads += 1
+        elif parent in states and states[parent][0] == anchor:
+            awaiting.add(parent)
+    return len(awaiting) + new_threads
+
+
+def _question_records(queue: Any) -> Iterator[dict[str, Any]]:
+    """Yield bounded, decoded question records from a queue stream."""
     while line := queue.readline(MAX_QUEUE_RECORD_BYTES + 1):
         complete = line.endswith(b"\n")
         oversized = len(line) > MAX_QUEUE_RECORD_BYTES
@@ -71,22 +97,25 @@ def _count_queue_stream(
             continue
         if record.get("type", "question") != "question":
             continue
-        anchor = record.get("anchor_id")
-        text = record.get("text")
-        parent = record.get("parent_id")
-        if not isinstance(anchor, str) or not isinstance(text, str):
-            continue
-        if parent is not None and not isinstance(parent, str):
-            continue
-        folded_key = (parent, anchor, text)
-        if folded[folded_key]:
-            folded[folded_key] -= 1
-            continue
-        if parent is None:
-            new_threads += 1
-        elif parent in states:
-            awaiting.add(parent)
-    return len(awaiting) + new_threads
+        yield record
+
+
+def _consume_folded(
+    folded: Counter[FoldedKey],
+    key: FoldedKey,
+) -> bool:
+    """Consume an exact folded record, with legacy fallback if undated."""
+    if folded[key]:
+        folded[key] -= 1
+        return True
+    if key[3] is not None:
+        return False
+    prefix = key[:3]
+    for candidate, count in folded.items():
+        if count and candidate[:3] == prefix:
+            folded[candidate] -= 1
+            return True
+    return False
 
 
 def _discard_record_remainder(queue: Any) -> bool:
@@ -99,18 +128,33 @@ def _discard_record_remainder(queue: Any) -> bool:
 
 def _read_thread_state(
     run_dir: Path,
-) -> tuple[dict[str, bool], Counter[FoldedKey]]:
+) -> tuple[dict[str, ThreadState], Counter[FoldedKey]]:
     """Read saved thread states and queue-folding keys from content."""
     content = _read_json_object(run_dir, "content.json")
     if content is None:
         return {}, Counter()
     normalized = normalize_document(content)
+    states, folded, _ = _collect_thread_state(normalized)
+    return states, folded
+
+
+def _collect_thread_state(
+    normalized: Any,
+) -> tuple[
+    dict[str, ThreadState],
+    Counter[FoldedKey],
+    dict[str, dict[str, Any]],
+]:
+    """Collect saved thread states, folding keys, and thread objects."""
+    if not isinstance(normalized, dict):
+        return {}, Counter(), {}
     updates = normalized.get("updates")
     if not isinstance(updates, list):
-        return {}, Counter()
+        return {}, Counter(), {}
 
-    states: dict[str, bool] = {}
+    states: dict[str, ThreadState] = {}
     folded: Counter[FoldedKey] = Counter()
+    threads: dict[str, dict[str, Any]] = {}
     for update in updates:
         if not isinstance(update, dict):
             continue
@@ -119,13 +163,14 @@ def _read_thread_state(
         if not isinstance(update_id, str) or not isinstance(lanes, list):
             continue
         for lane in lanes:
-            _collect_lane(states, folded, update_id, lane)
-    return states, folded
+            _collect_lane(states, folded, threads, update_id, lane)
+    return states, folded, threads
 
 
 def _collect_lane(
-    states: dict[str, bool],
+    states: dict[str, ThreadState],
     folded: Counter[FoldedKey],
+    threads: dict[str, dict[str, Any]],
     update_id: str,
     lane: Any,
 ) -> None:
@@ -136,7 +181,13 @@ def _collect_lane(
     if not isinstance(lane_id, str):
         return
     lane_anchor = f"{update_id}/{lane_id}"
-    _collect_threads(states, folded, lane.get("questions"), lane_anchor)
+    _collect_threads(
+        states,
+        folded,
+        threads,
+        lane.get("questions"),
+        lane_anchor,
+    )
     items = lane.get("items")
     if not isinstance(items, list):
         return
@@ -147,12 +198,19 @@ def _collect_lane(
         if not isinstance(item_id, str):
             continue
         anchor = f"{lane_anchor}/{item_id}"
-        _collect_threads(states, folded, item.get("questions"), anchor)
+        _collect_threads(
+            states,
+            folded,
+            threads,
+            item.get("questions"),
+            anchor,
+        )
 
 
 def _collect_threads(
-    states: dict[str, bool],
+    states: dict[str, ThreadState],
     folded: Counter[FoldedKey],
+    threads: dict[str, dict[str, Any]],
     questions: Any,
     anchor: str,
 ) -> None:
@@ -176,7 +234,8 @@ def _collect_threads(
         author = newest.get("author")
         if author not in {"human", "agent"}:
             continue
-        states[thread_id] = author == "human"
+        states[thread_id] = (anchor, author == "human")
+        threads[thread_id] = thread
         _collect_human_turns(folded, thread_id, turns, anchor)
 
 
@@ -194,9 +253,83 @@ def _collect_human_turns(
         text = turn.get("text")
         if not isinstance(text, str):
             continue
+        timestamp = turn.get("at")
+        if not isinstance(timestamp, str):
+            timestamp = None
         parent = None if human_index == 0 else thread_id
-        folded[(parent, anchor, text)] += 1
+        folded[(parent, anchor, text, timestamp)] += 1
         human_index += 1
+
+
+def thread_anchor_for_reply(run_dir: Path, parent_id: str) -> str | None:
+    """Return the saved anchor for a reply parent, if it exists."""
+    states, _ = _read_thread_state(run_dir)
+    state = states.get(parent_id)
+    return state[0] if state is not None else None
+
+
+def reply_target_error(
+    run_dir: Path,
+    parent_id: str | None,
+    anchor_id: str,
+) -> str | None:
+    """Return a clear error when a follow-up target is stale or mismatched."""
+    if parent_id is None:
+        return None
+    saved_anchor = thread_anchor_for_reply(run_dir, parent_id)
+    if saved_anchor is None:
+        return f"Reply parent {parent_id!r} does not exist"
+    if saved_anchor != anchor_id:
+        return f"Reply parent {parent_id!r} does not belong to this anchor"
+    return None
+
+
+def merge_pending_followups(run_dir: Path) -> dict[str, Any] | None:
+    """Return content with valid, unfolded follow-ups added in memory."""
+    content = _read_json_object(run_dir, "content.json")
+    if content is None:
+        return None
+    normalized = normalize_document(content)
+    states, folded, threads = _collect_thread_state(normalized)
+    path = _contained_child(run_dir, "questions.jsonl")
+    if path is None:
+        return None
+    changed = False
+    try:
+        with path.open("rb") as queue:
+            for record in _question_records(queue):
+                parent = record.get("parent_id")
+                anchor = record.get("anchor_id")
+                text = record.get("text")
+                timestamp = record.get("timestamp")
+                if (
+                    not isinstance(parent, str)
+                    or not isinstance(anchor, str)
+                    or not isinstance(text, str)
+                    or not isinstance(timestamp, str)
+                ):
+                    continue
+                key = (parent, anchor, text, timestamp)
+                if _consume_folded(folded, key):
+                    continue
+                state = states.get(parent)
+                thread = threads.get(parent)
+                if state is None or state[0] != anchor or thread is None:
+                    continue
+                turns = thread.get("turns")
+                if not isinstance(turns, list):
+                    continue
+                thread["turns"] = [
+                    *turns,
+                    {"author": "human", "text": text, "at": timestamp},
+                ]
+                states[parent] = (anchor, True)
+                changed = True
+    except OSError:
+        return None
+    if not changed or not isinstance(normalized, dict):
+        return None
+    return normalized
 
 
 def _read_json_object(run_dir: Path, name: str) -> dict[str, Any] | None:

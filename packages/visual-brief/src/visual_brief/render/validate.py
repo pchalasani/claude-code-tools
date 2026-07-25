@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 TRUST_LABELS = {
@@ -47,9 +48,12 @@ def identifier(value: Any, location: str) -> str:
     if (
         value != text
         or "/" in text
+        or "#" in text
         or any(character.isspace() for character in text)
     ):
-        raise ValueError(f"{location} must not contain whitespace or '/'")
+        raise ValueError(
+            f"{location} must not contain whitespace, '/' or '#'"
+        )
     return text
 
 
@@ -83,6 +87,7 @@ def _validate_turns(turns: Any, location: str) -> None:
     """Validate a non-empty chronological turn collection."""
     if not isinstance(turns, list) or not turns:
         raise ValueError(f"{location} must be a non-empty list")
+    previous_at: datetime | None = None
     for index, turn in enumerate(turns):
         turn_location = f"{location}[{index}]"
         if not isinstance(turn, dict):
@@ -93,7 +98,20 @@ def _validate_turns(turns: Any, location: str) -> None:
                 f"{turn_location}.author must be 'human' or 'agent'"
             )
         require_text(turn.get("text"), f"{turn_location}.text")
-        require_text(turn.get("at"), f"{turn_location}.at")
+        at_text = require_text(turn.get("at"), f"{turn_location}.at")
+        try:
+            at = datetime.fromisoformat(at_text.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ValueError(
+                f"{turn_location}.at must be an ISO 8601 timestamp"
+            ) from error
+        if at.tzinfo is None:
+            raise ValueError(
+                f"{turn_location}.at must include a timezone"
+            )
+        if previous_at is not None and at < previous_at:
+            raise ValueError(f"{location} must be chronological (oldest first)")
+        previous_at = at
 
 
 def _validate_questions(

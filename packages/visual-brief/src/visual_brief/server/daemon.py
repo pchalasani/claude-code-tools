@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 
 from visual_brief import __version__
 from visual_brief.server.dashboard import render_dashboard
+from visual_brief.server.counting import reply_target_error
 from visual_brief.server.queue import (
     append_record,
     build_question_record,
@@ -21,6 +22,11 @@ from visual_brief.server.queue import (
 )
 from visual_brief.server.registry import discover_runs, resolve_run_path
 from visual_brief.server.routes import Route, route_request
+from visual_brief.server.served_page import (
+    read_file_generation,
+    read_served_generation,
+    read_served_page,
+)
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
@@ -117,10 +123,7 @@ class VisualBriefHandler(BaseHTTPRequestHandler):
         if run_dir is None:
             return
         if route.endpoint == "run":
-            self._serve_file(
-                _contained_run_file(run_dir, "index.html"),
-                send_body=send_body,
-            )
+            self._serve_file(run_dir, send_body=send_body)
         elif route.endpoint == "version":
             self._serve_version(run_dir, send_body=send_body)
         else:
@@ -156,18 +159,10 @@ class VisualBriefHandler(BaseHTTPRequestHandler):
             return None
         return run_dir
 
-    def _serve_file(self, path: Path | None, *, send_body: bool) -> None:
+    def _serve_file(self, run_dir: Path, *, send_body: bool) -> None:
         """Serve the rendered run page."""
-        if path is None:
-            self._json_error(
-                HTTPStatus.NOT_FOUND,
-                "Rendered page is unavailable",
-                send_body=send_body,
-            )
-            return
-        try:
-            body = path.read_bytes()
-        except OSError:
+        body = read_served_page(run_dir)
+        if body is None:
             self._json_error(
                 HTTPStatus.NOT_FOUND,
                 "Rendered page is unavailable",
@@ -194,7 +189,7 @@ class VisualBriefHandler(BaseHTTPRequestHandler):
         """Serve the SHA-256 hash of a run's rendered page."""
         self._serve_file_hash(
             run_dir,
-            "index.html",
+            None,
             "Rendered page is unavailable",
             send_body=send_body,
         )
@@ -202,30 +197,24 @@ class VisualBriefHandler(BaseHTTPRequestHandler):
     def _serve_file_hash(
         self,
         run_dir: Path,
-        name: str,
+        name: str | None,
         unavailable: str,
         *,
         send_body: bool,
     ) -> None:
         """Serve a contained run file's SHA-256 hash."""
-        path = _contained_run_file(run_dir, name)
-        if path is None:
+        version = (
+            read_served_generation(run_dir)
+            if name is None
+            else read_file_generation(run_dir, name)
+        )
+        if version is None:
             self._json_error(
                 HTTPStatus.NOT_FOUND,
                 unavailable,
                 send_body=send_body,
             )
             return
-        try:
-            content = path.read_bytes()
-        except OSError:
-            self._json_error(
-                HTTPStatus.NOT_FOUND,
-                unavailable,
-                send_body=send_body,
-            )
-            return
-        version = hashlib.sha256(content).hexdigest().encode("ascii")
         self._send(
             HTTPStatus.OK,
             version,
@@ -242,6 +231,14 @@ class VisualBriefHandler(BaseHTTPRequestHandler):
             record = build_question_record(data)
         except ValueError as error:
             self._json_error(HTTPStatus.BAD_REQUEST, str(error))
+            return
+        target_error = reply_target_error(
+            run_dir,
+            record["parent_id"],
+            record["anchor_id"] or "",
+        )
+        if target_error is not None:
+            self._json_error(HTTPStatus.CONFLICT, target_error)
             return
         self._append_queue_record(run_dir, record)
 
@@ -355,18 +352,6 @@ class VisualBriefHandler(BaseHTTPRequestHandler):
             f"{self.address_string()} - {format_string % args}",
             file=sys.stderr,
         )
-
-
-def _contained_run_file(run_dir: Path, name: str) -> Path | None:
-    """Resolve a run file only when its final path stays in the run."""
-    try:
-        root = run_dir.resolve()
-        path = (root / name).resolve()
-    except (OSError, RuntimeError):
-        return None
-    if path == root or not path.is_relative_to(root):
-        return None
-    return path
 
 def runs_root_id(runs_root: Path) -> str:
     """Return a stable identity for a normalized runs root."""

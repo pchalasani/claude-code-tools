@@ -108,7 +108,7 @@ something else. Resolve its anchor, answer it **on the page**, re-render.
 1. Choose a stable run id, then create the run:
 
    ```bash
-   visual-brief new --label "Parser review" --run-id parser-review
+   visual-brief new --label "Parser review" --run-id parser-review --port 8765
    ```
 
 2. Edit the new run's `content.json` below `$VISUAL_BRIEF_HOME`, which defaults

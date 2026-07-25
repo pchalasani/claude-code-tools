@@ -54,6 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
     new_parser = subparsers.add_parser("new", help="create a run")
     new_parser.add_argument("--label", required=True)
     new_parser.add_argument("--run-id")
+    new_parser.add_argument("--port", type=int, default=DEFAULT_PORT)
 
     render_parser = subparsers.add_parser("render", help="render a run")
     render_parser.add_argument("run_id")
@@ -76,7 +77,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "serve":
             return serve_command(get_runs_root(), args.port)
         if args.command == "new":
-            return new_command(get_runs_root(), args.label, args.run_id)
+            return new_command(
+                get_runs_root(),
+                args.label,
+                args.run_id,
+                args.port,
+            )
         if args.command == "render":
             return render_command(get_runs_root(), args.run_id)
         return list_command(get_runs_root())
@@ -115,8 +121,15 @@ def serve_command(runs_root: Path, port: int) -> int:
     return 0
 
 
-def new_command(runs_root: Path, label: str, run_id: str | None) -> int:
-    """Create a run directory and print port-neutral route forms."""
+def new_command(
+    runs_root: Path,
+    label: str,
+    run_id: str | None,
+    port: int = DEFAULT_PORT,
+) -> int:
+    """Create a run directory and print copyable URLs for its daemon port."""
+    if not 1 <= port <= 65_535:
+        raise CliError("--port must be between 1 and 65535")
     label = label.strip()
     if not label:
         raise CliError("--label must not be empty")
@@ -138,8 +151,8 @@ def new_command(runs_root: Path, label: str, run_id: str | None) -> int:
         identity = selected_id or "generated run"
         raise CliError(f"could not initialize run {identity}: {error}") from error
 
-    print(f"host route: {selected_id}.localhost")
-    print(f"path route: /r/{selected_id}/")
+    print(f"http://{selected_id}.localhost:{port}/")
+    print(f"http://localhost:{port}/r/{selected_id}/")
     return 0
 
 

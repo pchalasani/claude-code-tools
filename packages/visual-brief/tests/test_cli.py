@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import socket
 import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -131,18 +133,50 @@ def test_new_succeeds_when_git_is_unavailable(
     }
 
 
-def test_new_prints_port_neutral_route_forms(
+def test_new_prints_live_urls_for_selected_daemon_port(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Avoid claiming a port when new cannot know the daemon's port."""
-    assert new_command(tmp_path / "runs", "Elsewhere", "elsewhere") == 0
+    """Print two copyable URLs that both reach a non-default-port daemon."""
+    runs_root = tmp_path / "runs"
+    with running_server(runs_root) as server:
+        port = server.server_address[1]
+        assert port != 8765
+        assert new_command(
+            runs_root,
+            "Elsewhere",
+            "elsewhere",
+            port,
+        ) == 0
 
-    output = capsys.readouterr().out.splitlines()
-    assert output == [
-        "host route: elsewhere.localhost",
-        "path route: /r/elsewhere/",
-    ]
+        output = capsys.readouterr().out.splitlines()
+        assert output == [
+            f"http://elsewhere.localhost:{port}/",
+            f"http://localhost:{port}/r/elsewhere/",
+        ]
+        for url in output:
+            parsed = urlsplit(url)
+            connection = http.client.HTTPConnection(HOST, port, timeout=2)
+            connection.request(
+                "GET",
+                parsed.path,
+                headers={"Host": parsed.netloc},
+            )
+            response = connection.getresponse()
+            body = response.read()
+            connection.close()
+            assert response.status == 200
+            assert b"Elsewhere" in body
+
+
+def test_new_rejects_unusable_port_before_creating_run(tmp_path: Path) -> None:
+    """A port-zero URL is not copyable because its actual port is unknown."""
+    runs_root = tmp_path / "runs"
+
+    with pytest.raises(CliError, match="between 1 and 65535"):
+        new_command(runs_root, "Bad port", "bad-port", 0)
+
+    assert not runs_root.exists()
 
 
 def test_cli_render_keeps_legacy_content_bytes_unchanged(

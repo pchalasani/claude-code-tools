@@ -8,6 +8,7 @@ JS = r"""
   const searchPanel = $("#search-panel");
   const searchInput = $("#page-search");
   const matchCount = $("#match-count");
+  const pageVersion = $('meta[name="visual-brief-render-version"]').content;
   let focusBeforeOverlay = null;
   let awaitingIndex = -1;
 
@@ -351,7 +352,7 @@ JS = r"""
     try {
       const response = await fetch("render-version", {cache: "no-store"});
       const current = await response.text();
-      if (checkVersion.value !== null && current !== checkVersion.value) {
+      if (current !== pageVersion) {
         const focused = document.activeElement;
         if (focused instanceof HTMLElement) {
           const thread = focused.closest("details.thread");
@@ -369,12 +370,10 @@ JS = r"""
         }
         location.reload();
       }
-      checkVersion.value = current;
     } catch (error) {
       // The static document remains usable when the local server is absent.
     }
   }
-  checkVersion.value = null;
 
   setupDisclosures();
   setupForms();

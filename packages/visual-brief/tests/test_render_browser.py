@@ -6,6 +6,7 @@ from typing import Iterator
 import pytest
 
 from browser_support import Browser, browser_session
+from visual_brief.render import render_content
 
 KEYS = ["j", "k", "J", "K", " ", "a", "n", "/", "g", "G", "?"]
 
@@ -259,16 +260,23 @@ def test_navigation_search_help_and_ask_behaviors(browser: Browser) -> None:
 
     browser.run("focus", 'summary[data-focus-id="current-update"]')
     browser.press("/")
-    browser.run("type", "#page-search", "eleven build gates")
+    payload = (
+        '<img id="search-injection" src="missing" '
+        'onerror="window.searchInjectionExecuted=true">'
+    )
+    browser.evaluate("window.searchInjectionExecuted = false")
+    browser.run("type", "#page-search", payload)
     assert browser.evaluate(
         """
         [
           document.querySelector("#match-count").textContent,
           [...document.querySelectorAll(".item-shell:not([hidden])")].length,
-          document.querySelectorAll("img").length,
+          document.querySelector("#search-injection") === null,
+          window.searchInjectionExecuted,
+          document.querySelector("#page-search").value,
         ]
         """
-    ) == ["1 match", 1, 0]
+    ) == ["0 matches", 0, True, False, payload]
     browser.press("Escape")
     assert browser.evaluate(
         """
@@ -297,12 +305,41 @@ def test_self_reload_restores_item_then_surviving_ancestors(
     """Restore focus after self-reload, including lane and update fallback."""
     item_id = "current-update/why-it-matters/repair-loop-routing"
     lane_id = "current-update/why-it-matters"
-    browser.run("focus", f'summary[data-focus-id="{item_id}"]')
+    current = browser.data["updates"][1]
+    lane = current["lanes"][1]
+    item = lane["items"][0]
+    thread_id = f'{item_id}#{item["questions"][0]["id"]}'
+    browser.run("focus", f'summary[data-focus-id="{thread_id}"]')
+    item["questions"] = []
     browser.publish()
     browser.wait_for_focus(item_id)
 
-    current = browser.data["updates"][1]
-    lane = current["lanes"][1]
+    browser.run("focus", f'summary[data-focus-id="{item_id}"]')
+    assert browser.evaluate(
+        """
+        (() => {
+          const style = getComputedStyle(document.activeElement);
+          return [
+            style.outlineStyle,
+            Number.parseFloat(style.outlineWidth),
+          ];
+        })()
+        """
+    ) == ["solid", 3]
+    browser.publish()
+    browser.wait_for_focus(item_id)
+    assert browser.evaluate(
+        """
+        (() => {
+          const style = getComputedStyle(document.activeElement);
+          return [
+            style.outlineStyle,
+            Number.parseFloat(style.outlineWidth),
+          ];
+        })()
+        """
+    ) == ["solid", 3]
+
     lane["items"] = []
     browser.publish()
     browser.wait_for_focus(lane_id)
@@ -310,6 +347,18 @@ def test_self_reload_restores_item_then_surviving_ancestors(
     current["lanes"].remove(lane)
     browser.publish()
     browser.wait_for_focus("current-update")
+
+
+def test_first_version_poll_reloads_a_page_that_lost_render_race(
+    browser: Browser,
+) -> None:
+    """Reload stale HTML when replacement wins before its first poll."""
+    browser.data["title"] = "Race winner"
+    browser.server.replacement_html = render_content(browser.data)
+
+    browser.run("open", browser.url)
+
+    browser.wait_for_title("Race winner")
 
 
 def test_native_disclosure_works_without_javascript(browser: Browser) -> None:

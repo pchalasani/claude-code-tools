@@ -164,6 +164,27 @@ def test_thread_turns_render_oldest_first_with_reply_after_newest() -> None:
     assert question_at < answer_at < follow_up_at < reply_at
 
 
+def test_out_of_order_thread_turns_are_rejected() -> None:
+    """Reject stored turns whose timestamps are not oldest first."""
+    data = _example()
+    thread = _first_item(data)["questions"][0]
+    thread["turns"] = [
+        {
+            "author": "human",
+            "text": "Newer question",
+            "at": "2026-07-25T20:00:00Z",
+        },
+        {
+            "author": "agent",
+            "text": "Older answer",
+            "at": "2026-07-25T19:00:00Z",
+        },
+    ]
+
+    with pytest.raises(ValueError, match="chronological"):
+        render_content(data)
+
+
 def test_agent_newest_thread_stays_collapsed_by_default() -> None:
     """An answered thread does not force itself or its item open."""
     rendered = render_content(_example())
@@ -280,6 +301,25 @@ def test_thread_identifier_surrounding_whitespace_is_rejected() -> None:
         ValueError,
         match=r"questions\[0\]\.id must not contain whitespace",
     ):
+        render_content(data)
+
+
+@pytest.mark.parametrize("kind", ["update", "lane", "item", "thread"])
+def test_focus_identifiers_reject_thread_separator(kind: str) -> None:
+    """Keep element and thread focus identities unambiguous."""
+    data = _example()
+    update = data["updates"][0]
+    lane = update["lanes"][0]
+    item = lane["items"][0]
+    targets = {
+        "update": update,
+        "lane": lane,
+        "item": item,
+        "thread": item["questions"][0],
+    }
+    targets[kind]["id"] = "c#q"
+
+    with pytest.raises(ValueError, match=r"must not contain .*'#'"):
         render_content(data)
 
 

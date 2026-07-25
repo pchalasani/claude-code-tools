@@ -17,6 +17,7 @@ from typing import Any, Iterator
 import pytest
 
 from visual_brief.render import render_content
+from visual_brief.server.served_page import page_generation
 
 EXAMPLE_PATH = Path(__file__).parents[1] / "example.json"
 
@@ -47,10 +48,13 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         """Serve one test resource."""
         if self.path.endswith("/render-version"):
-            body = self.server.version.encode()
+            body = page_generation(self.server.html.encode())
             content_type = "text/plain"
         else:
             html = self.server.html
+            if self.server.replacement_html is not None:
+                self.server.html = self.server.replacement_html
+                self.server.replacement_html = None
             if self.path == "/no-script":
                 html = html.split("<script>", 1)[0] + "</body></html>"
             body = html.encode()
@@ -78,7 +82,7 @@ class _TestServer(ThreadingHTTPServer):
     """HTTP server with mutable rendered content."""
 
     html: str
-    version: str
+    replacement_html: str | None = None
 
 
 @dataclass
@@ -133,7 +137,6 @@ class Browser:
     def publish(self) -> None:
         """Publish current data under a new self-reload version."""
         self.server.html = render_content(self.data)
-        self.server.version = uuid.uuid4().hex
 
     def wait_for_focus(self, focus_id: str) -> None:
         """Wait for self-reload to restore a specific focus identity."""
@@ -147,17 +150,29 @@ class Browser:
             time.sleep(0.25)
         pytest.fail(f"focus did not restore to {focus_id!r}; got {actual!r}")
 
+    def wait_for_title(self, title: str) -> None:
+        """Wait for self-reload to display one document title."""
+        deadline = time.monotonic() + 7
+        while time.monotonic() < deadline:
+            actual = self.evaluate("document.title")
+            if actual == title:
+                return
+            time.sleep(0.25)
+        pytest.fail(f"title did not become {title!r}; got {actual!r}")
+
 
 @contextmanager
 def browser_session() -> Iterator[Browser]:
     """Serve a brief and open it in an isolated real browser."""
     executable = shutil.which("agent-browser")
     if executable is None:
-        pytest.skip("agent-browser is not installed; real browser unavailable")
+        pytest.fail(
+            "agent-browser is required by the visual-brief verification suite; "
+            "install it before running the documented pytest command"
+        )
     data = _browser_data()
     server = _TestServer(("127.0.0.1", 0), _Handler)
     server.html = render_content(data)
-    server.version = uuid.uuid4().hex
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     driver = Browser(executable, f"visual-brief-{uuid.uuid4().hex}", server, data)

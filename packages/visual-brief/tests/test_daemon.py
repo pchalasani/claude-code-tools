@@ -208,10 +208,12 @@ def test_post_ask_records_optional_parent_id(
 ) -> None:
     """Distinguish a follow-up from a new queued thread."""
     server, run_dir = live_server
+    example = Path(__file__).parents[1] / "example.json"
+    (run_dir / "content.json").write_bytes(example.read_bytes())
     payload = {
-        "anchor_id": "update/lane/item",
+        "anchor_id": "current-update/why-it-matters/repair-loop-routing",
         "text": "Follow-up?",
-        "parent_id": "q-stable-thread",
+        "parent_id": "q-malformed-unsupported",
     }
 
     status, _ = request(

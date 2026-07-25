@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from .css import CSS
 from .html import escape, render_timeline
 from .script import JS
 from .validate import TRUST_LABELS
+
+_GENERATION_PLACEHOLDER = "0" * 64
 
 CONTROLS = """
 <nav class="key-controls" aria-label="Keyboard and page controls">
@@ -60,9 +63,11 @@ def render_page(data: dict[str, Any]) -> str:
         for key, label in TRUST_LABELS.items()
     )
     timeline = render_timeline(data["updates"])
-    return (
+    page = (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<meta name="visual-brief-render-version" '
+        f'content="{_GENERATION_PLACEHOLDER}">'
         '<link rel="icon" href="data:,">'
         f"<title>{escape(data['title'])}</title><style>{CSS}</style></head>"
         '<body><main class="page"><div class="eyebrow">Session briefing</div>'
@@ -73,3 +78,5 @@ def render_page(data: dict[str, Any]) -> str:
         f'</aside><section aria-label="Session timeline">{timeline}</section>'
         f"</main><script>{JS}</script></body></html>"
     )
+    generation = hashlib.sha256(page.encode("utf-8")).hexdigest()
+    return page.replace(_GENERATION_PLACEHOLDER, generation, 1)
