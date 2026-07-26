@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from visual_brief.render.threads import normalize_document
-from visual_brief.server.queue import MAX_QUEUE_RECORD_BYTES
+from visual_brief.server.queue import MAX_QUESTION_LENGTH, MAX_QUEUE_RECORD_BYTES
 
 FoldedKey = tuple[str | None, str, str, datetime | str | None]
 ThreadState = tuple[str, bool]
@@ -245,11 +245,12 @@ def _merge_pending_content(
     run_dir: Path,
 ) -> tuple[dict[str, Any] | None, bool, list[dict[str, Any]]]:
     """Merge timestamped queue records and retain undated legacy records."""
-    content = _read_json_object(run_dir, "content.json")
+    content, content_generation = _read_json_object(run_dir, "content.json")
     if content is None:
         return None, False, []
     legacy_unknown_ids: set[str] = set()
-    normalized = normalize_document(content, legacy_unknown_ids)
+    aliases: dict[str, str] = {}
+    normalized = normalize_document(content, legacy_unknown_ids, aliases)
     states, folded, threads, owners = _collect_thread_state(
         normalized, legacy_unknown_ids
     )
@@ -272,12 +273,22 @@ def _merge_pending_content(
                 if (
                     not isinstance(anchor, str)
                     or not isinstance(text, str)
+                    or not text.strip()
+                    or len(text.strip()) > MAX_QUESTION_LENGTH
                     or (
                         parent is not None
                         and not isinstance(parent, str)
                     )
                 ):
                     continue
+                text = text.strip()
+                if (
+                    isinstance(parent, str)
+                    and parent not in states
+                    and record.get("content_generation") == content_generation
+                ):
+                    parent = aliases.get(parent, parent)
+                    record = {**record, "parent_id": parent}
                 timestamp_key = _timestamp_key(timestamp)
                 identity = (anchor, text, str(timestamp))
                 occurrence = occurrences[identity]
@@ -299,7 +310,6 @@ def _merge_pending_content(
                     if not accepted:
                         continue
                     parent = None
-                    anchor = anchor if anchor in owners else next(iter(owners), "")
                 if parent is None:
                     owner = owners.get(anchor)
                     if owner is None:
@@ -370,16 +380,21 @@ def _timestamp_key(value: Any) -> datetime | str | None:
     return _parse_timestamp(value) or value
 
 
-def _read_json_object(run_dir: Path, name: str) -> dict[str, Any] | None:
-    """Read a contained JSON object, returning none on any damage."""
+def _read_json_object(
+    run_dir: Path,
+    name: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Read a contained JSON object and its generation."""
     path = _contained_child(run_dir, name)
     if path is None:
-        return None
+        return None, None
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        encoded = path.read_bytes()
+        value = json.loads(encoded)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    return value if isinstance(value, dict) else None
+        return None, None
+    generation = hashlib.sha256(encoded).hexdigest()
+    return (value, generation) if isinstance(value, dict) else (None, None)
 
 
 def _contained_child(run_dir: Path, name: str) -> Path | None:

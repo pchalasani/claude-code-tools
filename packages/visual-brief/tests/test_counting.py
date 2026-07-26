@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
+
+import pytest
 
 from visual_brief.server.counting import (
     merge_pending_followups,
     reply_target_error,
 )
+from visual_brief.server.queue import MAX_QUESTION_LENGTH
 from visual_brief.server.registry import count_unanswered_questions
 
 
@@ -44,7 +48,8 @@ def test_bogus_follow_up_parent_does_not_change_awaiting_count(
             }
         ]
     }
-    (run / "content.json").write_text(json.dumps(content), encoding="utf-8")
+    encoded_content = json.dumps(content).encode()
+    (run / "content.json").write_bytes(encoded_content)
     record = {
         "type": "question",
         "anchor_id": "update/lane/item",
@@ -56,6 +61,131 @@ def test_bogus_follow_up_parent_does_not_change_awaiting_count(
         encoding="utf-8",
     )
 
+    assert count_unanswered_questions(run) == 0
+
+
+def test_accepted_reply_is_not_reanchored_when_its_target_disappears(
+    tmp_path: Path,
+) -> None:
+    """Leave a raced reply orphaned instead of assigning an unrelated owner."""
+    run = tmp_path / "orphaned-reply"
+    run.mkdir()
+    content = {
+        "updates": [
+            {
+                "id": "replacement",
+                "lanes": [{"id": "survivor", "questions": []}],
+            }
+        ]
+    }
+    (run / "content.json").write_text(json.dumps(content), encoding="utf-8")
+    record = {
+        "timestamp": "2026-07-25T20:00:00Z",
+        "type": "question",
+        "anchor_id": "removed/lane/item",
+        "text": "Accepted before replacement",
+        "parent_id": "q-removed",
+        "content_generation": "previous-generation",
+    }
+    (run / "questions.jsonl").write_text(
+        f"{json.dumps(record)}\n",
+        encoding="utf-8",
+    )
+
+    assert merge_pending_followups(run) is None
+    assert count_unanswered_questions(run) == 0
+
+
+def test_queued_reply_with_prior_legacy_id_keeps_its_thread(
+    tmp_path: Path,
+) -> None:
+    """Map a persisted pre-migration parent ID to the stable legacy thread."""
+    run = tmp_path / "legacy-id-migration"
+    run.mkdir()
+    anchor = "update/lane"
+    content = {
+        "updates": [
+            {
+                "id": "update",
+                "lanes": [
+                    {
+                        "id": "lane",
+                        "questions": [
+                            {
+                                "question": "Repeated?",
+                                "answer": "First answer.",
+                                "asked_at": "2026-07-25T19:00:00Z",
+                            },
+                            {
+                                "question": "Repeated?",
+                                "answer": "Second answer.",
+                                "asked_at": "2026-07-25T20:00:00Z",
+                            },
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+    encoded_content = json.dumps(content).encode()
+    (run / "content.json").write_bytes(encoded_content)
+    prior_identity = f"{anchor}\0Repeated?\0{1}".encode()
+    prior_digest = hashlib.sha256(prior_identity).hexdigest()[:12]
+    record = {
+        "timestamp": "2026-07-25T21:00:00Z",
+        "type": "question",
+        "anchor_id": anchor,
+        "text": "Follow-up for the second answer",
+        "parent_id": f"q-{prior_digest}",
+        "content_generation": hashlib.sha256(encoded_content).hexdigest(),
+    }
+    (run / "questions.jsonl").write_text(
+        f"{json.dumps(record)}\n",
+        encoding="utf-8",
+    )
+
+    merged = merge_pending_followups(run)
+
+    assert merged is not None
+    threads = merged["updates"][0]["lanes"][0]["questions"]
+    assert len(threads) == 2
+    assert [turn["text"] for turn in threads[1]["turns"]] == [
+        "Repeated?",
+        "Second answer.",
+        "Follow-up for the second answer",
+    ]
+
+
+@pytest.mark.parametrize("text", ["", " \t ", "x" * (MAX_QUESTION_LENGTH + 1)])
+def test_invalid_queued_question_text_is_ignored(
+    tmp_path: Path,
+    text: str,
+) -> None:
+    """Do not merge or count queue text rejected at submission time."""
+    run = tmp_path / "invalid-text"
+    run.mkdir()
+    content = {
+        "updates": [
+            {
+                "id": "update",
+                "lanes": [{"id": "lane", "questions": []}],
+            }
+        ]
+    }
+    (run / "content.json").write_text(json.dumps(content), encoding="utf-8")
+    record = {
+        "timestamp": "2026-07-25T20:00:00Z",
+        "type": "question",
+        "anchor_id": "update/lane",
+        "text": text,
+        "parent_id": None,
+    }
+    (run / "questions.jsonl").write_text(
+        f"{json.dumps(record)}\n",
+        encoding="utf-8",
+    )
+
+    assert merge_pending_followups(run) is None
     assert count_unanswered_questions(run) == 0
 
 

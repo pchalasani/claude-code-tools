@@ -11,6 +11,7 @@ LEGACY_TIMESTAMP = "1970-01-01T00:00:00Z"
 def normalize_document(
     data: Any,
     legacy_unknown_ids: set[str] | None = None,
+    legacy_id_aliases: dict[str, str] | None = None,
 ) -> Any:
     """Return a deep copy with legacy question pairs converted to threads.
 
@@ -18,6 +19,8 @@ def normalize_document(
         data: Parsed content that may contain iteration-1 question pairs.
         legacy_unknown_ids: Optional collector for converted pairs without an
             original ``asked_at`` timestamp.
+        legacy_id_aliases: Optional mapping from prior generated IDs to their
+            timestamp-stable replacements.
 
     Returns:
         An independent value whose recognized legacy pairs are threads.
@@ -54,6 +57,7 @@ def normalize_document(
                 normalized_lane,
                 lane_path,
                 legacy_unknown_ids,
+                legacy_id_aliases,
             )
             items = lane.get("items")
             if not isinstance(items, list):
@@ -72,6 +76,7 @@ def normalize_document(
                     normalized_item,
                     f"{lane_path}/{item_id}",
                     legacy_unknown_ids,
+                    legacy_id_aliases,
                 )
     return normalized
 
@@ -91,23 +96,39 @@ def _normalize_questions(
     owner: dict[str, Any],
     path: str,
     legacy_unknown_ids: set[str] | None,
+    legacy_id_aliases: dict[str, str] | None,
 ) -> None:
     """Convert recognized legacy entries on one lane or item."""
     questions = owner.get("questions")
     if not isinstance(questions, list):
         return
-    occurrences: dict[str, int] = {}
+    occurrences: dict[tuple[str, str], int] = {}
+    prior_occurrences: dict[str, int] = {}
     converted: list[Any] = []
     for entry in questions:
         if not _is_legacy_pair(entry):
             converted.append(entry)
             continue
         question = entry["question"]
-        occurrence = occurrences.get(question, 0)
-        occurrences[question] = occurrence + 1
-        thread = _legacy_thread(entry, path, occurrence)
-        converted.append(thread)
         asked_at = entry.get("asked_at")
+        timestamp = (
+            asked_at.strip()
+            if isinstance(asked_at, str) and asked_at.strip()
+            else LEGACY_TIMESTAMP
+        )
+        identity = (question, timestamp)
+        occurrence = occurrences.get(identity, 0)
+        occurrences[identity] = occurrence + 1
+        thread = _legacy_thread(entry, path, occurrence)
+        prior_occurrence = prior_occurrences.get(question, 0)
+        prior_occurrences[question] = prior_occurrence + 1
+        if legacy_id_aliases is not None:
+            prior_identity = f"{path}\0{question}\0{prior_occurrence}".encode(
+                "utf-8", errors="surrogatepass"
+            )
+            prior_digest = hashlib.sha256(prior_identity).hexdigest()[:12]
+            legacy_id_aliases[f"q-{prior_digest}"] = thread["id"]
+        converted.append(thread)
         if (
             legacy_unknown_ids is not None
             and (not isinstance(asked_at, str) or not asked_at.strip())
@@ -136,11 +157,13 @@ def _legacy_thread(
     timestamp = pair.get("asked_at")
     if not isinstance(timestamp, str) or not timestamp.strip():
         timestamp = LEGACY_TIMESTAMP
+    else:
+        timestamp = timestamp.strip()
     turns = [{"author": "human", "text": question, "at": timestamp}]
     answer = pair.get("answer")
     if isinstance(answer, str) and answer.strip():
         turns.append({"author": "agent", "text": answer, "at": timestamp})
-    identity = f"{path}\0{question}\0{occurrence}".encode(
+    identity = f"{path}\0{question}\0{timestamp}\0{occurrence}".encode(
         "utf-8",
         errors="surrogatepass",
     )

@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from visual_brief.render import render_content
+from visual_brief.render.threads import normalize_document
 
 EXAMPLE_PATH = Path(__file__).parents[1] / "example.json"
 
@@ -127,6 +128,56 @@ def test_multiple_legacy_pairs_on_one_item_get_distinct_stable_ids() -> None:
     assert len(set(thread_ids)) == 3
     assert first.index("First answer.") < first.index("Second answer.")
     assert first.index("Second answer.") < first.index("Third?")
+
+
+def test_legacy_ids_survive_insertion_of_same_text_pair() -> None:
+    """Keep timestamped pair identities and answers stable after insertion."""
+    data = _example()
+    questions = [
+        {
+            "question": "Repeated?",
+            "answer": "First answer.",
+            "asked_at": "2026-07-25T19:00:00Z",
+        },
+        {
+            "question": "Repeated?",
+            "answer": "Second answer.",
+            "asked_at": "2026-07-25T20:00:00Z",
+        },
+    ]
+    _first_item(data)["questions"] = questions
+    before = normalize_document(data)
+    before_threads = _first_item(before)["questions"]
+    ids_by_time = {
+        thread["turns"][0]["at"]: thread["id"] for thread in before_threads
+    }
+
+    questions.insert(
+        0,
+        {
+            "question": "Repeated?",
+            "answer": "Inserted answer.",
+            "asked_at": "2026-07-25T18:00:00Z",
+        },
+    )
+    after = normalize_document(data)
+    after_by_time = {
+        thread["turns"][0]["at"]: thread
+        for thread in _first_item(after)["questions"]
+    }
+
+    assert after_by_time["2026-07-25T19:00:00Z"]["id"] == ids_by_time[
+        "2026-07-25T19:00:00Z"
+    ]
+    assert after_by_time["2026-07-25T20:00:00Z"]["id"] == ids_by_time[
+        "2026-07-25T20:00:00Z"
+    ]
+    assert after_by_time["2026-07-25T19:00:00Z"]["turns"][1]["text"] == (
+        "First answer."
+    )
+    assert after_by_time["2026-07-25T20:00:00Z"]["turns"][1]["text"] == (
+        "Second answer."
+    )
 
 
 def test_lane_legacy_pairs_convert_alongside_new_threads() -> None:
