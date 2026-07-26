@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from visual_brief import MAX_THREAD_ID_LENGTH
 from visual_brief.render import render_content
 
 EXAMPLE_PATH = Path(__file__).parents[1] / "example.json"
@@ -35,6 +36,20 @@ def test_thread_identifier_surrounding_whitespace_is_rejected() -> None:
     with pytest.raises(
         ValueError,
         match=r"questions\[0\]\.id must not contain whitespace",
+    ):
+        render_content(data)
+
+
+def test_thread_identifier_over_reply_limit_is_rejected() -> None:
+    """Reject a saved thread ID that no rendered reply can submit."""
+    data = _example()
+    _first_item(data)["questions"][0]["id"] = (
+        "q" * (MAX_THREAD_ID_LENGTH + 1)
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=rf"questions\[0\]\.id must be at most {MAX_THREAD_ID_LENGTH}",
     ):
         render_content(data)
 

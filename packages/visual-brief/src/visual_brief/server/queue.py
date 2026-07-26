@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from visual_brief import MAX_THREAD_ID_LENGTH
+
 MAX_ANCHOR_LENGTH = 200
 MAX_QUESTION_LENGTH = 20_000
 MAX_QUEUE_RECORD_BYTES = 128 * 1024
@@ -24,10 +26,10 @@ def build_question_record(
         if not isinstance(parent_id, str) or not parent_id.strip():
             raise ValueError("Field 'parent_id' must be non-empty text")
         parent_id = parent_id.strip()
-        if len(parent_id) > MAX_ANCHOR_LENGTH:
+        if len(parent_id) > MAX_THREAD_ID_LENGTH:
             raise ValueError(
                 f"Field 'parent_id' must be at most "
-                f"{MAX_ANCHOR_LENGTH} characters"
+                f"{MAX_THREAD_ID_LENGTH} characters"
             )
     return {
         "timestamp": _timestamp(),

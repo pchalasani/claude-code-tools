@@ -137,3 +137,104 @@ def test_browser_reply_survives_pending_thread_fold(
     ]
     assert reply in render_content(merged)
     assert count_unanswered_questions(run) == 3
+
+
+def test_identical_pending_threads_keep_their_own_replies_when_prepended(
+    browser: Browser,
+    tmp_path: Path,
+) -> None:
+    """Keep accepted replies with their pending threads after a legacy fold."""
+    anchor = "current-update/what-changed/differential-reader-check"
+    question = "Which identical conversation is this?"
+    replies = ["Reply to the first thread.", "Reply to the second thread."]
+    answers = ["Answer to the first thread.", "Answer to the second thread."]
+    form = f'form.question-box[data-anchor-id="{anchor}"]:not(.reply-box)'
+    for index in range(2):
+        browser.evaluate(
+            f"document.querySelector({json.dumps(form)}).classList.add('open')"
+        )
+        browser.run("type", f"{form} textarea", question)
+        browser.run("click", f"{form} .submit")
+        browser.run("wait", "500")
+        assert browser.server.post_count == index + 1
+
+    run = tmp_path / "identical-folded-browser-replies"
+    run.mkdir()
+    content_bytes = json.dumps(browser.data).encode()
+    content_generation = hashlib.sha256(content_bytes).hexdigest()
+    (run / "content.json").write_bytes(content_bytes)
+    questions = [
+        build_question_record(payload)
+        for _, payload in browser.server.posts
+    ]
+    for index, record in enumerate(questions):
+        record["timestamp"] = f"2026-07-25T20:0{index}:00Z"
+    queue_path = run / "questions.jsonl"
+    queue_path.write_text(
+        "".join(f"{json.dumps(record)}\n" for record in questions),
+        encoding="utf-8",
+    )
+
+    pending = merge_pending_followups(run)
+    assert pending is not None
+    pending_threads = [
+        thread
+        for thread in _item(pending, anchor)["questions"]
+        if thread["turns"][0]["text"] == question
+    ]
+    assert len(pending_threads) == 2
+
+    browser.data = pending
+    browser.publish()
+    browser.run("open", browser.url)
+    for thread, reply in zip(pending_threads, replies):
+        reply_form = (
+            f'form.reply-box[data-parent-id="{thread["id"]}"]'
+        )
+        browser.batch(
+            [
+                ["type", f"{reply_form} textarea", reply],
+                ["click", f"{reply_form} .submit"],
+                ["wait", "100"],
+            ]
+        )
+
+    reply_records = [
+        build_question_record(payload)
+        for _, payload in browser.server.posts[2:]
+    ]
+    for index, record in enumerate(reply_records, start=2):
+        record["timestamp"] = f"2026-07-25T20:0{index}:00Z"
+        record["content_generation"] = content_generation
+    queue_path.write_text(
+        "".join(
+            f"{json.dumps(record)}\n"
+            for record in [*questions, *reply_records]
+        ),
+        encoding="utf-8",
+    )
+
+    folded = json.loads(content_bytes)
+    existing = _item(folded, anchor).setdefault("questions", [])
+    existing[:0] = [
+        {"question": question, "answer": answers[1]},
+        {"question": question, "answer": answers[0]},
+    ]
+    (run / "content.json").write_text(json.dumps(folded), encoding="utf-8")
+
+    merged = merge_pending_followups(run)
+
+    assert merged is not None
+    folded_threads = [
+        thread
+        for thread in _item(merged, anchor)["questions"]
+        if thread["turns"][0]["text"] == question
+    ]
+    conversations = {
+        thread["turns"][1]["text"]: [
+            turn["text"] for turn in thread["turns"]
+        ]
+        for thread in folded_threads
+    }
+    assert conversations[answers[0]] == [question, answers[0], replies[0]]
+    assert conversations[answers[1]] == [question, answers[1], replies[1]]

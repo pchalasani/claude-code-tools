@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from visual_brief import MAX_THREAD_ID_LENGTH
 from visual_brief.render import render_content
 from visual_brief.server.daemon import HOST, VisualBriefServer, create_server
 from visual_brief.server.registry import count_unanswered_questions
@@ -77,6 +78,59 @@ def _wait_until_handler_reaches(source_lines: set[str]) -> None:
                 return
         time.sleep(0.001)
     raise AssertionError("request handler did not reach synchronization point")
+
+
+def test_longest_rendered_thread_id_accepts_reply_through_daemon(
+    tmp_path: Path,
+) -> None:
+    """Keep the rendered reply-id boundary accepted by the daemon."""
+    root = tmp_path / "runs"
+    run = root / RUN_ID
+    run.mkdir(parents=True)
+    content = json.loads(EXAMPLE_PATH.read_text(encoding="utf-8"))
+    item = content["updates"][0]["lanes"][0]["items"][0]
+    thread_id = "q" * MAX_THREAD_ID_LENGTH
+    item["questions"][0]["id"] = thread_id
+    anchor = (
+        f'{content["updates"][0]["id"]}/'
+        f'{content["updates"][0]["lanes"][0]["id"]}/{item["id"]}'
+    )
+    rendered = render_content(content)
+    assert f'data-parent-id="{thread_id}"' in rendered
+    (run / "content.json").write_text(
+        json.dumps(content),
+        encoding="utf-8",
+    )
+    (run / "index.html").write_text(rendered, encoding="utf-8")
+    payload = json.dumps(
+        {
+            "anchor_id": anchor,
+            "text": "Boundary reply",
+            "parent_id": thread_id,
+        }
+    ).encode()
+
+    with _running_server(root) as server:
+        connection = http.client.HTTPConnection(
+            HOST,
+            server.server_address[1],
+            timeout=5,
+        )
+        connection.request(
+            "POST",
+            f"/r/{RUN_ID}/ask",
+            body=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        response = connection.getresponse()
+        assert response.status == 202
+        response.read()
+        connection.close()
+
+    record = json.loads(
+        (run / "questions.jsonl").read_text(encoding="utf-8")
+    )
+    assert record["parent_id"] == thread_id
 
 
 def test_post_rejects_reply_when_content_changes_before_append(

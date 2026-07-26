@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from visual_brief import MAX_THREAD_ID_LENGTH
+
 TRUST_LABELS = {
     "verified-by-me": "Verified by me",
     "reported-by-agent": "Reported by agent",
@@ -129,9 +131,15 @@ def _validate_questions(
         thread_location = f"{location}[{index}]"
         if not isinstance(thread, dict):
             raise ValueError(f"{thread_location} must be an object")
-        thread_ids.append(
-            identifier(thread.get("id"), f"{thread_location}.id")
+        thread_id = identifier(
+            thread.get("id"), f"{thread_location}.id"
         )
+        if len(thread_id) > MAX_THREAD_ID_LENGTH:
+            raise ValueError(
+                f"{thread_location}.id must be at most "
+                f"{MAX_THREAD_ID_LENGTH} characters"
+            )
+        thread_ids.append(thread_id)
         _validate_anchor(
             thread.get("anchor"),
             f"{thread_location}.anchor",

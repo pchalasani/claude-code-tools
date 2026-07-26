@@ -318,7 +318,8 @@ def _merge_pending_content(
                 if folded_key is not None:
                     targets = folded_parents.get(folded_key)
                     if pending_id is not None and targets:
-                        pending_aliases[pending_id] = targets.pop(0)
+                        index = -1 if folded_key[3] is None else 0
+                        pending_aliases[pending_id] = targets.pop(index)
                     continue
                 if not isinstance(timestamp, str) or not isinstance(
                     timestamp_key, datetime
