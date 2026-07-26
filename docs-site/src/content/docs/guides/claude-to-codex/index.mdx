@@ -144,6 +144,12 @@ compatible CLI release for this callback protocol. The helper rejects older
 versions before starting the server or TUI. Callback preflight also validates
 the connected App Server before creating a workflow.
 
+For trusted projects, `codex-dynamic --yolo` provides the lowest-friction TUI.
+Restricted sessions instead need explicit supervisor approval, worker write
+authorization, network configuration, writable artifact paths, and accessible
+tool caches. Follow the complete
+[`codex-dynamic` permissions guide][codex-dynamic-permissions].
+
 The Python package is only a convenience for this callback setup. Without it,
 use Codex's manual two-terminal form:
 
@@ -263,5 +269,7 @@ to the repository.
   https://developers.openai.com/codex/build-plugins#add-a-marketplace-from-the-cli
 [codex-app-server]: https://developers.openai.com/codex/app-server
 [codex-dynamic]: /claude-code-tools/tools/codex-dynamic/
+[codex-dynamic-permissions]:
+  /claude-code-tools/tools/codex-dynamic/#choose-a-permissions-mode
 [codex-workflows]:
   /claude-code-tools/tools/codex-dynamic/#monitor-workflows-with-codex-workflows
