@@ -103,6 +103,103 @@ was started outside the helper.
 
 </Steps>
 
+## Choose a permissions mode
+
+The main Codex TUI and each headless workflow worker have separate permission
+boundaries. Starting the TUI with full access removes restrictions from tools
+run by that TUI. It does not silently widen a worker's declared sandbox.
+
+### Trusted projects: full access
+
+For a trusted repository, trusted workflow, and trusted local services, start
+the callback-ready TUI in YOLO mode:
+
+```bash
+codex-dynamic --yolo
+```
+
+This is the lowest-friction setup. It disables the main TUI's sandbox and
+approval prompts, so the TUI can create workflow files, launch the trusted
+supervisor, use local tool caches, and reach local services without separate
+approvals. Do not use it with an untrusted repository or workflow.
+
+Workflow workers remain independently sandboxed. They default to `read-only`
+and use the sandbox declared by each `agent()` call. If a trusted worker itself
+needs unrestricted host or network access, the reviewed workflow must declare:
+
+```javascript
+agent(prompt, {
+  sandbox: "danger-full-access",
+})
+```
+
+The workflow launch must also include `--allow-danger-full-access`. The
+dynamic-workflow skill requests that authorization after showing the reviewed
+source. Starting the main TUI with `--yolo` never adds it silently.
+
+### Restricted projects: configure each boundary
+
+Use an interactive approval policy when you want the main TUI sandboxed:
+
+```bash
+codex-dynamic \
+  --sandbox workspace-write \
+  --ask-for-approval on-request
+```
+
+Approve the exact reviewed workflow `run` or `resume` supervisor command. That
+command needs host execution so it can write durable state and launch headless
+Codex processes without inheriting the outer tool sandbox. Approve only that
+exact command, never a reusable `node` prefix.
+
+`workspace-write` controls filesystem writes; it does not enable command
+network access. A worker that must reach a local service or the internet needs
+network access in `~/.codex/config.toml` or the trusted project's Codex config:
+
+```toml
+[sandbox_workspace_write]
+network_access = true
+```
+
+When Codex's network proxy is enabled, allow the required destinations. For a
+local service, prefer exact loopback entries instead of broad private-network
+access:
+
+```toml
+[features.network_proxy]
+enabled = true
+domains = { "127.0.0.1" = "allow", "localhost" = "allow" }
+```
+
+Merge these values into existing tables instead of defining a TOML table
+twice. Enterprise policy can still disallow network access.
+
+A worker that edits project files must declare `sandbox: "workspace-write"`.
+The reviewed launch must also include `--allow-workspace-write`; the skill adds
+that flag only after the user authorizes the writes. Headless workers use
+approval policy `never`, so missing permissions fail instead of waiting for a
+prompt that nobody can answer.
+
+Restricted Codex sandboxes can protect `.codex/` and `.agents/` recursively,
+even when the rest of the workspace is writable. If a generated workflow or
+artifact cannot be written there, use an ordinary workspace directory such as
+`codex-workflows/` or a permitted temporary directory. Existing files in
+protected directories remain readable.
+
+Sandboxed workers may also be unable to read a user-level package cache. When
+a helper uses only the Python standard library, invoke the interpreter
+directly. Otherwise, configure the tool to use a permitted workspace or
+temporary cache, such as `UV_CACHE_DIR=/tmp/uv-cache`.
+
+<Aside type="caution" title="Permissions do not prove tool execution">
+  A schema-valid worker response proves only that the worker returned the
+  requested data shape. It does not prove that a prompted shell command or HTTP
+  request ran. When success depends on an observable side effect, validate an
+  application-specific log, ledger, test result, or other external evidence.
+  Permission changes also cannot correct inconsistent workflow limits, such as
+  a batch count that exceeds `maxItems`.
+</Aside>
+
 ### Import Claude Code Data
 
 Codex disables `/import` in a remote TUI, including a TUI started by

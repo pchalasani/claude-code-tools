@@ -42,6 +42,12 @@ workflow.
   callbacks keep their original generation. No forced restart is required.
 </Aside>
 
+Choose a permissions mode before running tool-heavy workflows. Trusted projects
+can use a full-access TUI, while restricted projects must configure supervisor
+approval, worker writes, network access, protected paths, and tool caches
+separately. See the
+[`codex-dynamic` permissions guide][codex-dynamic-permissions].
+
 ## Workflow shape
 
 Scripts use injected globals, top-level `await`, and top-level `return`:
@@ -281,3 +287,5 @@ npm test
 
 [codex-app-server]: https://developers.openai.com/codex/app-server
 [codex-dynamic]: /claude-code-tools/tools/codex-dynamic/
+[codex-dynamic-permissions]:
+  /claude-code-tools/tools/codex-dynamic/#choose-a-permissions-mode
