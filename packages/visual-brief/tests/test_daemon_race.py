@@ -119,10 +119,10 @@ def test_post_rejects_reply_when_content_changes_before_append(
     assert (run / "questions.jsonl").read_bytes() == b""
 
 
-def test_post_preserves_reply_when_content_changes_during_append(
+def test_post_drops_orphaned_reply_when_content_changes_during_append(
     tmp_path: Path,
 ) -> None:
-    """Keep an accepted raced reply visible after its parent disappears."""
+    """Do not promote an accepted raced reply after its parent disappears."""
     root = tmp_path / "runs"
     run = root / RUN_ID
     run.mkdir(parents=True)
@@ -166,5 +166,5 @@ def test_post_preserves_reply_when_content_changes_during_append(
     queue_path.unlink()
     queue_path.write_bytes(queued)
     page = read_served_page(run)
-    assert page and b"Racing reply" in page
-    assert count_unanswered_questions(run) == 1
+    assert page and b"Racing reply" not in page
+    assert count_unanswered_questions(run) == 0

@@ -67,14 +67,19 @@ def test_bogus_follow_up_parent_does_not_change_awaiting_count(
 def test_accepted_reply_is_not_reanchored_when_its_target_disappears(
     tmp_path: Path,
 ) -> None:
-    """Leave a raced reply orphaned instead of assigning an unrelated owner."""
+    """Leave a raced reply orphaned even when its original anchor survives."""
     run = tmp_path / "orphaned-reply"
     run.mkdir()
     content = {
         "updates": [
             {
-                "id": "replacement",
-                "lanes": [{"id": "survivor", "questions": []}],
+                "id": "removed",
+                "lanes": [
+                    {
+                        "id": "lane",
+                        "items": [{"id": "item", "questions": []}],
+                    }
+                ],
             }
         ]
     }
@@ -96,10 +101,10 @@ def test_accepted_reply_is_not_reanchored_when_its_target_disappears(
     assert count_unanswered_questions(run) == 0
 
 
-def test_queued_reply_with_prior_legacy_id_keeps_its_thread(
+def test_queued_reply_with_prior_undated_legacy_id_keeps_its_thread(
     tmp_path: Path,
 ) -> None:
-    """Map a persisted pre-migration parent ID to the stable legacy thread."""
+    """Map a persisted positional parent ID to the stable undated thread."""
     run = tmp_path / "legacy-id-migration"
     run.mkdir()
     anchor = "update/lane"
@@ -114,12 +119,15 @@ def test_queued_reply_with_prior_legacy_id_keeps_its_thread(
                             {
                                 "question": "Repeated?",
                                 "answer": "First answer.",
-                                "asked_at": "2026-07-25T19:00:00Z",
+                            },
+                            {
+                                "question": "Repeated?",
+                                "answer": "Explicit epoch.",
+                                "asked_at": "1970-01-01T00:00:00Z",
                             },
                             {
                                 "question": "Repeated?",
                                 "answer": "Second answer.",
-                                "asked_at": "2026-07-25T20:00:00Z",
                             },
                         ],
                     }
@@ -129,13 +137,17 @@ def test_queued_reply_with_prior_legacy_id_keeps_its_thread(
     }
     encoded_content = json.dumps(content).encode()
     (run / "content.json").write_bytes(encoded_content)
-    prior_identity = f"{anchor}\0Repeated?\0{1}".encode()
+    prior_identity = (
+        f"{anchor}\0Repeated?\0"
+        "1970-01-01T00:00:00Z\0"
+        f"{0}"
+    ).encode()
     prior_digest = hashlib.sha256(prior_identity).hexdigest()[:12]
     record = {
         "timestamp": "2026-07-25T21:00:00Z",
         "type": "question",
         "anchor_id": anchor,
-        "text": "Follow-up for the second answer",
+        "text": "Follow-up for the first answer",
         "parent_id": f"q-{prior_digest}",
         "content_generation": hashlib.sha256(encoded_content).hexdigest(),
     }
@@ -148,12 +160,13 @@ def test_queued_reply_with_prior_legacy_id_keeps_its_thread(
 
     assert merged is not None
     threads = merged["updates"][0]["lanes"][0]["questions"]
-    assert len(threads) == 2
-    assert [turn["text"] for turn in threads[1]["turns"]] == [
+    assert len(threads) == 3
+    assert [turn["text"] for turn in threads[0]["turns"]] == [
         "Repeated?",
-        "Second answer.",
-        "Follow-up for the second answer",
+        "First answer.",
+        "Follow-up for the first answer",
     ]
+    assert len(threads[1]["turns"]) == 2
 
 
 @pytest.mark.parametrize("text", ["", " \t ", "x" * (MAX_QUESTION_LENGTH + 1)])

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from visual_brief.render.threads import normalize_document
+from visual_brief.server.counting_io import _contained_child, _read_json_object
 from visual_brief.server.queue import MAX_QUESTION_LENGTH, MAX_QUEUE_RECORD_BYTES
 
 FoldedKey = tuple[str | None, str, str, datetime | str | None]
@@ -303,13 +304,10 @@ def _merge_pending_content(
                     continue
                 state = states.get(parent) if isinstance(parent, str) else None
                 thread = threads.get(parent) if isinstance(parent, str) else None
-                accepted = isinstance(record.get("content_generation"), str)
                 if parent is not None and (
                     state is None or state[0] != anchor or thread is None
                 ):
-                    if not accepted:
-                        continue
-                    parent = None
+                    continue
                 if parent is None:
                     owner = owners.get(anchor)
                     if owner is None:
@@ -378,32 +376,3 @@ def _timestamp_key(value: Any) -> datetime | str | None:
     if not isinstance(value, str):
         return None
     return _parse_timestamp(value) or value
-
-
-def _read_json_object(
-    run_dir: Path,
-    name: str,
-) -> tuple[dict[str, Any] | None, str | None]:
-    """Read a contained JSON object and its generation."""
-    path = _contained_child(run_dir, name)
-    if path is None:
-        return None, None
-    try:
-        encoded = path.read_bytes()
-        value = json.loads(encoded)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None, None
-    generation = hashlib.sha256(encoded).hexdigest()
-    return (value, generation) if isinstance(value, dict) else (None, None)
-
-
-def _contained_child(run_dir: Path, name: str) -> Path | None:
-    """Resolve a named run file only when it stays within the run."""
-    try:
-        root = run_dir.resolve()
-        child = (root / name).resolve()
-    except (OSError, RuntimeError):
-        return None
-    if child == root or not child.is_relative_to(root):
-        return None
-    return child

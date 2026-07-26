@@ -102,8 +102,16 @@ def _normalize_questions(
     questions = owner.get("questions")
     if not isinstance(questions, list):
         return
-    occurrences: dict[tuple[str, str], int] = {}
     prior_occurrences: dict[str, int] = {}
+    timestamp_occurrences: dict[tuple[str, str], int] = {}
+    undated_remaining: dict[str, int] = {}
+    for entry in questions:
+        if not _is_legacy_pair(entry):
+            continue
+        asked_at = entry.get("asked_at")
+        if not isinstance(asked_at, str) or not asked_at.strip():
+            question = entry["question"]
+            undated_remaining[question] = undated_remaining.get(question, 0) + 1
     converted: list[Any] = []
     for entry in questions:
         if not _is_legacy_pair(entry):
@@ -111,14 +119,20 @@ def _normalize_questions(
             continue
         question = entry["question"]
         asked_at = entry.get("asked_at")
+        has_timestamp = isinstance(asked_at, str) and bool(asked_at.strip())
         timestamp = (
             asked_at.strip()
-            if isinstance(asked_at, str) and asked_at.strip()
+            if has_timestamp
             else LEGACY_TIMESTAMP
         )
-        identity = (question, timestamp)
-        occurrence = occurrences.get(identity, 0)
-        occurrences[identity] = occurrence + 1
+        timestamp_identity = (question, timestamp)
+        timestamp_occurrence = timestamp_occurrences.get(timestamp_identity, 0)
+        timestamp_occurrences[timestamp_identity] = timestamp_occurrence + 1
+        if not has_timestamp:
+            undated_remaining[question] -= 1
+            occurrence = undated_remaining[question]
+        else:
+            occurrence = timestamp_occurrence
         thread = _legacy_thread(entry, path, occurrence)
         prior_occurrence = prior_occurrences.get(question, 0)
         prior_occurrences[question] = prior_occurrence + 1
@@ -128,6 +142,13 @@ def _normalize_questions(
             )
             prior_digest = hashlib.sha256(prior_identity).hexdigest()[:12]
             legacy_id_aliases[f"q-{prior_digest}"] = thread["id"]
+            timestamp_identity_bytes = (
+                f"{path}\0{question}\0{timestamp}\0{timestamp_occurrence}"
+            ).encode("utf-8", errors="surrogatepass")
+            timestamp_digest = hashlib.sha256(
+                timestamp_identity_bytes
+            ).hexdigest()[:12]
+            legacy_id_aliases[f"q-{timestamp_digest}"] = thread["id"]
         converted.append(thread)
         if (
             legacy_unknown_ids is not None
@@ -155,7 +176,8 @@ def _legacy_thread(
     """Convert one legacy pair without mutating its source object."""
     question = pair.get("question")
     timestamp = pair.get("asked_at")
-    if not isinstance(timestamp, str) or not timestamp.strip():
+    has_timestamp = isinstance(timestamp, str) and bool(timestamp.strip())
+    if not has_timestamp:
         timestamp = LEGACY_TIMESTAMP
     else:
         timestamp = timestamp.strip()
@@ -163,7 +185,10 @@ def _legacy_thread(
     answer = pair.get("answer")
     if isinstance(answer, str) and answer.strip():
         turns.append({"author": "agent", "text": answer, "at": timestamp})
-    identity = f"{path}\0{question}\0{timestamp}\0{occurrence}".encode(
+    identity_version = "" if has_timestamp else "\0undated-v2"
+    identity = (
+        f"{path}\0{question}\0{timestamp}{identity_version}\0{occurrence}"
+    ).encode(
         "utf-8",
         errors="surrogatepass",
     )

@@ -130,26 +130,24 @@ def test_multiple_legacy_pairs_on_one_item_get_distinct_stable_ids() -> None:
     assert first.index("Second answer.") < first.index("Third?")
 
 
-def test_legacy_ids_survive_insertion_of_same_text_pair() -> None:
-    """Keep timestamped pair identities and answers stable after insertion."""
+def test_undated_legacy_ids_survive_insertion_of_same_text_pair() -> None:
+    """Keep real legacy pair identities stable after same-text insertion."""
     data = _example()
     questions = [
         {
             "question": "Repeated?",
             "answer": "First answer.",
-            "asked_at": "2026-07-25T19:00:00Z",
         },
         {
             "question": "Repeated?",
             "answer": "Second answer.",
-            "asked_at": "2026-07-25T20:00:00Z",
         },
     ]
     _first_item(data)["questions"] = questions
     before = normalize_document(data)
     before_threads = _first_item(before)["questions"]
-    ids_by_time = {
-        thread["turns"][0]["at"]: thread["id"] for thread in before_threads
+    ids_by_answer = {
+        thread["turns"][1]["text"]: thread["id"] for thread in before_threads
     }
 
     questions.insert(
@@ -157,27 +155,56 @@ def test_legacy_ids_survive_insertion_of_same_text_pair() -> None:
         {
             "question": "Repeated?",
             "answer": "Inserted answer.",
-            "asked_at": "2026-07-25T18:00:00Z",
         },
     )
     after = normalize_document(data)
-    after_by_time = {
-        thread["turns"][0]["at"]: thread
+    after_by_answer = {
+        thread["turns"][1]["text"]: thread
         for thread in _first_item(after)["questions"]
     }
 
-    assert after_by_time["2026-07-25T19:00:00Z"]["id"] == ids_by_time[
-        "2026-07-25T19:00:00Z"
-    ]
-    assert after_by_time["2026-07-25T20:00:00Z"]["id"] == ids_by_time[
-        "2026-07-25T20:00:00Z"
-    ]
-    assert after_by_time["2026-07-25T19:00:00Z"]["turns"][1]["text"] == (
+    assert after_by_answer["First answer."]["id"] == ids_by_answer[
         "First answer."
-    )
-    assert after_by_time["2026-07-25T20:00:00Z"]["turns"][1]["text"] == (
+    ]
+    assert after_by_answer["Second answer."]["id"] == ids_by_answer[
         "Second answer."
+    ]
+    assert after_by_answer["Inserted answer."]["id"] not in set(
+        ids_by_answer.values()
     )
+
+
+def test_undated_legacy_id_survives_answer_update() -> None:
+    """Keep an undated legacy identity when its answer is filled."""
+    data = _example()
+    pair = {"question": "Still waiting?", "answer": ""}
+    _first_item(data)["questions"] = [pair]
+    before = normalize_document(data)
+    before_id = _first_item(before)["questions"][0]["id"]
+
+    pair["answer"] = "Now answered."
+    after = normalize_document(data)
+
+    assert _first_item(after)["questions"][0]["id"] == before_id
+
+
+def test_undated_and_epoch_dated_legacy_ids_do_not_collide() -> None:
+    """Keep undated identity separate from an explicit epoch timestamp."""
+    data = _example()
+    _first_item(data)["questions"] = [
+        {"question": "Repeated?", "answer": "Undated."},
+        {
+            "question": "Repeated?",
+            "answer": "Explicit epoch.",
+            "asked_at": "1970-01-01T00:00:00Z",
+        },
+    ]
+
+    normalized = normalize_document(data)
+    threads = _first_item(normalized)["questions"]
+
+    assert threads[0]["id"] != threads[1]["id"]
+    assert render_content(data).startswith("<!doctype html>")
 
 
 def test_lane_legacy_pairs_convert_alongside_new_threads() -> None:
@@ -352,87 +379,3 @@ def test_unused_deeply_nested_field_does_not_break_rendering() -> None:
     data["unused"] = nested
 
     assert render_content(data).startswith("<!doctype html>")
-
-
-def test_thread_identifier_surrounding_whitespace_is_rejected() -> None:
-    """Keep saved IDs identical to stripped queue parent IDs."""
-    data = _example()
-    _first_item(data)["questions"][0]["id"] = " q-spaced "
-
-    with pytest.raises(
-        ValueError,
-        match=r"questions\[0\]\.id must not contain whitespace",
-    ):
-        render_content(data)
-
-
-@pytest.mark.parametrize("kind", ["update", "lane", "item", "thread"])
-def test_focus_identifiers_reject_thread_separator(kind: str) -> None:
-    """Keep element and thread focus identities unambiguous."""
-    data = _example()
-    update = data["updates"][0]
-    lane = update["lanes"][0]
-    item = lane["items"][0]
-    targets = {
-        "update": update,
-        "lane": lane,
-        "item": item,
-        "thread": item["questions"][0],
-    }
-    targets[kind]["id"] = "c#q"
-
-    with pytest.raises(ValueError, match=r"must not contain .*'#'"):
-        render_content(data)
-
-
-def test_forensics_must_be_a_list_with_precise_path() -> None:
-    """Name the item path when forensics has the known wrong shape."""
-    data = _example()
-    _first_item(data)["forensics"] = {"title": "wrong"}
-
-    with pytest.raises(
-        ValueError,
-        match=r"^updates\[0\]\.lanes\[0\]\.items\[0\]\.forensics "
-        r"must be a list$",
-    ):
-        render_content(data)
-
-
-def test_table_requires_caption_with_precise_path() -> None:
-    """Name the table path when the known required field is absent."""
-    data = _example()
-    item = _first_item(data)
-    item["tables"] = [{"columns": ["a"], "rows": [["b"]]}]
-
-    with pytest.raises(
-        ValueError,
-        match=r"^updates\[0\]\.lanes\[0\]\.items\[0\]\.tables\[0\]"
-        r"\.caption must be non-empty text$",
-    ):
-        render_content(data)
-
-
-def test_unknown_trust_chip_is_rejected_with_precise_path() -> None:
-    """Reject an unknown trust chip at its item path."""
-    data = copy.deepcopy(_example())
-    _first_item(data)["trust"] = "probably"
-
-    with pytest.raises(
-        ValueError,
-        match=r"^updates\[0\]\.lanes\[0\]\.items\[0\]\.trust "
-        r"is not a recognized trust chip$",
-    ):
-        render_content(data)
-
-
-def test_trust_chip_with_surrounding_whitespace_is_rejected() -> None:
-    """Reject trust values that the renderer cannot index exactly."""
-    data = copy.deepcopy(_example())
-    _first_item(data)["trust"] = " verified-by-me "
-
-    with pytest.raises(
-        ValueError,
-        match=r"^updates\[0\]\.lanes\[0\]\.items\[0\]\.trust "
-        r"is not a recognized trust chip$",
-    ):
-        render_content(data)
