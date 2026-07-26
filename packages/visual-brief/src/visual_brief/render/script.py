@@ -113,7 +113,6 @@ JS = r"""
       focusElement(focusBeforeOverlay);
     }
   }
-
   function filterItems(query) {
     const needle = query.toLocaleLowerCase();
     let matches = 0;
@@ -125,7 +124,6 @@ JS = r"""
     });
     matchCount.textContent = `${matches} ${matches === 1 ? "match" : "matches"}`;
   }
-
   function openHelp() {
     focusBeforeOverlay = document.activeElement;
     if (typeof help.showModal === "function") help.showModal();
@@ -267,12 +265,14 @@ JS = r"""
       });
     });
     $$(".question-box").forEach((form) => {
+      let sending = false;
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
         const textarea = $("textarea", form);
         const text = textarea.value.trim();
         const status = $(".status", form);
-        if (!text) return;
+        if (!text || sending) return;
+        sending = $(".submit", form).disabled = true;
         status.textContent = "Sending…";
         const payload = {anchor_id: form.dataset.anchorId, text};
         if (form.dataset.parentId) payload.parent_id = form.dataset.parentId;
@@ -298,11 +298,12 @@ JS = r"""
           }
         } catch (error) {
           status.textContent = "Could not send. Is the local server running?";
+        } finally {
+          sending = $(".submit", form).disabled = false;
         }
       });
     });
   }
-
   function setupSignals() {
     $$(".signal").forEach((button) => {
       button.addEventListener("click", async () => {

@@ -68,8 +68,11 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         """Accept local form and signal requests made during interaction tests."""
         length = int(self.headers.get("Content-Length", "0"))
-        if length:
-            self.rfile.read(length)
+        body = self.rfile.read(length) if length else b""
+        self.server.posts.append((self.path, json.loads(body)))
+        self.server.post_count += 1
+        if self.server.post_gate is not None:
+            self.server.post_gate.wait(timeout=5)
         self.send_response(202)
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -83,6 +86,9 @@ class _TestServer(ThreadingHTTPServer):
 
     html: str
     replacement_html: str | None = None
+    posts: list[tuple[str, dict[str, Any]]]
+    post_count: int
+    post_gate: threading.Event | None
 
 
 @dataclass
@@ -173,6 +179,9 @@ def browser_session() -> Iterator[Browser]:
     data = _browser_data()
     server = _TestServer(("127.0.0.1", 0), _Handler)
     server.html = render_content(data)
+    server.posts = []
+    server.post_count = 0
+    server.post_gate = None
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     driver = Browser(executable, f"visual-brief-{uuid.uuid4().hex}", server, data)

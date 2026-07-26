@@ -66,18 +66,18 @@ def _question_records(queue: Any) -> Iterator[dict[str, Any]]:
 def _consume_folded(
     folded: Counter[FoldedKey],
     key: FoldedKey,
-) -> bool:
+) -> FoldedKey | None:
     """Consume an exact folded record, matching only unknown timestamps loosely."""
     if folded[key]:
         folded[key] -= 1
-        return True
+        return key
     prefix = key[:3]
     for candidate, count in folded.items():
         timestamps_match_loosely = key[3] is None or candidate[3] is None
         if count and candidate[:3] == prefix and timestamps_match_loosely:
             folded[candidate] -= 1
-            return True
-    return False
+            return candidate
+    return None
 
 
 def _discard_record_remainder(queue: Any) -> bool:
@@ -255,6 +255,19 @@ def _merge_pending_content(
     states, folded, threads, owners = _collect_thread_state(
         normalized, legacy_unknown_ids
     )
+    folded_parents: dict[FoldedKey, list[str]] = {}
+    for thread_id, thread in threads.items():
+        first = thread["turns"][0]
+        if not isinstance(first, dict) or first.get("author") != "human":
+            continue
+        text = first.get("text")
+        if not isinstance(text, str):
+            continue
+        timestamp = _timestamp_key(first.get("at"))
+        if thread_id in legacy_unknown_ids:
+            timestamp = None
+        key = (None, states[thread_id][0], text, timestamp)
+        folded_parents.setdefault(key, []).append(thread_id)
     if not isinstance(normalized, dict):
         return None, False, []
     path = _contained_child(run_dir, "questions.jsonl")
@@ -262,6 +275,7 @@ def _merge_pending_content(
         return normalized, False, []
     changed = False
     pending: dict[str, list[dict[str, str]]] = {}
+    pending_aliases: dict[str, str] = {}
     legacy_records: list[dict[str, Any]] = []
     occurrences: Counter[tuple[str, str, str]] = Counter()
     try:
@@ -283,19 +297,28 @@ def _merge_pending_content(
                 ):
                     continue
                 text = text.strip()
-                if (
-                    isinstance(parent, str)
-                    and parent not in states
-                    and record.get("content_generation") == content_generation
-                ):
-                    parent = aliases.get(parent, parent)
+                if isinstance(parent, str) and parent not in states:
+                    if record.get("content_generation") == content_generation:
+                        parent = aliases.get(parent, parent)
+                    parent = pending_aliases.get(parent, parent)
                     record = {**record, "parent_id": parent}
                 timestamp_key = _timestamp_key(timestamp)
                 identity = (anchor, text, str(timestamp))
                 occurrence = occurrences[identity]
                 occurrences[identity] += 1
                 key = (parent, anchor, text, timestamp_key)
-                if _consume_folded(folded, key):
+                pending_id = None
+                if parent is None:
+                    encoded = (
+                        f"{anchor}\0{text}\0{timestamp}\0{occurrence}"
+                    ).encode("utf-8", errors="surrogatepass")
+                    digest = hashlib.sha256(encoded).hexdigest()[:12]
+                    pending_id = f"q-pending-{digest}"
+                folded_key = _consume_folded(folded, key)
+                if folded_key is not None:
+                    targets = folded_parents.get(folded_key)
+                    if pending_id is not None and targets:
+                        pending_aliases[pending_id] = targets.pop(0)
                     continue
                 if not isinstance(timestamp, str) or not isinstance(
                     timestamp_key, datetime
@@ -319,11 +342,7 @@ def _merge_pending_content(
                         owner["questions"] = questions
                     if not isinstance(questions, list):
                         continue
-                    encoded = f"{anchor}\0{text}\0{timestamp}\0{occurrence}".encode(
-                        "utf-8", errors="surrogatepass"
-                    )
-                    digest = hashlib.sha256(encoded).hexdigest()[:12]
-                    thread_id = f"q-pending-{digest}"
+                    thread_id = pending_id
                     thread = {
                         "id": thread_id,
                         "anchor": {"kind": "element", "path": anchor},

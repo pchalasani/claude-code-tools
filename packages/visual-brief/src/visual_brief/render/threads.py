@@ -104,6 +104,7 @@ def _normalize_questions(
         return
     prior_occurrences: dict[str, int] = {}
     timestamp_occurrences: dict[tuple[str, str], int] = {}
+    prior_timestamp_occurrences: dict[tuple[str, str], int] = {}
     undated_remaining: dict[str, int] = {}
     for entry in questions:
         if not _is_legacy_pair(entry):
@@ -127,11 +128,17 @@ def _normalize_questions(
         )
         timestamp_identity = (question, timestamp)
         timestamp_occurrence = timestamp_occurrences.get(timestamp_identity, 0)
-        timestamp_occurrences[timestamp_identity] = timestamp_occurrence + 1
+        prior_timestamp_occurrence = prior_timestamp_occurrences.get(
+            timestamp_identity, 0
+        )
+        prior_timestamp_occurrences[timestamp_identity] = (
+            prior_timestamp_occurrence + 1
+        )
         if not has_timestamp:
             undated_remaining[question] -= 1
             occurrence = undated_remaining[question]
         else:
+            timestamp_occurrences[timestamp_identity] = timestamp_occurrence + 1
             occurrence = timestamp_occurrence
         thread = _legacy_thread(entry, path, occurrence)
         prior_occurrence = prior_occurrences.get(question, 0)
@@ -143,7 +150,8 @@ def _normalize_questions(
             prior_digest = hashlib.sha256(prior_identity).hexdigest()[:12]
             legacy_id_aliases[f"q-{prior_digest}"] = thread["id"]
             timestamp_identity_bytes = (
-                f"{path}\0{question}\0{timestamp}\0{timestamp_occurrence}"
+                f"{path}\0{question}\0{timestamp}\0"
+                f"{prior_timestamp_occurrence}"
             ).encode("utf-8", errors="surrogatepass")
             timestamp_digest = hashlib.sha256(
                 timestamp_identity_bytes
@@ -185,7 +193,12 @@ def _legacy_thread(
     answer = pair.get("answer")
     if isinstance(answer, str) and answer.strip():
         turns.append({"author": "agent", "text": answer, "at": timestamp})
-    identity_version = "" if has_timestamp else "\0undated-v2"
+    if not has_timestamp:
+        identity_version = "\0undated-v2"
+    elif timestamp == LEGACY_TIMESTAMP:
+        identity_version = "\0dated-v2"
+    else:
+        identity_version = ""
     identity = (
         f"{path}\0{question}\0{timestamp}{identity_version}\0{occurrence}"
     ).encode(

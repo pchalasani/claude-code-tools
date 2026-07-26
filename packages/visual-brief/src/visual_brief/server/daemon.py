@@ -16,6 +16,7 @@ from visual_brief import __version__
 from visual_brief.server.dashboard import render_dashboard
 from visual_brief.server.counting import reply_target_error
 from visual_brief.server.queue import (
+    MAX_QUEUE_RECORD_BYTES,
     append_record,
     build_question_record,
     build_signal_record,
@@ -30,7 +31,7 @@ from visual_brief.server.served_page import (
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
-MAX_BODY_BYTES = 64 * 1024
+MAX_BODY_BYTES = MAX_QUEUE_RECORD_BYTES
 CONTENT_CHANGED = "Content changed while validating reply"
 
 class VisualBriefServer(ThreadingHTTPServer):

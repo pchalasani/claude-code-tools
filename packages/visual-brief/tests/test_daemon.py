@@ -12,6 +12,7 @@ from typing import Iterator
 import pytest
 
 from visual_brief.server.daemon import HOST, VisualBriefServer, create_server
+from visual_brief.server.queue import MAX_QUESTION_LENGTH
 from visual_brief.server.registry import count_unanswered_questions
 
 
@@ -299,12 +300,12 @@ def test_maximum_accepted_question_is_visible_to_registry(
 ) -> None:
     """A large accepted UTF-8 question remains visible as unanswered."""
     server, run_dir = live_server
-    question = "😀" * 16_363
+    question = "😀" * MAX_QUESTION_LENGTH
     payload = json.dumps(
         {"anchor_id": "update/lane/item", "text": question},
         ensure_ascii=False,
     ).encode("utf-8")
-    assert len(payload) <= 64 * 1024
+    assert len(payload) > 64 * 1024
 
     status, _ = request(
         server,
