@@ -97,6 +97,15 @@ def test_legacy_pair_with_missing_answer_is_awaiting() -> None:
     assert "Awaiting answer" in rendered
 
 
+def test_malformed_legacy_question_raises_validation_error() -> None:
+    """Reject non-text legacy questions through the renderer contract."""
+    data = _example()
+    _first_item(data)["questions"] = [{"question": []}]
+
+    with pytest.raises(ValueError, match=r"questions\[0\]\.id"):
+        render_content(data)
+
+
 def test_multiple_legacy_pairs_on_one_item_get_distinct_stable_ids() -> None:
     """Convert every pair on an item without collisions or reordering."""
     data = _example()

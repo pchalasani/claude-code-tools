@@ -31,6 +31,7 @@ from visual_brief.server.served_page import (
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 MAX_BODY_BYTES = 64 * 1024
+CONTENT_CHANGED = "Content changed while validating reply"
 
 class VisualBriefServer(ThreadingHTTPServer):
     """HTTP server carrying the shared runs root."""
@@ -39,12 +40,7 @@ class VisualBriefServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
     def __init__(self, address: tuple[str, int], runs_root: Path) -> None:
-        """Initialize a loopback-only server.
-
-        Args:
-            address: Host and port. The host must be ``127.0.0.1``.
-            runs_root: Directory containing run directories.
-        """
+        """Initialize a loopback-only server at an address and runs root."""
         host, port = address
         if host != HOST:
             raise ValueError(f"visual-brief must bind to {HOST}")
@@ -55,7 +51,7 @@ class VisualBriefServer(ThreadingHTTPServer):
             raise ValueError(
                 f"could not prepare runs root {runs_root}: {error}"
             ) from error
-        self.queue_lock = threading.Lock()
+        self.queue_lock = threading.RLock()
         super().__init__((host, port), VisualBriefHandler)
 
 class VisualBriefHandler(BaseHTTPRequestHandler):
@@ -232,6 +228,9 @@ class VisualBriefHandler(BaseHTTPRequestHandler):
         except ValueError as error:
             self._json_error(HTTPStatus.BAD_REQUEST, str(error))
             return
+        generation = read_file_generation(run_dir, "content.json")
+        if record["parent_id"] is not None and generation is not None:
+            record["content_generation"] = generation.decode("ascii")
         target_error = reply_target_error(
             run_dir,
             record["parent_id"],
@@ -239,6 +238,13 @@ class VisualBriefHandler(BaseHTTPRequestHandler):
         )
         if target_error is not None:
             self._json_error(HTTPStatus.CONFLICT, target_error)
+            return
+        if record["parent_id"] is not None:
+            with self.server.queue_lock:
+                if read_file_generation(run_dir, "content.json") != generation:
+                    self._json_error(HTTPStatus.CONFLICT, CONTENT_CHANGED)
+                    return
+                self._append_queue_record(run_dir, record)
             return
         self._append_queue_record(run_dir, record)
 

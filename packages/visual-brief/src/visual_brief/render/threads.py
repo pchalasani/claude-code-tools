@@ -121,6 +121,7 @@ def _is_legacy_pair(value: Any) -> bool:
     return (
         isinstance(value, dict)
         and "question" in value
+        and isinstance(value.get("question"), str)
         and "turns" not in value
     )
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
 import threading
@@ -166,6 +167,96 @@ def test_pending_follow_up_agrees_across_page_dashboard_and_cli(
     assert b'class="lane" open' in page
     assert version_status == 200
     assert generation in page
+
+
+def test_older_pending_reply_keeps_page_and_count_answered(
+    tmp_path: Path,
+) -> None:
+    """Let the chronologically latest saved agent turn determine state."""
+    root = tmp_path / "runs"
+    run = _make_run(root)
+    record = {
+        "timestamp": "2026-07-25T19:12:30Z",
+        "type": "question",
+        "anchor_id": ANCHOR_ID,
+        "text": "Older queued reply",
+        "parent_id": THREAD_ID,
+    }
+    (run / "questions.jsonl").write_text(
+        f"{json.dumps(record)}\n",
+        encoding="utf-8",
+    )
+
+    page = read_served_page(run)
+
+    assert page is not None
+    assert count_unanswered_questions(run) == 0
+    assert page.index(b"Older queued reply") < page.index(
+        b"The loop may try to simplify"
+    )
+    thread_start = page.index(b'<details class="thread"')
+    thread_summary = page.index(b"<summary", thread_start)
+    assert b" open" not in page[thread_start:thread_summary]
+
+
+def test_pending_new_question_agrees_across_fresh_status_views(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Render and count a queued parentless question at its anchor."""
+    root = tmp_path / "runs"
+    run = _make_run(root)
+    question = "A newly queued question?"
+    with _running_server(root) as server:
+        status, _ = _request(
+            server,
+            "POST",
+            f"/r/{RUN_ID}/ask",
+            {"anchor_id": ANCHOR_ID, "text": question},
+        )
+        assert status == 202
+        dashboard_status, dashboard = _request(server, "GET", "/")
+        page_status, page = _request(server, "GET", f"/r/{RUN_ID}/")
+
+    assert count_unanswered_questions(run) == 1
+    assert list_command(root) == 0
+    assert "unanswered: 1" in capsys.readouterr().out
+    assert dashboard_status == 200
+    assert b"waiting on you \xc2\xb7 1 question" in dashboard
+    assert page_status == 200
+    assert question.encode() in page
+    assert b'<details class="thread" open data-awaiting>' in page
+
+
+def test_folded_parentless_duplicate_gets_distinct_id(tmp_path: Path) -> None:
+    """Count folded duplicates when deriving stable pending thread IDs."""
+    run = _make_run(tmp_path / "runs")
+    content_path = run / "content.json"
+    content = json.loads(content_path.read_text(encoding="utf-8"))
+    timestamp = "2026-07-25T20:00:00Z"
+    text = "Repeated new question?"
+    identity = f"{ANCHOR_ID}\0{text}\0{timestamp}\0{0}".encode()
+    digest = hashlib.sha256(identity).hexdigest()[:12]
+    saved = {
+        "id": f"q-pending-{digest}",
+        "anchor": {"kind": "element", "path": ANCHOR_ID},
+        "turns": [{"author": "human", "text": text, "at": timestamp}],
+    }
+    questions = content["updates"][1]["lanes"][1]["items"][0]["questions"]
+    questions.append(saved)
+    content_path.write_text(json.dumps(content), encoding="utf-8")
+    record = {
+        "timestamp": timestamp, "type": "question",
+        "anchor_id": ANCHOR_ID, "text": text, "parent_id": None,
+    }
+    (run / "questions.jsonl").write_text(
+        f"{json.dumps(record)}\n{json.dumps(record)}\n",
+        encoding="utf-8",
+    )
+
+    page = read_served_page(run)
+    assert page and page.count(text.encode()) == 4
+    assert count_unanswered_questions(run) == 2
 
 
 def test_identical_later_follow_up_is_not_consumed_as_folded(
