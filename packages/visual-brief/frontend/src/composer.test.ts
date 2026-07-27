@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createComposer } from "./composer";
+import { createComposer, sentFromThisPage } from "./composer";
 
 /** One recorded call to the daemon. */
 interface Sent {
@@ -185,6 +185,23 @@ describe("composition", () => {
     expect(composer.text()).toBe("Does this survive?");
     expect(composer.status()).toContain("Could not send");
     expect(composer.pendingAt("u/l/i")).toEqual([]);
+  });
+
+  it("owns the waiting sign from the moment of sending until a reload", async () => {
+    const daemon = recorder();
+    const composer = createComposer(daemon.post);
+
+    expect(sentFromThisPage(composer, "u/l/i")).toBe(false);
+    composer.toggleAt({ rowId: "u/l/i", anchorId: "u/l/i" });
+    composer.setText("Is anything happening?");
+    const inFlight = composer.submit();
+
+    expect(sentFromThisPage(composer, "u/l/i")).toBe(true);
+    expect(sentFromThisPage(composer, "u/l/other")).toBe(false);
+    daemon.release();
+    await inFlight;
+
+    expect(sentFromThisPage(composer, "u/l/i")).toBe(true);
   });
 
   it("reports one-click feedback against the anchor it belongs to", async () => {

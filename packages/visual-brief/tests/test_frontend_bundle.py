@@ -177,49 +177,12 @@ def test_bundle_can_be_inlined_into_a_single_page() -> None:
         assert "<!--" not in text, name
 
 
-def _reduced_motion_block(style: str) -> str:
-    """Return the shipped rules that apply when motion is unwelcome.
-
-    Args:
-        style: The bundled stylesheet.
-
-    Returns:
-        The body of the reduced-motion media block.
-
-    Raises:
-        AssertionError: If the stylesheet ships no such block.
-    """
-    match = re.search(r"@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{", style)
-    assert match is not None, "the bundle ships no reduced-motion rules"
-    depth = 1
-    start = match.end()
-    for index in range(start, len(style)):
-        if style[index] == "{":
-            depth += 1
-        elif style[index] == "}":
-            depth -= 1
-            if depth == 0:
-                return style[start:index]
-    raise AssertionError("the reduced-motion block is never closed")
-
-
-def test_the_agent_is_working_sign_degrades_to_a_static_label() -> None:
-    """Keep the words readable, and still, where motion is unwelcome.
-
-    The shimmer paints through transparent text, so switching the animation
-    off is not enough on its own: the fill has to come back or the human is
-    left with a blank line where the reassurance should be. Chrome's motion
-    preference cannot be emulated through the browser driver this suite uses,
-    so the guarantee is checked in the stylesheet that ships.
-    """
-    style = bundle_style()
-
-    assert ".working-text{" in style.replace(" ", "")
-    assert "agent-working" in style
-    reduced = _reduced_motion_block(style)
-    assert ".working-text" in reduced
-    assert "animation:none" in reduced.replace(" ", "")
-    assert "-webkit-text-fill-color:currentcolor" in reduced.replace(" ", "").lower()
+# What the shipped stylesheet does when motion is unwelcome is no longer
+# asserted here. Reading rules out of the bundle proved nothing about what a
+# human sees — a later rule or an override elsewhere in the cascade would pass
+# unnoticed — so the guarantee is read off the painted element instead, with
+# Chrome's real preference turned on, in
+# test_submission_browser.test_the_working_sign_stands_still_where_motion_is_unwelcome.
 
 
 def test_bundle_has_no_dynamic_import_or_module_syntax() -> None:

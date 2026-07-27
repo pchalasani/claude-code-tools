@@ -1,6 +1,12 @@
-import { For, type JSX } from "solid-js";
+import { For, Show, type JSX } from "solid-js";
 
-import { ComposeBox, ComposeButton, PendingNotes } from "./compose-view";
+import {
+  AgentWorking,
+  ComposeBox,
+  ComposeButton,
+  PendingNotes,
+} from "./compose-view";
+import { sentFromThisPage } from "./composer";
 import type { Thread } from "./document";
 import type { Row } from "./outline";
 import { AwaitingChip, NewAnswerChip, RowShell } from "./row-shell";
@@ -52,6 +58,20 @@ export function ThreadView(props: {
         )}
       </For>
       <PendingNotes state={props.state} row={props.row} />
+      {/*
+        The document, not this page load, is what keeps the sign up. A human
+        who asks a question and then watches the agent republish something
+        else must not see the reassurance vanish: the conversation is still
+        awaiting, so it still says so, reload after reload.
+      */}
+      <Show
+        when={
+          props.row.awaiting &&
+          !sentFromThisPage(props.state.composer, props.row.id)
+        }
+      >
+        <AgentWorking />
+      </Show>
       <ComposeBox state={props.state} row={props.row} />
     </RowShell>
   );

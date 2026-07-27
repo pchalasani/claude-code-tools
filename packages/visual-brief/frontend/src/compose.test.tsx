@@ -110,6 +110,18 @@ describe("writing where the cursor is", () => {
     expect(document.querySelector(".composer")).not.toBeNull();
   });
 
+  it("says the agent is working under every unanswered conversation", () => {
+    mount();
+
+    const signs = [...document.querySelectorAll("p.working")];
+    const rows = signs.map((sign) =>
+      sign.closest("[data-row-id]")?.getAttribute("data-row-id"),
+    );
+
+    expect(rows).toEqual(["newest/changed/beta#q-open"]);
+    expect(signs[0]?.textContent).toBe("agent is working");
+  });
+
   it("leaves a row the human opened alone when the composer closes", () => {
     mount();
     click("newest/next");

@@ -52,22 +52,106 @@ _ENTER_SPY = """
     })()
     """
 
-_WORKING = """
-    (() => {
-      const marks = [...document.querySelectorAll("p.working .working-text")];
-      const first = marks[0];
-      const style = first === undefined ? null : getComputedStyle(first);
-      return {
+
+def _working_at(row_id: str) -> str:
+    """Return a script reading the waiting sign one row paints for itself.
+
+    Rows nest, so the sign is looked for among the row's own body children:
+    a conversation's sign belongs to the conversation, not to the item it
+    hangs from.
+
+    Args:
+        row_id: Identifier of the row to read.
+
+    Returns:
+        JavaScript returning what a human sees of that row's waiting sign.
+    """
+    return f"""
+    (() => {{
+      const row = document.querySelector('[data-row-id="{row_id}"]');
+      const marks = row === null
+        ? []
+        : [...row.querySelectorAll(":scope > .row-body > p.working")];
+      const first = marks[0]?.querySelector(".working-text") ?? null;
+      const style = first === null ? null : getComputedStyle(first);
+      return {{
         count: marks.length,
-        text: first === undefined ? "" : first.textContent,
+        text: first === null ? "" : first.textContent,
         moving: style !== null
           && style.animationName !== "none"
           && style.animationIterationCount === "infinite"
           && style.animationDuration !== "0s",
         awaiting: document.querySelectorAll(".chip-awaiting").length > 0,
-      };
-    })()
+      }};
+    }})()
     """
+
+
+def _still_at(row_id: str) -> str:
+    """Return a script reading the same sign as a still, coloured label.
+
+    Args:
+        row_id: Identifier of the row to read.
+
+    Returns:
+        JavaScript returning the preference in force and the painted words.
+    """
+    return f"""
+    (() => {{
+      const row = document.querySelector('[data-row-id="{row_id}"]');
+      const mark = row === null
+        ? null
+        : row.querySelector(":scope > .row-body > p.working .working-text");
+      if (mark === null) {{
+        return null;
+      }}
+      const style = getComputedStyle(mark);
+      return {{
+        reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
+        text: mark.textContent,
+        animation: style.animationName,
+        fill: style.getPropertyValue("-webkit-text-fill-color"),
+        color: style.getPropertyValue("color"),
+      }};
+    }})()
+    """
+
+
+def _fold_question_into_content(browser: Browser, thread_id: str, text: str) -> None:
+    """Publish a sent question as the awaiting conversation it becomes.
+
+    This is what the daemon does on its next publish: a queued question the
+    agent has not answered yet is folded into the served content as a
+    conversation whose newest turn is the human's.
+
+    Args:
+        browser: The open browser, whose ``data`` is the served document.
+        thread_id: Identifier to give the folded conversation.
+        text: What the human asked.
+    """
+    update_id, lane_id, item_id = ITEM.split("/")
+    item = next(
+        item
+        for update in browser.data["updates"]
+        if update["id"] == update_id
+        for lane in update["lanes"]
+        if lane["id"] == lane_id
+        for item in lane["items"]
+        if item["id"] == item_id
+    )
+    item.setdefault("questions", []).append(
+        {
+            "id": thread_id,
+            "anchor": {"kind": "element", "path": ITEM},
+            "turns": [
+                {
+                    "author": "human",
+                    "text": text,
+                    "at": "2026-07-25T20:05:00Z",
+                }
+            ],
+        }
+    )
 
 
 @pytest.fixture
@@ -210,12 +294,12 @@ def test_the_page_says_the_agent_is_working_until_the_answer_lands(
         while browser.server.post_count < 1 and time.monotonic() < deadline:
             time.sleep(0.01)
         browser.run("wait", "250")
-        in_flight = browser.evaluate(_WORKING)
+        in_flight = browser.evaluate(_working_at(ITEM))
     finally:
         browser.server.post_gate.set()
     browser.run("wait", "600")
 
-    landed = browser.evaluate(_WORKING)
+    landed = browser.evaluate(_working_at(ITEM))
 
     expected = {
         "count": 1,
@@ -225,6 +309,74 @@ def test_the_page_says_the_agent_is_working_until_the_answer_lands(
     }
     assert in_flight == expected
     assert landed == expected
+
+
+def test_the_working_sign_stands_still_where_motion_is_unwelcome(
+    browser: Browser,
+) -> None:
+    """Keep the same words readable, and still, when motion is unwelcome.
+
+    The shimmer paints through transparent text, so switching the animation
+    off is not enough on its own: the fill has to come back or the human is
+    left with a blank line where the reassurance should be. Chrome's real
+    preference is turned on for this, and the result is read off the element
+    rather than off the stylesheet.
+    """
+    browser.server.post_gate = threading.Event()
+    try:
+        browser.compose_at(ITEM)
+        browser.run("fill", ".composer textarea", "Is anything happening?")
+        browser.run("click", ".composer .submit")
+        deadline = time.monotonic() + 2
+        while browser.server.post_count < 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        browser.run("wait", "250")
+        moving = browser.evaluate(_working_at(ITEM))
+        with browser.reduced_motion():
+            still = browser.evaluate(_still_at(ITEM))
+    finally:
+        browser.server.post_gate.set()
+
+    assert moving["moving"] is True
+    assert still is not None
+    assert still["reduced"] is True
+    assert still["text"] == "agent is working"
+    assert still["animation"] == "none"
+    assert still["fill"] == still["color"]
+    assert still["fill"] not in ("transparent", "rgba(0, 0, 0, 0)")
+
+
+def test_the_working_sign_outlives_a_publish_that_carries_no_answer(
+    browser: Browser,
+) -> None:
+    """Keep the reassurance up when a republish beats the answer to the page.
+
+    The agent republishes constantly, and every publish reloads the page from
+    scratch. The sign has to be a fact about the conversation rather than
+    about the page load that sent the question, or the first unrelated update
+    wipes the reassurance out for the whole remaining wait.
+    """
+    question = "Will this outlast a republish?"
+    thread_id = "q-pending-republish"
+    browser.compose_at(ITEM)
+    browser.send(question)
+    browser.run("wait", "400")
+    before = browser.evaluate(_working_at(ITEM))
+
+    _fold_question_into_content(browser, thread_id, question)
+    browser.data["title"] = "Republished with no answer yet"
+    browser.publish()
+    browser.wait_for_title("Republished with no answer yet")
+    browser.run("wait", "400")
+
+    assert before["count"] == 1
+    assert browser.evaluate(_working_at(f"{ITEM}#{thread_id}")) == {
+        "count": 1,
+        "text": "agent is working",
+        "moving": True,
+        "awaiting": True,
+    }
+    assert browser.evaluate(_working_at(ITEM))["count"] == 0
 
 
 def test_a_question_the_daemon_refuses_is_not_lost(browser: Browser) -> None:

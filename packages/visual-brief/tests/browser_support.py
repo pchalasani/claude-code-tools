@@ -16,6 +16,7 @@ from typing import Any, Iterator
 
 import pytest
 
+from cdp import emulated_media
 from visual_brief.render import render_content
 from visual_brief.server.served_page import page_generation
 
@@ -184,6 +185,30 @@ class Browser:
         )
         assert len(marked) == 1, marked
         return str(marked[0])
+
+    @contextmanager
+    def reduced_motion(self) -> Iterator[None]:
+        """Turn Chrome's real motion preference on for the body of the block.
+
+        The browser CLI's own ``set media reduced-motion`` is a silent no-op —
+        after it, the page still matches ``no-preference`` — so the preference
+        is set over the DevTools protocol the same browser exposes. Chrome
+        forgets it when that connection drops, which is why the page has to be
+        read inside the block.
+
+        Yields:
+            Nothing; the page matches ``(prefers-reduced-motion: reduce)``
+            until the block ends.
+        """
+        cdp_url = self.run("get", "cdp-url").strip()
+        with emulated_media(
+            cdp_url,
+            self.url,
+            {"prefers-reduced-motion": "reduce"},
+        ):
+            # One paint at the new preference before anything is measured.
+            self.run("wait", "150")
+            yield
 
     def publish(self) -> None:
         """Publish current data under a new self-reload version."""
