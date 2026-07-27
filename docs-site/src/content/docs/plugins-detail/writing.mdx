@@ -145,15 +145,35 @@ round cap is still wise as a backstop.
 
 remove-ai-patterns includes a JSON-emitting detector that needs only a
 `node` binary. Resolve it by the skill's absolute path (the command runs
-from your working directory, so a bare relative path fails); under a
-Claude Code plugin install that is `${CLAUDE_PLUGIN_ROOT}`:
+from your working directory, so a bare relative path fails). Set that
+directory once, then reuse it:
+
+<Tabs>
+<TabItem label="Claude Code">
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/remove-ai-patterns/scripts/detect.js" FILE
+SKILL_DIR="${CLAUDE_PLUGIN_ROOT}/skills/remove-ai-patterns"
+node "$SKILL_DIR/scripts/detect.js" FILE
 
 # technical documentation: suppress checks that are valid in technical prose
-node "${CLAUDE_PLUGIN_ROOT}/skills/remove-ai-patterns/scripts/detect.js" FILE technical
+node "$SKILL_DIR/scripts/detect.js" FILE technical
 ```
+
+</TabItem>
+<TabItem label="Codex">
+
+`${CLAUDE_PLUGIN_ROOT}` is unset under Codex, so use the absolute path of
+the installed skill directory (the agent already knows it from reading
+the skill):
+
+```bash
+SKILL_DIR="$HOME/.codex/plugins/<...>/plugins/writing/skills/remove-ai-patterns"
+node "$SKILL_DIR/scripts/detect.js" FILE
+node "$SKILL_DIR/scripts/detect.js" FILE technical
+```
+
+</TabItem>
+</Tabs>
 
 The optional second argument is the context mode (`general` (default),
 `technical`, `marketing`, `personal`). It reports an overall score, a

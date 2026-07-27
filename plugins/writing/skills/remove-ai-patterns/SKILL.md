@@ -28,13 +28,21 @@ vendored at `upstream/` inside this skill directory (commit recorded in
    (requires Node.js, no npm install needed). Resolve it by the skill's own
    absolute path, NOT a bare relative path: the command runs from the
    user's current working directory, so `node scripts/detect.js` would fail
-   with `MODULE_NOT_FOUND`. When installed as a Claude Code plugin, use
-   `${CLAUDE_PLUGIN_ROOT}`; otherwise substitute this skill's directory:
+   with `MODULE_NOT_FOUND`. You already know this skill's directory (you
+   just read this SKILL.md from it), so set it once and reuse it. Under a
+   Claude Code plugin install `${CLAUDE_PLUGIN_ROOT}` gives the plugin root;
+   under Codex (where that variable is unset) or a direct skill install,
+   substitute the absolute path of the directory holding this file:
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/skills/remove-ai-patterns/scripts/detect.js" FILE
-   # or, for a direct (non-plugin) skill install, the absolute path to it:
-   #   node /abs/path/to/remove-ai-patterns/scripts/detect.js FILE
+   # Claude Code plugin install:
+   SKILL_DIR="${CLAUDE_PLUGIN_ROOT}/skills/remove-ai-patterns"
+   # Codex plugin or direct skill install: use the absolute path of the
+   # directory this SKILL.md lives in, e.g.
+   #   SKILL_DIR="$HOME/.codex/plugins/.../plugins/writing/skills/remove-ai-patterns"
+   #   SKILL_DIR="$HOME/.local/share/agent-skills/remove-ai-patterns"
+
+   node "$SKILL_DIR/scripts/detect.js" FILE
    ```
 
    Pass a context mode as the second argument when the text is technical
@@ -42,7 +50,7 @@ vendored at `upstream/` inside this skill directory (commit recorded in
    technical prose (matches the skill's `technical` voice profile):
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/skills/remove-ai-patterns/scripts/detect.js" FILE technical
+   node "$SKILL_DIR/scripts/detect.js" FILE technical
    ```
 
    Valid modes: `general` (default), `technical`, `marketing`, `personal`.
