@@ -108,17 +108,23 @@ until clean). agent-style keeps its 21 compact rules in the SKILL.md
 itself and the full rule bodies (BAD/GOOD pairs, rationale) in a
 vendored `references/RULES.md`.
 
-### As acceptance gates in a workflow
+### As an acceptance gate in a workflow
 
-The skills are most useful as the **acceptance criteria** of a larger
-task: the agent keeps editing until both prose gates pass. Paired with
-the [dynamic-workflow](/claude-code-tools/plugins-detail/dynamic-workflow/)
-plugin, they become an automatic loop. Just describe the gate:
+A skill is most useful as the **acceptance criterion** of a larger task:
+the agent keeps editing until the prose gate passes. Pick ONE skill as
+the final gate (interleaving both on the same document churns the same
+sentences, per the two-lanes note above); if you want both to weigh in,
+run one as a single up-front pass and the other as the looping gate.
+Paired with the
+[dynamic-workflow](/claude-code-tools/plugins-detail/dynamic-workflow/)
+plugin, the gate becomes an automatic loop. Just describe it:
 
 :::tip[Tell Claude Code]
-"Set up a dynamic workflow to draft this blog post, where acceptance is
-gated on both writing skills: run remove-ai-patterns until the detector
-is clean, then an agent-style pass, and loop until both are satisfied."
+"Set up a dynamic workflow to draft this blog post. Do one agent-style
+pass first, then loop on remove-ai-patterns as the acceptance gate:
+re-run the detector after each revision and stop when it returns a
+scored result (not UNSCORED) with no issues, or you have completed 2
+passes (the skill's own iterate cap)."
 :::
 
 Simpler, without a workflow, you can name the gate inline on any writing
@@ -126,28 +132,71 @@ task:
 
 :::tip[Tell Claude Code]
 "Write the release notes from this changelog, then de-AI them with
-remove-ai-patterns and don't stop until the detector reports zero
-issues."
+remove-ai-patterns: iterate until the detector returns a scored result
+with no issues, or you have completed 2 passes."
 :::
 
-The deterministic detector (below) is what makes such a loop terminate
-on its own: it is an objective pass/fail signal the agent cannot talk
-itself past.
+The deterministic detector (below) is what lets such a loop terminate on
+its own. Its convergence rule, matching the upstream skill, is to repeat
+until a scored result has no issues or the cap of 2 passes is reached (a
+rewrite plus one corrective pass). A finding that cannot be removed
+without changing intended content simply survives to the cap, so the loop
+still ends; it does not use a separate "score stopped improving"
+criterion, which could stop before that corrective pass.
 
 ### The deterministic detector
 
 remove-ai-patterns includes a JSON-emitting detector that needs only a
-`node` binary:
+`node` binary. Resolve it by the skill's absolute path (the command runs
+from your working directory, so a bare relative path fails). Set that
+directory once, then reuse it:
+
+<Tabs>
+<TabItem label="Claude Code">
 
 ```bash
-node <skill-dir>/scripts/detect.js FILE
+SKILL_DIR="${CLAUDE_PLUGIN_ROOT}/skills/remove-ai-patterns"
+node "$SKILL_DIR/scripts/detect.js" FILE
+
+# technical documentation: skip the title-case-header check (see below)
+node "$SKILL_DIR/scripts/detect.js" FILE technical
 ```
 
-It reports an overall score, a label, a document classification, and
-per-issue findings with severities and suggestions. For "iterate until
-clean" requests the agent loops revise → detect until findings stop
-improving; the detector is the objective stopping criterion, so the loop
-cannot argue with itself about whether the text is done.
+</TabItem>
+<TabItem label="Codex">
+
+`${CLAUDE_PLUGIN_ROOT}` is unset under Codex, so use the absolute path of
+the installed skill directory. The agent already knows it from loading
+the skill; it lives under the Codex plugin cache and ends in
+`skills/remove-ai-patterns` (the plugin root is the `writing` plugin, so
+there is no extra `plugins/writing` segment). Discover it if unsure:
+
+```bash
+SKILL_DIR="$(dirname "$(find "$HOME/.codex" -path '*/skills/remove-ai-patterns/scripts/detect.js' | head -1)")/.."
+node "$SKILL_DIR/scripts/detect.js" FILE
+node "$SKILL_DIR/scripts/detect.js" FILE technical
+```
+
+</TabItem>
+</Tabs>
+
+The optional second argument is the context mode (`general` (default),
+`technical`, `marketing`, `personal`). In this detector, `technical` has
+one concrete effect: it skips the `title-case-header` check, because Title
+Case section headings are legitimate in technical docs. It does not
+broadly relax vocabulary checks; the wider technical-prose exceptions
+(words like `robust` or `leverage`) live in the upstream skill's prose
+rules that the agent applies when rewriting, not in the detector.
+
+The detector reports an overall score, a label, a
+`document_classification`, and per-issue findings with severities and
+suggestions. For "iterate until clean" requests the agent repeats
+revise → detect using the same convergence rule as above: stop when a
+scored result has no issues, or at the 2-pass cap. One caveat: on empty,
+very short (< ~10 words), or very long (> 10,000 words) input the detector
+returns `document_classification: "UNSCORED"` with no issues, which is a
+refused scan rather than a clean document, so the loop must require a
+scored result and split or trim over-long files.
 
 ## Updating the vendored catalogs
 

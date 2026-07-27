@@ -25,17 +25,56 @@ vendored at `upstream/` inside this skill directory (commit recorded in
    edit-in-place for files, optional voice profile, and an
    iterate-to-convergence pass.
 2. For a deterministic, machine-checkable audit, run the bundled detector
-   (requires Node.js, no npm install needed):
+   (requires Node.js, no npm install needed). Resolve it by the skill's own
+   absolute path, NOT a bare relative path: the command runs from the
+   user's current working directory, so `node scripts/detect.js` would fail
+   with `MODULE_NOT_FOUND`. You already know this skill's directory (you
+   just read this SKILL.md from it), so set it once and reuse it. Under a
+   Claude Code plugin install `${CLAUDE_PLUGIN_ROOT}` gives the plugin root;
+   under Codex (where that variable is unset) or a direct skill install,
+   substitute the absolute path of the directory holding this file:
 
    ```bash
-   node scripts/detect.js FILE
+   # Claude Code plugin install:
+   SKILL_DIR="${CLAUDE_PLUGIN_ROOT}/skills/remove-ai-patterns"
+   # Codex plugin or direct skill install: the absolute path of the
+   # directory this SKILL.md lives in (it ends in skills/remove-ai-patterns;
+   # the plugin root already is the writing plugin, so there is no extra
+   # plugins/writing segment). Direct installs are simpler, e.g.
+   #   SKILL_DIR="$HOME/.local/share/agent-skills/remove-ai-patterns"
+
+   node "$SKILL_DIR/scripts/detect.js" FILE
    ```
 
-   It prints JSON: an overall score, a label, a document classification with
-   class probabilities, and per-issue findings (`type`, matched `text`,
-   `severity`, `suggestion`). For "iterate until clean/green" requests, loop
-   revise -> detect until the score/label stops improving or issues hit zero;
-   the detector is the objective stopping criterion.
+   Pass a context mode as the second argument when the text is technical
+   documentation. In this detector, `technical` has one concrete effect: it
+   skips the `title-case-header` check (Title Case section headings are
+   legitimate in technical docs). It does not broadly relax vocabulary
+   checks, and it is not the same as selecting the skill's `technical`
+   VOICE profile (context and voice are separate axes); the wider
+   technical-prose word exceptions live in the upstream skill's rewrite
+   rules, not in the detector.
+
+   ```bash
+   node "$SKILL_DIR/scripts/detect.js" FILE technical
+   ```
+
+   Valid modes: `general` (default), `technical`, `marketing`, `personal`.
+
+   It prints JSON: an overall `score`, a `label`, a `document_classification`
+   with class probabilities, and per-issue findings (`type`, matched `text`,
+   `severity`, `suggestion`). For "iterate until clean/green" requests,
+   follow the upstream skill's convergence rule (see `upstream/SKILL.md`):
+   repeat the audit -> revise cycle until a scored result has no issues, or
+   the cap of 2 passes is reached (the built-in corrective pass is pass 2).
+   Do not stop early on a "score stopped improving" heuristic and do not
+   invent a larger cap.
+   IMPORTANT: only treat a zero-issue result as clean when it is actually
+   scored. On empty input, under ~10 words, or over 10,000 words the detector
+   returns `document_classification: "UNSCORED"` with an empty `issues` list;
+   that is a refused scan, not a clean document, so convergence must require
+   a scored result (`document_classification` other than `"UNSCORED"`), not
+   merely an empty issue list. Split or trim over-long inputs so they score.
 3. Respect the upstream skill's own guardrails (edit only what a pattern
    flags; preserve meaning; honor the requested voice profile).
 
