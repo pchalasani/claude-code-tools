@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import errno
+import json
 import os
 from pathlib import Path
 
@@ -20,7 +22,7 @@ from write_support import (
 )
 from visual_brief.server.counting import count_unanswered_questions
 from visual_brief.writes import fold as fold_module
-from visual_brief.writes import CliError, fold_command
+from visual_brief.writes import CliError, answer_command, fold_command
 
 ASKED = "Why does teh fold  copy bytes, exactly?"
 
@@ -98,6 +100,62 @@ def test_folding_twice_changes_no_byte(tmp_path: Path) -> None:
     assert fold_command(root, None) == 0
 
     assert (run_dir / "content.json").read_bytes() == folded
+
+
+def test_a_second_fold_after_an_edited_turn_writes_no_second_thread(
+    tmp_path: Path,
+) -> None:
+    """A hand-fixed turn keeps its id, so the next fold must not clone it."""
+    root = tmp_path / "runs"
+    run_dir = make_run(root)
+    queue_line(run_dir, ASKED)
+    assert fold_command(root, None) == 0
+    document = read_content_file(run_dir)
+    thread = threads_at(document, ANCHOR)[0]
+    thread_id = str(thread["id"])
+    thread["turns"][0]["text"] = "Why does the fold copy bytes, exactly?"
+    write_content(run_dir, document)
+
+    assert fold_command(root, None) == 0
+
+    saved = threads_at(read_content_file(run_dir), ANCHOR)
+    assert [entry["id"] for entry in saved] == [thread_id]
+
+    queue_line(run_dir, "Asked after the edit")
+    assert fold_command(root, None) == 0
+    arrived = [
+        turn["text"]
+        for entry in threads_at(read_content_file(run_dir), ANCHOR)
+        for turn in entry["turns"]
+    ]
+    assert "Asked after the edit" in arrived
+
+
+def test_a_repeated_thread_id_is_named_rather_than_written(
+    tmp_path: Path,
+) -> None:
+    """Two conversations under one id say which id, and where both sit."""
+    root = tmp_path / "runs"
+    run_dir = make_run(root)
+    queue_line(run_dir, ASKED)
+    assert fold_command(root, None) == 0
+    document = read_content_file(run_dir)
+    threads = threads_at(document, ANCHOR)
+    thread_id = str(threads[0]["id"])
+    threads.append(copy.deepcopy(threads[0]))
+    (run_dir / "content.json").write_text(
+        json.dumps(document, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    damaged = (run_dir / "content.json").read_bytes()
+
+    with pytest.raises(CliError) as failure:
+        answer_command(root, None, thread_id, "Which one is this?")
+
+    message = str(failure.value)
+    assert "two conversations carry the id" in message
+    assert thread_id in message and ANCHOR in message
+    assert (run_dir / "content.json").read_bytes() == damaged
 
 
 def test_fold_appends_a_reply_to_the_thread_it_names(tmp_path: Path) -> None:

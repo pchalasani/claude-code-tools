@@ -170,14 +170,24 @@ def _lint_threads(questions: Any, path: str) -> list[str]:
 
 
 def _lint_turns(turns: list[Any], path: str) -> list[str]:
-    """Check one conversation's turn text and turn timestamps."""
+    """Check one conversation's turn text and turn timestamps.
+
+    The enumeration check is about the shape of what the agent wrote, so it
+    only reads agent turns. A human turn is the human's own words, copied out
+    of the queue byte for byte; telling the agent to split it up would be
+    telling it to paraphrase the human, which is exactly what folding exists
+    to prevent. The epoch check reads every turn, because an epoch date is
+    always the agent's doing.
+    """
     warnings: list[str] = []
     for index, turn in enumerate(turns):
         if not isinstance(turn, dict):
             continue
         text = turn.get("text")
-        if isinstance(text, str) and _enumeration_markers(text) > (
-            MAX_INLINE_MARKERS
+        if (
+            turn.get("author") == "agent"
+            and isinstance(text, str)
+            and _enumeration_markers(text) > MAX_INLINE_MARKERS
         ):
             warnings.append(
                 f"{path}: turn {index + 1} holds an enumeration; a turn is "
@@ -197,7 +207,10 @@ def _lint_queue(run_dir: Path, data: Any) -> list[str]:
     records = queue_records(run_dir)
     if not records:
         return []
-    view = document_view(normalize_document(data))
+    legacy_unknown_ids: set[str] = set()
+    view = document_view(
+        normalize_document(data, legacy_unknown_ids), legacy_unknown_ids
+    )
     written_at = _content_written_at(run_dir)
     if written_at is None:
         return []

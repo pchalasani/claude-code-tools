@@ -12,6 +12,7 @@ def normalize_document(
     data: Any,
     legacy_unknown_ids: set[str] | None = None,
     legacy_id_aliases: dict[str, str] | None = None,
+    legacy_sources: dict[str, Any] | None = None,
 ) -> Any:
     """Return a deep copy with legacy question pairs converted to threads.
 
@@ -21,6 +22,9 @@ def normalize_document(
             original ``asked_at`` timestamp.
         legacy_id_aliases: Optional mapping from prior generated IDs to their
             timestamp-stable replacements.
+        legacy_sources: Optional mapping from each converted thread's id back
+            to the pair it came from, so a caller that only reads the
+            conversion can still write the original bytes back.
 
     Returns:
         An independent value whose recognized legacy pairs are threads.
@@ -58,6 +62,7 @@ def normalize_document(
                 lane_path,
                 legacy_unknown_ids,
                 legacy_id_aliases,
+                legacy_sources,
             )
             items = lane.get("items")
             if not isinstance(items, list):
@@ -77,6 +82,7 @@ def normalize_document(
                     f"{lane_path}/{item_id}",
                     legacy_unknown_ids,
                     legacy_id_aliases,
+                    legacy_sources,
                 )
     return normalized
 
@@ -97,6 +103,7 @@ def _normalize_questions(
     path: str,
     legacy_unknown_ids: set[str] | None,
     legacy_id_aliases: dict[str, str] | None,
+    legacy_sources: dict[str, Any] | None = None,
 ) -> None:
     """Convert recognized legacy entries on one lane or item."""
     questions = owner.get("questions")
@@ -158,6 +165,8 @@ def _normalize_questions(
             ).hexdigest()[:12]
             legacy_id_aliases[f"q-{timestamp_digest}"] = thread["id"]
         converted.append(thread)
+        if legacy_sources is not None:
+            legacy_sources[thread["id"]] = entry
         if (
             legacy_unknown_ids is not None
             and (not isinstance(asked_at, str) or not asked_at.strip())
@@ -183,6 +192,34 @@ def is_legacy_pair(value: Any) -> bool:
     )
 
 
+def legacy_pair_turns(pair: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the turns one legacy pair converts to.
+
+    Args:
+        pair: An iteration-1 ``{question, answer}`` entry.
+
+    Returns:
+        The converted turns. A caller holding a converted thread can compare
+        against these to tell an untouched conversion from an edited one.
+    """
+    timestamp, _ = _legacy_timestamp(pair)
+    turns = [
+        {"author": "human", "text": pair.get("question"), "at": timestamp}
+    ]
+    answer = pair.get("answer")
+    if isinstance(answer, str) and answer.strip():
+        turns.append({"author": "agent", "text": answer, "at": timestamp})
+    return turns
+
+
+def _legacy_timestamp(pair: dict[str, Any]) -> tuple[str, bool]:
+    """Return a pair's conversion instant, and whether the pair carried it."""
+    timestamp = pair.get("asked_at")
+    if isinstance(timestamp, str) and timestamp.strip():
+        return timestamp.strip(), True
+    return LEGACY_TIMESTAMP, False
+
+
 def _legacy_thread(
     pair: dict[str, Any],
     path: str,
@@ -190,16 +227,8 @@ def _legacy_thread(
 ) -> dict[str, Any]:
     """Convert one legacy pair without mutating its source object."""
     question = pair.get("question")
-    timestamp = pair.get("asked_at")
-    has_timestamp = isinstance(timestamp, str) and bool(timestamp.strip())
-    if not has_timestamp:
-        timestamp = LEGACY_TIMESTAMP
-    else:
-        timestamp = timestamp.strip()
-    turns = [{"author": "human", "text": question, "at": timestamp}]
-    answer = pair.get("answer")
-    if isinstance(answer, str) and answer.strip():
-        turns.append({"author": "agent", "text": answer, "at": timestamp})
+    timestamp, has_timestamp = _legacy_timestamp(pair)
+    turns = legacy_pair_turns(pair)
     if not has_timestamp:
         identity_version = "\0undated-v2"
     elif timestamp == LEGACY_TIMESTAMP:

@@ -13,12 +13,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from visual_brief.render.threads import normalize_document
+from visual_brief.writes.legacy import read_for_write, settle_legacy_pairs
 from visual_brief.writes.lint import report_lint
 from visual_brief.writes.runfiles import (
     CliError,
     local_timestamp,
-    read_content,
     resolve_run,
     save_document,
 )
@@ -50,7 +49,7 @@ def publish_now_command(runs_root: Path, run_id: str | None, panel: Any) -> int:
     if not isinstance(stamp, str) or not stamp.strip():
         panel["timestamp"] = local_timestamp()
 
-    document = normalize_document(read_content(run_dir))
+    document, legacy = read_for_write(run_dir)
     updates = _updates(document)
     position = _now_position(updates)
     previous = updates[position] if position is not None else None
@@ -59,6 +58,7 @@ def publish_now_command(runs_root: Path, run_id: str | None, panel: Any) -> int:
         updates.append(panel)
     else:
         updates[position] = panel
+    settle_legacy_pairs(run_dir, document, legacy)
     index_path = save_document(run_dir, document)
 
     for path, thread in orphans:
@@ -106,7 +106,7 @@ def add_update_command(runs_root: Path, run_id: str | None, update: Any) -> int:
     if not isinstance(stamp, str) or not stamp.strip():
         raise CliError("a dated update must carry a timestamp")
 
-    document = normalize_document(read_content(run_dir))
+    document, legacy = read_for_write(run_dir)
     updates = _updates(document)
     if any(
         isinstance(existing, dict) and existing.get("id") == update_id
@@ -117,6 +117,7 @@ def add_update_command(runs_root: Path, run_id: str | None, update: Any) -> int:
             "never rewritten"
         )
     updates.append(update)
+    settle_legacy_pairs(run_dir, document, legacy)
     index_path = save_document(run_dir, document)
     print(f"add-update: appended {update_id}; rendered {index_path}")
     report_lint(run_dir, document)

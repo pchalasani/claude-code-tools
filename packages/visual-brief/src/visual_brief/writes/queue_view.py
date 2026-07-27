@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from visual_brief.server.counting import (
     _collect_thread_state,
@@ -34,12 +34,18 @@ class QueueRecord:
 
 @dataclass(frozen=True, slots=True)
 class DocumentView:
-    """What a saved document says about its threads and anchors."""
+    """What a saved document says about its threads and anchors.
+
+    ``human_turns`` maps each saved human turn's anchor and text to the
+    instants it was recorded at. An undated legacy pair contributes ``None``,
+    which stands for "the saved instant is unknown" — the same thing the
+    accounting means by it.
+    """
 
     thread_anchors: dict[str, str]
     threads: dict[str, dict[str, Any]]
     anchors: dict[str, dict[str, Any]]
-    human_turns: frozenset[tuple[str, str, str]]
+    human_turns: dict[tuple[str, str], frozenset[str | None]]
 
 
 def queue_records(run_dir: Path) -> list[QueueRecord]:
@@ -68,39 +74,90 @@ def queue_records(run_dir: Path) -> list[QueueRecord]:
     return records
 
 
-def document_view(document: Any) -> DocumentView:
+def document_view(
+    document: Any,
+    legacy_unknown_ids: set[str] | None = None,
+) -> DocumentView:
     """Summarize a document's threads, anchors and saved human turns.
 
     Args:
         document: A normalized visual brief document.
+        legacy_unknown_ids: Ids of threads the normalization built from a
+            legacy pair that carried no ``asked_at``. Passing them is what
+            makes a fold agree with the awaiting badge: their saved instant
+            is unknown, not 1970.
 
     Returns:
         The thread anchors, thread objects, anchor owners and the identity of
         every human turn already saved.
     """
-    states, folded, threads, owners = _collect_thread_state(document)
-    human_turns = frozenset(
-        (anchor, text, _timestamp_text(timestamp))
-        for _, anchor, text, timestamp in folded
+    states, folded, threads, owners = _collect_thread_state(
+        document, legacy_unknown_ids
     )
+    human_turns: dict[tuple[str, str], set[str | None]] = {}
+    for _, anchor, text, timestamp in folded:
+        human_turns.setdefault((anchor, text), set()).add(
+            _timestamp_text(timestamp)
+        )
     return DocumentView(
         thread_anchors={
             thread_id: anchor for thread_id, (anchor, _) in states.items()
         },
         threads=threads,
         anchors=owners,
-        human_turns=human_turns,
+        human_turns={key: frozenset(value) for key, value in human_turns.items()},
     )
 
 
-def record_identity(record: QueueRecord) -> tuple[str, str, str]:
+def question_lists(document: Any) -> Iterator[tuple[str, list[Any]]]:
+    """Yield every conversation list in a document, with its anchor path.
+
+    Args:
+        document: A document, normalized or exactly as it was read.
+
+    Yields:
+        The anchor path of each lane and item that carries conversations,
+        paired with the list itself, so a caller can read the entries or
+        replace them in place.
+    """
+    updates = document.get("updates") if isinstance(document, dict) else None
+    if not isinstance(updates, list):
+        return
+    for update in updates:
+        if not isinstance(update, dict):
+            continue
+        update_id = update.get("id")
+        lanes = update.get("lanes")
+        if not isinstance(update_id, str) or not isinstance(lanes, list):
+            continue
+        for lane in lanes:
+            if not isinstance(lane, dict):
+                continue
+            lane_id = lane.get("id")
+            if not isinstance(lane_id, str):
+                continue
+            lane_path = f"{update_id}/{lane_id}"
+            yield from _owner_questions(lane, lane_path)
+            items = lane.get("items")
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                item_id = item.get("id")
+                if isinstance(item_id, str):
+                    yield from _owner_questions(item, f"{lane_path}/{item_id}")
+
+
+def record_identity(record: QueueRecord) -> tuple[str, str, str | None]:
     """Return the anchor, text and instant that identify a queue line.
 
     Args:
         record: One queue record.
 
     Returns:
-        The identity a saved human turn must match to count as folded.
+        The identity a saved human turn must match to count as folded, with
+        ``None`` for an instant the line does not carry.
     """
     return (record.anchor_id, record.text, _timestamp_text(record.timestamp))
 
@@ -113,10 +170,17 @@ def is_folded(record: QueueRecord, view: DocumentView) -> bool:
         view: A summary of the saved document.
 
     Returns:
-        True when a saved human turn carries the same anchor, text and
-        instant.
+        True when a saved human turn carries the same anchor and text, and an
+        instant that matches. An unknown instant on either side matches any
+        instant, which is the rule the awaiting badge counts by: a pair
+        converted from an undated legacy entry is still the queue line it
+        came from.
     """
-    return record_identity(record) in view.human_turns
+    anchor, text, instant = record_identity(record)
+    saved = view.human_turns.get((anchor, text))
+    if saved is None:
+        return False
+    return instant is None or None in saved or instant in saved
 
 
 def parse_timestamp(value: Any) -> datetime | None:
@@ -152,6 +216,17 @@ def _parse_record(record: dict[str, Any]) -> QueueRecord | None:
     )
 
 
-def _timestamp_text(value: Any) -> str:
-    """Return a comparable text form of a normalized timestamp key."""
-    return str(_timestamp_key(value) if isinstance(value, str) else value)
+def _owner_questions(
+    owner: dict[str, Any],
+    path: str,
+) -> Iterator[tuple[str, list[Any]]]:
+    """Yield one lane's or item's conversation list when it has one."""
+    questions = owner.get("questions")
+    if isinstance(questions, list):
+        yield path, questions
+
+
+def _timestamp_text(value: Any) -> str | None:
+    """Return a comparable text form, or ``None`` for an unknown instant."""
+    key = _timestamp_key(value) if isinstance(value, str) else value
+    return None if key is None else str(key)

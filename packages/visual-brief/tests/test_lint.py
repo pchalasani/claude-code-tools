@@ -14,11 +14,13 @@ from write_support import (
     make_run,
     owner_at,
     queue_line,
+    read_content_file,
+    threads_at,
     with_thread,
     write_content,
 )
 from visual_brief.cli import main, render_command
-from visual_brief.writes import lint_document, publish_now_command
+from visual_brief.writes import fold_command, lint_document, publish_now_command
 from visual_brief.writes.lint import lint_command, lint_run
 
 CRAMMED = (
@@ -69,6 +71,25 @@ def test_an_enumeration_crammed_into_a_turn_is_reported() -> None:
     warnings = lint_document(document)
 
     assert any("turn 2 holds an enumeration" in warning for warning in warnings)
+
+
+def test_a_humans_own_list_is_not_the_agents_to_split(tmp_path: Path) -> None:
+    """A folded question is the human's words; only the agent's are checked."""
+    root = tmp_path / "runs"
+    run_dir = make_run(root)
+    queue_line(run_dir, CRAMMED)
+    assert fold_command(root, None) == 0
+    document = read_content_file(run_dir)
+
+    assert lint_document(document) == []
+
+    threads_at(document, ANCHOR)[0]["turns"].append(
+        {"author": "agent", "text": CRAMMED, "at": "2027-01-01T00:00:00Z"}
+    )
+    assert any(
+        "turn 2 holds an enumeration" in warning
+        for warning in lint_document(document)
+    )
 
 
 def test_ordinary_prose_is_not_mistaken_for_a_list() -> None:

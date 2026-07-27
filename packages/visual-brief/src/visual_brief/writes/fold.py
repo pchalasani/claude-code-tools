@@ -14,8 +14,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from visual_brief.render.threads import normalize_document
 from visual_brief.server.counting import merge_pending_followups
+from visual_brief.writes.legacy import (
+    LegacyPairs,
+    normalize_for_write,
+    settle_legacy_pairs,
+)
 from visual_brief.writes.lint import report_lint
 from visual_brief.writes.queue_view import (
     DocumentView,
@@ -57,12 +61,21 @@ def fold_command(runs_root: Path, run_id: str | None) -> int:
             would not validate.
     """
     _, run_dir = resolve_run(runs_root, run_id)
-    before = normalize_document(read_content(run_dir))
-    merged = merge_pending_followups(run_dir)
+    saved = read_content(run_dir)
+    before, before_legacy = normalize_for_write(saved)
+    merged_legacy = LegacyPairs()
+    merged = merge_pending_followups(
+        run_dir, merged_legacy.undated, merged_legacy.sources
+    )
     document = before if merged is None else merged
+    undated = before_legacy.undated if merged is None else merged_legacy.undated
     folded = _describe_folded(before, document)
-    left = _describe_unfolded(run_dir, document)
-    index_path = save_document(run_dir, merged) if merged is not None else None
+    left = _describe_unfolded(run_dir, document, undated)
+    index_path = None
+    if merged is not None:
+        settle_legacy_pairs(run_dir, merged, merged_legacy)
+        index_path = save_document(run_dir, merged)
+        saved = merged
 
     for entry in folded:
         opening = (
@@ -77,7 +90,7 @@ def fold_command(runs_root: Path, run_id: str | None) -> int:
         _print_block(record.text, sys.stderr)
 
     print(_summary(folded, left, index_path))
-    report_lint(run_dir, document)
+    report_lint(run_dir, saved)
     return 0
 
 
@@ -133,9 +146,10 @@ def _describe_folded(before: Any, after: Any) -> list[FoldedTurn]:
 def _describe_unfolded(
     run_dir: Path,
     document: Any,
+    legacy_unknown_ids: set[str],
 ) -> list[tuple[QueueRecord, str]]:
     """List the queue lines the fold could not place, and why."""
-    view = document_view(document)
+    view = document_view(document, legacy_unknown_ids)
     return [
         (record, _unfolded_reason(record, view))
         for record in queue_records(run_dir)

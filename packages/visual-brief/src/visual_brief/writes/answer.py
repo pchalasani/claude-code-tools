@@ -12,13 +12,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from visual_brief.render.threads import normalize_document
 from visual_brief.server.counting import merge_pending_followups
+from visual_brief.writes.legacy import read_for_write, settle_legacy_pairs
 from visual_brief.writes.lint import report_lint
 from visual_brief.writes.queue_view import document_view, parse_timestamp
 from visual_brief.writes.runfiles import (
     CliError,
-    read_content,
     resolve_run,
     save_document,
     utc_timestamp,
@@ -50,14 +49,15 @@ def answer_command(
     answer = text.strip()
     if not answer:
         raise CliError("the answer text must not be empty")
-    document = normalize_document(read_content(run_dir))
-    view = document_view(document)
+    document, legacy = read_for_write(run_dir)
+    view = document_view(document, legacy.undated)
     thread = view.threads.get(thread_id)
     if thread is None:
         raise CliError(_unknown_thread(run_dir, thread_id))
     at = utc_timestamp(milliseconds=True)
     _require_clock_after(thread, at, thread_id)
     thread["turns"].append({"author": "agent", "text": answer, "at": at})
+    settle_legacy_pairs(run_dir, document, legacy)
     index_path = save_document(run_dir, document)
     anchor = view.thread_anchors.get(thread_id, "")
     print(f"answer: appended to {thread_id} at {anchor}; rendered {index_path}")

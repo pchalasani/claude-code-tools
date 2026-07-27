@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from visual_brief.render.threads import normalize_document
-from visual_brief.server.counting_io import _contained_child, _read_json_object
-from visual_brief.server.queue import MAX_QUESTION_LENGTH, MAX_QUEUE_RECORD_BYTES
+from visual_brief.server.counting_io import (
+    _contained_child,
+    _question_records,
+    _read_json_object,
+)
+from visual_brief.server.queue import MAX_QUESTION_LENGTH
 
 FoldedKey = tuple[str | None, str, str, datetime | str | None]
 ThreadState = tuple[str, bool]
@@ -43,26 +46,6 @@ def count_unanswered_questions(run_dir: Path) -> int:
     return len(awaiting) + new_threads
 
 
-def _question_records(queue: Any) -> Iterator[dict[str, Any]]:
-    """Yield bounded, decoded question records from a queue stream."""
-    while line := queue.readline(MAX_QUEUE_RECORD_BYTES + 1):
-        complete = line.endswith(b"\n")
-        oversized = len(line) > MAX_QUEUE_RECORD_BYTES
-        if oversized and not complete:
-            complete = _discard_record_remainder(queue)
-        if oversized or not complete:
-            continue
-        try:
-            record = json.loads(line.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            continue
-        if not isinstance(record, dict):
-            continue
-        if record.get("type", "question") != "question":
-            continue
-        yield record
-
-
 def _consume_folded(
     folded: Counter[FoldedKey],
     key: FoldedKey,
@@ -78,14 +61,6 @@ def _consume_folded(
             folded[candidate] -= 1
             return candidate
     return None
-
-
-def _discard_record_remainder(queue: Any) -> bool:
-    """Discard a long record in bounded chunks and report completeness."""
-    while chunk := queue.readline(MAX_QUEUE_RECORD_BYTES + 1):
-        if chunk.endswith(b"\n"):
-            return True
-    return False
 
 
 def _collect_thread_state(
@@ -236,22 +211,46 @@ def reply_target_error(
     return None
 
 
-def merge_pending_followups(run_dir: Path) -> dict[str, Any] | None:
-    """Return content with valid, unfolded follow-ups added in memory."""
-    normalized, changed, _ = _merge_pending_content(run_dir)
+def merge_pending_followups(
+    run_dir: Path,
+    legacy_unknown_ids: set[str] | None = None,
+    legacy_sources: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Return content with valid, unfolded follow-ups added in memory.
+
+    Args:
+        run_dir: The run directory.
+        legacy_unknown_ids: Optional collector for undated converted pairs.
+        legacy_sources: Optional map from converted thread id to its pair.
+
+    Returns:
+        The merged document, or ``None`` when nothing was pending.
+    """
+    normalized, changed, _ = _merge_pending_content(
+        run_dir, legacy_unknown_ids, legacy_sources
+    )
     return normalized if changed else None
 
 
 def _merge_pending_content(
     run_dir: Path,
+    legacy_unknown_ids: set[str] | None = None,
+    legacy_sources: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, bool, list[dict[str, Any]]]:
-    """Merge timestamped queue records and retain undated legacy records."""
+    """Merge timestamped queue records and retain undated legacy records.
+
+    A queue line whose generated id already names a saved thread counts as
+    folded whatever that thread's turns now say: adding it again would put
+    two threads with one id in the document, which no later run can repair.
+    """
     content, content_generation = _read_json_object(run_dir, "content.json")
     if content is None:
         return None, False, []
-    legacy_unknown_ids: set[str] = set()
+    legacy_unknown_ids = set() if legacy_unknown_ids is None else legacy_unknown_ids
     aliases: dict[str, str] = {}
-    normalized = normalize_document(content, legacy_unknown_ids, aliases)
+    normalized = normalize_document(
+        content, legacy_unknown_ids, aliases, legacy_sources
+    )
     states, folded, threads, owners = _collect_thread_state(
         normalized, legacy_unknown_ids
     )
@@ -333,6 +332,8 @@ def _merge_pending_content(
                 ):
                     continue
                 if parent is None:
+                    if pending_id in threads:
+                        continue
                     owner = owners.get(anchor)
                     if owner is None:
                         legacy_records.append(record)

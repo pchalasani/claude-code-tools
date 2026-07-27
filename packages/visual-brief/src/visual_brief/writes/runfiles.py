@@ -23,6 +23,7 @@ from visual_brief.server.registry import (
     resolve_run_path,
     validate_run_id,
 )
+from visual_brief.writes.queue_view import question_lists
 
 
 class CliError(Exception):
@@ -105,10 +106,36 @@ def render_html(run_dir: Path, data: Any) -> str:
     Raises:
         CliError: If the document does not satisfy the schema.
     """
+    content_path = run_dir / "content.json"
+    collision = _repeated_thread(data)
+    if collision is not None:
+        thread_id, first, second = collision
+        raise CliError(
+            f"{content_path}: two conversations carry the id {thread_id!r}, "
+            f"one at {first} and one at {second}; an id names one "
+            "conversation, and the queue line that generated it can only "
+            "belong to one of them — keep that one and drop the other"
+        )
     try:
         return render_content(data)
     except ValueError as error:
-        raise CliError(f"{run_dir / 'content.json'}: {error}") from error
+        raise CliError(f"{content_path}: {error}") from error
+
+
+def _repeated_thread(data: Any) -> tuple[str, str, str] | None:
+    """Return the first repeated conversation id and both anchor paths."""
+    seen: dict[str, str] = {}
+    for path, questions in question_lists(data):
+        for thread in questions:
+            if not isinstance(thread, dict):
+                continue
+            thread_id = thread.get("id")
+            if not isinstance(thread_id, str):
+                continue
+            if thread_id in seen:
+                return thread_id, seen[thread_id], path
+            seen[thread_id] = path
+    return None
 
 
 def publish_render(run_dir: Path, data: Any) -> Path:
