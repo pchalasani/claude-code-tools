@@ -47,10 +47,13 @@ vendored at `upstream/` inside this skill directory (commit recorded in
    ```
 
    Pass a context mode as the second argument when the text is technical
-   documentation, so the detector suppresses checks that are legitimate in
-   technical prose. (This sets the detector's `contextMode`, which is a
-   separate axis from the skill's voice profile; it does not select the
-   technical voice.)
+   documentation. In this detector, `technical` has one concrete effect: it
+   skips the `title-case-header` check (Title Case section headings are
+   legitimate in technical docs). It does not broadly relax vocabulary
+   checks, and it is not the same as selecting the skill's `technical`
+   VOICE profile (context and voice are separate axes); the wider
+   technical-prose word exceptions live in the upstream skill's rewrite
+   rules, not in the detector.
 
    ```bash
    node "$SKILL_DIR/scripts/detect.js" FILE technical
