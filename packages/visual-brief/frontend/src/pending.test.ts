@@ -104,6 +104,34 @@ describe("finding what a sent message became", () => {
     ).toEqual([`${ITEM}#q-first`, `${ITEM}#q-second`]);
   });
 
+  it("retires two submissions the fold put in one conversation", () => {
+    // A question and the follow-up written into the same thread come back as
+    // two turns of one conversation. Claiming the thread rather than the turn
+    // left the follow-up looking unsent for the rest of the session.
+    const later = "2026-07-27T09:05:00.000Z";
+    const brief = briefWith([
+      [
+        "q-one-thread",
+        [
+          asked("Why this way?"),
+          {
+            author: "agent",
+            text: "Because of the parser.",
+            at: "2026-07-27T09:02:00.000Z",
+          },
+          asked("And the other parser?", later),
+        ],
+      ],
+    ]);
+
+    expect(
+      locateSubmissions(brief, [
+        sent("Why this way?"),
+        sent("And the other parser?", later),
+      ]),
+    ).toEqual([`${ITEM}#q-one-thread`, `${ITEM}#q-one-thread`]);
+  });
+
   it("finds it under whatever id the fold gave it, and however deep", () => {
     // The provisional id a queued question is shown under is not the id it
     // keeps, which is exactly why the match is on the words and the instant.

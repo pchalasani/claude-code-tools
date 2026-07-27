@@ -1,55 +1,42 @@
-"""Real-browser support for visual brief interaction tests."""
+"""Real-browser support for visual brief interaction tests.
+
+The driver a suite drives: real keys, real clicks, and readings taken off the
+painted page. The document it drives lives next door in ``browser_server``,
+whose row identifiers are re-exported here so a suite has one import.
+"""
 
 from __future__ import annotations
 
 import json
 import shutil
 import subprocess
-import threading
 import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from typing import Any, Callable, Iterator
 
 import pytest
 
-from cdp import emulated_media
-from visual_brief.render import render_content
-from visual_brief.render.page import POLL_INTERVAL_MS
-from visual_brief.server.served_page import page_generation
-
-EXAMPLE_PATH = Path(__file__).parents[1] / "example.json"
-
-# The served page carries its own poll interval, so a suite that has to watch
-# the page notice something does not have to wait five real seconds for it.
-FAST_POLL_MS = 250
-
-
-def served_page(data: dict[str, Any]) -> str:
-    """Render one page that checks itself often enough to be watched.
-
-    Args:
-        data: The document to render.
-
-    Returns:
-        The rendered page, asking to be checked every few hundred
-        milliseconds instead of every few seconds.
-    """
-    return render_content(data).replace(
-        f'content="{POLL_INTERVAL_MS}"',
-        f'content="{FAST_POLL_MS}"',
-        1,
-    )
-
-# Rows of the served example page that the interaction suites navigate by.
-FIRST_ITEM = "current-update/what-changed/differential-reader-check"
-SECOND_ITEM = "current-update/what-changed/four-cold-review-defects"
-AWAITING_THREAD = (
-    "current-update/why-it-matters/repair-loop-routing#q-malformed-unsupported"
+from browser_server import (
+    AWAITING_THREAD,
+    FIRST_ITEM,
+    SECOND_ITEM,
+    PageServer,
+    browser_data,
+    served_page,
+    serving,
 )
+from cdp import emulated_media
+
+__all__ = [
+    "AWAITING_THREAD",
+    "FIRST_ITEM",
+    "SECOND_ITEM",
+    "Browser",
+    "browser_session",
+    "landing_at",
+]
 
 
 def landing_at(row_id: str) -> str:
@@ -82,106 +69,13 @@ def landing_at(row_id: str) -> str:
     """
 
 
-def _browser_data() -> dict[str, Any]:
-    """Return example data with two awaiting threads."""
-    data = json.loads(EXAMPLE_PATH.read_text(encoding="utf-8"))
-    threads = [
-        data["updates"][0]["lanes"][0]["items"][0]["questions"][0],
-        data["updates"][1]["lanes"][1]["items"][0]["questions"][0],
-    ]
-    for index, thread in enumerate(threads):
-        thread["turns"].append(
-            {
-                "author": "human",
-                "text": f"Awaiting follow-up {index}",
-                "at": f"2026-07-25T20:0{index}:00Z",
-            }
-        )
-    return data
-
-
-class _Handler(BaseHTTPRequestHandler):
-    """Serve the current rendered page and reload version."""
-
-    server: "_TestServer"
-
-    def do_GET(self) -> None:
-        """Serve one test resource."""
-        if self.path.endswith("/render-version"):
-            if self.server.version_status != 200:
-                self.send_response(self.server.version_status)
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                return
-            spoken = self.server.version_body
-            body = (
-                spoken.encode()
-                if spoken is not None
-                else page_generation(self.server.html.encode())
-            )
-            content_type = "text/plain"
-        else:
-            html = self.server.html
-            if self.server.replacement_html is not None:
-                self.server.html = self.server.replacement_html
-                self.server.replacement_html = None
-            body = html.encode()
-            content_type = "text/html"
-        self.send_response(200)
-        self.send_header("Content-Type", f"{content_type}; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_POST(self) -> None:
-        """Accept local form and signal requests made during interaction tests."""
-        length = int(self.headers.get("Content-Length", "0"))
-        body = self.rfile.read(length) if length else b""
-        self.server.posts.append((self.path, json.loads(body)))
-        self.server.post_count += 1
-        if self.server.post_gate is not None:
-            self.server.post_gate.wait(timeout=5)
-        if self.server.refuse:
-            self.send_response(500)
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-            return
-        # The real daemon reports the instant it stamped the queue line, and
-        # the page recognizes its own message by those words at that instant.
-        stamp = f"2026-07-25T21:00:{self.server.post_count:02d}Z"
-        self.server.stamps.append(stamp)
-        queued = json.dumps({"status": "queued", "timestamp": stamp}).encode()
-        self.send_response(202)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(queued)))
-        self.end_headers()
-        self.wfile.write(queued)
-
-    def log_message(self, format: str, *args: object) -> None:
-        """Keep browser-test requests out of pytest output."""
-
-
-class _TestServer(ThreadingHTTPServer):
-    """HTTP server with mutable rendered content."""
-
-    html: str
-    replacement_html: str | None = None
-    posts: list[tuple[str, dict[str, Any]]]
-    stamps: list[str]
-    post_count: int
-    post_gate: threading.Event | None
-    refuse: bool = False
-    version_body: str | None = None
-    version_status: int = 200
-
-
 @dataclass
 class Browser:
     """Small real-browser driver around the installed agent-browser CLI."""
 
     executable: str
     session: str
-    server: _TestServer
+    server: PageServer
     data: dict[str, Any]
 
     @property
@@ -385,27 +279,15 @@ def browser_session() -> Iterator[Browser]:
             "agent-browser is required by the visual-brief verification suite; "
             "install it before running the documented pytest command"
         )
-    data = _browser_data()
-    server = _TestServer(("127.0.0.1", 0), _Handler)
-    server.html = served_page(data)
-    server.posts = []
-    server.stamps = []
-    server.post_count = 0
-    server.post_gate = None
-    server.refuse = False
-    server.version_body = None
-    server.version_status = 200
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    driver = Browser(executable, f"visual-brief-{uuid.uuid4().hex}", server, data)
-    try:
-        _start_browser(driver)
-        yield driver
-    finally:
+    data = browser_data()
+    with serving(data) as server:
+        name = f"visual-brief-{uuid.uuid4().hex}"
+        driver = Browser(executable, name, server, data)
         try:
-            driver.run("close")
-        except (AssertionError, subprocess.TimeoutExpired):
-            pass
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
+            _start_browser(driver)
+            yield driver
+        finally:
+            try:
+                driver.run("close")
+            except (AssertionError, subprocess.TimeoutExpired):
+                pass

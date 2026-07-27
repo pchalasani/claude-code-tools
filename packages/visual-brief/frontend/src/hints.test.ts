@@ -129,6 +129,55 @@ describe("jumping by label", () => {
     expect(hints.active()).toBe(true);
   });
 
+  it("lets the page go when the page repaints underneath it", () => {
+    // Expand-all clicked with the mouse repaints the page while the labels
+    // are up. The rows that arrive have no label, so the labels that are left
+    // describe a page nobody is looking at any more — and the keyboard is
+    // still being swallowed by them.
+    let painted = someRows(3);
+    const went: string[] = [];
+    const hints = createHints({
+      rows: () => painted,
+      select: (id) => went.push(id),
+      keys: "asd",
+    });
+    hints.enter();
+    expect(hints.active()).toBe(true);
+
+    painted = someRows(8);
+
+    expect(hints.active()).toBe(false);
+    expect(hints.labelFor(painted[0]?.id ?? "")).toBeNull();
+    expect(hints.handleKey("a")).toBe(false);
+    expect(went).toEqual([]);
+  });
+
+  it("keeps the labels up while the page stays as it was", () => {
+    const { rows, hints } = layer(5);
+
+    hints.enter();
+    hints.handleKey("a");
+
+    expect(hints.active()).toBe(true);
+    expect(hints.labelFor(rows[1]?.id ?? "")).toBe("as");
+  });
+
+  it("labels the page it is asked about, not the one before it", () => {
+    let painted = someRows(3);
+    const hints = createHints({
+      rows: () => painted,
+      select: () => undefined,
+      keys: "asd",
+    });
+    hints.enter();
+
+    painted = someRows(5);
+    hints.enter();
+
+    expect(hints.active()).toBe(true);
+    expect(painted.every((row) => hints.labelFor(row.id) !== null)).toBe(true);
+  });
+
   it("leaves on Escape without moving the cursor", () => {
     const { hints, went } = layer(3);
     hints.enter();

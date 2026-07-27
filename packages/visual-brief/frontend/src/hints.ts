@@ -6,11 +6,15 @@
  * turns every row the page is painting into a two-keystroke destination: one
  * key paints a short label onto each row, and typing a label goes there.
  *
- * Two rules keep it unambiguous. Labels are the same length across the whole
+ * Three rules keep it unambiguous. Labels are the same length across the whole
  * page, so no label is a prefix of another and no typed label ever has to wait
- * to see whether more is coming. And the labels are a snapshot taken when the
- * mode is entered, so a row cannot renumber itself under the fingers that are
- * halfway through typing its label.
+ * to see whether more is coming. The labels are a snapshot taken when the mode
+ * is entered, so a row cannot renumber itself under the fingers that are
+ * halfway through typing its label. And that snapshot describes one painted
+ * page: the moment anything else repaints the page — an expand-all clicked
+ * with the mouse, new content arriving — the labels go away and the keyboard
+ * goes back to meaning what it usually means, because half a page of labels is
+ * worse than none.
  */
 
 import { createSignal, type Accessor } from "solid-js";
@@ -101,6 +105,31 @@ export function labelRows(
   return painted;
 }
 
+/** What a page nobody is jumping around paints. */
+const NO_LABELS: ReadonlyMap<string, string> = new Map();
+
+/** The labels handed out, and the page they were handed out for. */
+interface Snapshot {
+  /** The rows painted when the labels were taken, in order. */
+  ids: string[];
+  /** Each row's label. */
+  labels: ReadonlyMap<string, string>;
+}
+
+/**
+ * Report whether a snapshot still describes what is on the screen.
+ *
+ * @param rows - The rows the page is painting now.
+ * @param ids - The rows it was painting when the labels were taken.
+ * @returns True when they are the same rows in the same order.
+ */
+function samePage(rows: Row[], ids: string[]): boolean {
+  return (
+    rows.length === ids.length
+    && rows.every((row, index) => row.id === ids[index])
+  );
+}
+
 /**
  * Build the hint layer for one page.
  *
@@ -116,19 +145,39 @@ export function createHints(deps: {
   keys?: string;
 }): Hints {
   const keys = deps.keys ?? HINT_KEYS;
-  const [labels, setLabels] = createSignal<ReadonlyMap<string, string>>(
-    new Map(),
-  );
+  const [snapshot, setSnapshot] = createSignal<Snapshot | null>(null);
   const [typed, setTyped] = createSignal("");
+  // What the last comparison was made against. The rows come from a memo, so
+  // the same painted page is the same array: the check is an identity test on
+  // every read and a walk only when the page has actually been repainted.
+  let checked: { rows: Row[]; current: boolean } | null = null;
+
+  const labels = (): ReadonlyMap<string, string> => {
+    const taken = snapshot();
+    if (taken === null) {
+      return NO_LABELS;
+    }
+    const rows = deps.rows();
+    if (checked === null || checked.rows !== rows) {
+      checked = { rows, current: samePage(rows, taken.ids) };
+    }
+    return checked.current ? taken.labels : NO_LABELS;
+  };
 
   const leave = (): void => {
-    setLabels(new Map());
+    checked = null;
+    setSnapshot(null);
     setTyped("");
   };
 
   const enter = (): void => {
+    const rows = deps.rows();
     setTyped("");
-    setLabels(labelRows(deps.rows(), keys));
+    checked = { rows, current: true };
+    setSnapshot({
+      ids: rows.map((row) => row.id),
+      labels: labelRows(rows, keys),
+    });
   };
 
   const active = (): boolean => labels().size > 0;

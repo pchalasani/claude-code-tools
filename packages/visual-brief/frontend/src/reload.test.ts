@@ -32,6 +32,16 @@ function serve(ok: boolean, body: string): void {
   })) as unknown as typeof globalThis.fetch;
 }
 
+/** Accept the next request and never answer it, until it is abandoned. */
+function hang(): void {
+  globalThis.fetch = ((_path: string, init?: RequestInit) =>
+    new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        reject(new Error("the request was abandoned"));
+      });
+    })) as unknown as typeof globalThis.fetch;
+}
+
 afterEach(() => {
   globalThis.fetch = realFetch;
 });
@@ -221,6 +231,27 @@ describe("what the daemon says", () => {
 
     expect(await pollOnce(driver.watch)).toBe("retry");
     expect(driver.reloads()).toBe(0);
+  });
+
+  it("gives up on a daemon that answers by never answering", async () => {
+    // A daemon that accepts the connection and then freezes used to end the
+    // watch: the promise never settled, so the next cycle was never
+    // scheduled, and the tab stopped checking for the rest of its life.
+    hang();
+    const driver = watching(() => readServedVersion(20));
+
+    expect(await readServedVersion(20)).toBeNull();
+    expect(await pollOnce(driver.watch)).toBe("retry");
+    expect(driver.reloads()).toBe(0);
+  });
+
+  it("stops waiting the moment a hung request is given up on", async () => {
+    hang();
+    const started = Date.now();
+
+    await readServedVersion(20);
+
+    expect(Date.now() - started).toBeLessThan(2000);
   });
 });
 

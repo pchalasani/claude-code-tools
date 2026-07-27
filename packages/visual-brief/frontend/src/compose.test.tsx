@@ -133,4 +133,51 @@ describe("writing where the cursor is", () => {
     expect(document.querySelector(".composer")).toBeNull();
     expect(paintedOpen("newest/next")).toBe("true");
   });
+
+  it("brings back the whole way to a note that landed on a folded page", async () => {
+    // A send takes seconds and the page stays live throughout, so the human
+    // can fold everything while their words are still in the air. Opening
+    // only the row they wrote in would leave the note they are waiting for
+    // inside a container nobody can see through.
+    const realFetch = globalThis.fetch;
+    let accept = (): void => undefined;
+    globalThis.fetch = (() =>
+      new Promise<Response>((resolve) => {
+        accept = () =>
+          resolve({
+            ok: true,
+            text: async () => '{"status": "queued", "timestamp": "21:00"}',
+          } as unknown as Response);
+      })) as unknown as typeof globalThis.fetch;
+    try {
+      mount();
+      press("c");
+      const box = document.querySelector<HTMLTextAreaElement>(
+        ".composer textarea",
+      );
+      if (box === null) {
+        throw new Error("no chat box");
+      }
+      box.value = "Does this survive a fold?";
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+      document
+        .querySelector(".composer")
+        ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+
+      press("C");
+      expect(paintedOpen("newest/changed")).toBe("false");
+
+      accept();
+      await new Promise((settled) => setTimeout(settled, 0));
+
+      expect(paintedOpen("newest/changed")).toBe("true");
+      expect(paintedOpen("newest/changed/alpha")).toBe("true");
+      expect(
+        document.querySelector('[data-row-id="newest/changed/alpha"] p.pending')
+          ?.textContent,
+      ).toContain("Does this survive a fold?");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
 });

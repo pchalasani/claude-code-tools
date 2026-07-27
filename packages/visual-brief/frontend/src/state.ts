@@ -78,6 +78,12 @@ export function createBriefState(brief: BriefDocument): BriefState {
    * that was written into is opened rather than merely left alone: the note
    * that just landed is rendered inside it, and Escape during a send would
    * otherwise fold the confirmation out of sight before it arrived.
+   *
+   * Opening that row is not enough on its own. A request in flight is seconds
+   * long and the page stays live throughout — Escape, a fold, a collapse of
+   * the whole page — so everything containing the row is opened with it. A
+   * note inside a folded container is a note the human never sees, and it was
+   * the reassurance they were waiting for.
    */
   const releaseRow = (rowId: string, sent: boolean): void => {
     const borrowed = expandedForComposer === rowId;
@@ -85,7 +91,7 @@ export function createBriefState(brief: BriefDocument): BriefState {
       expandedForComposer = null;
     }
     if (sent) {
-      nav.setOpen(rowId, true);
+      revealNow(nav, rowId);
       return;
     }
     if (borrowed) {

@@ -19,6 +19,10 @@
  *   itself in a loop.
  * - Nothing thrown anywhere in a poll may end the polling. Every cycle
  *   schedules the next one from a ``finally``.
+ * - A question that hangs is not an answer either. Every version request
+ *   carries its own deadline, because the next cycle is scheduled only once
+ *   this one settles and one frozen daemon must not end the watch for the
+ *   life of the tab.
  * - Healing is remembered, so a page that comes back exactly as
  *   unintelligible as it left does not reload forever.
  */
@@ -35,6 +39,9 @@ export const POLL_INTERVAL_MS = 5000;
 
 /** Slowest the watch backs off to while the daemon is unreachable. */
 export const MAX_POLL_INTERVAL_MS = 60_000;
+
+/** Longest one version question may hang before it counts as unanswered. */
+export const VERSION_TIMEOUT_MS = 10_000;
 
 /** Narrowest and widest poll interval a page may ask for. */
 const POLL_BOUNDS = [100, 600_000] as const;
@@ -223,15 +230,38 @@ export function announcePoll(outcome: PollOutcome): void {
 /**
  * Ask the local daemon which generation it would serve right now.
  *
+ * The question is given a deadline, because ``fetch`` has none: a daemon that
+ * accepts the connection and then never answers would otherwise leave this
+ * promise pending forever, and the next cycle is only scheduled once this one
+ * settles. One hung request would end the watch for the life of the tab. A
+ * request that runs out of time is no answer at all, which is the case the
+ * poller already knows how to back off from.
+ *
+ * @param timeoutMs - How long to wait before giving up on this question.
  * @returns What the daemon said, or null when the question did not get
  *     through.
  */
-export async function readServedVersion(): Promise<string | null> {
-  const response = await fetch(VERSION_PATH, { cache: "no-store" });
-  if (!response.ok) {
+export async function readServedVersion(
+  timeoutMs: number = VERSION_TIMEOUT_MS,
+): Promise<string | null> {
+  const giveUp = new AbortController();
+  const deadline = setTimeout(() => giveUp.abort(), timeoutMs);
+  try {
+    const response = await fetch(VERSION_PATH, {
+      cache: "no-store",
+      signal: giveUp.signal,
+    });
+    if (!response.ok) {
+      return null;
+    }
+    return (await response.text()).trim();
+  } catch {
+    // Refused, aborted, or out of time: all of them mean the page learned
+    // nothing this cycle, and none of them mean it should reload.
     return null;
+  } finally {
+    clearTimeout(deadline);
   }
-  return (await response.text()).trim();
 }
 
 /**

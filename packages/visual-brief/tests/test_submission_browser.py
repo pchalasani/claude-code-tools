@@ -118,10 +118,7 @@ def _still_at(row_id: str) -> str:
 
 
 def _fold_question_into_content(
-    browser: Browser,
-    thread_id: str,
-    text: str,
-    at: str,
+    browser: Browser, thread_id: str, text: str, at: str
 ) -> None:
     """Publish a sent question as the awaiting conversation it becomes.
 
