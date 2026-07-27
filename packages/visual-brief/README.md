@@ -12,12 +12,24 @@ uv tool install visual-brief
 
 ## Use
 
-Create and render a run, then start the shared daemon:
+Create a run, then start the shared daemon:
 
 ```bash
 visual-brief new --label "Review parser changes" --port 8765
-visual-brief render review-parser-changes-a1b2
 visual-brief serve --port 8765
+```
+
+The content of a run is written by verbs rather than by hand. Each one
+validates the whole document first, writes atomically, and re-renders the
+page:
+
+```bash
+visual-brief publish-now --file now.json   # rewrite the pinned Now panel
+visual-brief add-update --file update.json # append one dated update
+visual-brief fold                          # queued questions into the page
+visual-brief answer <thread-id> --text "…" # reply to one conversation
+visual-brief lint                          # the checks the verbs already run
+visual-brief render <run-id>               # re-render a hand-edited file
 ```
 
 Runs are stored below `$VISUAL_BRIEF_HOME`, which defaults to

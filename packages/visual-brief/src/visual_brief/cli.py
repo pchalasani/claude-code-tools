@@ -1,4 +1,9 @@
-"""Command-line interface for visual brief runs."""
+"""Command-line interface for visual brief runs.
+
+This module is wiring: it parses arguments, resolves the runs root, and hands
+each command to the module that owns it. The verbs that change a run live in
+``visual_brief.writes``.
+"""
 
 from __future__ import annotations
 
@@ -7,32 +12,42 @@ import errno
 import http.client
 import json
 import os
-import re
-import secrets
-import shutil
-import stat
-import subprocess
 import sys
-import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import NoReturn
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
-from visual_brief.render import render_content
 from visual_brief.server.daemon import DEFAULT_PORT, create_server
-from visual_brief.server.registry import (
-    discover_runs,
-    resolve_run_path,
-    validate_run_id,
+from visual_brief.server.registry import discover_runs
+from visual_brief.writes import (
+    CliError,
+    add_update_command,
+    answer_command,
+    fold_command,
+    lint_command,
+    new_command,
+    publish_now_command,
+    publish_render,
+    read_content,
+    read_json_payload,
+    read_text_payload,
+    report_lint,
+    resolve_run,
 )
 
 DEFAULT_RUNS_ROOT = Path("~/.claude/visual-brief/runs/")
 
-
-class CliError(Exception):
-    """A concise user-facing command error."""
+__all__ = [
+    "CliError",
+    "build_parser",
+    "get_runs_root",
+    "list_command",
+    "main",
+    "new_command",
+    "render_command",
+    "serve_command",
+]
 
 
 def get_runs_root() -> Path:
@@ -60,7 +75,69 @@ def build_parser() -> argparse.ArgumentParser:
     render_parser.add_argument("run_id")
 
     subparsers.add_parser("list", help="list runs")
+
+    fold_parser = subparsers.add_parser(
+        "fold",
+        help="fold queued questions into the page",
+    )
+    _add_run_option(fold_parser)
+
+    answer_parser = subparsers.add_parser(
+        "answer",
+        help="answer one conversation on the page",
+    )
+    answer_parser.add_argument("thread_id")
+    _add_run_option(answer_parser)
+    answer_source = answer_parser.add_mutually_exclusive_group()
+    answer_source.add_argument("--text", help="the answer itself")
+    answer_source.add_argument("--file", help="read the answer from a file")
+    _add_stdin_argument(answer_parser)
+
+    publish_parser = subparsers.add_parser(
+        "publish-now",
+        help="rewrite the Now panel",
+    )
+    _add_run_option(publish_parser)
+    publish_parser.add_argument("--file", help="read the panel from a file")
+    _add_stdin_argument(publish_parser)
+
+    update_parser = subparsers.add_parser(
+        "add-update",
+        help="append one dated history update",
+    )
+    _add_run_option(update_parser)
+    update_parser.add_argument("--file", help="read the update from a file")
+    _add_stdin_argument(update_parser)
+
+    lint_parser = subparsers.add_parser("lint", help="check one run's content")
+    _add_run_option(lint_parser)
+    lint_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit 2 when anything is reported",
+    )
     return parser
+
+
+def _add_run_option(parser: argparse.ArgumentParser) -> None:
+    """Add the run selector shared by every verb."""
+    parser.add_argument(
+        "--run",
+        dest="run",
+        default=None,
+        help="run id; optional when exactly one run exists",
+    )
+
+
+def _add_stdin_argument(parser: argparse.ArgumentParser) -> None:
+    """Add the bare ``-`` that reads the payload from standard input."""
+    parser.add_argument(
+        "stdin",
+        nargs="?",
+        choices=["-"],
+        default=None,
+        help="read the payload from standard input",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -74,25 +151,60 @@ def main(argv: list[str] | None = None) -> int:
     """
     args = build_parser().parse_args(argv)
     try:
-        if args.command == "serve":
-            return serve_command(get_runs_root(), args.port)
-        if args.command == "new":
-            return new_command(
-                get_runs_root(),
-                args.label,
-                args.run_id,
-                args.port,
-            )
-        if args.command == "render":
-            return render_command(get_runs_root(), args.run_id)
-        return list_command(get_runs_root())
+        return _dispatch(args)
     except (CliError, ValueError, RuntimeError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
 
+def _dispatch(args: argparse.Namespace) -> int:
+    """Run the selected command."""
+    runs_root = get_runs_root()
+    if args.command == "serve":
+        return serve_command(runs_root, args.port)
+    if args.command == "new":
+        return new_command(runs_root, args.label, args.run_id, args.port)
+    if args.command == "render":
+        return render_command(runs_root, args.run_id)
+    if args.command == "fold":
+        return fold_command(runs_root, args.run)
+    if args.command == "answer":
+        return answer_command(
+            runs_root,
+            args.run,
+            args.thread_id,
+            read_text_payload(args.text, args.file, args.stdin == "-"),
+        )
+    if args.command == "publish-now":
+        return publish_now_command(
+            runs_root,
+            args.run,
+            read_json_payload(args.file, args.stdin == "-"),
+        )
+    if args.command == "add-update":
+        return add_update_command(
+            runs_root,
+            args.run,
+            read_json_payload(args.file, args.stdin == "-"),
+        )
+    if args.command == "lint":
+        return lint_command(runs_root, args.run, args.strict)
+    return list_command(runs_root)
+
+
 def serve_command(runs_root: Path, port: int) -> int:
-    """Start the daemon, or reuse a visual-brief daemon on the port."""
+    """Start the daemon, or reuse a visual-brief daemon on the port.
+
+    Args:
+        runs_root: Directory holding every run.
+        port: Loopback port to bind.
+
+    Returns:
+        The process exit status.
+
+    Raises:
+        CliError: If the port is unusable or occupied by another service.
+    """
     if not 0 <= port <= 65_535:
         raise CliError("--port must be between 0 and 65535")
     try:
@@ -121,74 +233,36 @@ def serve_command(runs_root: Path, port: int) -> int:
     return 0
 
 
-def new_command(
-    runs_root: Path,
-    label: str,
-    run_id: str | None,
-    port: int = DEFAULT_PORT,
-) -> int:
-    """Create a run directory and print copyable URLs for its daemon port."""
-    if not 1 <= port <= 65_535:
-        raise CliError("--port must be between 1 and 65535")
-    label = label.strip()
-    if not label:
-        raise CliError("--label must not be empty")
-    try:
-        runs_root = runs_root.expanduser().resolve()
-        runs_root.mkdir(parents=True, exist_ok=True)
-    except (OSError, RuntimeError) as error:
-        raise CliError(f"could not prepare runs root {runs_root}: {error}") from error
-
-    selected_id = validate_run_id(run_id) if run_id is not None else None
-    try:
-        if selected_id is None:
-            selected_id = _create_generated_run(runs_root, label)
-        else:
-            _initialize_run(runs_root, selected_id, label)
-    except FileExistsError as error:
-        raise CliError(f"run already exists: {selected_id}") from error
-    except (OSError, UnicodeError) as error:
-        identity = selected_id or "generated run"
-        raise CliError(f"could not initialize run {identity}: {error}") from error
-
-    print(f"http://{selected_id}.localhost:{port}/")
-    print(f"http://localhost:{port}/r/{selected_id}/")
-    return 0
-
-
 def render_command(runs_root: Path, run_id: str) -> int:
-    """Render a run's content JSON into its index page."""
-    selected_id = validate_run_id(run_id)
-    run_dir = resolve_run_path(runs_root, selected_id)
-    if not run_dir.is_dir():
-        raise CliError(f"unknown run: {selected_id}")
-    content_path = _run_file(run_dir, "content.json")
-    try:
-        data = json.loads(content_path.read_text(encoding="utf-8"))
-    except OSError as error:
-        raise CliError(f"cannot read {content_path}: {error}") from error
-    except json.JSONDecodeError as error:
-        raise CliError(
-            f"malformed JSON in {content_path} at line {error.lineno}, "
-            f"column {error.colno}: {error.msg}"
-        ) from error
-    try:
-        html = render_content(data)
-    except ValueError as error:
-        raise CliError(f"{content_path}: {error}") from error
-    try:
-        output_path = _run_output_file(run_dir, "index.html")
-        meta_path = _run_output_file(run_dir, "meta.json")
-        _touch_updated_at(meta_path)
-        _write_text_atomic(output_path, html + "\n")
-    except OSError as error:
-        raise CliError(f"cannot write rendered run {selected_id}: {error}") from error
-    print(run_dir / "index.html")
+    """Render a run's content JSON into its index page.
+
+    Args:
+        runs_root: Directory holding every run.
+        run_id: The run to render.
+
+    Returns:
+        The process exit status.
+
+    Raises:
+        CliError: If the run is unknown, unreadable, or invalid.
+    """
+    _, run_dir = resolve_run(runs_root, run_id)
+    data = read_content(run_dir)
+    index_path = publish_render(run_dir, data)
+    print(index_path)
+    report_lint(run_dir, data)
     return 0
 
 
 def list_command(runs_root: Path) -> int:
-    """Print known runs and unanswered-question counts."""
+    """Print known runs and unanswered-question counts.
+
+    Args:
+        runs_root: Directory holding every run.
+
+    Returns:
+        The process exit status.
+    """
     runs = discover_runs(runs_root)
     if not runs:
         print("No visual brief runs.")
@@ -223,169 +297,15 @@ def _visual_brief_health(port: int) -> dict[str, object] | None:
     return data
 
 
-def _create_generated_run(runs_root: Path, label: str) -> str:
-    """Initialize a non-colliding generated run."""
-    slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-") or "run"
-    slug = slug[:31].rstrip("-") or "run"
-    for _ in range(100):
-        candidate = validate_run_id(f"{slug}-{secrets.token_hex(3)}")
-        try:
-            _initialize_run(runs_root, candidate, label)
-        except FileExistsError:
-            continue
-        return candidate
-    raise CliError("could not generate a unique run id")
-
-
-def _initialize_run(runs_root: Path, run_id: str, label: str) -> None:
-    """Build a complete sibling directory, then publish it atomically."""
-    run_dir = resolve_run_path(runs_root, run_id)
-    if run_dir.exists():
-        raise FileExistsError(run_dir)
-    timestamp = _timestamp()
-    cwd = Path.cwd()
-    meta = {
-        "run_id": run_id,
-        "label": label,
-        "cwd": str(cwd),
-        "repo": _git_value(cwd, ["config", "--get", "remote.origin.url"]),
-        "branch": _git_value(cwd, ["branch", "--show-current"]),
-        "created_at": timestamp,
-        "updated_at": timestamp,
-    }
-    content = _initial_content(label)
-    temporary = Path(
-        tempfile.mkdtemp(dir=runs_root, prefix=f".{run_id}.", suffix=".tmp")
-    )
-    try:
-        _run_file(temporary, "meta.json").write_text(
-            json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        _run_file(temporary, "content.json").write_text(
-            json.dumps(content, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        _run_file(temporary, "index.html").write_text(
-            render_content(content) + "\n",
-            encoding="utf-8",
-        )
-        _run_file(temporary, "questions.jsonl").touch(mode=0o600)
-        temporary.rename(run_dir)
-    except BaseException:
-        shutil.rmtree(temporary, ignore_errors=True)
-        raise
-
-
-def _initial_content(label: str) -> dict[str, object]:
-    """Build a small valid document for a newly created run."""
-    return {
-        "title": label,
-        "summary": "This visual brief is ready for content.",
-        "updates": [
-            {
-                "id": "created",
-                "timestamp": "Created",
-                "headline": "The visual brief run is ready",
-                "summary": "Replace content.json, then run visual-brief render.",
-                "lanes": [],
-            }
-        ],
-    }
-
-
-def _git_value(cwd: Path, arguments: list[str]) -> str:
-    """Read optional repository metadata without invoking a shell."""
-    try:
-        completed = subprocess.run(
-            ["git", "-C", str(cwd), *arguments],
-            capture_output=True,
-            check=False,
-            text=True,
-        )
-    except OSError:
-        return ""
-    return completed.stdout.strip() if completed.returncode == 0 else ""
-
-
-def _touch_updated_at(meta_path: Path) -> None:
-    """Update the activity timestamp in readable run metadata."""
-    try:
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return
-    if not isinstance(meta, dict):
-        return
-    meta["updated_at"] = _timestamp()
-    _write_text_atomic(
-        meta_path,
-        json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
-    )
-
-
-def _run_file(run_dir: Path, name: str) -> Path:
-    """Resolve a run file and reject any final path outside the run."""
-    try:
-        root = run_dir.resolve()
-        path = (root / name).resolve()
-    except (OSError, RuntimeError) as error:
-        raise CliError(f"cannot resolve {name} in {run_dir}: {error}") from error
-    if path == root or not path.is_relative_to(root):
-        raise CliError(f"run file escapes run directory: {name}")
-    return path
-
-
-def _run_output_file(run_dir: Path, name: str) -> Path:
-    """Return a lexical output path whose parent is inside the run."""
-    try:
-        root = run_dir.resolve()
-        path = root / name
-        parent = path.parent.resolve()
-    except (OSError, RuntimeError) as error:
-        raise CliError(f"cannot resolve {name} in {run_dir}: {error}") from error
-    if parent != root and not parent.is_relative_to(root):
-        raise CliError(f"run file escapes run directory: {name}")
-    try:
-        mode = path.lstat().st_mode
-    except FileNotFoundError:
-        pass
-    else:
-        if stat.S_ISLNK(mode):
-            raise CliError(f"refusing to replace symlink: {path}")
-    return path
-
-
-def _write_text_atomic(path: Path, content: str) -> None:
-    """Replace a text file atomically."""
-    descriptor, temporary = tempfile.mkstemp(
-        dir=path.parent,
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        text=True,
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-            output.write(content)
-        os.replace(temporary, path)
-    except BaseException:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
-        raise
-
-
-def _timestamp() -> str:
-    """Return an RFC 3339 UTC timestamp."""
-    return (
-        datetime.now(timezone.utc)
-        .isoformat(timespec="seconds")
-        .replace("+00:00", "Z")
-    )
-
-
 def fail(message: str) -> NoReturn:
-    """Raise a concise command-line error."""
+    """Raise a concise command-line error.
+
+    Args:
+        message: The message to show the user.
+
+    Raises:
+        CliError: Always.
+    """
     raise CliError(message)
 
 

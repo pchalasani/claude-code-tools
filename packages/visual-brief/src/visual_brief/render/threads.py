@@ -107,7 +107,7 @@ def _normalize_questions(
     prior_timestamp_occurrences: dict[tuple[str, str], int] = {}
     undated_remaining: dict[str, int] = {}
     for entry in questions:
-        if not _is_legacy_pair(entry):
+        if not is_legacy_pair(entry):
             continue
         asked_at = entry.get("asked_at")
         if not isinstance(asked_at, str) or not asked_at.strip():
@@ -115,7 +115,7 @@ def _normalize_questions(
             undated_remaining[question] = undated_remaining.get(question, 0) + 1
     converted: list[Any] = []
     for entry in questions:
-        if not _is_legacy_pair(entry):
+        if not is_legacy_pair(entry):
             converted.append(entry)
             continue
         question = entry["question"]
@@ -166,8 +166,15 @@ def _normalize_questions(
     owner["questions"] = converted
 
 
-def _is_legacy_pair(value: Any) -> bool:
-    """Return whether a value has the old question-pair shape."""
+def is_legacy_pair(value: Any) -> bool:
+    """Return whether a value has the old question-pair shape.
+
+    Args:
+        value: A candidate entry from a ``questions`` list.
+
+    Returns:
+        True for the iteration-1 ``{question, answer}`` shape.
+    """
     return (
         isinstance(value, dict)
         and "question" in value
