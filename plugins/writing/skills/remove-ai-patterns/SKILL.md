@@ -60,10 +60,12 @@ vendored at `upstream/` inside this skill directory (commit recorded in
 
    It prints JSON: an overall `score`, a `label`, a `document_classification`
    with class probabilities, and per-issue findings (`type`, matched `text`,
-   `severity`, `suggestion`). For "iterate until clean/green" requests, loop
-   revise -> detect until the score/label stops improving or a scored
-   result has zero issues. Respect the upstream skill's iterate cap of 2
-   passes (see `upstream/SKILL.md`); do not invent a larger limit.
+   `severity`, `suggestion`). For "iterate until clean/green" requests,
+   follow the upstream skill's convergence rule (see `upstream/SKILL.md`):
+   repeat the audit -> revise cycle until a scored result has no issues, or
+   the cap of 2 passes is reached (the built-in corrective pass is pass 2).
+   Do not stop early on a "score stopped improving" heuristic and do not
+   invent a larger cap.
    IMPORTANT: only treat a zero-issue result as clean when it is actually
    scored. On empty input, under ~10 words, or over 10,000 words the detector
    returns `document_classification: "UNSCORED"` with an empty `issues` list;

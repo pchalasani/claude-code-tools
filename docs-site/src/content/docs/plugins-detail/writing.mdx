@@ -123,8 +123,8 @@ plugin, the gate becomes an automatic loop. Just describe it:
 "Set up a dynamic workflow to draft this blog post. Do one agent-style
 pass first, then loop on remove-ai-patterns as the acceptance gate:
 re-run the detector after each revision and stop when it returns a
-scored result (not UNSCORED) with no issues, or the score stops
-improving. Cap the loop at 2 passes, matching the skill's own limit."
+scored result (not UNSCORED) with no issues, or you have completed 2
+passes (the skill's own iterate cap)."
 :::
 
 Simpler, without a workflow, you can name the gate inline on any writing
@@ -133,16 +133,16 @@ task:
 :::tip[Tell Claude Code]
 "Write the release notes from this changelog, then de-AI them with
 remove-ai-patterns: iterate until the detector returns a scored result
-with no issues, or the score stops improving (at most 2 passes)."
+with no issues, or you have completed 2 passes."
 :::
 
 The deterministic detector (below) is what lets such a loop terminate on
-its own. Its convergence rule is to stop when a scored result has zero
-issues **or** the score/label stalls, so a finding that cannot be removed
-without changing intended content ends the loop instead of spinning. The
-2-pass cap matches the upstream skill's own iterate limit (a rewrite plus
-one corrective pass), so the gate does not contradict the instructions
-the agent is told to follow.
+its own. Its convergence rule, matching the upstream skill, is to repeat
+until a scored result has no issues or the cap of 2 passes is reached (a
+rewrite plus one corrective pass). A finding that cannot be removed
+without changing intended content simply survives to the cap, so the loop
+still ends; it does not use a separate "score stopped improving"
+criterion, which could stop before that corrective pass.
 
 ### The deterministic detector
 
