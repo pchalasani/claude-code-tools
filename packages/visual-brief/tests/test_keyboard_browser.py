@@ -50,6 +50,18 @@ _ENTER_SPY = """
     })()
     """
 
+_ARROW_SPY = """
+    (() => {
+      window.__arrows = [];
+      document.addEventListener('keydown', (event) => {
+        if (event.key.startsWith('Arrow')) {
+          window.__arrows.push(event.defaultPrevented);
+        }
+      });
+      return true;
+    })()
+    """
+
 _CURSOR_AND_ROWS = f"""
     (() => {{
       const open = (id) => document.querySelector(
@@ -66,6 +78,19 @@ _CURSOR_AND_ROWS = f"""
 
 _CURSOR_IS_OPEN = """
     document.querySelector('[data-cursor="true"]').dataset.open
+    """
+
+_CHAT_BOX = """
+    (() => {
+      const box = document.querySelector(".composer");
+      const cursor = document.querySelector('[data-cursor="true"]');
+      const button = cursor?.querySelector(":scope > .row-head .chat-button");
+      return {
+        open: box !== null,
+        label: box?.querySelector(".composer-label")?.textContent ?? "",
+        affordance: button?.textContent ?? "",
+      };
+    })()
     """
 
 
@@ -229,6 +254,71 @@ def test_space_folds_the_cursor_row_after_the_mouse_moved_focus(
         "first": "true",
         "second": "true",
     }
+
+
+def test_the_arrow_keys_walk_the_page_with_the_pointer_resting_on_it(
+    browser: Browser,
+) -> None:
+    """Move item by item on the real arrow keys, mouse parked on a row.
+
+    Two things can make an arrow key look dead while ``j`` works. The browser
+    can scroll instead, which happens the moment the page does not claim the
+    key; and hover is selection, so a mouse resting on the page can put the
+    cursor straight back where it was. This presses the real keys with a real
+    pointer at rest and checks both: the page consumed every press, and the
+    cursor walked and stayed walked.
+    """
+    browser.run("scrollintoview", f'[data-row-id="{FIRST_ITEM}"]')
+    browser.run("hover", f'[data-row-id="{FIRST_ITEM}"] > .row-head .row-toggle')
+    browser.run("wait", "250")
+    browser.evaluate(_ARROW_SPY)
+    assert browser.cursor_row() == FIRST_ITEM
+
+    browser.press("ArrowDown")
+    browser.run("wait", "250")
+    down = browser.cursor_row()
+
+    browser.press("ArrowDown")
+    browser.run("wait", "250")
+    further = browser.cursor_row()
+
+    browser.press("ArrowUp")
+    browser.run("wait", "250")
+    back = browser.cursor_row()
+
+    claimed = browser.evaluate("window.__arrows")
+    assert claimed == [True, True, True], claimed
+    assert down == SECOND_ITEM
+    assert further not in {FIRST_ITEM, SECOND_ITEM}
+    assert back == SECOND_ITEM
+
+
+def test_the_chat_box_opens_on_c_and_still_on_the_old_a(
+    browser: Browser,
+) -> None:
+    """Open the box the page now calls Chat from its documented key.
+
+    ``a`` is kept as an undocumented alias because fingers remember it.
+    """
+    browser.press("c")
+    browser.run("wait", "300")
+    on_c = browser.evaluate(_CHAT_BOX)
+
+    browser.press("Escape")
+    browser.run("wait", "200")
+    closed = browser.evaluate("document.querySelector('.composer') !== null")
+
+    browser.press("a")
+    browser.run("wait", "300")
+    on_a = browser.evaluate(_CHAT_BOX)
+
+    assert on_c == {
+        "open": True,
+        "label": "Chat about this section",
+        "affordance": "Chat",
+    }
+    assert closed is False
+    assert on_a == on_c
 
 
 def test_keys_are_inert_while_a_question_is_being_typed(

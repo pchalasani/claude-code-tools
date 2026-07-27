@@ -9,7 +9,7 @@ const KEY_BAR: [string, Action, string][] = [
   ["j", "next-item", "Next item"],
   ["K", "previous-lane", "Previous lane"],
   ["J", "next-lane", "Next lane"],
-  ["a", "compose", "Ask"],
+  ["c", "compose", "Chat"],
   ["n", "next-awaiting", "Awaiting"],
   ["/", "search", "Search"],
   ["g", "top", "Top"],

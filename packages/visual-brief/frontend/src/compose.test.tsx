@@ -19,7 +19,7 @@ describe("writing where the cursor is", () => {
     deferTransitions();
 
     press("j");
-    press("a");
+    press("c");
     flushTransitions();
 
     const form = document.querySelector(".composer");
@@ -37,7 +37,7 @@ describe("writing where the cursor is", () => {
     expect(paintedCursor()).toBe("older");
     expect(paintedOpen("older")).toBe("false");
 
-    press("a");
+    press("c");
     await Promise.resolve();
 
     const box = document.querySelector<HTMLTextAreaElement>(
@@ -62,11 +62,11 @@ describe("writing where the cursor is", () => {
     click("older");
     expect(paintedOpen("older")).toBe("false");
 
-    press("a");
+    press("c");
     expect(paintedOpen("older/history")).toBe("true");
     expect(document.querySelector(".composer")).not.toBeNull();
 
-    press("a");
+    press("c");
 
     expect(document.querySelector(".composer")).toBeNull();
     expect(paintedOpen("older/history")).toBe("false");
@@ -80,7 +80,7 @@ describe("writing where the cursor is", () => {
     click("older");
     expect(paintedOpen("older")).toBe("false");
 
-    press("a");
+    press("c");
     expect(paintedOpen("older/history")).toBe("true");
 
     press("Escape");
@@ -93,7 +93,7 @@ describe("writing where the cursor is", () => {
   it("lets go of the composer when its own row is folded away", () => {
     mount();
     click("newest/next");
-    press("a");
+    press("c");
     expect(document.querySelector(".composer")).not.toBeNull();
 
     click("newest/next");
@@ -101,11 +101,11 @@ describe("writing where the cursor is", () => {
     expect(document.querySelector(".composer")).toBeNull();
     expect(
       document
-        .querySelector('[data-row-id="newest/next"] .ask-button')
+        .querySelector('[data-row-id="newest/next"] .chat-button')
         ?.getAttribute("aria-expanded"),
     ).toBe("false");
 
-    press("a");
+    press("c");
 
     expect(document.querySelector(".composer")).not.toBeNull();
   });
@@ -115,8 +115,8 @@ describe("writing where the cursor is", () => {
     click("newest/next");
     expect(paintedOpen("newest/next")).toBe("true");
 
-    press("a");
-    press("a");
+    press("c");
+    press("c");
 
     expect(document.querySelector(".composer")).toBeNull();
     expect(paintedOpen("newest/next")).toBe("true");

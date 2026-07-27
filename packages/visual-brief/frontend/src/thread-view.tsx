@@ -3,7 +3,7 @@ import { For, type JSX } from "solid-js";
 import { ComposeBox, ComposeButton, PendingNotes } from "./compose-view";
 import type { Thread } from "./document";
 import type { Row } from "./outline";
-import { AwaitingChip, RowShell } from "./row-shell";
+import { AwaitingChip, NewAnswerChip, RowShell } from "./row-shell";
 import type { BriefState } from "./state";
 
 /**
@@ -25,6 +25,7 @@ export function ThreadView(props: {
         <>
           <span class="thread-title">{props.row.label}</span>
           <AwaitingChip when={props.row.awaiting} />
+          <NewAnswerChip when={props.state.nav.isFresh(props.row.id)} />
           <span class="row-count">
             {props.thread.turns.length}{" "}
             {props.thread.turns.length === 1 ? "turn" : "turns"}
@@ -35,7 +36,7 @@ export function ThreadView(props: {
         <ComposeButton
           state={props.state}
           row={props.row}
-          label={`Reply to ${props.row.label}`}
+          label={`Chat in ${props.row.label}`}
         />
       }
     >

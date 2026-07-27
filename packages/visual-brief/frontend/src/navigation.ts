@@ -19,6 +19,7 @@ import {
   type Edge,
 } from "./cursor";
 import type { BriefDocument } from "./document";
+import { answerStates, freshAnswers, rememberSeen } from "./freshness";
 import {
   ancestorIds,
   awaitingThreadCount,
@@ -27,13 +28,17 @@ import {
   type Row,
   type RowKind,
 } from "./outline";
+import {
+  readSavedCursor,
+  readSeenAnswers,
+  saveCursor,
+  saveSeenAnswers,
+  type SeenAnswers,
+} from "./session-store";
 import { withTransition } from "./transitions";
 
 /** Which full-page surface, if any, is showing. */
 export type Overlay = "none" | "search" | "help";
-
-/** Base name the cursor is stored under, before the run is added to it. */
-export const CURSOR_STORAGE_KEY = "visual-brief-cursor";
 
 /** The navigable state of one open brief. */
 export interface Navigation {
@@ -74,6 +79,14 @@ export interface Navigation {
   jump: (edge: Edge) => void;
   /** Send the cursor to the next question awaiting an answer. */
   toAwaiting: () => void;
+  /**
+   * Whether one conversation's answer arrived since the human last looked.
+   *
+   * Cleared by visiting it — the cursor landing on it, or it being folded or
+   * unfolded — never by a timer, so an answer that lands while the human is
+   * away is still marked when they come back.
+   */
+  isFresh: (id: string) => boolean;
   /** Whether one row is expanded. */
   isOpen: (id: string) => boolean;
   /** Expand or fold one row. */
@@ -123,8 +136,17 @@ export function createNavigation(
   // two keys pressed within one frame would otherwise both move from the same
   // row and one of the two presses would be lost.
   let selected: string | null = restored;
+  const states = answerStates(rows);
+  const [fresh, setFresh] = createSignal<ReadonlySet<string>>(
+    freshAnswers(states, readSeenAnswers()),
+  );
+  // Written now rather than on the way out: this page is closed by being
+  // replaced, so there is no later moment to write in. What is still marked
+  // new is left out, which is what keeps it marked across further reloads.
+  let seen: SeenAnswers = rememberSeen(states, fresh());
+  saveSeenAnswers(seen);
   const [open, setOpen] = createSignal<ReadonlySet<string>>(
-    openedFor(brief, rows, restored),
+    openedFor(brief, rows, restored, fresh()),
   );
   const [query, setQueryValue] = createSignal("");
   const [overlay, setOverlay] = createSignal<Overlay>("none");
@@ -144,19 +166,65 @@ export function createNavigation(
     return next;
   };
 
+  /**
+   * Note that the human has now seen one conversation.
+   *
+   * @param id - Row that was visited.
+   */
+  const visit = (id: string): void => {
+    if (!fresh().has(id)) {
+      return;
+    }
+    setFresh((current) => {
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+    seen = { ...seen, [id]: states[id] ?? "" };
+    saveSeenAnswers(seen);
+  };
+
+  /**
+   * Report whether a row is already the cursor, painted and reachable.
+   *
+   * The painted signal is read as well as the authoritative one: a move whose
+   * paint is still held inside a view transition has not finished landing, and
+   * treating it as settled would drop the second of two presses in one frame.
+   *
+   * @param id - Row to check.
+   * @returns True when selecting it again would change nothing.
+   */
+  const settled = (id: string): boolean =>
+    selected === id
+    && cursorId() === id
+    && ancestorIds(id).every((one) => open().has(one));
+
   const select = (id: string, options?: { scroll?: boolean }): void => {
     if (!rowIds.has(id)) {
       return;
     }
-    if (!visibleIds().has(id)) {
+    const filtered = !visibleIds().has(id);
+    if (filtered) {
       // The row exists but the search is hiding it, and a cursor on a row
       // that is not rendered is a cursor the human cannot see, cannot move
       // from and cannot fold. Whoever asked for this row wins; the filter is
       // the thing that gives way.
       setQueryValue("");
     }
-    selected = id;
+    visit(id);
     const scroll = options?.scroll !== false;
+    // Selecting the row that is already selected has to be free. Hover selects,
+    // and hover fires again for every relayout, so a select that always wrote
+    // state and always animated turned a stationary mouse into an endless
+    // stream of view transitions — and a page mid-transition cannot be clicked
+    // at all.
+    if (!filtered && settled(id)) {
+      if (scroll) {
+        queueMicrotask(() => scrollRowIntoView(id));
+      }
+      return;
+    }
+    selected = id;
     withTransition(() => {
       setOpen((current) => expand(id, current));
       setCursorId(id);
@@ -212,9 +280,11 @@ export function createNavigation(
         setOpen((current) => new Set(current).add(next));
       }
     },
+    isFresh: (id) => fresh().has(id),
     isOpen: (id) => open().has(id),
     toggle: (id) => {
       const wasOpen = open().has(id);
+      visit(id);
       withTransition(() =>
         setOpen((current) => {
           const next = new Set(current);
@@ -253,64 +323,6 @@ export function createNavigation(
 }
 
 /**
- * Return the key this page's cursor is remembered under.
- *
- * The daemon serves one run at two addresses — ``<run>.localhost/`` and
- * ``localhost/r/<run>/`` — so the key carries the run's id rather than the
- * address it was reached through: opening the same run the other way restores
- * the same place, and a tab pointed at a different run does not adopt it.
- *
- * @returns The session-storage key for the run being shown.
- */
-export function cursorStorageKey(): string {
-  return `${CURSOR_STORAGE_KEY}:${runIdFromLocation()}`;
-}
-
-/**
- * Read the run's id out of the address this page was opened at.
- *
- * @returns The run id, or an empty string when the address names no run.
- */
-function runIdFromLocation(): string {
-  if (typeof window === "undefined") {
-    return "";
-  }
-  const fromPath = /^\/r\/([^/]+)\//.exec(window.location?.pathname ?? "");
-  if (fromPath !== null) {
-    return fromPath[1] ?? "";
-  }
-  const host = (window.location?.hostname ?? "").toLowerCase();
-  const suffix = ".localhost";
-  return host.endsWith(suffix) ? host.slice(0, -suffix.length) : "";
-}
-
-/**
- * Read the row the cursor was on before the page last reloaded.
- *
- * @returns The saved row id, or null when there is none.
- */
-export function readSavedCursor(): string | null {
-  try {
-    return window.sessionStorage.getItem(cursorStorageKey());
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Remember the row the cursor is on, so a reload can restore it.
- *
- * @param id - The row id to remember.
- */
-export function saveCursor(id: string): void {
-  try {
-    window.sessionStorage.setItem(cursorStorageKey(), id);
-  } catch {
-    // Storage can be disabled; the cursor still works within this page.
-  }
-}
-
-/**
  * Bring one row into comfortable reading position.
  *
  * The row carries a generous scroll margin, so the page moves around the
@@ -335,16 +347,26 @@ function scrollRowIntoView(id: string): void {
  * @param brief - The delivered document.
  * @param rows - The document's rows.
  * @param cursorId - Row the cursor was restored to.
+ * @param fresh - Conversations answered since the human last looked.
  * @returns The initially expanded row ids.
  */
 function openedFor(
   brief: BriefDocument,
   rows: Row[],
   cursorId: string | null,
+  fresh: ReadonlySet<string>,
 ): Set<string> {
   const opened = defaultOpenIds(brief, rows);
   if (cursorId !== null) {
     for (const ancestor of ancestorIds(cursorId)) {
+      opened.add(ancestor);
+    }
+  }
+  // An answer nobody can see is an answer that did not arrive: a conversation
+  // answered since the last look opens itself and everything holding it.
+  for (const id of fresh) {
+    opened.add(id);
+    for (const ancestor of ancestorIds(id)) {
       opened.add(ancestor);
     }
   }

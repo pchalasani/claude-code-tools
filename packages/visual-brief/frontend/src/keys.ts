@@ -36,6 +36,53 @@ export interface KeyEventLike {
   target?: EventTarget | null;
 }
 
+/**
+ * Report whether this is an Apple keyboard, where the send chord is Command.
+ *
+ * @param platform - What the browser calls the platform.
+ * @returns True on macOS and on the iPad's desktop-class browser.
+ */
+export function isApplePlatform(platform: string = readPlatform()): boolean {
+  return /mac|iphone|ipad|ipod/i.test(platform);
+}
+
+/**
+ * Ask the browser what it is running on.
+ *
+ * @returns The platform string, or an empty string outside a browser.
+ */
+function readPlatform(): string {
+  if (typeof navigator === "undefined") {
+    return "";
+  }
+  return navigator.platform !== "" ? navigator.platform : navigator.userAgent;
+}
+
+/** How the send chord is written for the human. */
+export const SEND_CHORD_LABEL = isApplePlatform() ? "⌘ + Enter" : "Ctrl + Enter";
+
+/**
+ * Report whether a key press is the chord that sends what is written.
+ *
+ * Plain Enter has to keep making a paragraph — a question worth asking is
+ * often longer than one line — so sending needs a chord. It is Command on a
+ * Mac and Control everywhere else, which is what the rest of both platforms
+ * already means by "send this now".
+ *
+ * @param event - The key press.
+ * @param apple - Whether this is an Apple keyboard.
+ * @returns True when the press should send.
+ */
+export function isSendChord(
+  event: KeyEventLike,
+  apple: boolean = isApplePlatform(),
+): boolean {
+  if (event.key !== "Enter") {
+    return false;
+  }
+  return apple ? event.metaKey === true : event.ctrlKey === true;
+}
+
 /** Every binding, keyed by the ``key`` value the browser reports. */
 export const BINDINGS: Record<string, Action> = {
   j: "next-item",
@@ -48,7 +95,8 @@ export const BINDINGS: Record<string, Action> = {
   ArrowDown: "next-item",
   ArrowUp: "previous-item",
   " ": "toggle",
-  Enter: "toggle",
+  c: "compose",
+  // The key this used to be. Undocumented, kept because fingers remember.
   a: "compose",
   n: "next-awaiting",
   "/": "search",
@@ -62,8 +110,9 @@ export const BINDINGS: Record<string, Action> = {
 export const KEY_HELP: [string, string][] = [
   ["j / k  or  ↓ / ↑", "Next / previous item"],
   ["J / K", "Next / previous lane"],
-  ["Enter / Space", "Open or close the selected row"],
-  ["a", "Ask about the selected row"],
+  ["Space", "Open or close the selected row"],
+  ["c", "Chat about the selected row"],
+  [SEND_CHORD_LABEL, "Send what you have written"],
   ["n", "Jump to your next unanswered question"],
   ["/", "Search items"],
   ["g / G", "Top / bottom"],
@@ -99,9 +148,12 @@ export function isTypingTarget(target: EventTarget | null): boolean {
  * aside for a focused control looked polite and was not: the browser focuses a
  * button when it is clicked, the cursor is deliberately not the browser's
  * focus, so after one mouse click Space folded whichever row the mouse last
- * touched instead of the row the cursor is on. Every control on this page is a
- * ``<button>``, which Enter activates natively, so a keyboard reader who tabs
- * to an evidence fold loses nothing.
+ * touched instead of the row the cursor is on.
+ *
+ * Enter is the exception, and it is not one the page gets to make. Every
+ * control here is a ``<button>``, and Enter is what a button answers to: a
+ * keyboard reader who tabs to an evidence fold presses Enter to open it. Space
+ * is the page's, so Enter goes back to the browser untouched.
  *
  * @param event - The key press.
  * @returns The action to run, or null when the page should not react.

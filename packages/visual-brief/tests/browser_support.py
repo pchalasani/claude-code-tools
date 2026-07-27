@@ -151,12 +151,12 @@ class Browser:
         self.run("click", selector)
 
     def compose_at(self, row_id: str) -> None:
-        """Open the composer at one row through its own affordance.
+        """Open the chat box at one row through its own affordance.
 
         Args:
             row_id: Identifier of the row to write against.
         """
-        selector = f'[data-row-id="{row_id}"] > .row-head .ask-button'
+        selector = f'[data-row-id="{row_id}"] > .row-head .chat-button'
         self.run("scrollintoview", selector)
         self.run("click", selector)
 

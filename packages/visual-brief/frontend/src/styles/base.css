@@ -259,6 +259,16 @@ button.meta-count:hover {
   font-weight: 600;
 }
 
+/* The one thing on the page that arrived while the human was not looking. It
+   borrows the cursor's violet, which appears nowhere else, because it is the
+   other thing worth walking to. */
+.chip-new {
+  background: var(--select);
+  border-color: var(--select);
+  color: var(--ground);
+  font-weight: 600;
+}
+
 .legend {
   align-items: center;
   display: flex;

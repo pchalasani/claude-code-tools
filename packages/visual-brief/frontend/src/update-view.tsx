@@ -94,7 +94,7 @@ export function LaneView(props: {
         <ComposeButton
           state={props.state}
           row={props.row}
-          label={`Ask about ${props.lane.name}`}
+          label={`Chat about ${props.lane.name}`}
         />
       }
     >

@@ -63,6 +63,8 @@ export interface Composer {
   setText: (value: string) => void;
   /** Whether a request is in flight. */
   sending: Accessor<boolean>;
+  /** Whether the request in flight was written at one row. */
+  sendingAt: (rowId: string) => boolean;
   /** What to tell the human about the last attempt. */
   status: Accessor<string>;
   /** Send what is written to its target. */
@@ -187,6 +189,7 @@ export function createComposer(
     text,
     setText,
     sending,
+    sendingAt: (rowId) => sending() && target()?.rowId === rowId,
     status,
     submit,
     pendingAt: (rowId) => pending().filter((note) => note.rowId === rowId),

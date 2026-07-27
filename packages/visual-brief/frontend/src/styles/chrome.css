@@ -2,7 +2,7 @@
  * Composition, overlays, motion and small screens.
  */
 
-.ask-button {
+.chat-button {
   background: none;
   border: 1px solid var(--rule);
   border-radius: var(--radius);
@@ -13,8 +13,8 @@
   padding: 0.1rem 0.45rem;
 }
 
-.ask-button:hover,
-.ask-button[aria-expanded="true"] {
+.chat-button:hover,
+.chat-button[aria-expanded="true"] {
   border-color: var(--rule-strong);
   color: var(--ink);
 }
@@ -110,6 +110,54 @@
 
 .pending .chip {
   margin-right: 0.4rem;
+}
+
+.chord-hint {
+  color: var(--ink-faint);
+}
+
+/* ---------- the agent is working ---------- */
+
+/*
+ * A waiting human's only question is whether anything is happening. A static
+ * line cannot answer it, so the words themselves carry a light travelling
+ * across them. Where motion is unwelcome the same words stay, unmoving and
+ * fully coloured — the reduced-motion rule has to put the fill back, because
+ * the shimmer paints through transparent text.
+ */
+.working {
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  letter-spacing: 0.14em;
+  margin: 0.35rem 0 0.55rem;
+  text-transform: uppercase;
+}
+
+.working-text {
+  animation: agent-working 1.6s linear infinite;
+  background: linear-gradient(
+    100deg,
+    var(--ink-faint) 20%,
+    var(--select-edge) 42%,
+    var(--ink) 50%,
+    var(--select-edge) 58%,
+    var(--ink-faint) 80%
+  );
+  background-clip: text;
+  background-size: 260% 100%;
+  color: transparent;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+@keyframes agent-working {
+  from {
+    background-position: 160% 0;
+  }
+
+  to {
+    background-position: -60% 0;
+  }
 }
 
 .signals {
@@ -262,6 +310,13 @@
   ::view-transition-old(*),
   ::view-transition-new(*) {
     animation: none !important;
+  }
+
+  .working-text {
+    animation: none !important;
+    background: none;
+    color: var(--ink-quiet);
+    -webkit-text-fill-color: currentcolor;
   }
 }
 

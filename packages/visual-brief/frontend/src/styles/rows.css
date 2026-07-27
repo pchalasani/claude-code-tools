@@ -221,6 +221,14 @@
   border-left-color: var(--select);
 }
 
+/* An answer that landed since the last look keeps its own edge until it is
+   visited, so it is findable from across the page and not only where the
+   cursor happens to be. */
+.row[data-fresh="true"] > .row-head {
+  border-left-color: var(--select-edge);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--select) 45%, transparent);
+}
+
 /* ---------- turns ---------- */
 
 .turn {

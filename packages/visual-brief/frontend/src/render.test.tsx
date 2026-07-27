@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { cursorStorageKey } from "./navigation";
+import { cursorStorageKey } from "./session-store";
 import { outline } from "./outline";
 import { sampleBrief } from "../test/sample-brief";
 import {

@@ -44,7 +44,7 @@ export function ItemView(props: {
         <ComposeButton
           state={props.state}
           row={props.row}
-          label={`Ask about ${props.item.glance}`}
+          label={`Chat about ${props.item.glance}`}
         />
       }
     >

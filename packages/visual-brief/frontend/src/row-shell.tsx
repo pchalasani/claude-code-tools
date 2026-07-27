@@ -37,6 +37,7 @@ export function RowShell(props: {
       data-cursor={isCursor() ? "true" : "false"}
       data-open={isOpen() ? "true" : "false"}
       data-awaiting={props.row.awaiting ? "true" : "false"}
+      data-fresh={props.state.nav.isFresh(props.row.id) ? "true" : "false"}
       onPointerOver={(event) => {
         // Hover IS selection: the row under the pointer becomes the cursor, so
         // whatever you press next acts on the row you are looking at. Guarded
@@ -121,6 +122,25 @@ export function AwaitingChip(props: { when: boolean }): JSX.Element {
           ●
         </span>
         Awaiting answer
+      </span>
+    </Show>
+  );
+}
+
+/**
+ * The badge marking an answer that landed since the human last looked.
+ *
+ * @param props - Whether to show the badge.
+ * @returns The badge, or nothing.
+ */
+export function NewAnswerChip(props: { when: boolean }): JSX.Element {
+  return (
+    <Show when={props.when}>
+      <span class="chip chip-new">
+        <span class="chip-mark" aria-hidden="true">
+          ★
+        </span>
+        New answer
       </span>
     </Show>
   );

@@ -78,7 +78,7 @@ and if they ask for something in the chat, give it to them there.
 
 ## Arm the question watcher before you hand over the URL
 
-The page has an Ask button. If nothing is watching the queue, it silently goes
+The page has a Chat button. If nothing is watching the queue, it silently goes
 nowhere and the human waits for an answer that will never come.
 
 ```

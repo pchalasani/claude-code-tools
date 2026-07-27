@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
+import { keyboardTookOver, pointerIsDriving, watchPointer } from "./pointer";
 import { prefersReducedMotion, withTransition } from "./transitions";
 
 type Motion = { matches: boolean };
@@ -37,7 +38,22 @@ function recordTransitions(): string[] {
 afterEach(() => {
   window.matchMedia = realMatchMedia;
   document.startViewTransition = realStart;
+  keyboardTookOver();
 });
+
+/**
+ * Put the mouse in charge, the way a real mouse movement does.
+ *
+ * @returns A function that stops watching the pointer.
+ */
+function mouseTakesOver(): () => void {
+  const target = new EventTarget();
+  const stop = watchPointer(target);
+  target.dispatchEvent(
+    new MouseEvent("pointermove", { clientX: 41, clientY: 97 }),
+  );
+  return stop;
+}
 
 describe("motion", () => {
   it("animates the change when motion is welcome", () => {
@@ -66,6 +82,33 @@ describe("motion", () => {
     expect(prefersReducedMotion()).toBe(true);
     expect(used).toEqual([]);
     expect(applied).toBe(true);
+  });
+
+  it("stands aside while the mouse is the thing driving", () => {
+    // A running view transition captures the whole document, so nothing under
+    // it can be clicked. Animating a change the mouse just made would cost the
+    // human the click they are about to make.
+    prefer(false);
+    const used = recordTransitions();
+    const stop = mouseTakesOver();
+    let applied = 0;
+
+    withTransition(() => {
+      applied += 1;
+    });
+
+    expect(pointerIsDriving()).toBe(true);
+    expect(used).toEqual([]);
+    expect(applied).toBe(1);
+
+    keyboardTookOver();
+    withTransition(() => {
+      applied += 1;
+    });
+
+    expect(used).toEqual(["started"]);
+    expect(applied).toBe(2);
+    stop();
   });
 
   it("applies the change where the browser has no view transitions", () => {

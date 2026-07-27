@@ -40,7 +40,8 @@ comfortable reading position. Clicking a row moves the same cursor.
 | `j` / `k` | Next / previous item |
 | `J` / `K` | Next / previous lane |
 | `Space` | Expand or collapse the cursor row |
-| `a` | Write a question, or a reply when the cursor is on a conversation |
+| `c` | Chat about the cursor row: ask, answer the agent, or steer it |
+| `⌘`/`Ctrl` + `Enter` | Send what you have written |
 | `n` | Next question awaiting an answer |
 | `/` | Search items |
 | `g` / `G` | Top / bottom |
@@ -48,6 +49,14 @@ comfortable reading position. Clicking a row moves the same cursor.
 | `Escape` | Close an overlay, or leave a text box |
 
 Keys stay inert while you are typing, so a question can contain the letter `j`.
+Inside the chat box plain `Enter` starts a new line; sending is the chord.
+`Enter` outside a text box belongs to the browser, so a control you tabbed to
+still opens the way it does anywhere else.
+
+While a message is on its way and until its answer arrives, the page says
+`agent is working` where the answer will land. When an answer arrives during a
+self-reload, its conversation opens itself and is marked `New answer` until you
+go to it.
 
 ## Development
 

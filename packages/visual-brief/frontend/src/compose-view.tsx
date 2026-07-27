@@ -1,13 +1,21 @@
 import { For, Show, type JSX } from "solid-js";
 
 import { SIGNALS } from "./composer";
+import { SEND_CHORD_LABEL, isSendChord } from "./keys";
 import type { Row } from "./outline";
 import type { BriefState } from "./state";
 
+/** The word this page uses for writing to the agent, wherever it writes it. */
+const CHAT_LABEL = "Chat";
+
 /**
- * The affordance that points composition at one row.
+ * The affordance that points the chat box at one row.
  *
- * @param props - The row to compose against and its state.
+ * One word covers every direction the conversation can go: the human may be
+ * asking, answering something the agent asked, or steering it somewhere else.
+ * "Ask" only covered the first.
+ *
+ * @param props - The row to write against and its state.
  * @returns The button.
  */
 export function ComposeButton(props: {
@@ -19,24 +27,24 @@ export function ComposeButton(props: {
   return (
     <button
       type="button"
-      class="ask-button"
+      class="chat-button"
       aria-expanded={open()}
       aria-label={props.label}
       onClick={() => props.state.composeAt(props.row)}
     >
-      {props.row.kind === "thread" ? "Reply" : "Ask"}
+      {CHAT_LABEL}
     </button>
   );
 }
 
 /**
- * The one composer, wherever it is currently pointed.
+ * The one chat box, wherever it is currently pointed.
  *
  * It renders only under the row it targets, so the human writes where they
  * are looking, and it refuses to send twice while a request is in flight.
  *
  * @param props - The row this slot belongs to and its state.
- * @returns The composer when it is pointed here, otherwise nothing.
+ * @returns The chat box when it is pointed here, otherwise nothing.
  */
 export function ComposeBox(props: {
   state: BriefState;
@@ -56,21 +64,33 @@ export function ComposeBox(props: {
         }}
       >
         <label class="composer-label" for="brief-compose">
-          {isReply() ? "Reply to this conversation" : "Ask about this section"}
+          {isReply() ? "Chat in this conversation" : "Chat about this section"}
         </label>
         <textarea
           id="brief-compose"
           class="composer-text"
           required
           rows="3"
-          placeholder="What would you like clarified?"
+          placeholder="What would you like to say?"
           value={composer.text()}
           onInput={(event) => composer.setText(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            // Plain Enter still makes a paragraph. The chord is the one way
+            // to send without reaching for the mouse.
+            if (!isSendChord(event)) {
+              return;
+            }
+            event.preventDefault();
+            void composer.submit();
+          }}
         />
         <div class="composer-actions">
           <button class="submit" type="submit" disabled={composer.sending()}>
             {composer.sending() ? "Sending…" : "Send"}
           </button>
+          <span class="chord-hint">
+            <kbd>{SEND_CHORD_LABEL}</kbd>
+          </span>
           <button type="button" class="quiet" onClick={() => composer.close()}>
             <kbd>Esc</kbd> Cancel
           </button>
@@ -84,29 +104,56 @@ export function ComposeBox(props: {
 }
 
 /**
+ * The sign that the other end of the conversation is busy.
+ *
+ * It sits where the answer will appear, and it moves, because the whole
+ * question a waiting human has is whether anything is happening at all. The
+ * wording never names a product: whichever agent is behind this page, it is
+ * "agent". Where motion is unwelcome the same words stay put.
+ *
+ * @returns The indicator.
+ */
+export function AgentWorking(): JSX.Element {
+  return (
+    <p class="working" role="status">
+      <span class="working-text">agent is working</span>
+    </p>
+  );
+}
+
+/**
  * Everything this page has sent from one row and not yet seen answered.
  *
  * @param props - The row and its state.
- * @returns The pending notes.
+ * @returns The pending notes, each with the sign that an answer is coming.
  */
 export function PendingNotes(props: {
   state: BriefState;
   row: Row;
 }): JSX.Element {
+  const composer = props.state.composer;
   return (
-    <For each={props.state.composer.pendingAt(props.row.id)}>
-      {(note) => (
-        <p class="pending">
-          <span class="chip chip-awaiting">
-            <span class="chip-mark" aria-hidden="true">
-              ●
-            </span>
-            Sent
-          </span>
-          You asked: {note.text} — awaiting an answer
-        </p>
-      )}
-    </For>
+    <>
+      <Show when={composer.sendingAt(props.row.id)}>
+        <AgentWorking />
+      </Show>
+      <For each={composer.pendingAt(props.row.id)}>
+        {(note) => (
+          <>
+            <p class="pending">
+              <span class="chip chip-awaiting">
+                <span class="chip-mark" aria-hidden="true">
+                  ●
+                </span>
+                Sent
+              </span>
+              You asked: {note.text} — awaiting an answer
+            </p>
+            <AgentWorking />
+          </>
+        )}
+      </For>
+    </>
   );
 }
 

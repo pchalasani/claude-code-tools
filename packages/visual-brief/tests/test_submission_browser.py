@@ -17,6 +17,58 @@ from browser_support import Browser, browser_session
 ITEM = "current-update/what-changed/differential-reader-check"
 REFUSED = "Could not send. Is the local server running?"
 
+# The send chord carries a modifier, and the installed agent-browser reports
+# every chord as an empty key with no modifier set, so the chord itself has to
+# be delivered to the box as a DOM key press. Everything around it — the plain
+# Enter that must make a paragraph instead, and the painted result of sending —
+# is driven with real keys and read off the page.
+_SEND_CHORD = """
+    (() => {
+      const box = document.querySelector(".composer textarea");
+      const apple = /mac|iphone|ipad|ipod/i.test(
+        navigator.platform || navigator.userAgent,
+      );
+      const press = new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+        metaKey: apple,
+        ctrlKey: !apple,
+      });
+      box.dispatchEvent(press);
+      return press.defaultPrevented;
+    })()
+    """
+
+_ENTER_SPY = """
+    (() => {
+      window.__enter = [];
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          window.__enter.push(event.defaultPrevented);
+        }
+      });
+      return true;
+    })()
+    """
+
+_WORKING = """
+    (() => {
+      const marks = [...document.querySelectorAll("p.working .working-text")];
+      const first = marks[0];
+      const style = first === undefined ? null : getComputedStyle(first);
+      return {
+        count: marks.length,
+        text: first === undefined ? "" : first.textContent,
+        moving: style !== null
+          && style.animationName !== "none"
+          && style.animationIterationCount === "infinite"
+          && style.animationDuration !== "0s",
+        awaiting: document.querySelectorAll(".chip-awaiting").length > 0,
+      };
+    })()
+    """
+
 
 @pytest.fixture
 def browser() -> Iterator[Browser]:
@@ -95,6 +147,84 @@ def test_escape_during_a_send_still_shows_the_question_landing(
         }})()
         """
     ) == ["true", True]
+
+
+def test_plain_enter_stays_in_the_box_and_the_chord_sends(
+    browser: Browser,
+) -> None:
+    """Leave Enter to the text box, and give sending its own chord.
+
+    A question worth asking is often more than one line, so Enter has to keep
+    belonging to the box. The real key press proves the page does not claim it;
+    the chord then sends everything written, newline and all.
+    """
+    written = "First line\nsecond line"
+    browser.compose_at(ITEM)
+    browser.run("fill", ".composer textarea", written)
+    browser.evaluate(_ENTER_SPY)
+
+    browser.press("Enter")
+    browser.run("wait", "400")
+    after_enter = browser.evaluate(
+        """
+        [
+          window.__enter,
+          document.querySelector(".composer") !== null,
+          document.querySelector(".composer textarea").value,
+        ]
+        """
+    )
+    unsent = list(browser.server.posts)
+
+    consumed = browser.evaluate(_SEND_CHORD)
+    browser.run("wait", "600")
+
+    assert after_enter == [[False], True, written]
+    assert unsent == []
+    assert consumed is True
+    assert browser.server.posts == [
+        ("/ask", {"anchor_id": ITEM, "text": written})
+    ]
+    assert browser.evaluate(
+        """
+        [
+          document.querySelector(".composer") === null,
+          document.querySelector("p.pending").textContent.includes(
+            "second line",
+          ),
+        ]
+        """
+    ) == [True, True]
+
+
+def test_the_page_says_the_agent_is_working_until_the_answer_lands(
+    browser: Browser,
+) -> None:
+    """Move something where the answer will appear, from send until arrival."""
+    browser.server.post_gate = threading.Event()
+    try:
+        browser.compose_at(ITEM)
+        browser.run("fill", ".composer textarea", "Is anything happening?")
+        browser.run("click", ".composer .submit")
+        deadline = time.monotonic() + 2
+        while browser.server.post_count < 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        browser.run("wait", "250")
+        in_flight = browser.evaluate(_WORKING)
+    finally:
+        browser.server.post_gate.set()
+    browser.run("wait", "600")
+
+    landed = browser.evaluate(_WORKING)
+
+    expected = {
+        "count": 1,
+        "text": "agent is working",
+        "moving": True,
+        "awaiting": True,
+    }
+    assert in_flight == expected
+    assert landed == expected
 
 
 def test_a_question_the_daemon_refuses_is_not_lost(browser: Browser) -> None:

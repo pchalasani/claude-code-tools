@@ -9,6 +9,7 @@
  * the cursor believes cannot drift apart.
  */
 
+import { conversationState } from "./freshness";
 import {
   threadIsAwaiting,
   type BriefDocument,
@@ -56,6 +57,14 @@ export interface Row {
   search: string;
   /** Whether this row holds a question still waiting for an answer. */
   awaiting: boolean;
+  /**
+   * How a conversation stands, as a value two loads of the page can compare.
+   *
+   * Only conversation rows carry one. It changes whenever a turn is added, so
+   * a reload can tell an answer that arrived while the human was away from one
+   * they have already read.
+   */
+  answerState?: string;
 }
 
 /**
@@ -256,6 +265,7 @@ export function awaitingThreadCount(rows: Row[]): number {
  */
 function threadRow(thread: Thread, anchorId: string, parentId: string): Row {
   const opening = thread.turns.find((turn) => turn.author === "human");
+  const awaiting = threadIsAwaiting(thread);
   return {
     id: threadRowId(anchorId, thread),
     kind: "thread",
@@ -264,7 +274,8 @@ function threadRow(thread: Thread, anchorId: string, parentId: string): Row {
     parentId,
     label: opening?.text ?? "Conversation",
     search: "",
-    awaiting: threadIsAwaiting(thread),
+    awaiting,
+    answerState: conversationState(thread.turns.length, awaiting),
   };
 }
 
