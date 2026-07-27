@@ -12,7 +12,7 @@ from typing import Iterator
 
 import pytest
 
-from browser_support import Browser, browser_session
+from browser_support import Browser, browser_session, landing_at
 
 ITEM = "current-update/what-changed/differential-reader-check"
 REFUSED = "Could not send. Is the local server running?"
@@ -247,38 +247,33 @@ def test_plain_enter_stays_in_the_box_and_the_chord_sends(
     browser.run("fill", ".composer textarea", written)
     browser.evaluate(_ENTER_SPY)
 
+    # Enter leaving the box alone is proved by nothing happening, and nothing
+    # is not something to wait for: this one moment is read after a settling
+    # wait. Everything the send does paint is polled for instead.
     browser.press("Enter")
     browser.run("wait", "400")
-    after_enter = browser.evaluate(
-        """
-        [
-          window.__enter,
-          document.querySelector(".composer") !== null,
-          document.querySelector(".composer textarea").value,
-        ]
-        """
-    )
+    delivered = browser.evaluate("window.__enter")
+    after_enter = browser.evaluate(landing_at(ITEM))
     unsent = list(browser.server.posts)
 
     consumed = browser.evaluate(_SEND_CHORD)
-    browser.run("wait", "600")
+    landed = browser.read_until(
+        landing_at(ITEM), lambda seen: seen["note"] is not None
+    )
 
-    assert after_enter == [[False], True, written]
+    assert delivered == [False]
+    assert after_enter["composer"] is True, after_enter
+    assert after_enter["typed"] == written, after_enter
+    assert after_enter["notes"] == 0, after_enter
     assert unsent == []
     assert consumed is True
     assert browser.server.posts == [
         ("/ask", {"anchor_id": ITEM, "text": written})
     ]
-    assert browser.evaluate(
-        """
-        [
-          document.querySelector(".composer") === null,
-          document.querySelector("p.pending").textContent.includes(
-            "second line",
-          ),
-        ]
-        """
-    ) == [True, True]
+    assert landed["composer"] is False, landed
+    assert landed["open"] == "true", landed
+    assert landed["notes"] == 1, landed
+    assert "second line" in (landed["note"] or ""), landed
 
 
 def test_the_page_says_the_agent_is_working_until_the_answer_lands(
@@ -293,11 +288,12 @@ def test_the_page_says_the_agent_is_working_until_the_answer_lands(
         deadline = time.monotonic() + 2
         while browser.server.post_count < 1 and time.monotonic() < deadline:
             time.sleep(0.01)
-        browser.run("wait", "250")
-        in_flight = browser.evaluate(_working_at(ITEM))
+        in_flight = browser.read_until(
+            _working_at(ITEM), lambda seen: seen["count"] == 1, timeout=3
+        )
     finally:
         browser.server.post_gate.set()
-    browser.run("wait", "600")
+    browser.read_until(landing_at(ITEM), lambda seen: seen["note"] is not None)
 
     landed = browser.evaluate(_working_at(ITEM))
 
@@ -330,8 +326,9 @@ def test_the_working_sign_stands_still_where_motion_is_unwelcome(
         deadline = time.monotonic() + 2
         while browser.server.post_count < 1 and time.monotonic() < deadline:
             time.sleep(0.01)
-        browser.run("wait", "250")
-        moving = browser.evaluate(_working_at(ITEM))
+        moving = browser.read_until(
+            _working_at(ITEM), lambda seen: seen["count"] == 1, timeout=3
+        )
         with browser.reduced_motion():
             still = browser.evaluate(_still_at(ITEM))
     finally:
@@ -360,17 +357,19 @@ def test_the_working_sign_outlives_a_publish_that_carries_no_answer(
     thread_id = "q-pending-republish"
     browser.compose_at(ITEM)
     browser.send(question)
-    browser.run("wait", "400")
+    browser.read_until(landing_at(ITEM), lambda seen: seen["note"] is not None)
     before = browser.evaluate(_working_at(ITEM))
 
     _fold_question_into_content(browser, thread_id, question)
     browser.data["title"] = "Republished with no answer yet"
     browser.publish()
     browser.wait_for_title("Republished with no answer yet")
-    browser.run("wait", "400")
+    folded = browser.read_until(
+        _working_at(f"{ITEM}#{thread_id}"), lambda seen: seen["count"] == 1
+    )
 
     assert before["count"] == 1
-    assert browser.evaluate(_working_at(f"{ITEM}#{thread_id}")) == {
+    assert folded == {
         "count": 1,
         "text": "agent is working",
         "moving": True,

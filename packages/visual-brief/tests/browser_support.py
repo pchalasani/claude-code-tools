@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 import pytest
 
@@ -28,6 +28,36 @@ SECOND_ITEM = "current-update/what-changed/four-cold-review-defects"
 AWAITING_THREAD = (
     "current-update/why-it-matters/repair-loop-routing#q-malformed-unsupported"
 )
+
+
+def landing_at(row_id: str) -> str:
+    """Return a script reading where a message sent from one row lands.
+
+    Every field is guarded, so a page that has not painted the note yet says
+    what it does show — whether the box is still open, what is written in it,
+    whether the row folded, and what the status line reports — instead of
+    throwing and taking the diagnosis with it.
+
+    Args:
+        row_id: Identifier of the row that was written against.
+
+    Returns:
+        JavaScript returning what a human sees of one send.
+    """
+    return f"""
+    (() => {{
+      const row = document.querySelector('[data-row-id="{row_id}"]');
+      const box = document.querySelector(".composer");
+      return {{
+        composer: box !== null,
+        open: row?.dataset.open ?? null,
+        notes: document.querySelectorAll("p.pending").length,
+        note: row?.querySelector("p.pending")?.textContent ?? null,
+        typed: box?.querySelector("textarea")?.value ?? null,
+        status: box?.querySelector(".status")?.textContent ?? null,
+      }};
+    }})()
+    """
 
 
 def _browser_data() -> dict[str, Any]:
@@ -136,6 +166,37 @@ class Browser:
         result = json.loads(output)
         assert result["success"], result
         return result["data"]["result"]
+
+    def read_until(
+        self,
+        script: str,
+        painted: Callable[[Any], bool],
+        timeout: float = 5.0,
+    ) -> Any:
+        """Read the page over and over until it paints what a test waits for.
+
+        Reading once after a fixed wait loses the race on a loaded machine,
+        and the reading is handed back whether or not it ever became the
+        awaited one, so the caller's own assertion reports what the page
+        actually showed rather than failing inside the browser.
+
+        Args:
+            script: JavaScript returning what a human sees. It has to read
+                defensively: an unpainted page must read as a value.
+            painted: Decides whether one reading is the awaited one.
+            timeout: Seconds to keep reading before handing back what is
+                there.
+
+        Returns:
+            The first awaited reading, or the last one taken before the
+            deadline passed.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            seen = self.evaluate(script)
+            if painted(seen) or time.monotonic() >= deadline:
+                return seen
+            time.sleep(0.1)
 
     def press(self, key: str) -> None:
         """Press a real browser key."""
