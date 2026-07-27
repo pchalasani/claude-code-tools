@@ -151,6 +151,10 @@ export default defineConfig({
               label: "Langroid",
               slug: "plugins-detail/langroid",
             },
+            {
+              label: "Writing",
+              slug: "plugins-detail/writing",
+            },
           ],
         },
         {

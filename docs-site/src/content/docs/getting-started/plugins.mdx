@@ -28,6 +28,7 @@ This repo provides plugins for Codex and for the
 | `voice` | Spoken audio summaries |
 | `agent-tunnel` | `>share` a live session so teammates can ask it questions over Discord |
 | `dynamic-workflow` | Durable JavaScript orchestration for headless Codex agents |
+| `writing` | Prose-quality skills: agent-style rules and remove-ai-patterns de-AI-ing |
 
 ## Codex Plugin Installation
 
@@ -87,6 +88,7 @@ for its JavaScript API, state model, and safety boundaries.
    claude plugin install "langroid@cctools-plugins"
    claude plugin install "voice@cctools-plugins"
    claude plugin install "agent-tunnel@cctools-plugins"
+   claude plugin install "writing@cctools-plugins"
    ```
 
    Or use `/plugin` without arguments inside a
@@ -222,3 +224,24 @@ questions — `agent-tunnel serve` and the rest of the CLI — ships with the
 `claude-code-tools` package (`uv tool install claude-code-tools`). See the
 [agent-tunnel tool page](/claude-code-tools/tools/agent-tunnel/) for the full
 setup: creating the Discord bot, configuration, and running the daemon.
+
+---
+
+## writing Plugin
+
+Two explicit-trigger skills for prose quality; neither fires on ordinary
+writing tasks — you invoke them by name for a dedicated editing pass.
+
+| Skill | What it does |
+|-------|--------------|
+| `/agent-style` | 21 literature-backed rules for formal technical prose (papers, design docs, READMEs) |
+| `/remove-ai-patterns` | Remove AI-writing patterns at any register, with voice profiles and a deterministic Node.js detector |
+
+Both skills vendor a pinned snapshot of their upstream source
+([agent-style](https://github.com/yzhao062/agent-style), CC BY 4.0, and
+[avoid-ai-writing](https://github.com/conorbronsdon/avoid-ai-writing),
+MIT), so they work offline with no extra installs.
+
+See the
+[Writing detail page](/claude-code-tools/plugins-detail/writing/)
+for the two skills' lanes and the detector workflow.

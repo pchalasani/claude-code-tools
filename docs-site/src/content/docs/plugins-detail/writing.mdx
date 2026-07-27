@@ -1,0 +1,90 @@
+---
+title: "Writing Plugin"
+description: >
+  Prose-quality skills: agent-style rules for formal
+  technical prose, and remove-ai-patterns for de-AI-ing
+  text with a deterministic detector.
+---
+
+import { Steps } from "@astrojs/starlight/components";
+
+<style>{`
+  table td:first-child,
+  table th:first-child {
+    white-space: nowrap;
+  }
+`}</style>
+
+The `writing` plugin bundles two skills for improving prose quality. Both
+are **explicit-trigger only**: they never fire on ordinary writing or
+documentation tasks, so they add no noise to normal sessions. You invoke
+them by name when you want a dedicated editing pass.
+
+Install via the Claude Code marketplace:
+
+```bash
+claude plugin install writing@cctools-plugins
+```
+
+## Skills
+
+| Skill | What It Does |
+|-------|--------------|
+| `writing:agent-style` | 21 literature-backed rules for formal technical prose (papers, design docs, proposals, READMEs, commit messages) |
+| `writing:remove-ai-patterns` | Remove AI-writing patterns ("AI-isms") from text at any register, with voice profiles and a deterministic detector |
+
+## Two lanes, not one
+
+The skills are complementary and deliberately kept apart:
+
+- **agent-style** is a clarity and composition ruleset for *formal*
+  technical prose: passive voice, needless words, claim calibration,
+  parallel structure, stress position, and a set of field-observed rules
+  about LLM habits (bullet overuse, dash overuse, summary closers, and so
+  on). It is based on
+  [The Elements of Agent Style](https://github.com/yzhao062/agent-style)
+  (CC BY 4.0).
+- **remove-ai-patterns** de-AIs text of *any* voice: it applies the
+  [avoid-ai-writing](https://github.com/conorbronsdon/avoid-ai-writing)
+  catalog (MIT, by Conor Bronsdon) of AI-writing tells, supports voice
+  profiles (casual / professional / technical / warm / blunt), and ships
+  a self-contained Node.js detector for machine-checkable audits.
+
+Pick one as the final gate on a given document; interleaving passes of
+both tends to churn the same sentences back and forth.
+
+## How to Use
+
+Ask for a pass by name:
+
+> "Apply agent-style to this design doc."
+
+> "De-AI this blog post with remove-ai-patterns, technical voice, and
+> iterate until the detector is clean."
+
+> "Run a detect-only audit of README.md."
+
+### The deterministic detector
+
+remove-ai-patterns includes a JSON-emitting detector that needs only a
+`node` binary (no npm install):
+
+```bash
+node <skill-dir>/scripts/detect.js FILE
+```
+
+It reports an overall score, a label, a document classification, and
+per-issue findings with severities and suggestions. For "iterate until
+clean" requests the agent loops revise → detect until findings stop
+improving; the detector is the objective stopping criterion, so the loop
+cannot argue with itself about whether the text is done.
+
+## Vendored, pinned upstream content
+
+Each skill vendors a pinned snapshot of its upstream source (rule bodies,
+pattern catalog, detector), so the skills work offline and behave the
+same on every machine. The pinned commit of each upstream is recorded in
+an `UPSTREAM-PIN` file next to the vendored content, and upstream
+licenses are included alongside. Maintainers refresh the snapshots with
+`plugins/writing/scripts/update-upstream.sh` and review the diff before
+committing; users pick up refreshed catalogs by updating the plugin.
