@@ -108,17 +108,22 @@ until clean). agent-style keeps its 21 compact rules in the SKILL.md
 itself and the full rule bodies (BAD/GOOD pairs, rationale) in a
 vendored `references/RULES.md`.
 
-### As acceptance gates in a workflow
+### As an acceptance gate in a workflow
 
-The skills are most useful as the **acceptance criteria** of a larger
-task: the agent keeps editing until both prose gates pass. Paired with
-the [dynamic-workflow](/claude-code-tools/plugins-detail/dynamic-workflow/)
-plugin, they become an automatic loop. Just describe the gate:
+A skill is most useful as the **acceptance criterion** of a larger task:
+the agent keeps editing until the prose gate passes. Pick ONE skill as
+the final gate (interleaving both on the same document churns the same
+sentences, per the two-lanes note above); if you want both to weigh in,
+run one as a single up-front pass and the other as the looping gate.
+Paired with the
+[dynamic-workflow](/claude-code-tools/plugins-detail/dynamic-workflow/)
+plugin, the gate becomes an automatic loop. Just describe it:
 
 :::tip[Tell Claude Code]
-"Set up a dynamic workflow to draft this blog post, where acceptance is
-gated on both writing skills: run remove-ai-patterns until the detector
-is clean, then an agent-style pass, and loop until both are satisfied."
+"Set up a dynamic workflow to draft this blog post. Do one agent-style
+pass first, then loop on remove-ai-patterns as the acceptance gate:
+re-run the detector after each revision and stop when it reports no
+issues or the score stops improving (cap at 5 rounds)."
 :::
 
 Simpler, without a workflow, you can name the gate inline on any writing
@@ -126,13 +131,15 @@ task:
 
 :::tip[Tell Claude Code]
 "Write the release notes from this changelog, then de-AI them with
-remove-ai-patterns and don't stop until the detector reports zero
-issues."
+remove-ai-patterns: iterate until the detector reports no issues or the
+score stops improving."
 :::
 
-The deterministic detector (below) is what makes such a loop terminate
-on its own: it is an objective pass/fail signal the agent cannot talk
-itself past.
+The deterministic detector (below) is what lets such a loop terminate on
+its own. Its convergence rule is to stop when issues reach zero **or**
+the score/label stalls, so a finding that cannot be removed without
+changing intended content ends the loop instead of spinning; keeping a
+round cap is still wise as a backstop.
 
 ### The deterministic detector
 
