@@ -265,6 +265,34 @@ export async function readServedVersion(
 }
 
 /**
+ * Build the watch a real page polls on, memory and all.
+ *
+ * The memory is the whole reason this is a named thing rather than an object
+ * literal inside the watch: "reload once out of a state you cannot read" is
+ * only true if the page can still say, after the reload, that it was here
+ * before. That claim is worth testing against the store it is actually kept
+ * in, so this is what the tests drive too.
+ *
+ * @param current - Generation the loaded page was rendered from.
+ * @param read - How to ask the daemon what it would serve.
+ * @param reload - What replacing the loaded page does.
+ * @returns The watch.
+ */
+export function healingWatch(
+  current: string,
+  read: () => Promise<string | null>,
+  reload: () => void,
+): VersionWatch {
+  return {
+    current,
+    read,
+    reload,
+    healed: () => readHealedGeneration() === current,
+    remember: () => rememberHealedGeneration(current),
+  };
+}
+
+/**
  * Start polling the local daemon for a newer generation of this page.
  *
  * @param root - Document holding the generation meta element.
@@ -275,14 +303,11 @@ export function startVersionWatch(
   root: Document,
   intervalMs: number = pollInterval(root),
 ): () => void {
-  const current = pageVersion(root);
-  const watch: VersionWatch = {
-    current,
-    read: readServedVersion,
-    reload: () => window.location.reload(),
-    healed: () => readHealedGeneration() === current,
-    remember: () => rememberHealedGeneration(current),
-  };
+  const watch = healingWatch(
+    pageVersion(root),
+    readServedVersion,
+    () => window.location.reload(),
+  );
   let timer = 0;
   let delay = intervalMs;
   let stopped = false;

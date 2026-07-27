@@ -25,6 +25,8 @@ needs_git = pytest.mark.skipif(
 from visual_brief.render.assets import (
     SCRIPT_NAME,
     STYLE_NAME,
+    BundleError,
+    _require_inlinable,
     bundle_script,
     bundle_style,
 )
@@ -32,6 +34,8 @@ from visual_brief.render.assets import (
 PACKAGE_ROOT = Path(__file__).parents[1]
 STAMP_TOOL = PACKAGE_ROOT / "tools" / "frontend_stamp.py"
 STATIC_DIR = PACKAGE_ROOT / "src" / "visual_brief" / "static"
+# The C0 controls, less the three that are ordinary whitespace.
+CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
 def _load_stamp_tool() -> ModuleType:
@@ -175,6 +179,27 @@ def test_bundle_can_be_inlined_into_a_single_page() -> None:
         assert re.search(r"https?://", text) is None, name
         assert re.search(r"</(script|style)", text, re.IGNORECASE) is None, name
         assert "<!--" not in text, name
+        assert CONTROL_CHARACTERS.search(text) is None, name
+
+
+def test_a_control_character_is_refused_before_it_is_served() -> None:
+    """Name the byte, because nothing downstream ever will.
+
+    A NUL that reaches the page is rewritten to U+FFFD by the HTML tokenizer
+    without a word of complaint, and the served script is then not the script
+    that was built. It also makes the source file binary to git, which is how
+    one of these went unnoticed through a review.
+    """
+    with pytest.raises(BundleError) as refusal:
+        _require_inlinable(SCRIPT_NAME, "const key = `${id}\x00${index}`;")
+
+    assert "control character" in str(refusal.value)
+    assert "0x00" in str(refusal.value)
+
+
+def test_ordinary_whitespace_is_not_mistaken_for_a_control_character() -> None:
+    """A bundle is full of newlines and tabs, and all of them are fine."""
+    assert _require_inlinable(SCRIPT_NAME, "const a = 1;\n\tconst b = 2;\r\n")
 
 
 # What the shipped stylesheet does when motion is unwelcome is no longer

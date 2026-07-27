@@ -16,7 +16,11 @@ import {
 import type { BriefDocument } from "./document";
 import { createHints, type Hints } from "./hints";
 import { isTypingTarget, resolveAction, type Action } from "./keys";
-import { createNavigation, type Navigation } from "./navigation";
+import {
+  createNavigation,
+  type Navigation,
+  type Overlay,
+} from "./navigation";
 import { ancestorIds, type Row } from "./outline";
 import { createPending, type Pending } from "./pending";
 import { focusLater } from "./reveal";
@@ -162,6 +166,26 @@ export function createBriefState(brief: BriefDocument): BriefState {
     }
   };
 
+  /**
+   * Show one overlay, and put the jump labels away as it opens.
+   *
+   * An overlay owns the keyboard while it is up — Escape closes it, and that
+   * is the only way out an overlay advertises. Hint labels own the keyboard
+   * too, and they own it first, so a page left in hint mode would swallow the
+   * Escape and leave the human holding a dialog that will not close. The
+   * labels lose: they describe a page nobody is reading any more, and jumping
+   * the cursor around underneath a modal dialog was never the point.
+   *
+   * Every way in comes through here, because the key and the on-screen
+   * control both run the same action.
+   *
+   * @param overlay - The overlay to show.
+   */
+  const showOverlay = (overlay: Exclude<Overlay, "none">): void => {
+    hints.leave();
+    nav.openOverlay(overlay);
+  };
+
   const run = (action: Action): void => {
     const actions: Record<Action, () => void> = {
       "next-item": () => nav.move("item", 1),
@@ -181,12 +205,12 @@ export function createBriefState(brief: BriefDocument): BriefState {
       chats: () => nav.toggleChats(),
       hints: () => hints.enter(),
       search: () => {
-        nav.openOverlay("search");
+        showOverlay("search");
         focusLater("#brief-search");
       },
       top: () => nav.jump("top"),
       bottom: () => nav.jump("bottom"),
-      help: () => nav.openOverlay("help"),
+      help: () => showOverlay("help"),
       close: closeOne,
     };
     actions[action]();

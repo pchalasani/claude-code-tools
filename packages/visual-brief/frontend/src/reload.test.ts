@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   MAX_POLL_INTERVAL_MS,
@@ -7,6 +7,7 @@ import {
   VERSION_META,
   announcePoll,
   decidePoll,
+  healingWatch,
   isGeneration,
   nextDelay,
   onPollCycle,
@@ -16,6 +17,7 @@ import {
   readServedVersion,
   type VersionWatch,
 } from "./reload";
+import { forgetStores, withoutSessionStorage } from "../test/storage";
 
 const realFetch = globalThis.fetch;
 
@@ -42,6 +44,10 @@ function hang(): void {
     })) as unknown as typeof globalThis.fetch;
 }
 
+beforeEach(() => {
+  forgetStores();
+});
+
 afterEach(() => {
   globalThis.fetch = realFetch;
 });
@@ -64,15 +70,21 @@ function pageWith(metas: Record<string, string>): Document {
 }
 
 /**
- * Build a watch that records what it was asked to do.
+ * Load the page again, on a watch that records what it was asked to do.
+ *
+ * The watch is the one a real page runs on, memory and all: what it recalls
+ * having healed comes out of the browser's own stores rather than out of a
+ * flag set by the test. Calling this twice is what two page loads look like —
+ * the second watch starts with no memory but the store's, exactly as a
+ * reloaded page does.
  *
  * @param served - What the daemon answers.
- * @param options - The page's own generation and healing memory.
+ * @param options - The page's own generation.
  * @returns The watch and what it did.
  */
 function watching(
   served: () => Promise<string | null>,
-  options: { current?: string; healed?: boolean } = {},
+  options: { current?: string } = {},
 ): {
   watch: VersionWatch;
   reloads: () => number;
@@ -80,18 +92,16 @@ function watching(
 } {
   let reloads = 0;
   let remembered = 0;
+  const watch = healingWatch(options.current ?? "a".repeat(64), served, () => {
+    reloads += 1;
+  });
+  const remember = watch.remember;
+  watch.remember = () => {
+    remembered += 1;
+    remember();
+  };
   return {
-    watch: {
-      current: options.current ?? "a".repeat(64),
-      read: served,
-      reload: () => {
-        reloads += 1;
-      },
-      healed: () => options.healed === true,
-      remember: () => {
-        remembered += 1;
-      },
-    },
+    watch,
     reloads: () => reloads,
     remembered: () => remembered,
   };
@@ -197,6 +207,61 @@ describe("one poll cycle", () => {
 
     expect(await pollOnce(driver.watch)).toBe("reload");
     expect(driver.reloads()).toBe(1);
+  });
+});
+
+describe("healing, remembered where the page really keeps it", () => {
+  it("reloads out of an answer it cannot read once, not every load", async () => {
+    const first = watching(async () => "not a generation");
+    expect(await pollOnce(first.watch)).toBe("reload");
+    expect(first.reloads()).toBe(1);
+
+    // The page comes back exactly as it left: same generation, same daemon,
+    // saying the same unintelligible thing.
+    const second = watching(async () => "not a generation");
+
+    expect(await pollOnce(second.watch)).toBe("same");
+    expect(second.reloads()).toBe(0);
+  });
+
+  it("does the same for a page served with no generation at all", async () => {
+    // This is the page that used to reload forever: what it remembered was
+    // the empty string, and the store handed the empty string back as
+    // "nothing was ever remembered".
+    const first = watching(async () => "c".repeat(64), { current: "" });
+    expect(await pollOnce(first.watch)).toBe("reload");
+    expect(first.reloads()).toBe(1);
+
+    const second = watching(async () => "c".repeat(64), { current: "" });
+
+    expect(await pollOnce(second.watch)).toBe("same");
+    expect(second.reloads()).toBe(0);
+  });
+
+  it("remembers even where session storage is refused outright", async () => {
+    // Storage that is switched off fails silently, and a silently forgotten
+    // healing is a tab that reloads, comes back, and reloads again.
+    await withoutSessionStorage(async () => {
+      const first = watching(async () => "not a generation");
+      expect(await pollOnce(first.watch)).toBe("reload");
+
+      const second = watching(async () => "not a generation");
+
+      expect(await pollOnce(second.watch)).toBe("same");
+      expect(second.reloads()).toBe(0);
+    });
+  });
+
+  it("keeps reloading for content that simply moved on", async () => {
+    // Healing is remembered once; a generation that keeps changing is the
+    // daemon publishing, and every one of those is worth a reload.
+    const first = watching(async () => "c".repeat(64));
+    expect(await pollOnce(first.watch)).toBe("reload");
+
+    const second = watching(async () => "d".repeat(64));
+
+    expect(await pollOnce(second.watch)).toBe("reload");
+    expect(second.reloads()).toBe(1);
   });
 });
 

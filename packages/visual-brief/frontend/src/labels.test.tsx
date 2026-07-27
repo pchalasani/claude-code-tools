@@ -118,6 +118,42 @@ describe("jumping by label", () => {
     expect(document.querySelector(".help")).not.toBeNull();
   });
 
+  it("hands the keyboard to a dialog opened while the labels are up", () => {
+    // The labels swallow every key, Escape included, and a dialog opened with
+    // the mouse offers Escape as its way out. The human was left holding a
+    // help dialog that would not close and no sign of why.
+    mount();
+    press("f");
+    expect(Object.keys(paintedHints()).length).toBeGreaterThan(0);
+
+    document
+      .querySelector('.key-control[data-action="help"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(document.querySelector(".help")).not.toBeNull();
+    expect(paintedHints()).toEqual({});
+
+    press("Escape");
+
+    expect(document.querySelector(".help")).toBeNull();
+  });
+
+  it("does the same for the search field, which also opens by mouse", () => {
+    mount();
+    press("f");
+
+    document
+      .querySelector('.key-control[data-action="search"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(document.querySelector(".search")).not.toBeNull();
+    expect(paintedHints()).toEqual({});
+
+    press("Escape");
+
+    expect(document.querySelector(".search")).toBeNull();
+  });
+
   it("grows to two keys when one is not enough", () => {
     mount();
     press("E");

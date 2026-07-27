@@ -75,6 +75,13 @@ def test_bundled_example_renders_without_external_requests() -> None:
     assert "<link" not in rendered.replace('<link rel="icon" href="data:,">', "")
 
 
+def test_bundled_example_renders_the_bytes_that_were_built() -> None:
+    """Carry no control character; the HTML parser rewrites one unasked."""
+    rendered = render_content(_example())
+
+    assert re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", rendered) is None
+
+
 def test_page_delivers_the_validated_document_and_the_bundle() -> None:
     """Deliver the document as data and the interface as one inlined bundle."""
     data = _example()

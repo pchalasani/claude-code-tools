@@ -20,6 +20,12 @@ _CLOSING_ELEMENT = re.compile(r"</(script|style)", re.IGNORECASE)
 # `<!--` puts the HTML parser into the escaped script-data state, where the
 # next `</script>` no longer closes the element.
 _COMMENT_OPEN = "<!--"
+# Control characters have no business in a bundle, and a NUL least of all: the
+# HTML tokenizer rewrites it to U+FFFD without a word of complaint, so a page
+# carrying one serves a script that is not the script that was built. The rest
+# are parse errors. Tab, newline and carriage return are ordinary whitespace
+# and stay welcome.
+_CONTROL_CHARACTER = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
 class BundleError(RuntimeError):
@@ -63,9 +69,18 @@ def _require_inlinable(name: str, text: str) -> str:
         The unchanged text.
 
     Raises:
-        BundleError: If the text carries an absolute URL, a closing tag, or a
-            comment opener, which would escape the inline element's parser.
+        BundleError: If the text carries an absolute URL, a closing tag, a
+            comment opener, or a control character — the first three escape
+            the inline element's parser, and the last it refuses to serve
+            back unchanged.
     """
+    control = _CONTROL_CHARACTER.search(text)
+    if control is not None:
+        raise BundleError(
+            f"{name} contains the control character "
+            f"{ord(control.group(0)):#04x}, which the HTML parser reports as "
+            f"an error and, for a NUL, silently rewrites; {_REBUILD_HINT}"
+        )
     url = _ABSOLUTE_URL.search(text)
     if url is not None:
         raise BundleError(

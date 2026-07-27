@@ -7,6 +7,13 @@
  * where the cursor was, and which answers they had already seen. Both live
  * here so there is exactly one store to reason about — a second one would
  * drift out of step with the first at the first bug.
+ *
+ * Exactly one fact is kept twice, and it earns it: whether this tab has
+ * already reloaded itself to escape a page it could not read. Session storage
+ * is where that belongs and is also the first thing a browser withdraws, and
+ * it withdraws it silently. Everything else here is worth losing on a page
+ * that has no storage; this one costs a reload loop, so the page's own history
+ * entry carries a copy.
  */
 
 /** Base name the cursor is stored under, before the run is added to it. */
@@ -20,6 +27,15 @@ export const SENT_STORAGE_KEY = "visual-brief-sent";
 
 /** Base name the self-healing reload is remembered under. */
 export const HEALED_STORAGE_KEY = "visual-brief-healed";
+
+/**
+ * Property the page's history entry carries its fallback memory under.
+ *
+ * Namespaced because the history entry belongs to the page rather than to this
+ * module: anything else that ever writes to it has to find its own state again
+ * where it left it.
+ */
+export const HISTORY_NAMESPACE = "visual-brief";
 
 /** What each conversation looked like the last time the human saw it. */
 export type SeenAnswers = Record<string, string>;
@@ -189,21 +205,37 @@ export function saveSentRecords(records: SentRecord[]): void {
 /**
  * Read the page generation this tab last reloaded itself to escape.
  *
+ * A generation that was stored as an empty string is a memory like any other,
+ * not an absence. A page served without a generation of its own is exactly the
+ * page that heals — it is unintelligible to the daemon by definition — and
+ * reading its memory back as "never happened" is what made such a page reload
+ * on every single load rather than once.
+ *
  * @returns The generation, or null when this tab has never had to.
  */
 export function readHealedGeneration(): string | null {
-  const raw = readItem(healedStorageKey());
-  return raw === null || raw === "" ? null : raw;
+  const key = healedStorageKey();
+  const stored = readItem(key);
+  return stored !== null ? stored : readHistoryItem(key);
 }
 
 /**
  * Remember that this tab reloaded itself to escape one page generation.
  *
+ * It is written twice, to two stores that fail independently. Session storage
+ * is the right home for it and is also the first thing a browser takes away —
+ * switched off, full, or blocked by policy — and it takes it away silently.
+ * Losing this particular memory is not a small loss: the page reloads to
+ * escape a state it cannot read, comes back into the same state, and reloads
+ * again, for as long as the tab is open.
+ *
  * @param generation - The generation the tab was showing when it gave up on
  *     understanding the daemon.
  */
 export function rememberHealedGeneration(generation: string): void {
-  writeItem(healedStorageKey(), generation);
+  const key = healedStorageKey();
+  writeItem(key, generation);
+  writeHistoryItem(key, generation);
 }
 
 /**
@@ -252,4 +284,55 @@ function writeItem(key: string, value: string): void {
   } catch {
     // Storage can be disabled; the page still works within this one load.
   }
+}
+
+/**
+ * Read one value out of the history entry this page came back to.
+ *
+ * @param key - The key to read.
+ * @returns The stored value, or null when there is none.
+ */
+function readHistoryItem(key: string): string | null {
+  try {
+    const state = asRecord(window.history.state);
+    const carried = asRecord(state?.[HISTORY_NAMESPACE]);
+    const value = carried?.[key];
+    return typeof value === "string" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write one value into the history entry, alongside whatever it already holds.
+ *
+ * The state a history entry carries survives ``location.reload()`` the same
+ * way session storage does, and is refused under different circumstances, so
+ * a page denied one store still remembers through the other.
+ *
+ * @param key - The key to write.
+ * @param value - The value to store.
+ */
+function writeHistoryItem(key: string, value: string): void {
+  try {
+    const state = { ...(asRecord(window.history.state) ?? {}) };
+    const carried = { ...(asRecord(state[HISTORY_NAMESPACE]) ?? {}) };
+    carried[key] = value;
+    state[HISTORY_NAMESPACE] = carried;
+    window.history.replaceState(state, "");
+  } catch {
+    // No history to write to either; the page still works within this load.
+  }
+}
+
+/**
+ * Read a value as a plain record, when that is what it turns out to be.
+ *
+ * @param value - Anything at all.
+ * @returns The value as a record, or null when it is not one.
+ */
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
 }
