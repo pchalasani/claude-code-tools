@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { saveSentRecords } from "./session-store";
+import { cursorStorageKey, saveSentRecords } from "./session-store";
 import {
   mount,
   paintedCursor,
@@ -269,6 +269,11 @@ describe("after the reload a send causes", () => {
     expect(paintedCursor()).toBe(ANSWERED);
     expect(paintedOpen(ANSWERED)).toBe("true");
     expect(document.querySelector("p.pending")).toBeNull();
+    // The anchored landing must be written into the real cursor store, not
+    // just painted: the NEXT reload (the agent's answer arriving) restores
+    // from storage, and forgetting to write meant that second reload threw
+    // the human back to wherever they were before they wrote.
+    expect(window.sessionStorage.getItem(cursorStorageKey())).toBe(ANSWERED);
   });
 
   it("carries the waiting sign over, folded row and all", () => {

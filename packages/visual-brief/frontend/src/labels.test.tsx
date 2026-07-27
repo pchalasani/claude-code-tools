@@ -138,6 +138,24 @@ describe("jumping by label", () => {
     expect(document.querySelector(".help")).toBeNull();
   });
 
+  it("refuses to arm over an open dialog, and one Escape closes it", () => {
+    // The mirror of the case above: the dialog came first. Labels must not
+    // paint behind the scrim, no global key may act on the page the human
+    // cannot see, and the FIRST Escape must close the dialog.
+    mount();
+    const before = paintedCursor();
+    press("?");
+    expect(document.querySelector(".help")).not.toBeNull();
+
+    press("f");
+    expect(paintedHints()).toEqual({});
+    press("j");
+    expect(paintedCursor()).toBe(before);
+
+    press("Escape");
+    expect(document.querySelector(".help")).toBeNull();
+  });
+
   it("does the same for the search field, which also opens by mouse", () => {
     mount();
     press("f");

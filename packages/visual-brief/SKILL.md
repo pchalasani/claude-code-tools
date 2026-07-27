@@ -99,7 +99,9 @@ Monitor(
 ```
 
 `persistent: true` and `tail -n 0`. Arm it **before** giving out the URL, and
-re-arm it after any session boundary — monitors die with their session, and
+re-arm it after any session boundary — idempotently: if you may have armed a
+watcher before, stop it first (TaskStop on its id, or find it by this
+description) so the queue never has two watchers double-reporting — monitors die with their session, and
 resuming does not revive them. If you cannot start it, say so in your one line.
 
 ## Building the page
@@ -157,6 +159,8 @@ nothing needs shell quoting.
 
 A question whose anchor no longer exists, or a reply naming a thread that is
 not on the page, is reported and left in the queue. Neither is guessed at.
+
+**Every human turn gets an agent turn — even a pure confirmation.** The page cannot tell "read, nothing more needed" from "ignored": a thread whose newest turn is the human's shows *agent is working* forever. When the human's message closes the loop, reply with one acknowledging line via `answer`; folding their words in is not answering them.
 
 **The answer must live on the page, complete.** Never answer with a pointer to
 the clipboard, the terminal, a file, or anywhere else. If the human asked for

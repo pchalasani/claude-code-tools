@@ -203,7 +203,14 @@ export function createBriefState(brief: BriefDocument): BriefState {
       compose: composeAtCursor,
       "next-awaiting": () => nav.toAwaiting(),
       chats: () => nav.toggleChats(),
-      hints: () => hints.enter(),
+      // Labels never arm over a modal: they would paint behind the scrim
+      // and their handler would swallow the dialog's Escape. The search
+      // panel is not modal, and jumping between its matches is fine.
+      hints: () => {
+        if (nav.overlay() !== "help") {
+          hints.enter();
+        }
+      },
       search: () => {
         showOverlay("search");
         focusLater("#brief-search");
@@ -230,9 +237,21 @@ export function createBriefState(brief: BriefDocument): BriefState {
       // Browser and system chords are never taken, so Command-R still works.
       const chorded =
         event.ctrlKey || event.metaKey || event.altKey;
+      const typing = isTypingTarget(event.target ?? null);
+      if (!chorded && !typing && nav.overlay() === "help") {
+        // A MODAL overlay owns the keyboard: only its dismissal is honoured,
+        // so no global shortcut can arm hint labels over the scrim or mutate
+        // a page the human cannot see. Search is deliberately not gated —
+        // it is a filter panel, and j/k walking the matches is its point.
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeOne();
+        }
+        return;
+      }
       if (
         !chorded
-        && !isTypingTarget(event.target ?? null)
+        && !typing
         && hints.handleKey(event.key)
       ) {
         event.preventDefault();

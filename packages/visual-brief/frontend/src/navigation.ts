@@ -154,6 +154,13 @@ export function createNavigation(
   const rows = outline(brief);
   const rowIds = new Set(rows.map((row) => row.id));
   const restored = restoreCursor(rows, anchorId ?? readSavedCursor());
+  if (restored !== null) {
+    // The landing is written into the store, not just painted from it: an
+    // anchored load (the human's own message) must survive the NEXT reload
+    // too, or the agent's answer arriving seconds later throws the human
+    // back to wherever they were before they wrote.
+    saveCursor(restored);
+  }
   const [cursorId, setCursorId] = createSignal<string | null>(restored);
   // The authority on where the cursor is. The painted signal is written
   // inside a view transition, which the browser defers to the next frame, so
