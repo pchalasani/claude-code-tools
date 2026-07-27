@@ -108,6 +108,32 @@ until clean). agent-style keeps its 21 compact rules in the SKILL.md
 itself and the full rule bodies (BAD/GOOD pairs, rationale) in a
 vendored `references/RULES.md`.
 
+### As acceptance gates in a workflow
+
+The skills are most useful as the **acceptance criteria** of a larger
+task: the agent keeps editing until both prose gates pass. Paired with
+the [dynamic-workflow](/claude-code-tools/plugins-detail/dynamic-workflow/)
+plugin, they become an automatic loop. Just describe the gate:
+
+:::tip[Tell Claude Code]
+"Set up a dynamic workflow to draft this blog post, where acceptance is
+gated on both writing skills: run remove-ai-patterns until the detector
+is clean, then an agent-style pass, and loop until both are satisfied."
+:::
+
+Simpler, without a workflow, you can name the gate inline on any writing
+task:
+
+:::tip[Tell Claude Code]
+"Write the release notes from this changelog, then de-AI them with
+remove-ai-patterns and don't stop until the detector reports zero
+issues."
+:::
+
+The deterministic detector (below) is what makes such a loop terminate
+on its own: it is an objective pass/fail signal the agent cannot talk
+itself past.
+
 ### The deterministic detector
 
 remove-ai-patterns includes a JSON-emitting detector that needs only a
