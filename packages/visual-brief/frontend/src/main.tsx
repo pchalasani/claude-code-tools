@@ -7,6 +7,7 @@ import { startVersionWatch } from "./reload";
 import "./styles/base.css";
 import "./styles/rows.css";
 import "./styles/chrome.css";
+import "./styles/marks.css";
 
 export const ROOT_ID = "visual-brief-root";
 
@@ -31,8 +32,11 @@ export function mount(root: Document): void {
     host.className = "brief-error";
     throw error;
   } finally {
+    // Started even when the document above failed to parse: a page that could
+    // not start is exactly the page that has to notice the next publish and
+    // replace itself with one that can.
     watchPointer();
-startVersionWatch(root);
+    startVersionWatch(root);
   }
 }
 

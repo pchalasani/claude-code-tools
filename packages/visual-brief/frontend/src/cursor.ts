@@ -170,6 +170,41 @@ export function filterRows(rows: Row[], query: string): Row[] {
 }
 
 /**
+ * Keep only the conversations the human has written in, and their containers.
+ *
+ * This is the same filtering the search does, aimed at a different question.
+ * Search asks what the page says about a word; this asks where the human has
+ * spoken. Answered or not, every one of their conversations survives, together
+ * with the rows that hold it so it can be reached and read.
+ *
+ * @param rows - Rows currently on the page, in document order.
+ * @returns The human's conversations and their containers, in document order.
+ */
+export function chatRows(rows: Row[]): Row[] {
+  const kept = new Set<string>();
+  for (const row of rows) {
+    if (row.kind !== "thread" || !row.human) {
+      continue;
+    }
+    kept.add(row.id);
+    for (const ancestor of ancestorIds(row.id)) {
+      kept.add(ancestor);
+    }
+  }
+  return rows.filter((row) => kept.has(row.id));
+}
+
+/**
+ * Count the conversations the human has written in.
+ *
+ * @param rows - Rows to count.
+ * @returns How many of them are the human's conversations.
+ */
+export function countChats(rows: Row[]): number {
+  return rows.filter((row) => row.kind === "thread" && row.human).length;
+}
+
+/**
  * Count the items a search query keeps.
  *
  * @param rows - Rows surviving a search.

@@ -12,7 +12,13 @@
  * so freshness can be tested without a browser, a clock or a timer.
  */
 
-import type { SeenAnswers } from "./session-store";
+import { createSignal } from "solid-js";
+
+import {
+  readSeenAnswers,
+  saveSeenAnswers,
+  type SeenAnswers,
+} from "./session-store";
 import type { Row } from "./outline";
 
 /** Mark a conversation carries once an agent has answered it. */
@@ -96,4 +102,50 @@ export function rememberSeen(
     }
   }
   return remembered;
+}
+
+/** What one page load knows about answers it has not been shown before. */
+export interface Freshness {
+  /** Whether one conversation's answer arrived since the last look. */
+  isFresh: (id: string) => boolean;
+  /** Note that the human has now been shown one conversation. */
+  visit: (id: string) => void;
+  /** The conversations still marked new. */
+  ids: () => ReadonlySet<string>;
+}
+
+/**
+ * Build the freshness state for one page load.
+ *
+ * What the human has seen is written now rather than on the way out: this page
+ * is closed by being replaced, so there is no later moment to write in. What
+ * is still marked new is deliberately left out of that record, which is what
+ * keeps it marked across further reloads until it is visited.
+ *
+ * @param rows - Every row of the document.
+ * @returns The live freshness state.
+ */
+export function createFreshness(rows: Row[]): Freshness {
+  const states = answerStates(rows);
+  const [fresh, setFresh] = createSignal<ReadonlySet<string>>(
+    freshAnswers(states, readSeenAnswers()),
+  );
+  let seen: SeenAnswers = rememberSeen(states, fresh());
+  saveSeenAnswers(seen);
+  return {
+    isFresh: (id) => fresh().has(id),
+    ids: fresh,
+    visit: (id) => {
+      if (!fresh().has(id)) {
+        return;
+      }
+      setFresh((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+      seen = { ...seen, [id]: states[id] ?? "" };
+      saveSeenAnswers(seen);
+    },
+  };
 }

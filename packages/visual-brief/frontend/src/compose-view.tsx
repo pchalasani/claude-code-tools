@@ -122,6 +122,24 @@ export function AgentWorking(): JSX.Element {
 }
 
 /**
+ * The sign a message that never arrived degrades to.
+ *
+ * A moving sign is a promise that something is happening. Once a page load
+ * and several polls have gone by without the human's words appearing anywhere
+ * on the page, that promise is no longer one this page can keep, so it says
+ * the true and much smaller thing instead.
+ *
+ * @returns The still statement.
+ */
+export function SubmissionStalled(): JSX.Element {
+  return (
+    <p class="stalled" role="status">
+      submitted — refresh if this persists
+    </p>
+  );
+}
+
+/**
  * Everything this page has sent from one row and not yet seen answered.
  *
  * @param props - The row and its state.
@@ -140,7 +158,7 @@ export function PendingNotes(props: {
       <For each={composer.pendingAt(props.row.id)}>
         {(note) => (
           <>
-            <p class="pending">
+            <p class="pending" data-stalled={note.stalled ? "true" : "false"}>
               <span class="chip chip-awaiting">
                 <span class="chip-mark" aria-hidden="true">
                   ●
@@ -149,7 +167,9 @@ export function PendingNotes(props: {
               </span>
               You asked: {note.text} — awaiting an answer
             </p>
-            <AgentWorking />
+            <Show when={!note.stalled} fallback={<SubmissionStalled />}>
+              <AgentWorking />
+            </Show>
           </>
         )}
       </For>

@@ -117,17 +117,24 @@ def _still_at(row_id: str) -> str:
     """
 
 
-def _fold_question_into_content(browser: Browser, thread_id: str, text: str) -> None:
+def _fold_question_into_content(
+    browser: Browser,
+    thread_id: str,
+    text: str,
+    at: str,
+) -> None:
     """Publish a sent question as the awaiting conversation it becomes.
 
     This is what the daemon does on its next publish: a queued question the
     agent has not answered yet is folded into the served content as a
-    conversation whose newest turn is the human's.
+    conversation whose newest turn is the human's, carrying the queue line's
+    own timestamp.
 
     Args:
         browser: The open browser, whose ``data`` is the served document.
         thread_id: Identifier to give the folded conversation.
         text: What the human asked.
+        at: Timestamp the daemon stamped the queue line with.
     """
     update_id, lane_id, item_id = ITEM.split("/")
     item = next(
@@ -143,13 +150,7 @@ def _fold_question_into_content(browser: Browser, thread_id: str, text: str) -> 
         {
             "id": thread_id,
             "anchor": {"kind": "element", "path": ITEM},
-            "turns": [
-                {
-                    "author": "human",
-                    "text": text,
-                    "at": "2026-07-25T20:05:00Z",
-                }
-            ],
+            "turns": [{"author": "human", "text": text, "at": at}],
         }
     )
 
@@ -360,7 +361,9 @@ def test_the_working_sign_outlives_a_publish_that_carries_no_answer(
     browser.read_until(landing_at(ITEM), lambda seen: seen["note"] is not None)
     before = browser.evaluate(_working_at(ITEM))
 
-    _fold_question_into_content(browser, thread_id, question)
+    _fold_question_into_content(
+        browser, thread_id, question, browser.server.stamps[0]
+    )
     browser.data["title"] = "Republished with no answer yet"
     browser.publish()
     browser.wait_for_title("Republished with no answer yet")

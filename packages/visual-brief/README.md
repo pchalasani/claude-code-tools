@@ -52,13 +52,25 @@ comfortable reading position. Clicking a row moves the same cursor.
 | `j` / `k` | Next / previous item |
 | `J` / `K` | Next / previous lane |
 | `Space` | Expand or collapse the cursor row |
-| `c` | Chat about the cursor row: ask, answer the agent, or steer it |
+| `E` / `C` | Expand everything / collapse back to lanes |
+| `f` | Label every row on the page, then type a label to jump there |
+| `c` | Chat wherever the cursor is: update, lane, item or conversation |
 | `⌘`/`Ctrl` + `Enter` | Send what you have written |
 | `n` | Next question awaiting an answer |
+| `m` | Show every conversation you have written in |
 | `/` | Search items |
 | `g` / `G` | Top / bottom |
 | `?` | Show the key list |
-| `Escape` | Close an overlay, or leave a text box |
+| `Escape` | Close an overlay, leave the chats view, or leave a text box |
+
+Every granularity the mouse can chat at, the keyboard reaches: `J`/`K` onto a
+lane and `c` opens exactly the box that lane's own Chat button opens.
+
+`m` is how you find your own conversations again. Collapsing the page hides
+them, and `n` only visits the ones still waiting for an answer, so the chats
+view collects every thread you have written in — answered or not — and `j`/`k`
+walk them. Inside an expanded lane each item also carries a small muted number,
+so a conversation can refer to "item 12".
 
 Keys stay inert while you are typing, so a question can contain the letter `j`.
 Inside the chat box plain `Enter` starts a new line; sending is the chord.
@@ -69,6 +81,20 @@ While a message is on its way and until its answer arrives, the page says
 `agent is working` where the answer will land. When an answer arrives during a
 self-reload, its conversation opens itself and is marked `New answer` until you
 go to it.
+
+Sending makes the agent republish, which reloads the page under you. The page
+comes back on the conversation you just wrote in, scrolled to it, with the
+waiting sign still up: the message is recognised again by its own words and the
+instant the daemon queued them, so the sign follows it wherever the fold puts
+it. A message that never appears at all stops claiming progress and says
+`submitted — refresh if this persists` instead.
+
+An open tab also looks after itself. It asks the local daemon for the current
+page generation on a timer, backs off while the daemon is unreachable, and
+replaces itself when the answer is one it cannot interpret — which is what a
+tab left open across an upgrade used to sit through, silently, forever. It does
+that once per unreadable state, so a page that comes back the same stays
+readable instead of reloading in a loop.
 
 ## Development
 

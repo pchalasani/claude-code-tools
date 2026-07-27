@@ -9,8 +9,14 @@ const KEY_BAR: [string, Action, string][] = [
   ["j", "next-item", "Next item"],
   ["K", "previous-lane", "Previous lane"],
   ["J", "next-lane", "Next lane"],
-  ["c", "compose", "Chat"],
+  // The word every level of the page answers to: wherever the cursor is, this
+  // opens a conversation there, exactly as that row's own button does.
+  ["c", "compose", "Chat here"],
+  ["f", "hints", "Jump to a row"],
+  ["E", "expand-all", "Expand all"],
+  ["C", "collapse-all", "Collapse all"],
   ["n", "next-awaiting", "Awaiting"],
+  ["m", "chats", "My chats"],
   ["/", "search", "Search"],
   ["g", "top", "Top"],
   ["G", "bottom", "Bottom"],

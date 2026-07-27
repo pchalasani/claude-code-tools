@@ -58,6 +58,14 @@ export interface Row {
   /** Whether this row holds a question still waiting for an answer. */
   awaiting: boolean;
   /**
+   * Whether the human has written in this conversation.
+   *
+   * Only conversation rows are ever true. The chats view is built from it: a
+   * conversation the human wrote in is theirs whether or not it has been
+   * answered, and after a collapse-all it is the only way back to it.
+   */
+  human: boolean;
+  /**
    * How a conversation stands, as a value two loads of the page can compare.
    *
    * Only conversation rows carry one. It changes whenever a turn is added, so
@@ -156,6 +164,7 @@ export function outline(brief: BriefDocument): Row[] {
       label: update.headline,
       search: "",
       awaiting: false,
+      human: false,
     };
     rows.push(updateRow);
     for (const lane of update.lanes ?? []) {
@@ -168,6 +177,7 @@ export function outline(brief: BriefDocument): Row[] {
         label: lane.name,
         search: "",
         awaiting: false,
+        human: false,
       };
       rows.push(laneRow);
       for (const item of lane.items ?? []) {
@@ -180,6 +190,7 @@ export function outline(brief: BriefDocument): Row[] {
           label: item.glance,
           search: itemSearchText(item),
           awaiting: false,
+          human: false,
         };
         rows.push(itemRow);
         for (const thread of item.questions ?? []) {
@@ -275,6 +286,7 @@ function threadRow(thread: Thread, anchorId: string, parentId: string): Row {
     label: opening?.text ?? "Conversation",
     search: "",
     awaiting,
+    human: opening !== undefined,
     answerState: conversationState(thread.turns.length, awaiting),
   };
 }

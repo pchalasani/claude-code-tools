@@ -1,0 +1,122 @@
+/*
+ * The small marks the page paints onto rows: jump labels, citation numbers,
+ * and the way news of an unanswered question arrives.
+ *
+ * All three are quiet by construction. A label is only there while the human
+ * is asking for one, a number is a number, and an arriving chip fades in from
+ * where the human is looking outwards rather than repainting the page at once.
+ */
+
+/* ---------- jump labels ---------- */
+
+.hint {
+  align-self: center;
+  background: var(--select);
+  border-radius: var(--radius);
+  color: var(--ground);
+  flex: none;
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.5;
+  margin-left: 0.15rem;
+  padding: 0 0.3em;
+  text-transform: lowercase;
+}
+
+/* The half of a two-key label already typed, so a label caught mid-jump reads
+   as partly done rather than as the wrong label. */
+.hint-done {
+  color: color-mix(in srgb, var(--ground) 55%, var(--select-edge));
+  font-weight: 700;
+}
+
+/* ---------- citation numbers ---------- */
+
+.ordinal {
+  color: var(--ink-faint);
+  flex: none;
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.65;
+  padding-right: 0.15rem;
+  user-select: none;
+}
+
+.row[data-cursor="true"] > .row-head .ordinal {
+  color: var(--select-edge);
+  opacity: 1;
+}
+
+/* ---------- a message that never arrived ---------- */
+
+.stalled {
+  color: var(--ink-quiet);
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  letter-spacing: 0.12em;
+  margin: 0.35rem 0 0.55rem;
+  text-transform: uppercase;
+}
+
+.pending[data-stalled="true"] {
+  border-left-color: var(--rule);
+}
+
+/* ---------- the news arriving ---------- */
+
+/*
+ * After a send the page reloads under the human, and every level above the
+ * conversation they wrote in acquires an awaiting chip at once. Arriving in
+ * one frame reads as the whole page changing; arriving from the conversation
+ * outwards reads as one thing happening, which is what did happen.
+ */
+@keyframes chip-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.chip-awaiting {
+  animation: chip-arrive 260ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.row-thread > .row-head .chip-awaiting {
+  animation-delay: 0ms;
+}
+
+.row-item > .row-head .chip-awaiting {
+  animation-delay: 70ms;
+}
+
+.row-lane > .row-head .chip-awaiting {
+  animation-delay: 140ms;
+}
+
+.row-update > .row-head .chip-awaiting {
+  animation-delay: 210ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chip-awaiting {
+    animation: none !important;
+  }
+}
+
+/* ---------- the chats view ---------- */
+
+button.meta-chats[aria-pressed="true"] {
+  color: var(--select-edge);
+}
+
+button.meta-chats[aria-pressed="true"] b {
+  color: var(--select-edge);
+}

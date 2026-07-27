@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
-import { createComposer, sentFromThisPage } from "./composer";
+import { createComposer, sentFromThisPage, type Post } from "./composer";
 
 /** One recorded call to the daemon. */
 interface Sent {
@@ -12,10 +12,11 @@ interface Sent {
  * Build a sender that records what it was given and answers on demand.
  *
  * @param accepted - What the daemon answers.
+ * @param timestamp - The queue timestamp it reports, if any.
  * @returns The sender, its record, and a release for the request in flight.
  */
-function recorder(accepted = true): {
-  post: (path: string, payload: unknown) => Promise<boolean>;
+function recorder(accepted = true, timestamp = ""): {
+  post: Post;
   sent: Sent[];
   release: () => void;
 } {
@@ -30,14 +31,16 @@ function recorder(accepted = true): {
     post: async (path, payload) => {
       sent.push({ path, payload });
       await gate;
-      return accepted;
+      return { ok: accepted, timestamp };
     },
   };
 }
 
+beforeEach(() => window.sessionStorage.clear());
+
 describe("composition", () => {
   it("always carries a target, and sends what was written there", async () => {
-    const daemon = recorder();
+    const daemon = recorder(true, "2026-07-27T09:00:00.000Z");
     const composer = createComposer(daemon.post);
 
     composer.toggleAt({ rowId: "u/l/i", anchorId: "u/l/i" });
@@ -51,7 +54,12 @@ describe("composition", () => {
     ]);
     expect(composer.target()).toBeNull();
     expect(composer.pendingAt("u/l/i")).toEqual([
-      { rowId: "u/l/i", text: "Why this way?" },
+      {
+        rowId: "u/l/i",
+        text: "Why this way?",
+        at: "2026-07-27T09:00:00.000Z",
+        stalled: false,
+      },
     ]);
   });
 

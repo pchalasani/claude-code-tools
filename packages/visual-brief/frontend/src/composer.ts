@@ -9,6 +9,8 @@
 
 import { createSignal, type Accessor } from "solid-js";
 
+import { createPending, type Pending, type PendingNote } from "./pending";
+
 /** Where a composed message is going. */
 export interface ComposeTarget {
   /** Row whose composer is open. */
@@ -19,12 +21,18 @@ export interface ComposeTarget {
   parentId?: string;
 }
 
-/** A message this page sent that has no answer yet. */
-export interface PendingNote {
-  /** Row the note belongs under. */
-  rowId: string;
-  /** What was sent. */
-  text: string;
+/** What the daemon said about one record it was given. */
+export interface PostReply {
+  /** Whether it accepted the record. */
+  ok: boolean;
+  /**
+   * The timestamp it wrote on the queue line, or empty when it did not say.
+   *
+   * This is half of the identity a sent message is later recognised by, so
+   * the page can tell its own question from an identical one asked a minute
+   * earlier once both have been folded into the document.
+   */
+  timestamp: string;
 }
 
 /** The fixed vocabulary of one-click feedback. */
@@ -36,7 +44,7 @@ export const SIGNALS: [string, string][] = [
 ];
 
 /** Sends one record to the local daemon. */
-export type Post = (path: string, payload: unknown) => Promise<boolean>;
+export type Post = (path: string, payload: unknown) => Promise<PostReply>;
 
 /**
  * Told whenever the composer lets go of a row.
@@ -87,13 +95,35 @@ export interface Composer {
 export async function postJson(
   path: string,
   payload: unknown,
-): Promise<boolean> {
+): Promise<PostReply> {
   const response = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  return response.ok;
+  return { ok: response.ok, timestamp: await queuedTimestamp(response) };
+}
+
+/**
+ * Read the timestamp a daemon reports for the record it just queued.
+ *
+ * An older daemon says nothing about it, and nothing is a perfectly good
+ * answer: a message with no timestamp is recognised by its words alone.
+ *
+ * @param response - The daemon's answer.
+ * @returns The queue timestamp, or an empty string.
+ */
+async function queuedTimestamp(response: Response): Promise<string> {
+  try {
+    const body: unknown = JSON.parse(await response.text());
+    if (body !== null && typeof body === "object") {
+      const stamped = (body as Record<string, unknown>).timestamp;
+      return typeof stamped === "string" ? stamped : "";
+    }
+  } catch {
+    // An empty or unreadable body is not a failure to send.
+  }
+  return "";
 }
 
 /**
@@ -120,17 +150,18 @@ export function sentFromThisPage(composer: Composer, rowId: string): boolean {
  *
  * @param post - How records reach the daemon.
  * @param release - Told which row the composer just let go of, and why.
+ * @param pending - Where sent messages wait to be seen arriving.
  * @returns The live composer.
  */
 export function createComposer(
   post: Post = postJson,
   release: Release = () => undefined,
+  pending: Pending = createPending(),
 ): Composer {
   const [target, setTarget] = createSignal<ComposeTarget | null>(null);
   const [text, setText] = createSignal("");
   const [sending, setSending] = createSignal(false);
   const [status, setStatus] = createSignal("");
-  const [pending, setPending] = createSignal<PendingNote[]>([]);
   const [signals, setSignals] = createSignal<Record<string, string>>({});
   const [inFlight, setInFlight] = createSignal<ReadonlySet<string>>(new Set());
 
@@ -180,11 +211,16 @@ export function createComposer(
       payload.parent_id = current.parentId;
     }
     try {
-      const accepted = await post("ask", payload);
-      if (!accepted) {
+      const reply = await post("ask", payload);
+      if (!reply.ok) {
         throw new Error("not accepted");
       }
-      setPending((notes) => [...notes, { rowId: current.rowId, text: written }]);
+      pending.add({
+        rowId: current.rowId,
+        anchorId: current.anchorId,
+        text: written,
+        at: reply.timestamp,
+      });
       letGo(current.rowId, true);
     } catch {
       setStatus("Could not send. Is the local server running?");
@@ -211,7 +247,7 @@ export function createComposer(
     sendingAt: (rowId) => sending() && target()?.rowId === rowId,
     status,
     submit,
-    pendingAt: (rowId) => pending().filter((note) => note.rowId === rowId),
+    pendingAt: (rowId) => pending.at(rowId),
     sendSignal: async (rowId, anchorId, signal) => {
       const label = SIGNALS.find(([name]) => name === signal)?.[1] ?? signal;
       // Keyed on the button, not on the row: a double-click collapses into
@@ -227,13 +263,13 @@ export function createComposer(
         [rowId]: `Sending ${label}…`,
       }));
       try {
-        const accepted = await post("signal", {
+        const reply = await post("signal", {
           anchor_id: anchorId,
           signal,
         });
         setSignals((current) => ({
           ...current,
-          [rowId]: accepted
+          [rowId]: reply.ok
             ? `Feedback received: ${label}`
             : "Could not send feedback.",
         }));

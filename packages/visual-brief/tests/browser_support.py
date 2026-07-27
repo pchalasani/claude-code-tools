@@ -18,9 +18,31 @@ import pytest
 
 from cdp import emulated_media
 from visual_brief.render import render_content
+from visual_brief.render.page import POLL_INTERVAL_MS
 from visual_brief.server.served_page import page_generation
 
 EXAMPLE_PATH = Path(__file__).parents[1] / "example.json"
+
+# The served page carries its own poll interval, so a suite that has to watch
+# the page notice something does not have to wait five real seconds for it.
+FAST_POLL_MS = 250
+
+
+def served_page(data: dict[str, Any]) -> str:
+    """Render one page that checks itself often enough to be watched.
+
+    Args:
+        data: The document to render.
+
+    Returns:
+        The rendered page, asking to be checked every few hundred
+        milliseconds instead of every few seconds.
+    """
+    return render_content(data).replace(
+        f'content="{POLL_INTERVAL_MS}"',
+        f'content="{FAST_POLL_MS}"',
+        1,
+    )
 
 # Rows of the served example page that the interaction suites navigate by.
 FIRST_ITEM = "current-update/what-changed/differential-reader-check"
@@ -86,7 +108,17 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         """Serve one test resource."""
         if self.path.endswith("/render-version"):
-            body = page_generation(self.server.html.encode())
+            if self.server.version_status != 200:
+                self.send_response(self.server.version_status)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            spoken = self.server.version_body
+            body = (
+                spoken.encode()
+                if spoken is not None
+                else page_generation(self.server.html.encode())
+            )
             content_type = "text/plain"
         else:
             html = self.server.html
@@ -114,9 +146,16 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        # The real daemon reports the instant it stamped the queue line, and
+        # the page recognizes its own message by those words at that instant.
+        stamp = f"2026-07-25T21:00:{self.server.post_count:02d}Z"
+        self.server.stamps.append(stamp)
+        queued = json.dumps({"status": "queued", "timestamp": stamp}).encode()
         self.send_response(202)
-        self.send_header("Content-Length", "0")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(queued)))
         self.end_headers()
+        self.wfile.write(queued)
 
     def log_message(self, format: str, *args: object) -> None:
         """Keep browser-test requests out of pytest output."""
@@ -128,9 +167,12 @@ class _TestServer(ThreadingHTTPServer):
     html: str
     replacement_html: str | None = None
     posts: list[tuple[str, dict[str, Any]]]
+    stamps: list[str]
     post_count: int
     post_gate: threading.Event | None
     refuse: bool = False
+    version_body: str | None = None
+    version_status: int = 200
 
 
 @dataclass
@@ -273,7 +315,24 @@ class Browser:
 
     def publish(self) -> None:
         """Publish current data under a new self-reload version."""
-        self.server.html = render_content(self.data)
+        self.server.html = served_page(self.data)
+
+    def wait_for_row(self, row_id: str) -> None:
+        """Wait for the page to reload itself and paint one row.
+
+        Publishing is enough on its own: the page notices the new generation
+        and replaces itself. Asking the browser to navigate as well races that
+        reload and loses, which is what a cancelled navigation looks like.
+
+        Args:
+            row_id: Identifier of the row the new content must carry.
+        """
+        script = (
+            "document.querySelector("
+            f'\'[data-row-id="{row_id}"]\') !== null'
+        )
+        painted = self.read_until(script, lambda seen: seen is True, timeout=7)
+        assert painted is True, f"the page never painted {row_id!r}"
 
     def wait_for_title(self, title: str) -> None:
         """Wait for self-reload to display one document title."""
@@ -328,11 +387,14 @@ def browser_session() -> Iterator[Browser]:
         )
     data = _browser_data()
     server = _TestServer(("127.0.0.1", 0), _Handler)
-    server.html = render_content(data)
+    server.html = served_page(data)
     server.posts = []
+    server.stamps = []
     server.post_count = 0
     server.post_gate = None
     server.refuse = False
+    server.version_body = None
+    server.version_status = 200
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     driver = Browser(executable, f"visual-brief-{uuid.uuid4().hex}", server, data)

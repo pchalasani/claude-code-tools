@@ -15,6 +15,10 @@ from .assets import bundle_script, bundle_style
 from .embed import DOCUMENT_ELEMENT_ID, ROOT_ELEMENT_ID, embed_document, escape
 
 _GENERATION_PLACEHOLDER = "0" * 64
+# How often the delivered page checks whether it is still current. It is
+# written into the page rather than compiled into the bundle so that one
+# served page can be asked to check faster than another.
+POLL_INTERVAL_MS = 5000
 _NOSCRIPT = (
     "This briefing is an interactive page and needs JavaScript, which is "
     "already running locally on your own machine."
@@ -35,6 +39,7 @@ def render_page(data: dict[str, Any]) -> str:
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<meta name="visual-brief-render-version" '
         f'content="{_GENERATION_PLACEHOLDER}">'
+        f'<meta name="visual-brief-poll-ms" content="{POLL_INTERVAL_MS}">'
         '<link rel="icon" href="data:,">'
         f"<title>{escape(data['title'])}</title>"
         f"<style>{bundle_style()}</style></head>"

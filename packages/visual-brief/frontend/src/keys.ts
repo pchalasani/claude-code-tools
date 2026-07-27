@@ -14,8 +14,12 @@ export type Action =
   | "next-lane"
   | "previous-lane"
   | "toggle"
+  | "expand-all"
+  | "collapse-all"
   | "compose"
   | "next-awaiting"
+  | "chats"
+  | "hints"
   | "search"
   | "top"
   | "bottom"
@@ -95,10 +99,21 @@ export const BINDINGS: Record<string, Action> = {
   ArrowDown: "next-item",
   ArrowUp: "previous-item",
   " ": "toggle",
+  // Space folds one row; the shifted letters fold the page. E and C are free,
+  // sit under the same fingers as the keys they extend, and read as what they
+  // do the moment the key bar names them.
+  E: "expand-all",
+  C: "collapse-all",
   c: "compose",
   // The key this used to be. Undocumented, kept because fingers remember.
   a: "compose",
   n: "next-awaiting",
+  // The human's own conversations, which nothing else on the page collects:
+  // after a collapse-all they are invisible, and n only visits the ones still
+  // waiting for an answer.
+  m: "chats",
+  // Vimium's key for "label everything I can go to", which is exactly this.
+  f: "hints",
   "/": "search",
   g: "top",
   G: "bottom",
@@ -111,9 +126,15 @@ export const KEY_HELP: [string, string][] = [
   ["j / k  or  ↓ / ↑", "Next / previous item"],
   ["J / K", "Next / previous lane"],
   ["Space", "Open or close the selected row"],
-  ["c", "Chat about the selected row"],
+  ["E / C", "Expand everything / collapse back to lanes"],
+  ["f", "Label every row, then type a label to jump there"],
+  [
+    "c",
+    "Chat wherever the cursor is — update, lane, item or conversation",
+  ],
   [SEND_CHORD_LABEL, "Send what you have written"],
   ["n", "Jump to your next unanswered question"],
+  ["m", "Show every conversation you have written in"],
   ["/", "Search items"],
   ["g / G", "Top / bottom"],
   ["?", "Show this key list"],

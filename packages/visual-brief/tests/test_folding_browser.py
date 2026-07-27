@@ -77,8 +77,7 @@ def test_browser_reply_survives_pending_thread_fold(
 
     browser.data = pending
     browser.publish()
-    browser.run("open", browser.url)
-    browser.run("wait", "400")
+    browser.wait_for_row(f"{anchor}#{pending_id}")
     browser.compose_at(f"{anchor}#{pending_id}")
     browser.send(reply)
     browser.run("wait", "300")
@@ -175,8 +174,8 @@ def test_identical_pending_threads_keep_their_own_replies_when_prepended(
 
     browser.data = pending
     browser.publish()
-    browser.run("open", browser.url)
-    browser.run("wait", "400")
+    for thread in pending_threads:
+        browser.wait_for_row(f"{anchor}#{thread['id']}")
     for thread, reply in zip(pending_threads, replies):
         browser.compose_at(f"{anchor}#{thread['id']}")
         browser.send(reply)

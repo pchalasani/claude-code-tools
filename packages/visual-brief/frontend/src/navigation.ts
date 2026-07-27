@@ -10,40 +10,40 @@
 import { createMemo, createSignal, type Accessor } from "solid-js";
 
 import {
+  countChats,
   countItems,
   edgeRow,
   filterRows,
   moveByKind,
   nextAwaiting,
   restoreCursor,
+  chatRows,
   type Edge,
 } from "./cursor";
 import type { BriefDocument } from "./document";
-import { answerStates, freshAnswers, rememberSeen } from "./freshness";
+import { itemOrdinals, openedFor, paintedRows } from "./folding";
+import { createFreshness } from "./freshness";
 import {
   ancestorIds,
   awaitingThreadCount,
-  defaultOpenIds,
   outline,
   type Row,
   type RowKind,
 } from "./outline";
-import {
-  readSavedCursor,
-  readSeenAnswers,
-  saveCursor,
-  saveSeenAnswers,
-  type SeenAnswers,
-} from "./session-store";
+import { revealRowSoon, scrollRowIntoView } from "./reveal";
+import { readSavedCursor, saveCursor } from "./session-store";
 import { withTransition } from "./transitions";
+import { createViewModes } from "./view-modes";
 
 /** Which full-page surface, if any, is showing. */
 export type Overlay = "none" | "search" | "help";
 
 /** The navigable state of one open brief. */
 export interface Navigation {
-  /** The rows the current search leaves on the page. */
+  /** The rows the current search and view leave on the page. */
   visible: Accessor<Row[]>;
+  /** The rows the page is actually painting, containers included. */
+  painted: Accessor<Row[]>;
   /** Whether one row survives the current search. */
   isVisible: (id: string) => boolean;
   /** Look one row up by id. */
@@ -67,10 +67,9 @@ export interface Navigation {
    * Put the cursor on one row.
    *
    * This is the only door into the cursor, so it is the only place that can
-   * guarantee the cursor is on the page. A row the current search filtered
-   * away — the structure map still offers every lane, and a click still
-   * reaches every rendered row — drops the search rather than leaving the
-   * page with nothing marked on it.
+   * guarantee the cursor is on the page. A row a filter hid — the structure
+   * map still offers every lane, and a click still reaches every rendered row
+   * — drops that filter rather than leaving the page with nothing marked.
    */
   select: (id: string, options?: { scroll?: boolean }) => void;
   /** Move the cursor between rows of one kind. */
@@ -93,6 +92,18 @@ export interface Navigation {
   toggle: (id: string) => void;
   /** Expand or fold one row explicitly. */
   setOpen: (id: string, open: boolean) => void;
+  /** Open every row, to the most granular level there is. */
+  expandAll: () => void;
+  /** Fold the whole page back to its lanes. */
+  collapseAll: () => void;
+  /** Whether the page is showing only the human's own conversations. */
+  chats: Accessor<boolean>;
+  /** Show, or stop showing, only the human's own conversations. */
+  toggleChats: () => void;
+  /** How many conversations the human has written in. */
+  chatCount: Accessor<number>;
+  /** One painted item's position on the page, for citing it by number. */
+  ordinal: (id: string) => number | null;
   /** The current search text. */
   query: Accessor<string>;
   /**
@@ -113,6 +124,13 @@ export interface Navigation {
   closeOverlay: () => void;
   /** How many question threads await an answer. */
   awaitingCount: Accessor<number>;
+  /**
+   * Bring the row this page load was anchored to into reading position.
+   *
+   * Only a load that followed the human's own message carries an anchor, so
+   * this scrolls exactly once, and only to where they were already looking.
+   */
+  revealAnchor: () => void;
 }
 
 /**
@@ -121,42 +139,71 @@ export interface Navigation {
  * @param brief - The document the page is showing.
  * @param onFold - Told each time a row is folded, so anything rendered inside
  *     that row can let go of it.
+ * @param anchorId - Row this load should open on, overriding the remembered
+ *     cursor: the conversation the human wrote in just before the reload.
+ * @param waiting - Rows whose waiting sign has to be visible from the first
+ *     paint, because it was already up before the reload.
  * @returns The live cursor, folding and search state.
  */
 export function createNavigation(
   brief: BriefDocument,
   onFold: (id: string) => void = () => undefined,
+  anchorId: string | null = null,
+  waiting: string[] = [],
 ): Navigation {
   const rows = outline(brief);
   const rowIds = new Set(rows.map((row) => row.id));
-  const restored = restoreCursor(rows, readSavedCursor());
+  const restored = restoreCursor(rows, anchorId ?? readSavedCursor());
   const [cursorId, setCursorId] = createSignal<string | null>(restored);
   // The authority on where the cursor is. The painted signal is written
   // inside a view transition, which the browser defers to the next frame, so
   // two keys pressed within one frame would otherwise both move from the same
   // row and one of the two presses would be lost.
   let selected: string | null = restored;
-  const states = answerStates(rows);
-  const [fresh, setFresh] = createSignal<ReadonlySet<string>>(
-    freshAnswers(states, readSeenAnswers()),
-  );
-  // Written now rather than on the way out: this page is closed by being
-  // replaced, so there is no later moment to write in. What is still marked
-  // new is left out, which is what keeps it marked across further reloads.
-  let seen: SeenAnswers = rememberSeen(states, fresh());
-  saveSeenAnswers(seen);
+  const fresh = createFreshness(rows);
   const [open, setOpen] = createSignal<ReadonlySet<string>>(
-    openedFor(brief, rows, restored, fresh()),
+    openedFor(brief, rows, restored, fresh.ids(), waiting),
   );
   const [query, setQueryValue] = createSignal("");
   const [overlay, setOverlay] = createSignal<Overlay>("none");
 
-  const visible = createMemo(() => filterRows(rows, query()));
+  /**
+   * Move the cursor as part of a change already being animated.
+   *
+   * Folding the page and moving the cursor off what just folded are one
+   * event, and a second view transition started inside the first cancels it,
+   * so whole-page commands write the cursor rather than calling ``select``.
+   *
+   * @param id - Row the cursor lands on.
+   */
+  const place = (id: string): void => {
+    selected = id;
+    setCursorId(id);
+    saveCursor(id);
+  };
+
+  const modes = createViewModes({
+    rows,
+    query,
+    open,
+    setOpen: (next) => setOpen(next),
+    cursorId: () => selected,
+    place,
+    onFold,
+  });
+
+  const visible = createMemo(() => {
+    const matching = filterRows(rows, query());
+    return modes.chats() ? chatRows(matching) : matching;
+  });
+  const painted = createMemo(() => paintedRows(visible(), open()));
+  const ordinals = createMemo(() => itemOrdinals(painted()));
   const visibleIds = createMemo(
     () => new Set(visible().map((row) => row.id)),
   );
   const byId = new Map(rows.map((row) => [row.id, row]));
   const awaiting = awaitingThreadCount(rows);
+  const chatting = countChats(rows);
 
   const expand = (id: string, current: ReadonlySet<string>): Set<string> => {
     const next = new Set(current);
@@ -164,24 +211,6 @@ export function createNavigation(
       next.add(ancestor);
     }
     return next;
-  };
-
-  /**
-   * Note that the human has now seen one conversation.
-   *
-   * @param id - Row that was visited.
-   */
-  const visit = (id: string): void => {
-    if (!fresh().has(id)) {
-      return;
-    }
-    setFresh((current) => {
-      const next = new Set(current);
-      next.delete(id);
-      return next;
-    });
-    seen = { ...seen, [id]: states[id] ?? "" };
-    saveSeenAnswers(seen);
   };
 
   /**
@@ -205,13 +234,13 @@ export function createNavigation(
     }
     const filtered = !visibleIds().has(id);
     if (filtered) {
-      // The row exists but the search is hiding it, and a cursor on a row
-      // that is not rendered is a cursor the human cannot see, cannot move
-      // from and cannot fold. Whoever asked for this row wins; the filter is
-      // the thing that gives way.
+      // The row exists but a filter is hiding it, and a cursor on a row that
+      // is not rendered is a cursor the human cannot see, cannot move from and
+      // cannot fold. Whoever asked for this row wins; the filter gives way.
       setQueryValue("");
+      modes.setChats(false);
     }
-    visit(id);
+    fresh.visit(id);
     const scroll = options?.scroll !== false;
     // Selecting the row that is already selected has to be free. Hover selects,
     // and hover fires again for every relayout, so a select that always wrote
@@ -236,7 +265,11 @@ export function createNavigation(
   };
 
   const step = (kind: RowKind, delta: number): void => {
-    const next = moveByKind(visible(), selected, kind, delta);
+    // In the chats view the item key walks conversations: the view is a list
+    // of the human's chats, and the key that means "the next thing" has to
+    // mean the next thing on the page they are looking at.
+    const wanted = modes.chats() && kind === "item" ? "thread" : kind;
+    const next = moveByKind(visible(), selected, wanted, delta);
     if (next !== null) {
       select(next);
     }
@@ -257,6 +290,7 @@ export function createNavigation(
 
   return {
     visible,
+    painted,
     isVisible: (id) => visibleIds().has(id),
     row: (id) => byId.get(id),
     cursorId,
@@ -280,11 +314,11 @@ export function createNavigation(
         setOpen((current) => new Set(current).add(next));
       }
     },
-    isFresh: (id) => fresh().has(id),
+    isFresh: fresh.isFresh,
     isOpen: (id) => open().has(id),
     toggle: (id) => {
       const wasOpen = open().has(id);
-      visit(id);
+      fresh.visit(id);
       withTransition(() =>
         setOpen((current) => {
           const next = new Set(current);
@@ -312,6 +346,12 @@ export function createNavigation(
         onFold(id);
       }
     },
+    expandAll: modes.expandAll,
+    collapseAll: modes.collapseAll,
+    chats: modes.chats,
+    toggleChats: modes.toggleChats,
+    chatCount: () => chatting,
+    ordinal: (id) => ordinals().get(id) ?? null,
     query,
     setQuery: search,
     matchCount: () => countItems(visible()),
@@ -319,56 +359,10 @@ export function createNavigation(
     openOverlay: setOverlay,
     closeOverlay: () => setOverlay("none"),
     awaitingCount: () => awaiting,
+    revealAnchor: () => {
+      if (anchorId !== null && restored !== null) {
+        revealRowSoon(restored);
+      }
+    },
   };
-}
-
-/**
- * Bring one row into comfortable reading position.
- *
- * The row carries a generous scroll margin, so the page moves around the
- * cursor rather than pinning the cursor to an edge of the window.
- *
- * @param id - Row id to scroll to.
- */
-function scrollRowIntoView(id: string): void {
-  if (typeof document === "undefined") {
-    return;
-  }
-  const row = document.querySelector(`[data-row-id=${JSON.stringify(id)}]`);
-  const head = row?.querySelector(".row-head");
-  if (head instanceof Element && typeof head.scrollIntoView === "function") {
-    head.scrollIntoView({ block: "nearest" });
-  }
-}
-
-/**
- * Choose the rows that are expanded when the page opens.
- *
- * @param brief - The delivered document.
- * @param rows - The document's rows.
- * @param cursorId - Row the cursor was restored to.
- * @param fresh - Conversations answered since the human last looked.
- * @returns The initially expanded row ids.
- */
-function openedFor(
-  brief: BriefDocument,
-  rows: Row[],
-  cursorId: string | null,
-  fresh: ReadonlySet<string>,
-): Set<string> {
-  const opened = defaultOpenIds(brief, rows);
-  if (cursorId !== null) {
-    for (const ancestor of ancestorIds(cursorId)) {
-      opened.add(ancestor);
-    }
-  }
-  // An answer nobody can see is an answer that did not arrive: a conversation
-  // answered since the last look opens itself and everything holding it.
-  for (const id of fresh) {
-    opened.add(id);
-    for (const ancestor of ancestorIds(id)) {
-      opened.add(ancestor);
-    }
-  }
-  return opened;
 }

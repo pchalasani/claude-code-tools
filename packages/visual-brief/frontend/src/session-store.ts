@@ -15,8 +15,35 @@ export const CURSOR_STORAGE_KEY = "visual-brief-cursor";
 /** Base name the seen answers are stored under. */
 export const SEEN_STORAGE_KEY = "visual-brief-seen";
 
+/** Base name the unanswered submissions are stored under. */
+export const SENT_STORAGE_KEY = "visual-brief-sent";
+
+/** Base name the self-healing reload is remembered under. */
+export const HEALED_STORAGE_KEY = "visual-brief-healed";
+
 /** What each conversation looked like the last time the human saw it. */
 export type SeenAnswers = Record<string, string>;
+
+/**
+ * One message this page sent that has not been seen landing yet.
+ *
+ * It is remembered by what the queue line says — the verbatim text and the
+ * timestamp the daemon wrote — rather than by any id the page made up, because
+ * the id a queued question is folded under is chosen by the daemon and changes
+ * the moment the question becomes a saved conversation.
+ */
+export interface SentRecord {
+  /** Row it was written at. */
+  rowId: string;
+  /** Anchor path it was attached to. */
+  anchorId: string;
+  /** Exactly what was sent. */
+  text: string;
+  /** Timestamp the daemon recorded, or empty when it did not say. */
+  at: string;
+  /** How many page loads it has survived without being found. */
+  loads: number;
+}
 
 /**
  * Read the run's id out of the address this page was opened at.
@@ -109,6 +136,94 @@ export function readSeenAnswers(): SeenAnswers | null {
  */
 export function saveSeenAnswers(seen: SeenAnswers): void {
   writeItem(seenStorageKey(), JSON.stringify(seen));
+}
+
+/**
+ * Return the key this page's unanswered submissions are remembered under.
+ *
+ * @returns The session-storage key for the run being shown.
+ */
+export function sentStorageKey(): string {
+  return `${SENT_STORAGE_KEY}:${runIdFromLocation()}`;
+}
+
+/**
+ * Return the key this page's self-healing reload is remembered under.
+ *
+ * @returns The session-storage key for the run being shown.
+ */
+export function healedStorageKey(): string {
+  return `${HEALED_STORAGE_KEY}:${runIdFromLocation()}`;
+}
+
+/**
+ * Read the messages this tab sent and has not yet seen on the page.
+ *
+ * Anything unreadable is treated as nothing at all: a waiting sign is worth
+ * having, but not at the price of a page that will not start.
+ *
+ * @returns The remembered submissions, oldest first.
+ */
+export function readSentRecords(): SentRecord[] {
+  const raw = readItem(sentStorageKey());
+  if (raw === null || raw === "") {
+    return [];
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter(isSentRecord) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Remember the messages this tab is still waiting to see land.
+ *
+ * @param records - The submissions to carry into the next page load.
+ */
+export function saveSentRecords(records: SentRecord[]): void {
+  writeItem(sentStorageKey(), JSON.stringify(records));
+}
+
+/**
+ * Read the page generation this tab last reloaded itself to escape.
+ *
+ * @returns The generation, or null when this tab has never had to.
+ */
+export function readHealedGeneration(): string | null {
+  const raw = readItem(healedStorageKey());
+  return raw === null || raw === "" ? null : raw;
+}
+
+/**
+ * Remember that this tab reloaded itself to escape one page generation.
+ *
+ * @param generation - The generation the tab was showing when it gave up on
+ *     understanding the daemon.
+ */
+export function rememberHealedGeneration(generation: string): void {
+  writeItem(healedStorageKey(), generation);
+}
+
+/**
+ * Report whether one stored value is a submission this page can act on.
+ *
+ * @param value - A parsed record from storage.
+ * @returns True when every field is the kind of value it should be.
+ */
+function isSentRecord(value: unknown): value is SentRecord {
+  if (value === null || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.rowId === "string"
+    && typeof record.anchorId === "string"
+    && typeof record.text === "string"
+    && typeof record.at === "string"
+    && typeof record.loads === "number"
+  );
 }
 
 /**

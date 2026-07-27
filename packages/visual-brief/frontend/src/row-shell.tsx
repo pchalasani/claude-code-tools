@@ -29,6 +29,8 @@ export function RowShell(props: {
   const isCursor = () => props.state.nav.isCursor(props.row.id);
   const isOpen = () => props.state.nav.isOpen(props.row.id);
   const bodyId = () => `body:${props.row.id}`;
+  const hint = () => props.state.hints.labelFor(props.row.id);
+  const ordinal = () => props.state.nav.ordinal(props.row.id);
   return (
     <article
       class={`row row-${props.row.kind}`}
@@ -65,6 +67,11 @@ export function RowShell(props: {
             : undefined,
         }}
       >
+        <Show when={hint()}>
+          {(label) => (
+            <HintLabel label={label()} typed={props.state.hints.typed()} />
+          )}
+        </Show>
         <button
           type="button"
           class="row-toggle"
@@ -77,6 +84,16 @@ export function RowShell(props: {
           </span>
           {props.head}
         </button>
+        <Show when={ordinal() !== null}>
+          {/*
+            A number to say "item 12" by, and nothing more: it is not a key,
+            not a link, and not read aloud, because it means nothing to anyone
+            who is not looking at the same screen.
+          */}
+          <span class="ordinal" aria-hidden="true">
+            {ordinal()}
+          </span>
+        </Show>
         <Show when={props.actions !== undefined}>
           <span class="row-actions">{props.actions}</span>
         </Show>
@@ -87,6 +104,27 @@ export function RowShell(props: {
         </div>
       </Show>
     </article>
+  );
+}
+
+/**
+ * The label a row wears while the jump keys are showing.
+ *
+ * It is painted state, not a tooltip: the label is on the row, in the page,
+ * in whichever theme the reader is using, and the part of it already typed is
+ * marked so a two-key label can be seen half-finished.
+ *
+ * @param props - The row's label and what has been typed so far.
+ * @returns The rendered label.
+ */
+function HintLabel(props: { label: string; typed: string }): JSX.Element {
+  const done = () =>
+    props.label.startsWith(props.typed) ? props.typed : "";
+  return (
+    <span class="hint" data-hint={props.label} aria-hidden="true">
+      <b class="hint-done">{done()}</b>
+      {props.label.slice(done().length)}
+    </span>
   );
 }
 

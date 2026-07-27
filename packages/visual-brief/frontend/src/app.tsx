@@ -9,6 +9,7 @@ import {
 import { TrustChip } from "./item-view";
 import { NOW_UPDATE_ID, orderedUpdates } from "./outline";
 import { HelpOverlay, KeyBar, SearchOverlay } from "./overlays";
+import { onPollCycle } from "./reload";
 import { VisibleRow } from "./row-shell";
 import { createBriefState, type BriefState } from "./state";
 import { StructureMap } from "./structure-map";
@@ -23,8 +24,20 @@ import { UpdateView } from "./update-view";
 export function App(props: { brief: BriefDocument }): JSX.Element {
   const state = createBriefState(props.brief);
   const onKey = (event: KeyboardEvent): void => state.handleKey(event);
-  onMount(() => document.addEventListener("keydown", onKey));
-  onCleanup(() => document.removeEventListener("keydown", onKey));
+  let stopWatching: (() => void) | null = null;
+  onMount(() => {
+    document.addEventListener("keydown", onKey);
+    // A message that never appears has to stop claiming progress eventually,
+    // and "eventually" is counted in polls rather than in seconds: the page
+    // is only ever wrong about this when the daemon has gone quiet.
+    stopWatching = onPollCycle(() => state.pending.tick());
+    // A load that followed the human's own message opens on that message.
+    state.nav.revealAnchor();
+  });
+  onCleanup(() => {
+    document.removeEventListener("keydown", onKey);
+    stopWatching?.();
+  });
   const ordered = createMemo(() => orderedUpdates(props.brief));
   // The divider only earns its place when a Now panel leads AND at least one
   // dated update survives the search filter; otherwise it would label
@@ -69,6 +82,7 @@ export function App(props: { brief: BriefDocument }): JSX.Element {
 function Masthead(props: { state: BriefState }): JSX.Element {
   const shape = createMemo(() => describeShape(props.state.brief));
   const awaiting = () => props.state.nav.awaitingCount();
+  const chats = () => props.state.nav.chatCount();
   return (
     <header class="masthead">
       <p class="eyebrow">Session briefing</p>
@@ -91,6 +105,20 @@ function Masthead(props: { state: BriefState }): JSX.Element {
           onClick={() => props.state.run("next-awaiting")}
         >
           <b>{awaiting()}</b> unanswered
+        </button>
+        {/*
+          The human's own conversations, answered or not. Nothing else on the
+          page collects them: folded away they are invisible, and the awaiting
+          count deliberately skips the ones already answered.
+        */}
+        <button
+          type="button"
+          class="meta-count meta-chats"
+          data-chats-count={chats()}
+          aria-pressed={props.state.nav.chats()}
+          onClick={() => props.state.run("chats")}
+        >
+          <b>{chats()}</b> my chats
         </button>
       </div>
       <KeyBar state={props.state} />

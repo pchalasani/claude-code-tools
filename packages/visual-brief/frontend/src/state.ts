@@ -14,9 +14,12 @@ import {
   type ComposeTarget,
 } from "./composer";
 import type { BriefDocument } from "./document";
-import { resolveAction, type Action } from "./keys";
+import { createHints, type Hints } from "./hints";
+import { isTypingTarget, resolveAction, type Action } from "./keys";
 import { createNavigation, type Navigation } from "./navigation";
 import { ancestorIds, type Row } from "./outline";
+import { createPending, type Pending } from "./pending";
+import { focusLater } from "./reveal";
 
 /** Everything the page reads and writes. */
 export interface BriefState {
@@ -26,6 +29,10 @@ export interface BriefState {
   nav: Navigation;
   /** What the human is writing. */
   composer: Composer;
+  /** The jump labels, when they are showing. */
+  hints: Hints;
+  /** What this page has sent and not yet seen arrive. */
+  pending: Pending;
   /** Open the composer against one row. */
   composeAt: (row: Row) => void;
   /** Run one resolved action. */
@@ -41,7 +48,23 @@ export interface BriefState {
  * @returns The live page state.
  */
 export function createBriefState(brief: BriefDocument): BriefState {
-  const nav = createNavigation(brief, abandonComposer);
+  // Read before anything is built: a message this tab sent just before the
+  // reload names the conversation this load should open on, which the cursor
+  // has to know before it decides where it is.
+  const pending = createPending(brief);
+  const landing = pending.landing();
+  // The conversation a send landed in opens with the page: the human is being
+  // returned to something they wrote, and a folded row is not a return.
+  const nav = createNavigation(
+    brief,
+    abandonComposer,
+    landing,
+    landing === null ? pending.waiting() : [...pending.waiting(), landing],
+  );
+  const hints = createHints({
+    rows: () => nav.painted(),
+    select: (id) => nav.select(id),
+  });
 
   /** Row the open composer expanded, so closing it can fold it back. */
   let expandedForComposer: string | null = null;
@@ -70,7 +93,7 @@ export function createBriefState(brief: BriefDocument): BriefState {
     }
   };
 
-  const composer = createComposer(postJson, releaseRow);
+  const composer = createComposer(postJson, releaseRow, pending);
 
   /**
    * Let go of the composer when the row it is written in folds away.
@@ -126,6 +149,10 @@ export function createBriefState(brief: BriefDocument): BriefState {
     }
     if (composer.target() !== null) {
       composer.close();
+      return;
+    }
+    if (nav.chats()) {
+      nav.toggleChats();
     }
   };
 
@@ -141,8 +168,12 @@ export function createBriefState(brief: BriefDocument): BriefState {
           nav.toggle(id);
         }
       },
+      "expand-all": () => nav.expandAll(),
+      "collapse-all": () => nav.collapseAll(),
       compose: composeAtCursor,
       "next-awaiting": () => nav.toAwaiting(),
+      chats: () => nav.toggleChats(),
+      hints: () => hints.enter(),
       search: () => {
         nav.openOverlay("search");
         focusLater("#brief-search");
@@ -159,9 +190,24 @@ export function createBriefState(brief: BriefDocument): BriefState {
     brief,
     nav,
     composer,
+    hints,
+    pending,
     composeAt,
     run,
     handleKey: (event) => {
+      // While the labels are up they own the keyboard: a key that quietly did
+      // something else would act on a page the human is no longer reading.
+      // Browser and system chords are never taken, so Command-R still works.
+      const chorded =
+        event.ctrlKey || event.metaKey || event.altKey;
+      if (
+        !chorded
+        && !isTypingTarget(event.target ?? null)
+        && hints.handleKey(event.key)
+      ) {
+        event.preventDefault();
+        return;
+      }
       const action = resolveAction(event);
       if (action === null) {
         return;
@@ -197,24 +243,4 @@ function revealNow(nav: Navigation, rowId: string): boolean {
   }
   nav.setOpen(rowId, true);
   return true;
-}
-
-/**
- * Put the browser's text caret in a box once it exists.
- *
- * Typing needs the browser's focus; selection does not. This is the only
- * place the page asks for focus, and it asks only for text boxes.
- *
- * @param selector - Selector of the text box to focus.
- */
-function focusLater(selector: string): void {
-  if (typeof document === "undefined") {
-    return;
-  }
-  queueMicrotask(() => {
-    const box = document.querySelector(selector);
-    if (box instanceof HTMLElement) {
-      box.focus();
-    }
-  });
 }

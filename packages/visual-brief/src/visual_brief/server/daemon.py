@@ -275,7 +275,14 @@ class VisualBriefHandler(BaseHTTPRequestHandler):
                 "Could not append to question queue",
             )
             return
-        self._send_json(HTTPStatus.ACCEPTED, {"status": "queued"})
+        # The queued timestamp is reported back because it is half of the
+        # identity the page recognizes its own message by once the daemon has
+        # folded it into the document: those words, stamped at that instant.
+        queued = {"status": "queued"}
+        timestamp = record.get("timestamp")
+        if isinstance(timestamp, str):
+            queued["timestamp"] = timestamp
+        self._send_json(HTTPStatus.ACCEPTED, queued)
 
     def _read_json_object(self) -> dict[str, Any] | None:
         """Read a bounded JSON object from the request body."""
