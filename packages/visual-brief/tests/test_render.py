@@ -1,4 +1,10 @@
-"""Tests for the visual brief renderer."""
+"""Tests for the visual brief renderer.
+
+The renderer delivers the validated document as an embedded JSON blob next to
+the inlined front-end bundle, so these tests assert what the page delivers:
+the document's content, identity and ordering, and the fact that the page
+reaches nothing outside itself.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +16,14 @@ from typing import Any
 
 import pytest
 
+from page_document import (
+    embedded_document,
+    find_thread,
+    is_awaiting,
+    iter_threads,
+    thread_ids,
+    turn_texts,
+)
 from visual_brief.render import render_content
 from visual_brief.render.threads import normalize_document
 
@@ -29,26 +43,66 @@ def _first_item(data: dict[str, Any]) -> dict[str, Any]:
     return data["updates"][0]["lanes"][0]["items"][0]
 
 
+def _first_item_path(data: dict[str, Any]) -> str:
+    """Return the anchor path of the example's first item."""
+    update = data["updates"][0]
+    lane = update["lanes"][0]
+    return f'{update["id"]}/{lane["id"]}/{lane["items"][0]["id"]}'
+
+
+def _threads_at(
+    delivered: dict[str, Any],
+    path: str,
+) -> list[dict[str, Any]]:
+    """Return the delivered threads anchored at one path."""
+    return [
+        thread
+        for anchor, thread in iter_threads(delivered)
+        if anchor == path
+    ]
+
+
 def test_bundled_example_renders_without_external_requests() -> None:
     """Render the example as a self-contained page."""
     rendered = render_content(_example())
 
     assert rendered.startswith("<!doctype html>")
-    assert "<details" in rendered
     assert "http://" not in rendered
     assert "https://" not in rendered
+    assert '<div id="visual-brief-root"></div>' in rendered
+    assert rendered.count("<script") == 2
+    assert rendered.count("<style>") == 1
+    assert "<link" not in rendered.replace('<link rel="icon" href="data:,">', "")
+
+
+def test_page_delivers_the_validated_document_and_the_bundle() -> None:
+    """Deliver the document as data and the interface as one inlined bundle."""
+    data = _example()
+
+    rendered = render_content(data)
+    delivered = embedded_document(rendered)
+
+    assert delivered["title"] == data["title"]
+    assert delivered["summary"] == data["summary"]
+    assert [update["id"] for update in delivered["updates"]] == [
+        update["id"] for update in data["updates"]
+    ]
+    assert "VisualBrief" in rendered
+    assert "visual-brief-root" in rendered
 
 
 def test_question_text_is_escaped() -> None:
-    """Treat question text as untrusted content."""
+    """Treat question text as untrusted data that never becomes markup."""
     data = _example()
     thread = _first_item(data)["questions"][0]
     thread["turns"][0]["text"] = "<script>alert(1)</script>"
 
     rendered = render_content(data)
 
-    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in rendered
     assert "<script>alert(1)</script>" not in rendered
+    assert "\\u003cscript\\u003ealert(1)" in rendered
+    delivered = find_thread(embedded_document(rendered), thread["id"])
+    assert delivered["turns"][0]["text"] == "<script>alert(1)</script>"
 
 
 def test_legacy_pairs_convert_in_memory_with_stable_ids() -> None:
@@ -68,23 +122,24 @@ def test_legacy_pairs_convert_in_memory_with_stable_ids() -> None:
     second = render_content(data)
 
     assert data == original
-    assert "q-" in first
     assert first == second
-    assert first.index("Legacy question?") < first.index("Legacy answer.")
+    threads = _threads_at(embedded_document(first), _first_item_path(data))
+    assert re.fullmatch(r"q-[0-9a-f]{12}", threads[0]["id"])
+    assert turn_texts(threads[0]) == ["Legacy question?", "Legacy answer."]
 
 
-def test_legacy_pair_without_answer_is_awaiting_and_opens_ancestors() -> None:
-    """A legacy human-only question cannot hide in closed disclosures."""
+def test_legacy_pair_without_answer_is_delivered_awaiting() -> None:
+    """A legacy human-only question arrives marked as awaiting an answer."""
     data = _example()
     item = _first_item(data)
     item["questions"] = [{"question": "Still waiting?", "answer": ""}]
 
-    rendered = render_content(data)
+    delivered = embedded_document(render_content(data))
 
-    assert '<details class="thread" open data-awaiting>' in rendered
-    assert '<details class="item" open>' in rendered
-    assert 'class="lane" open' in rendered
-    assert "Awaiting answer" in rendered
+    threads = _threads_at(delivered, _first_item_path(data))
+    assert len(threads) == 1
+    assert turn_texts(threads[0]) == ["Still waiting?"]
+    assert is_awaiting(threads[0])
 
 
 def test_legacy_pair_with_missing_answer_is_awaiting() -> None:
@@ -92,10 +147,11 @@ def test_legacy_pair_with_missing_answer_is_awaiting() -> None:
     data = _example()
     _first_item(data)["questions"] = [{"question": "No answer field?"}]
 
-    rendered = render_content(data)
+    delivered = embedded_document(render_content(data))
 
-    assert "No answer field?" in rendered
-    assert "Awaiting answer" in rendered
+    threads = _threads_at(delivered, _first_item_path(data))
+    assert turn_texts(threads[0]) == ["No answer field?"]
+    assert is_awaiting(threads[0])
 
 
 def test_malformed_legacy_question_raises_validation_error() -> None:
@@ -118,16 +174,20 @@ def test_multiple_legacy_pairs_on_one_item_get_distinct_stable_ids() -> None:
 
     first = render_content(data)
     second = render_content(data)
-    thread_ids = re.findall(
-        r'data-focus-id="[^"]+#(q-[0-9a-f]{12})"',
-        first,
-    )
+    delivered = embedded_document(first)
+    threads = _threads_at(delivered, _first_item_path(data))
+    ids = [thread["id"] for thread in threads]
 
     assert first == second
-    assert len(thread_ids) == 3
-    assert len(set(thread_ids)) == 3
-    assert first.index("First answer.") < first.index("Second answer.")
-    assert first.index("Second answer.") < first.index("Third?")
+    assert len(ids) == 3
+    assert len(set(ids)) == 3
+    assert set(ids) <= set(thread_ids(delivered))
+    assert all(re.fullmatch(r"q-[0-9a-f]{12}", value) for value in ids)
+    assert [turn_texts(thread) for thread in threads] == [
+        ["Repeated?", "First answer."],
+        ["Repeated?", "Second answer."],
+        ["Third?"],
+    ]
 
 
 def test_undated_legacy_ids_survive_insertion_of_same_text_pair() -> None:
@@ -213,25 +273,30 @@ def test_lane_legacy_pairs_convert_alongside_new_threads() -> None:
     lane = data["updates"][0]["lanes"][0]
     new_thread = copy.deepcopy(_first_item(data)["questions"][0])
     new_thread["id"] = "q-existing"
-    new_thread["anchor"]["path"] = (
-        f'{data["updates"][0]["id"]}/{lane["id"]}'
-    )
+    lane_path = f'{data["updates"][0]["id"]}/{lane["id"]}'
+    new_thread["anchor"]["path"] = lane_path
     lane["questions"] = [
         {"question": "Legacy lane?", "answer": "Lane answer."},
         new_thread,
     ]
 
-    rendered = render_content(data)
+    delivered = embedded_document(render_content(data))
 
-    assert "Legacy lane?" in rendered
-    assert "Lane answer." in rendered
-    assert 'data-focus-id="review-round-four/round-four-change#q-existing"' in (
-        rendered
-    )
+    lane_threads = [
+        (path, thread)
+        for path, thread in iter_threads(delivered)
+        if path == lane_path
+    ]
+    assert turn_texts(lane_threads[0][1]) == ["Legacy lane?", "Lane answer."]
+    assert lane_threads[1][1]["id"] == "q-existing"
+    assert lane_threads[1][1]["anchor"] == {
+        "kind": "element",
+        "path": "review-round-four/round-four-change",
+    }
 
 
-def test_thread_turns_render_oldest_first_with_reply_after_newest() -> None:
-    """Keep chronological turns intact and put the reply below them."""
+def test_thread_turns_are_delivered_oldest_first() -> None:
+    """Keep chronological turns intact in the delivered document."""
     data = _example()
     thread = _first_item(data)["questions"][0]
     thread["turns"].append(
@@ -242,13 +307,17 @@ def test_thread_turns_render_oldest_first_with_reply_after_newest() -> None:
         }
     )
 
-    rendered = render_content(data)
+    delivered = find_thread(
+        embedded_document(render_content(data)),
+        thread["id"],
+    )
 
-    question_at = rendered.index(thread["turns"][0]["text"])
-    answer_at = rendered.index(thread["turns"][1]["text"])
-    follow_up_at = rendered.index("Newest follow-up")
-    reply_at = rendered.index(f'id="reply-{thread["id"]}"')
-    assert question_at < answer_at < follow_up_at < reply_at
+    assert turn_texts(delivered) == [
+        thread["turns"][0]["text"],
+        thread["turns"][1]["text"],
+        "Newest follow-up",
+    ]
+    assert is_awaiting(delivered)
 
 
 def test_out_of_order_thread_turns_are_rejected() -> None:
@@ -272,13 +341,14 @@ def test_out_of_order_thread_turns_are_rejected() -> None:
         render_content(data)
 
 
-def test_agent_newest_thread_stays_collapsed_by_default() -> None:
-    """An answered thread does not force itself or its item open."""
-    rendered = render_content(_example())
-    first_thread = rendered.index('<details class="thread"')
-    first_summary = rendered.index("<summary", first_thread)
+def test_answered_thread_is_not_delivered_as_awaiting() -> None:
+    """An answered thread does not arrive asking for attention."""
+    delivered = embedded_document(render_content(_example()))
 
-    assert " open" not in rendered[first_thread:first_summary]
+    thread = next(iter_threads(delivered))[1]
+
+    assert thread["turns"][-1]["author"] == "agent"
+    assert not is_awaiting(thread)
 
 
 def test_unknown_anchor_kind_has_clear_validation_error() -> None:
@@ -295,79 +365,14 @@ def test_unknown_anchor_kind_has_clear_validation_error() -> None:
         render_content(data)
 
 
-def test_keyboard_controls_are_progressive_and_have_mouse_equivalents() -> None:
-    """Expose every binding while retaining native details disclosures."""
-    rendered = render_content(_example())
+def test_update_identities_are_delivered_for_cursor_restoration() -> None:
+    """Deliver stable update ids so a cursor can return to a survivor."""
+    delivered = embedded_document(render_content(_example()))
 
-    for label in (
-        "j · Next item",
-        "k · Previous item",
-        "J · Next lane",
-        "K · Previous lane",
-        "n · Awaiting",
-        "/ · Search",
-        "g · Top",
-        "G · Bottom",
-        "? · Keys",
-        "Space",
-        "a",
-        "Escape",
-    ):
-        assert label in rendered
-    assert "<details" in rendered
-    assert "<summary" in rendered
-
-
-def test_keyboard_script_protects_typing_and_restores_focus() -> None:
-    """Keep bindings inert in editors and retain an ancestor focus fallback."""
-    rendered = render_content(_example())
-
-    assert 'target.matches("textarea,input,[contenteditable]")' in rendered
-    assert 'event.target === searchInput' in rendered
-    assert "else leaveTextBox(event.target)" in rendered
-    assert 'form.closest("details.thread")' in rendered
-    assert "focusElement(owner || nav(" in rendered
-    assert 'sessionStorage.setItem(' in rendered
-    assert 'saved.split("/").slice(0, -1).join("/")' in rendered
-    assert "openAncestors(element)" in rendered
-
-
-def test_search_and_awaiting_navigation_are_safe() -> None:
-    """Filter by text without HTML execution and tolerate no waiting thread."""
-    rendered = render_content(_example())
-
-    assert "item.textContent.toLocaleLowerCase()" in rendered
-    assert "matchCount.textContent" in rendered
-    assert "innerHTML" not in rendered
-    assert "if (!threads.length) return;" in rendered
-    assert "% threads.length" in rendered
-
-
-def test_help_is_modal_mouse_reachable_and_disclosures_have_aria() -> None:
-    """Render accessible overlay controls and disclosure relationships."""
-    rendered = render_content(_example())
-
-    assert '<dialog id="key-help"' in rendered
-    assert 'data-action="help"' in rendered
-    assert 'id="close-help"' in rendered
-    assert "help.showModal()" in rendered
-    assert 'event.key === "Escape"' in rendered
-    assert 'aria-controls="item-body-' in rendered
-    assert 'aria-controls="lane-body-' in rendered
-    assert 'aria-expanded="' in rendered
-    assert all(
-        "aria-expanded" not in summary
-        for summary in re.findall(r"<summary[^>]*>", rendered)
-    )
-    assert ":focus, .nav-focus" in rendered
-
-
-def test_update_summaries_have_stable_focus_identity() -> None:
-    """Allow focus restoration to stop at a surviving update."""
-    rendered = render_content(_example())
-
-    assert '<summary data-focus-id="current-update"' in rendered
-    assert '<summary data-focus-id="review-round-four"' in rendered
+    assert [update["id"] for update in delivered["updates"]] == [
+        "review-round-four",
+        "current-update",
+    ]
 
 
 def test_unused_deeply_nested_field_does_not_break_rendering() -> None:
@@ -378,4 +383,7 @@ def test_unused_deeply_nested_field_does_not_break_rendering() -> None:
         nested = [nested]
     data["unused"] = nested
 
-    assert render_content(data).startswith("<!doctype html>")
+    rendered = render_content(data)
+
+    assert rendered.startswith("<!doctype html>")
+    assert "unused" not in embedded_document(rendered)

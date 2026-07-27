@@ -1,4 +1,4 @@
-.PHONY: install release patch minor major dev-install help clean publish all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply update-homebrew docs-dev docs-build docs-preview voxtype-version voxtype-test voxtype-install voxtype-build voxtype-release voxtype-publish voxtype-all voxtype-all-patch voxtype-all-minor voxtype-all-major visual-brief-test visual-brief-install visual-brief-build visual-brief-release visual-brief-publish
+.PHONY: install release patch minor major dev-install help clean publish all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply update-homebrew docs-dev docs-build docs-preview voxtype-version voxtype-test voxtype-install voxtype-build voxtype-release voxtype-publish voxtype-all voxtype-all-patch voxtype-all-minor voxtype-all-major visual-brief-frontend visual-brief-frontend-check visual-brief-test visual-brief-install visual-brief-build visual-brief-release visual-brief-publish
 
 GIT_PRIMARY_WORKTREE := $(realpath $(shell git rev-parse \
 	--path-format=absolute --git-common-dir)/..)
@@ -39,6 +39,7 @@ help:
 	@echo "  make voxtype-all-patch / -minor / -major - Bump that part, push, GitHub release, build (then: make voxtype-publish)"
 	@echo "  make voxtype-publish - Publish dist/voxtype-* to PyPI"
 	@echo "  make voxtype-all [BUMP=...] - voxtype-release + voxtype-publish in one shot"
+	@echo "  make visual-brief-frontend - Build the visual-brief Solid bundle (needs Node)"
 	@echo "  make visual-brief-test    - Run the visual-brief test suite"
 	@echo "  make visual-brief-install - Install visual-brief in editable mode"
 	@echo "  make visual-brief-build   - Build visual-brief wheel and sdist"
@@ -414,13 +415,35 @@ print(new)
 endef
 export VISUAL_BRIEF_BUMP_PY
 
-visual-brief-test:
+VISUAL_BRIEF_FRONTEND := $(VISUAL_BRIEF_DIR)/frontend
+VISUAL_BRIEF_STAMP := $(VISUAL_BRIEF_DIR)/tools/frontend_stamp.py
+
+# Rebuild the committed Solid bundle. Needs Node; installing the tool does not.
+visual-brief-frontend:
+	@command -v npm >/dev/null 2>&1 || { \
+		echo "Error: npm is required to build the visual-brief front end" >&2; \
+		echo "       (Vite needs Node >= 20.19; installing the tool needs none)" >&2; \
+		exit 1; \
+	}
+	cd $(VISUAL_BRIEF_FRONTEND) && npm ci --ignore-scripts --no-audit --no-fund
+	cd $(VISUAL_BRIEF_FRONTEND) && npm run typecheck && npm test && npm run build
+	python3 $(VISUAL_BRIEF_STAMP) write
+	@echo "Built bundle is committed package data: git add \
+$(VISUAL_BRIEF_DIR)/src/visual_brief/static \
+$(VISUAL_BRIEF_DIR)/tools/bundle-stamp.json"
+
+# Refuse to test against a bundle that no longer matches its sources.
+visual-brief-frontend-check:
+	@python3 $(VISUAL_BRIEF_STAMP) check
+
+visual-brief-test: visual-brief-frontend-check
 	uv run --package visual-brief pytest $(VISUAL_BRIEF_DIR)/tests -q
 
 visual-brief-install:
 	uv tool install --force -e $(VISUAL_BRIEF_DIR)
 
-visual-brief-build:
+# Nothing leaves the machine without the committed bundle matching its sources.
+visual-brief-build: visual-brief-frontend-check
 	@echo "Cleaning old visual-brief builds..."
 	rm -f dist/visual_brief-*
 	@echo "Building visual-brief..."
@@ -442,7 +465,7 @@ visual-brief-release: visual-brief-test
 		|| echo "Release visual-brief-v$$NEW already exists"
 	$(MAKE) visual-brief-build
 
-visual-brief-publish:
+visual-brief-publish: visual-brief-frontend-check
 	@if ! ls dist/visual_brief-*.whl \
 		dist/visual_brief-*.tar.gz >/dev/null 2>&1; then \
 		echo "Error: build visual-brief before publishing" >&2; \

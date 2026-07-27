@@ -1,0 +1,298 @@
+/*
+ * The rows, and the cursor that sits on one of them.
+ *
+ * The cursor is the signature of this page: a solid rail down the left of the
+ * selected row, a washed background, and full-strength ink against quieter
+ * neighbours. It never depends on browser focus, and it never has to be
+ * hunted for.
+ */
+
+.row {
+  margin: 0;
+}
+
+.row-head {
+  align-items: baseline;
+  border-left: var(--rail) solid transparent;
+  display: flex;
+  gap: 0.5rem;
+  scroll-margin-block: 35vh;
+  transition: background-color 90ms linear, border-color 90ms linear;
+}
+
+.row-toggle {
+  align-items: baseline;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0.3rem 0.5rem;
+  text-align: left;
+}
+
+.row-fold {
+  color: var(--ink-faint);
+  flex: none;
+  font-size: var(--t-sm);
+  line-height: 1.4;
+  width: 0.9em;
+}
+
+.row-actions {
+  align-items: center;
+  display: flex;
+  flex: none;
+  gap: 0.25rem;
+  padding-right: 0.4rem;
+}
+
+.row-count {
+  color: var(--ink-faint);
+  flex: none;
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.row-body {
+  border-left: 1px solid var(--rule);
+  margin-left: calc(var(--rail) + 0.75rem);
+  padding-left: 0.75rem;
+}
+
+/* ---------- the cursor ---------- */
+
+.row[data-cursor="true"] > .row-head {
+  background: var(--wash);
+  border-left-color: var(--select);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--select) 34%, transparent);
+  color: var(--ink);
+}
+
+.row[data-cursor="true"] > .row-head .row-fold,
+.row[data-cursor="true"] > .row-head .row-count {
+  color: var(--select-edge);
+}
+
+.row[data-cursor="true"] > .row-body {
+  border-left-color: color-mix(in srgb, var(--select) 45%, var(--rule));
+}
+
+/* ---------- kinds ---------- */
+
+.row-update {
+  border-top: 1px solid var(--rule);
+  margin-top: 1.5rem;
+}
+
+.row-update > .row-head {
+  background: var(--ground-2);
+}
+
+.update-title {
+  flex: 1 1 12rem;
+  font-size: var(--t-md);
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+.update-time {
+  color: var(--ink-faint);
+  flex: 0 1 auto;
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-summary {
+  color: var(--ink-quiet);
+  margin: 0.5rem 0 0.9rem;
+  max-width: 62ch;
+}
+
+.row-lane {
+  margin-top: 0.9rem;
+}
+
+.lane-name {
+  color: var(--ink-quiet);
+  flex: 1 1 auto;
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.row-lane[data-cursor="true"] > .row-head .lane-name {
+  color: var(--ink);
+}
+
+.row-item {
+  margin-top: 2px;
+}
+
+.row-item > .row-head {
+  background: var(--surface);
+}
+
+.glance {
+  flex: 1 1 10rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.explanation {
+  margin: 0.4rem 0 0.75rem;
+  max-width: 68ch;
+}
+
+.row-thread {
+  margin-top: 4px;
+}
+
+.row-thread > .row-head {
+  background: var(--surface-2);
+}
+
+.thread-title {
+  color: var(--ink-quiet);
+  flex: 1 1 8rem;
+  font-size: var(--t-sm);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-thread[data-awaiting="true"] > .row-head {
+  border-left-color: var(--rule-strong);
+}
+
+.row-thread[data-cursor="true"] > .row-head {
+  border-left-color: var(--select);
+}
+
+/* ---------- turns ---------- */
+
+.turn {
+  border-left: 2px solid var(--rule);
+  margin: 0.5rem 0;
+  padding-left: 0.7rem;
+}
+
+.turn-agent {
+  border-left-color: var(--rule-strong);
+}
+
+.turn-meta {
+  color: var(--ink-faint);
+  display: flex;
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  gap: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.turn-text {
+  margin: 0.15rem 0 0;
+  max-width: 68ch;
+  white-space: pre-wrap;
+}
+
+/* ---------- evidence ---------- */
+
+.fold {
+  margin: 0.4rem 0;
+}
+
+.fold-head {
+  background: none;
+  border: 0;
+  color: var(--ink-quiet);
+  cursor: pointer;
+  display: flex;
+  font-family: var(--mono);
+  font-size: var(--t-sm);
+  gap: 0.45rem;
+  padding: 0.2rem 0;
+  text-align: left;
+}
+
+.fold-head:hover {
+  color: var(--ink);
+}
+
+.fold-body {
+  border-left: 1px solid var(--rule);
+  margin-left: 0.35rem;
+  padding-left: 0.75rem;
+}
+
+.evidence {
+  background: var(--ground-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: var(--t-sm);
+  margin: 0.35rem 0;
+  overflow-x: auto;
+  padding: 0.5rem 0.65rem;
+  white-space: pre-wrap;
+}
+
+.note-body {
+  color: var(--ink-quiet);
+  margin: 0.25rem 0 0.5rem;
+  max-width: 68ch;
+}
+
+/* ---------- tables ---------- */
+
+.table-wrap {
+  margin: 0.6rem 0;
+  overflow-x: auto;
+}
+
+table {
+  border-collapse: collapse;
+  font-size: var(--t-sm);
+  min-width: 100%;
+}
+
+caption {
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  letter-spacing: 0.14em;
+  padding-bottom: 0.35rem;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+th,
+td {
+  border: 1px solid var(--rule);
+  padding: 0.3rem 0.55rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: var(--ground-2);
+  font-weight: 600;
+}
+
+td.wrong {
+  color: var(--trust-limitation);
+}

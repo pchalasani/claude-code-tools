@@ -12,6 +12,7 @@ from typing import Iterator
 
 import pytest
 
+from page_document import delivered_thread, delivered_threads, is_awaiting, turn_texts
 from visual_brief.cli import list_command
 from visual_brief.render import render_content
 from visual_brief.server.daemon import HOST, VisualBriefServer, create_server
@@ -161,10 +162,9 @@ def test_pending_follow_up_agrees_across_page_dashboard_and_cli(
     assert dashboard_status == 200
     assert b"waiting on you \xc2\xb7 1 question" in dashboard
     assert page_status == 200
-    assert b"&lt;b&gt;Still unsafe?&lt;/b&gt;" in page
-    assert b'<details class="thread" open data-awaiting>' in page
-    assert b'<details class="item" open>' in page
-    assert b'class="lane" open' in page
+    assert question.encode() not in page
+    delivered = delivered_thread(page, THREAD_ID)
+    assert turn_texts(delivered)[-1] == question and is_awaiting(delivered)
     assert version_status == 200
     assert generation in page
 
@@ -191,12 +191,10 @@ def test_older_pending_reply_keeps_page_and_count_answered(
 
     assert page is not None
     assert count_unanswered_questions(run) == 0
-    assert page.index(b"Older queued reply") < page.index(
-        b"The loop may try to simplify"
-    )
-    thread_start = page.index(b'<details class="thread"')
-    thread_summary = page.index(b"<summary", thread_start)
-    assert b" open" not in page[thread_start:thread_summary]
+    delivered = delivered_thread(page, THREAD_ID)
+    texts = turn_texts(delivered)
+    assert "Older queued reply" in texts and not is_awaiting(delivered)
+    assert texts[-1].startswith("The loop may try to simplify")
 
 
 def test_pending_new_question_agrees_across_fresh_status_views(
@@ -224,8 +222,8 @@ def test_pending_new_question_agrees_across_fresh_status_views(
     assert dashboard_status == 200
     assert b"waiting on you \xc2\xb7 1 question" in dashboard
     assert page_status == 200
-    assert question.encode() in page
-    assert b'<details class="thread" open data-awaiting>' in page
+    queued = delivered_threads(page, ANCHOR_ID, [question])
+    assert len(queued) == 1 and is_awaiting(queued[0])
 
 
 def test_folded_parentless_duplicate_gets_distinct_id(tmp_path: Path) -> None:
@@ -255,7 +253,9 @@ def test_folded_parentless_duplicate_gets_distinct_id(tmp_path: Path) -> None:
     )
 
     page = read_served_page(run)
-    assert page and page.count(text.encode()) == 4
+    assert page is not None
+    duplicates = delivered_threads(page, ANCHOR_ID, [text])
+    assert len({thread["id"] for thread in duplicates}) == 2
     assert count_unanswered_questions(run) == 2
 
 

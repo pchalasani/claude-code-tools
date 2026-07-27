@@ -1,4 +1,9 @@
-"""Real-browser regression coverage for queue-backed thread folding."""
+"""Real-browser regression coverage for queue-backed thread folding.
+
+These drive composition through the page: they open the composer at a pending
+thread, send a reply, and check that the reply survives once the pending
+parent folds into saved content.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +19,6 @@ from visual_brief.render import render_content
 from visual_brief.server.counting import merge_pending_followups
 from visual_brief.server.queue import build_question_record
 from visual_brief.server.registry import count_unanswered_questions
-
 
 @pytest.fixture
 def browser() -> Iterator[Browser]:
@@ -45,16 +49,9 @@ def test_browser_reply_survives_pending_thread_fold(
     anchor = "current-update/what-changed/differential-reader-check"
     question = "Does this survive folding?"
     reply = "This reply came from the reloaded page."
-    form = f'form.question-box[data-anchor-id="{anchor}"]:not(.reply-box)'
-    ask = f'.ask-button[data-target="ask-{anchor}"]'
-    browser.batch(
-        [
-            ["click", ask],
-            ["type", f"{form} textarea", question],
-            ["click", f"{form} .submit"],
-            ["wait", "100"],
-        ]
-    )
+    browser.compose_at(anchor)
+    browser.send(question)
+    browser.run("wait", "300")
     assert browser.server.posts == [
         ("/ask", {"anchor_id": anchor, "text": question})
     ]
@@ -81,14 +78,10 @@ def test_browser_reply_survives_pending_thread_fold(
     browser.data = pending
     browser.publish()
     browser.run("open", browser.url)
-    reply_form = f'form.reply-box[data-parent-id="{pending_id}"]'
-    browser.batch(
-        [
-            ["type", f"{reply_form} textarea", reply],
-            ["click", f"{reply_form} .submit"],
-            ["wait", "100"],
-        ]
-    )
+    browser.run("wait", "400")
+    browser.compose_at(f"{anchor}#{pending_id}")
+    browser.send(reply)
+    browser.run("wait", "300")
     assert browser.server.posts[1] == (
         "/ask",
         {"anchor_id": anchor, "text": reply, "parent_id": pending_id},
@@ -148,13 +141,9 @@ def test_identical_pending_threads_keep_their_own_replies_when_prepended(
     question = "Which identical conversation is this?"
     replies = ["Reply to the first thread.", "Reply to the second thread."]
     answers = ["Answer to the first thread.", "Answer to the second thread."]
-    form = f'form.question-box[data-anchor-id="{anchor}"]:not(.reply-box)'
     for index in range(2):
-        browser.evaluate(
-            f"document.querySelector({json.dumps(form)}).classList.add('open')"
-        )
-        browser.run("type", f"{form} textarea", question)
-        browser.run("click", f"{form} .submit")
+        browser.compose_at(anchor)
+        browser.send(question)
         browser.run("wait", "500")
         assert browser.server.post_count == index + 1
 
@@ -187,17 +176,11 @@ def test_identical_pending_threads_keep_their_own_replies_when_prepended(
     browser.data = pending
     browser.publish()
     browser.run("open", browser.url)
+    browser.run("wait", "400")
     for thread, reply in zip(pending_threads, replies):
-        reply_form = (
-            f'form.reply-box[data-parent-id="{thread["id"]}"]'
-        )
-        browser.batch(
-            [
-                ["type", f"{reply_form} textarea", reply],
-                ["click", f"{reply_form} .submit"],
-                ["wait", "100"],
-            ]
-        )
+        browser.compose_at(f"{anchor}#{thread['id']}")
+        browser.send(reply)
+        browser.run("wait", "300")
 
     reply_records = [
         build_question_record(payload)

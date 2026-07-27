@@ -1,0 +1,127 @@
+import { For, Show, type JSX } from "solid-js";
+
+import { KEY_HELP, type Action } from "./keys";
+import type { BriefState } from "./state";
+
+/** The actions the on-screen key bar can run. */
+const KEY_BAR: [string, Action, string][] = [
+  ["k", "previous-item", "Previous item"],
+  ["j", "next-item", "Next item"],
+  ["K", "previous-lane", "Previous lane"],
+  ["J", "next-lane", "Next lane"],
+  ["a", "compose", "Ask"],
+  ["n", "next-awaiting", "Awaiting"],
+  ["/", "search", "Search"],
+  ["g", "top", "Top"],
+  ["G", "bottom", "Bottom"],
+  ["?", "help", "Keys"],
+];
+
+/**
+ * The same actions as the keyboard, for a hand on a mouse.
+ *
+ * @param props - The page state.
+ * @returns The rendered bar.
+ */
+export function KeyBar(props: { state: BriefState }): JSX.Element {
+  return (
+    <nav class="keybar" aria-label="Keyboard and page controls">
+      <For each={KEY_BAR}>
+        {([key, action, label]) => (
+          <button
+            type="button"
+            class="key-control"
+            data-action={action}
+            onClick={() => props.state.run(action)}
+          >
+            <kbd>{key}</kbd>
+            <span>{label}</span>
+          </button>
+        )}
+      </For>
+    </nav>
+  );
+}
+
+/**
+ * The search field and its live match count.
+ *
+ * @param props - The page state.
+ * @returns The rendered search bar when it is open.
+ */
+export function SearchOverlay(props: { state: BriefState }): JSX.Element {
+  const nav = props.state.nav;
+  return (
+    <Show when={nav.overlay() === "search"}>
+      <div class="search" role="search">
+        <label for="brief-search">Search items</label>
+        <input
+          id="brief-search"
+          type="search"
+          autocomplete="off"
+          value={nav.query()}
+          onInput={(event) => nav.setQuery(event.currentTarget.value)}
+        />
+        <span class="match-count" role="status">
+          {nav.matchCount()} {nav.matchCount() === 1 ? "match" : "matches"}
+        </span>
+        <button
+          type="button"
+          class="quiet"
+          onClick={() => props.state.run("close")}
+        >
+          <kbd>Esc</kbd> Close
+        </button>
+      </div>
+    </Show>
+  );
+}
+
+/**
+ * The key list, shown on demand.
+ *
+ * @param props - The page state.
+ * @returns The rendered overlay when it is open.
+ */
+export function HelpOverlay(props: { state: BriefState }): JSX.Element {
+  return (
+    <Show when={props.state.nav.overlay() === "help"}>
+      <div
+        class="help-scrim"
+        onClick={(event) => {
+          if (event.target === event.currentTarget) {
+            props.state.run("close");
+          }
+        }}
+      >
+        <div
+          class="help"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="help-title"
+        >
+          <h2 id="help-title">Keyboard control</h2>
+          <dl>
+            <For each={KEY_HELP}>
+              {([keys, meaning]) => (
+                <div class="help-row">
+                  <dt>
+                    <kbd>{keys}</kbd>
+                  </dt>
+                  <dd>{meaning}</dd>
+                </div>
+              )}
+            </For>
+          </dl>
+          <button
+            type="button"
+            class="quiet"
+            onClick={() => props.state.run("close")}
+          >
+            <kbd>Esc</kbd> Close
+          </button>
+        </div>
+      </div>
+    </Show>
+  );
+}

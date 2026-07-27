@@ -1,4 +1,13 @@
-"""Real-browser interaction tests for visual brief keyboard behavior."""
+"""Real-browser checks that the delivered page works as one self-contained file.
+
+These assert the delivery contract rather than the interface: the inlined
+bundle executes, the embedded document reaches it intact, the page fetches
+nothing but the local reload channel, and a republished run reloads itself.
+The reading interface and its keyboard surface are asserted separately once
+they exist.
+"""
+
+from __future__ import annotations
 
 import json
 from typing import Iterator
@@ -6,9 +15,8 @@ from typing import Iterator
 import pytest
 
 from browser_support import Browser, browser_session
+from page_document import embedded_document, is_awaiting, iter_threads
 from visual_brief.render import render_content
-
-KEYS = ["j", "k", "J", "K", " ", "a", "n", "/", "g", "G", "?"]
 
 
 @pytest.fixture
@@ -18,349 +26,111 @@ def browser() -> Iterator[Browser]:
         yield driver
 
 
-def test_typing_contexts_keep_every_binding_inert(browser: Browser) -> None:
-    """Dispatch every binding in editors and type real text into each."""
-    results = browser.evaluate(
-        f"""
-        (() => {{
-          const form = document.querySelector(".question-box:not(.reply-box)");
-          form.classList.add("open");
-          const searchOwner = document.activeElement;
-          document.querySelector(
-            '.key-control[data-action="search"]'
-          ).click();
-          const editable = document.createElement("div");
-          editable.id = "test-editable";
-          editable.contentEditable = "true";
-          editable.tabIndex = 0;
-          document.body.append(editable);
-          const question = form.querySelector("textarea");
-          const reply = document.querySelector(
-            ".thread[data-awaiting] textarea");
-          const replyOwner = reply.closest("details.thread").querySelector(
-            ":scope > summary");
-          const targets = [
-            [question, document.querySelector(
-              `.ask-button[data-target="${{CSS.escape(form.id)}}"]`
-            )],
-            [reply, replyOwner],
-            [document.querySelector("#page-search"), searchOwner],
-            [editable, document.querySelector('[data-nav-kind="item"]')],
-          ];
-          const keys = {json.dumps(KEYS + ["Escape"])};
-          return targets.map(([target, owner]) => keys.map((key) => {{
-            target.focus();
-            const event = new KeyboardEvent(
-              "keydown",
-              {{key, bubbles: true, cancelable: true}},
-            );
-            target.dispatchEvent(event);
-            const style = getComputedStyle(document.activeElement);
-            return {{
-              key,
-              prevented: event.defaultPrevented,
-              active: document.activeElement === target,
-              ownerFocused: document.activeElement === owner,
-              outline: [style.outlineStyle, Number.parseFloat(style.outlineWidth)],
-            }};
-          }}));
-        }})()
-        """
-    )
-    for target_results in results:
-        assert all(
-            not result["prevented"] and result["active"]
-            for result in target_results[:-1]
-        )
-        assert target_results[-1] == {
-            "key": "Escape",
-            "prevented": True,
-            "active": False,
-            "ownerFocused": True,
-            "outline": ["solid", 3],
-        }
-
-    browser.batch(
-        [
-            ["type", ".question-box:not(.reply-box) textarea", "again"],
-            ["type", "#test-editable", "again"],
-            [
-                "eval",
-                "document.querySelector("
-                "'.key-control[data-action=\"search\"]'"
-                ").click()",
-            ],
-            ["type", "#page-search", "again"],
-        ]
-    )
-    assert browser.evaluate(
-        """
-        [
-          document.querySelector(
-            ".question-box:not(.reply-box) textarea"
-          ).value,
-          document.querySelector("#page-search").value,
-          document.querySelector("#test-editable").textContent,
-        ]
-        """
-    ) == ["again", "again", "again"]
-
-
-@pytest.mark.parametrize(
-    "selector",
-    [
-        ".ask-button",
-        ".signal",
-        ".question-box:not(.reply-box) .submit",
-        '.key-control[data-action="next-lane"]',
-    ],
-)
-def test_space_keeps_native_button_operation(
-    browser: Browser,
-    selector: str,
-) -> None:
-    """Do not suppress Space activation on an ordinary button control."""
-    browser.evaluate(
-        f"""
-        (() => {{
-          document.querySelector(
-            ".question-box:not(.reply-box)"
-          ).classList.add("open");
-          const original = document.querySelector({json.dumps(selector)});
-          const button = original.cloneNode(true);
-          original.replaceWith(button);
-          button.dataset.clicks = "0";
-          button.addEventListener("click", (event) => {{
-            button.dataset.clicks = String(Number(button.dataset.clicks) + 1);
-            event.preventDefault();
-          }});
-        }})()
-        """
-    )
-    browser.batch([["focus", selector], ["press", "Space"]])
-
-    assert browser.evaluate(
-        f"document.querySelector({json.dumps(selector)}).dataset.clicks"
-    ) == "1"
-
-
-def test_space_keeps_native_button_and_disclosure_operation(
+def test_bundle_executes_and_renders_the_delivered_document(
     browser: Browser,
 ) -> None:
-    """Keep search-close activation and native disclosure toggling."""
-    browser.evaluate(
+    """Prove the inlined bundle ran and painted the delivered document."""
+    mounted = browser.evaluate(
         """
-        document.querySelector(
-          '.key-control[data-action="search"]'
-        ).click()
+        (() => {
+          const root = document.getElementById("visual-brief-root");
+          const app = root && root.querySelector("[data-mounted]");
+          const count = (name) =>
+            app.querySelector(`[data-count="${name}"] b`).textContent;
+          return {
+            mounted: Boolean(app),
+            title: app && app.querySelector(".brief-title").textContent,
+            items: count("items"),
+            lanes: count("lanes"),
+            awaiting: app.querySelector("[data-awaiting-count]")
+              .dataset.awaitingCount,
+            painted: document.querySelectorAll(
+              '[data-row-kind="item"]',
+            ).length,
+          };
+        })()
         """
     )
-    browser.batch([["focus", "#close-search"], ["press", "Space"]])
-    assert browser.evaluate("document.querySelector('#search-panel').hidden")
 
-    summary = 'summary[data-focus-id="current-update/what-changed"]'
-    before = browser.evaluate(
-        f"document.querySelector({json.dumps(summary)}).parentElement.open"
-    )
-    browser.batch([["focus", summary], ["press", "Space"]])
-    assert browser.evaluate(
-        f"""
-        (() => {{
-          const summary = document.querySelector({json.dumps(summary)});
-          return [
-            summary.parentElement.open,
-            summary.getAttribute("aria-expanded"),
-          ];
-        }})()
+    expected = embedded_document(browser.server.html)
+    lanes = [lane for update in expected["updates"] for lane in update["lanes"]]
+    total_items = sum(len(lane["items"]) for lane in lanes)
+    assert mounted["mounted"] is True
+    assert mounted["title"] == expected["title"]
+    assert mounted["items"] == str(total_items)
+    assert mounted["lanes"] == str(len(lanes))
+    assert 0 < int(mounted["painted"]) <= total_items
+
+
+def test_the_page_agrees_with_the_document_on_what_awaits_an_answer(
+    browser: Browser,
+) -> None:
+    """Show the same outstanding count the run accounting works from."""
+    shown = browser.evaluate(
         """
-    ) == [
-        not before,
-        str(not before).lower(),
+        document.querySelector("[data-awaiting-count]").dataset.awaitingCount
+        """
+    )
+
+    delivered = embedded_document(browser.server.html)
+    awaiting = [
+        thread
+        for _, thread in iter_threads(delivered)
+        if is_awaiting(thread)
     ]
+    assert int(shown) == len(awaiting) == 2
 
 
-def test_non_space_binding_still_works_from_button(browser: Browser) -> None:
-    """Keep page shortcuts active when a non-typing control has focus."""
-    browser.run("focus", ".signal")
-    browser.press("/")
-
-    assert browser.evaluate(
-        """
-        [
-          document.querySelector("#search-panel").hidden,
-          document.activeElement.id,
-        ]
-        """
-    ) == [False, "page-search"]
-
-
-def test_navigation_search_help_and_ask_behaviors(browser: Browser) -> None:
-    """Exercise navigation, wrapping, filtering, modal focus, and ask."""
-    browser.run(
-        "focus",
-        'summary[data-focus-id='
-        '"current-update/what-changed/differential-reader-check"]',
-    )
-    browser.press("J")
-    assert browser.evaluate("document.activeElement.dataset.focusId") == (
-        "current-update/why-it-matters"
-    )
-    browser.run(
-        "focus",
-        'summary[data-focus-id='
-        '"current-update/why-it-matters/repair-loop-routing"]',
-    )
-    browser.press("K")
-    assert browser.evaluate("document.activeElement.dataset.focusId") == (
-        "current-update/what-changed"
-    )
-
-    browser.evaluate(
-        """
-        document.querySelector(
-          'summary[data-focus-id="current-update/what-changed"]'
-        ).parentElement.open = false
-        """
-    )
-    browser.press("j")
-    assert browser.evaluate(
-        """
-        [
-          document.activeElement.dataset.navKind,
-          document.activeElement.closest("details.lane").open,
-        ]
-        """
-    ) == ["item", True]
-
-    item_id = "current-update/what-changed/differential-reader-check"
-    browser.run("focus", f'summary[data-focus-id="{item_id}"]')
-    browser.press("a")
-    browser.run("focus", f'summary[data-focus-id="{item_id}"]')
-    browser.press("a")
-    assert browser.evaluate(
-        """
-        [
-          document.activeElement.tagName,
-          document.activeElement.closest("form").classList.contains("open"),
-        ]
-        """
-    ) == ["TEXTAREA", True]
-
-    awaiting_ids = browser.evaluate(
-        """
-        [...document.querySelectorAll(
-          "details.thread[data-awaiting] > summary"
-        )].map((summary) => summary.dataset.focusId)
-        """
-    )
-    for expected in awaiting_ids + awaiting_ids[:1]:
-        browser.run("focus", 'summary[data-focus-id="current-update"]')
-        browser.press("n")
-        assert browser.evaluate(
-            "document.activeElement.dataset.focusId"
-        ) == expected
-    browser.evaluate(
-        """
-        document.querySelectorAll("details.thread[data-awaiting]").forEach(
-          (thread) => thread.removeAttribute("data-awaiting")
-        )
-        """
-    )
-    focus_before = browser.evaluate("document.activeElement.dataset.focusId")
-    browser.press("n")
-    assert browser.evaluate("document.activeElement.dataset.focusId") == (
-        focus_before
-    )
-
-    browser.run("focus", 'summary[data-focus-id="current-update"]')
-    browser.press("/")
-    payload = (
-        '<img id="search-injection" src="missing" '
-        'onerror="window.searchInjectionExecuted=true">'
-    )
-    browser.evaluate("window.searchInjectionExecuted = false")
-    browser.run("type", "#page-search", payload)
-    assert browser.evaluate(
-        """
-        [
-          document.querySelector("#match-count").textContent,
-          [...document.querySelectorAll(".item-shell:not([hidden])")].length,
-          document.querySelector("#search-injection") === null,
-          window.searchInjectionExecuted,
-          document.querySelector("#page-search").value,
-        ]
-        """
-    ) == ["0 matches", 0, True, False, payload]
-    browser.press("Escape")
-    assert browser.evaluate(
-        """
-        [
-          document.querySelector("#search-panel").hidden,
-          [...document.querySelectorAll(".item-shell:not([hidden])")].length,
-        ]
-        """
-    )[0] is True
-
-    browser.press("?")
-    assert browser.evaluate(
-        "document.querySelector('#key-help').open"
-    ) is True
-    browser.press("Tab")
-    assert browser.evaluate("document.activeElement.id") == "close-help"
-    browser.press("Escape")
-    assert browser.evaluate(
-        "document.querySelector('#key-help').open"
-    ) is False
-
-
-def test_self_reload_restores_item_then_surviving_ancestors(
+def test_page_makes_no_request_other_than_its_own_reload_channel(
     browser: Browser,
 ) -> None:
-    """Restore focus after self-reload, including lane and update fallback."""
-    item_id = "current-update/why-it-matters/repair-loop-routing"
-    lane_id = "current-update/why-it-matters"
-    current = browser.data["updates"][1]
-    lane = current["lanes"][1]
-    item = lane["items"][0]
-    thread_id = f'{item_id}#{item["questions"][0]["id"]}'
-    browser.run("focus", f'summary[data-focus-id="{thread_id}"]')
-    item["questions"] = []
-    browser.publish()
-    browser.wait_for_focus(item_id)
+    """Keep the page self-contained: no subresource ever leaves the file."""
+    browser.run("wait", "300")
+    requested = browser.evaluate(
+        """
+        performance.getEntriesByType("resource").map((entry) => entry.name)
+        """
+    )
 
-    browser.run("focus", f'summary[data-focus-id="{item_id}"]')
+    off_page = [
+        name
+        for name in requested
+        if not name.startswith("data:") and name != f"{browser.url}render-version"
+    ]
+    assert off_page == [], requested
+    assert "http://" not in browser.server.html
+    assert "https://" not in browser.server.html
+
+
+def test_untrusted_question_text_stays_inert_data(browser: Browser) -> None:
+    """Deliver hostile question text without ever executing it."""
+    payload = '<img src="missing" onerror="window.injected=true">'
+    thread = browser.data["updates"][1]["lanes"][1]["items"][0]["questions"][0]
+    thread["turns"].append(
+        {
+            "author": "human",
+            "text": payload,
+            "at": "2026-07-25T21:00:00Z",
+        }
+    )
+    browser.publish()
+    browser.run("open", browser.url)
+    browser.run("wait", "300")
+
     assert browser.evaluate(
-        """
-        (() => {
-          const style = getComputedStyle(document.activeElement);
+        f"""
+        (() => {{
+          const blob = document.getElementById("visual-brief-document");
+          const brief = JSON.parse(blob.textContent);
+          const turns = brief.updates[1].lanes[1].items[0].questions[0].turns;
           return [
-            style.outlineStyle,
-            Number.parseFloat(style.outlineWidth),
+            turns[turns.length - 1].text === {json.dumps(payload)},
+            document.querySelector("img") === null,
+            Boolean(window.injected),
           ];
-        })()
+        }})()
         """
-    ) == ["solid", 3]
-    browser.publish()
-    browser.wait_for_focus(item_id)
-    assert browser.evaluate(
-        """
-        (() => {
-          const style = getComputedStyle(document.activeElement);
-          return [
-            style.outlineStyle,
-            Number.parseFloat(style.outlineWidth),
-          ];
-        })()
-        """
-    ) == ["solid", 3]
-
-    lane["items"] = []
-    browser.publish()
-    browser.wait_for_focus(lane_id)
-
-    current["lanes"].remove(lane)
-    browser.publish()
-    browser.wait_for_focus("current-update")
+    ) == [True, True, False]
 
 
 def test_first_version_poll_reloads_a_page_that_lost_render_race(
@@ -373,27 +143,3 @@ def test_first_version_poll_reloads_a_page_that_lost_render_race(
     browser.run("open", browser.url)
 
     browser.wait_for_title("Race winner")
-
-
-def test_native_disclosure_works_without_javascript(browser: Browser) -> None:
-    """Keep native details usable without stale authored ARIA state."""
-    browser.run("open", f"{browser.url}no-script")
-    selector = 'summary[data-focus-id="current-update/what-changed"]'
-    before = browser.evaluate(
-        f"document.querySelector({json.dumps(selector)}).parentElement.open"
-    )
-    assert browser.evaluate("document.querySelectorAll('script').length") == 0
-    browser.run("focus", selector)
-    browser.press("Space")
-    browser.run("wait", "100")
-    assert browser.evaluate(
-        f"""
-        (() => {{
-          const summary = document.querySelector({json.dumps(selector)});
-          return [
-            summary.parentElement.open,
-            summary.hasAttribute("aria-expanded"),
-          ];
-        }})()
-        """
-    ) == [not before, False]

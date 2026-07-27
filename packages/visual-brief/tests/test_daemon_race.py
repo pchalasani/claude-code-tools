@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from page_document import delivered_thread
 from visual_brief import MAX_THREAD_ID_LENGTH
 from visual_brief.render import render_content
 from visual_brief.server.daemon import HOST, VisualBriefServer, create_server
@@ -96,7 +97,7 @@ def test_longest_rendered_thread_id_accepts_reply_through_daemon(
         f'{content["updates"][0]["lanes"][0]["id"]}/{item["id"]}'
     )
     rendered = render_content(content)
-    assert f'data-parent-id="{thread_id}"' in rendered
+    assert delivered_thread(rendered, thread_id)["turns"]
     (run / "content.json").write_text(
         json.dumps(content),
         encoding="utf-8",

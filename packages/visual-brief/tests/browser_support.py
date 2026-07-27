@@ -21,6 +21,13 @@ from visual_brief.server.served_page import page_generation
 
 EXAMPLE_PATH = Path(__file__).parents[1] / "example.json"
 
+# Rows of the served example page that the interaction suites navigate by.
+FIRST_ITEM = "current-update/what-changed/differential-reader-check"
+SECOND_ITEM = "current-update/what-changed/four-cold-review-defects"
+AWAITING_THREAD = (
+    "current-update/why-it-matters/repair-loop-routing#q-malformed-unsupported"
+)
+
 
 def _browser_data() -> dict[str, Any]:
     """Return example data with two awaiting threads."""
@@ -55,8 +62,6 @@ class _Handler(BaseHTTPRequestHandler):
             if self.server.replacement_html is not None:
                 self.server.html = self.server.replacement_html
                 self.server.replacement_html = None
-            if self.path == "/no-script":
-                html = html.split("<script>", 1)[0] + "</body></html>"
             body = html.encode()
             content_type = "text/html"
         self.send_response(200)
@@ -73,6 +78,11 @@ class _Handler(BaseHTTPRequestHandler):
         self.server.post_count += 1
         if self.server.post_gate is not None:
             self.server.post_gate.wait(timeout=5)
+        if self.server.refuse:
+            self.send_response(500)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         self.send_response(202)
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -89,6 +99,7 @@ class _TestServer(ThreadingHTTPServer):
     posts: list[tuple[str, dict[str, Any]]]
     post_count: int
     post_gate: threading.Event | None
+    refuse: bool = False
 
 
 @dataclass
@@ -129,32 +140,54 @@ class Browser:
         """Press a real browser key."""
         self.run("press", key)
 
-    def batch(self, commands: list[list[str]]) -> list[dict[str, Any]]:
-        """Run real browser actions together and require every action to pass."""
-        output = self.run(
-            "batch",
-            "--json",
-            input_text=json.dumps(commands),
+    def click_row(self, row_id: str) -> None:
+        """Scroll one row into view and click its head, the way a human does.
+
+        Args:
+            row_id: Identifier of the row to click.
+        """
+        selector = f'[data-row-id="{row_id}"] .row-toggle'
+        self.run("scrollintoview", selector)
+        self.run("click", selector)
+
+    def compose_at(self, row_id: str) -> None:
+        """Open the composer at one row through its own affordance.
+
+        Args:
+            row_id: Identifier of the row to write against.
+        """
+        selector = f'[data-row-id="{row_id}"] > .row-head .ask-button'
+        self.run("scrollintoview", selector)
+        self.run("click", selector)
+
+    def send(self, text: str) -> None:
+        """Write and submit one message in the open composer.
+
+        Args:
+            text: What to write.
+        """
+        self.run("fill", ".composer textarea", text)
+        self.run("click", ".composer .submit")
+
+    def cursor_row(self) -> str:
+        """Return the row the page paints as the cursor.
+
+        Returns:
+            The cursor's row identifier.
+        """
+        marked = self.evaluate(
+            """
+            [...document.querySelectorAll('[data-cursor="true"]')].map(
+              (row) => row.dataset.rowId,
+            )
+            """
         )
-        results = json.loads(output)
-        assert all(result["success"] for result in results), results
-        return results
+        assert len(marked) == 1, marked
+        return str(marked[0])
 
     def publish(self) -> None:
         """Publish current data under a new self-reload version."""
         self.server.html = render_content(self.data)
-
-    def wait_for_focus(self, focus_id: str) -> None:
-        """Wait for self-reload to restore a specific focus identity."""
-        deadline = time.monotonic() + 7
-        while time.monotonic() < deadline:
-            actual = self.evaluate(
-                "document.activeElement && document.activeElement.dataset.focusId"
-            )
-            if actual == focus_id:
-                return
-            time.sleep(0.25)
-        pytest.fail(f"focus did not restore to {focus_id!r}; got {actual!r}")
 
     def wait_for_title(self, title: str) -> None:
         """Wait for self-reload to display one document title."""
@@ -165,6 +198,37 @@ class Browser:
                 return
             time.sleep(0.25)
         pytest.fail(f"title did not become {title!r}; got {actual!r}")
+
+
+STARTUP_ATTEMPTS = 3
+
+
+def _start_browser(driver: Browser) -> None:
+    """Open the served page, retrying only a browser that failed to start.
+
+    Chrome occasionally fails to come up on a loaded machine. That is worth
+    one more attempt; a failing assertion never is, so nothing past startup is
+    retried, and a browser that will not start still fails the suite loudly.
+
+    Args:
+        driver: The browser driver to start.
+    """
+    failure = ""
+    for attempt in range(1, STARTUP_ATTEMPTS + 1):
+        try:
+            driver.run("open", driver.url)
+            driver.run("wait", "300")
+            return
+        except (AssertionError, subprocess.TimeoutExpired) as error:
+            failure = str(error)
+            try:
+                driver.run("close")
+            except (AssertionError, subprocess.TimeoutExpired):
+                pass
+            time.sleep(0.5 * attempt)
+    pytest.fail(
+        f"the browser did not start after {STARTUP_ATTEMPTS} attempts: {failure}"
+    )
 
 
 @contextmanager
@@ -182,12 +246,12 @@ def browser_session() -> Iterator[Browser]:
     server.posts = []
     server.post_count = 0
     server.post_gate = None
+    server.refuse = False
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     driver = Browser(executable, f"visual-brief-{uuid.uuid4().hex}", server, data)
     try:
-        driver.run("open", driver.url)
-        driver.run("wait", "300")
+        _start_browser(driver)
         yield driver
     finally:
         try:
