@@ -1,12 +1,13 @@
 ---
 title: "Writing Plugin"
 description: >
-  Prose-quality skills: agent-style rules for formal
-  technical prose, and remove-ai-patterns for de-AI-ing
-  text with a deterministic detector.
+  Prose-quality skills for Claude Code and Codex:
+  agent-style rules for formal technical prose, and
+  remove-ai-patterns for de-AI-ing text with a
+  deterministic detector.
 ---
 
-import { Steps } from "@astrojs/starlight/components";
+import { Tabs, TabItem } from "@astrojs/starlight/components";
 
 <style>{`
   table td:first-child,
@@ -15,23 +16,57 @@ import { Steps } from "@astrojs/starlight/components";
   }
 `}</style>
 
-The `writing` plugin bundles two skills for improving prose quality. Both
-are **explicit-trigger only**: they never fire on ordinary writing or
-documentation tasks, so they add no noise to normal sessions. You invoke
-them by name when you want a dedicated editing pass.
-
-Install via the Claude Code marketplace:
-
-```bash
-claude plugin install writing@cctools-plugins
-```
+The `writing` plugin bundles two skills for improving prose quality, and
+works in **both Claude Code and Codex** (this repo hosts a marketplace
+for each). Both skills are **explicit-trigger only**: they never fire on
+ordinary writing or documentation tasks, so they add no noise to normal
+sessions. You invoke them by name when you want a dedicated editing
+pass.
 
 ## Skills
 
 | Skill | What It Does |
 |-------|--------------|
-| `writing:agent-style` | 21 literature-backed rules for formal technical prose (papers, design docs, proposals, READMEs, commit messages) |
-| `writing:remove-ai-patterns` | Remove AI-writing patterns ("AI-isms") from text at any register, with voice profiles and a deterministic detector |
+| `agent-style` | 21 literature-backed rules for formal technical prose (papers, design docs, proposals, READMEs, commit messages) |
+| `remove-ai-patterns` | Remove AI-writing patterns ("AI-isms") from text at any register, with voice profiles and a deterministic detector |
+
+## Installation
+
+The plugin is published in two marketplaces in the same repo: Claude
+Code reads `.claude-plugin/marketplace.json` (marketplace name
+`cctools-plugins`), Codex reads `.agents/plugins/marketplace.json`
+(marketplace name `cctools-codex-plugins`). Add the marketplace once,
+then install:
+
+<Tabs>
+<TabItem label="Claude Code">
+
+```bash
+claude plugin marketplace add pchalasani/claude-code-tools
+claude plugin marketplace update cctools-plugins   # refresh if already added
+claude plugin install writing@cctools-plugins
+```
+
+Or run `/plugin` inside a session for the interactive browser.
+
+</TabItem>
+<TabItem label="Codex">
+
+```bash
+codex plugin marketplace add pchalasani/claude-code-tools
+codex plugin marketplace upgrade cctools-codex-plugins  # refresh if already added
+codex plugin add writing@cctools-codex-plugins
+```
+
+If you added the marketplace before this plugin was published, the
+`upgrade` step is what refreshes the cached snapshot so the plugin
+shows up.
+
+</TabItem>
+</Tabs>
+
+No further setup: the skills are self-contained. The detector only
+needs a `node` binary on PATH (no `npm install`).
 
 ## Two lanes, not one
 
@@ -55,7 +90,8 @@ both tends to churn the same sentences back and forth.
 
 ## How to Use
 
-Ask for a pass by name:
+Usage is the same in Claude Code and Codex: ask for a pass by name, in
+natural language.
 
 > "Apply agent-style to this design doc."
 
@@ -64,10 +100,18 @@ Ask for a pass by name:
 
 > "Run a detect-only audit of README.md."
 
+remove-ai-patterns supports three modes (defined in its vendored
+catalog): **detect-only** (report findings, change nothing),
+**edit-in-place** (minimal rewrites at flagged spans, meaning
+preserved), and **iterate-to-convergence** (revise, re-detect, repeat
+until clean). agent-style keeps its 21 compact rules in the SKILL.md
+itself and the full rule bodies (BAD/GOOD pairs, rationale) in a
+vendored `references/RULES.md`.
+
 ### The deterministic detector
 
 remove-ai-patterns includes a JSON-emitting detector that needs only a
-`node` binary (no npm install):
+`node` binary:
 
 ```bash
 node <skill-dir>/scripts/detect.js FILE
@@ -79,12 +123,41 @@ clean" requests the agent loops revise → detect until findings stop
 improving; the detector is the objective stopping criterion, so the loop
 cannot argue with itself about whether the text is done.
 
-## Vendored, pinned upstream content
+## Updating the vendored catalogs
 
-Each skill vendors a pinned snapshot of its upstream source (rule bodies,
-pattern catalog, detector), so the skills work offline and behave the
-same on every machine. The pinned commit of each upstream is recorded in
-an `UPSTREAM-PIN` file next to the vendored content, and upstream
-licenses are included alongside. Maintainers refresh the snapshots with
-`plugins/writing/scripts/update-upstream.sh` and review the diff before
-committing; users pick up refreshed catalogs by updating the plugin.
+Both skills derive from third-party GitHub repos, and the plugin vendors
+a **pinned snapshot** of each (rule bodies, pattern catalog, detector)
+rather than fetching at install or run time. That makes the skills work
+offline and behave identically on every machine. The exact upstream
+commit is recorded next to the vendored content:
+
+- `plugins/writing/skills/agent-style/references/UPSTREAM-PIN`
+- `plugins/writing/skills/remove-ai-patterns/upstream/UPSTREAM-PIN`
+
+**As a user**, you never touch upstream directly; you pick up refreshed
+catalogs by updating the marketplace and reinstalling the plugin:
+
+```bash
+# Claude Code
+claude plugin marketplace update cctools-plugins
+claude plugin install writing@cctools-plugins
+
+# Codex
+codex plugin marketplace upgrade cctools-codex-plugins
+codex plugin add writing@cctools-codex-plugins
+```
+
+**As a maintainer** (or in your own fork), refresh the snapshots from
+the upstream repos with:
+
+```bash
+plugins/writing/scripts/update-upstream.sh
+```
+
+The script shallow-clones both upstreams, copies the vendored files,
+and rewrites the `UPSTREAM-PIN` files. It commits nothing: review the
+diff before committing, because freshly fetched rule text is
+third-party input (check that the changes are writing-rule content, not
+new tool invocations or scope changes). Upstream licenses (CC BY 4.0
+and MIT) ship alongside the vendored files, with attribution in
+`references/NOTICE.md`.

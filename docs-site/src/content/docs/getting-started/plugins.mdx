@@ -32,12 +32,19 @@ This repo provides plugins for Codex and for the
 
 ## Codex Plugin Installation
 
-Install the dynamic workflow plugin from the Codex marketplace in this repo:
+This repo also hosts a Codex marketplace (`cctools-codex-plugins`, read
+from `.agents/plugins/marketplace.json`), currently offering the
+`dynamic-workflow`, `voxtype`, and `writing` plugins. Add it once, then
+install with `codex plugin add`:
 
 ```bash
 codex plugin marketplace add pchalasani/claude-code-tools
+codex plugin marketplace upgrade cctools-codex-plugins  # refresh if already added
 codex plugin add dynamic-workflow@cctools-codex-plugins
+codex plugin add writing@cctools-codex-plugins
 ```
+
+### dynamic-workflow
 
 The plugin itself does not require `uv tool install claude-code-tools` or an
 `npm install`. It includes the skill and compiled runner; Node.js 20 or newer
@@ -231,6 +238,8 @@ setup: creating the Discord bot, configuration, and running the daemon.
 
 Two explicit-trigger skills for prose quality; neither fires on ordinary
 writing tasks — you invoke them by name for a dedicated editing pass.
+Works in both Claude Code (`writing@cctools-plugins`) and Codex
+(`writing@cctools-codex-plugins`).
 
 | Skill | What it does |
 |-------|--------------|
@@ -244,4 +253,5 @@ MIT), so they work offline with no extra installs.
 
 See the
 [Writing detail page](/claude-code-tools/plugins-detail/writing/)
-for the two skills' lanes and the detector workflow.
+for installation in both agents, the two skills' lanes, the detector
+workflow, and how the vendored upstream snapshots are updated.

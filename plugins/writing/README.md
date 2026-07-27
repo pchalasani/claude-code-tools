@@ -19,9 +19,20 @@ Pick one as the final gate on a given document; do not interleave them.
 
 ## Install
 
+Works in both Claude Code and Codex; note the marketplace name differs
+(Claude reads `.claude-plugin/marketplace.json`, Codex reads
+`.agents/plugins/marketplace.json`):
+
 ```bash
+# Claude Code
 claude plugin marketplace add pchalasani/claude-code-tools
+claude plugin marketplace update cctools-plugins   # refresh if already added
 claude plugin install writing@cctools-plugins
+
+# Codex
+codex plugin marketplace add pchalasani/claude-code-tools
+codex plugin marketplace upgrade cctools-codex-plugins  # refresh if already added
+codex plugin add writing@cctools-codex-plugins
 ```
 
 Then invoke by name in a session: "apply agent-style to this README",
