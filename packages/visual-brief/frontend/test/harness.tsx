@@ -126,6 +126,7 @@ export function click(id: string): void {
 export function useHarness(): void {
   beforeEach(() => {
     window.sessionStorage.clear();
+    window.history.replaceState(null, "");
     pendingTransitions = [];
   });
 

@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import type { BriefDocument, Turn } from "./document";
 import { STALL_POLLS, createPending, locateSubmissions } from "./pending";
-import { saveSentRecords, type SentRecord } from "./session-store";
+import {
+  readSentRecords,
+  saveSentRecords,
+  type SentRecord,
+} from "./session-store";
 
 const ITEM = "u/l/i";
 const SENT_AT = "2026-07-27T09:00:00.000Z";
@@ -70,7 +74,10 @@ function sent(text: string, at: string = SENT_AT, loads = 0): SentRecord {
   return { rowId: ITEM, anchorId: ITEM, text, at, loads };
 }
 
-beforeEach(() => window.sessionStorage.clear());
+beforeEach(() => {
+  window.sessionStorage.clear();
+  window.history.replaceState(null, "");
+});
 
 describe("finding what a sent message became", () => {
   it("matches the queue line's words and timestamp", () => {
@@ -212,12 +219,6 @@ describe("the sign a page load carries over", () => {
     ]);
   });
 
-  it("forgets a submission no page load ever found", () => {
-    saveSentRecords([sent("Why this way?", SENT_AT, 3)]);
-
-    expect(createPending(briefWith([])).at(ITEM)).toEqual([]);
-  });
-
   it("carries an unfound submission across loads, counting them", () => {
     saveSentRecords([sent("Why this way?")]);
 
@@ -229,6 +230,25 @@ describe("the sign a page load carries over", () => {
     second.tick();
 
     expect(second.at(ITEM)[0]?.stalled).toBe(true);
+  });
+
+  it("never expires a submission by reload count", () => {
+    // Publishes the human did not cause reload the page; however many arrive
+    // before the fold, the waiting sign and the way back to the conversation
+    // must both survive until the message actually appears.
+    saveSentRecords([sent("Why this way?", SENT_AT, 40)]);
+
+    const pending = createPending(briefWith([]));
+
+    expect(pending.at(ITEM)).toHaveLength(1);
+    expect(readSentRecords()).toHaveLength(1);
+
+    // And the moment it appears, it retires and lands as usual.
+    const found = createPending(
+      briefWith([["q-late", [asked("Why this way?", SENT_AT)]]]),
+    );
+    expect(found.at(ITEM)).toHaveLength(0);
+    expect(found.landing()).toBe(`${ITEM}#q-late`);
   });
 
   it("has nothing to say when there is no document to match against", () => {

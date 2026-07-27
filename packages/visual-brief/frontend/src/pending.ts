@@ -28,8 +28,6 @@ import {
 /** Polls a submission survives after a page load before it stops spinning. */
 export const STALL_POLLS = 3;
 
-/** Page loads a submission survives unfound before it is forgotten. */
-export const MAX_LOADS = 3;
 
 /** What the page says about one message it is still waiting on. */
 export interface PendingNote {
@@ -174,9 +172,11 @@ export function createPending(brief: BriefDocument | null = null): Pending {
   const located = brief === null
     ? stored.map(() => null)
     : locateSubmissions(brief, stored);
-  const survivors = stored.filter(
-    (record, index) => located[index] === null && record.loads < MAX_LOADS,
-  );
+  // A record is never expired by reload count: publishes the human did not
+  // cause must not delete their waiting sign or their way back to the
+  // conversation when it finally appears. The loads counter only feeds the
+  // visible stalled degradation.
+  const survivors = stored.filter((_, index) => located[index] === null);
   const carried = survivors.map((record) => ({
     ...record,
     loads: record.loads + 1,

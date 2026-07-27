@@ -36,7 +36,10 @@ function recorder(accepted = true, timestamp = ""): {
   };
 }
 
-beforeEach(() => window.sessionStorage.clear());
+beforeEach(() => {
+  window.sessionStorage.clear();
+  window.history.replaceState(null, "");
+});
 
 describe("composition", () => {
   it("always carries a target, and sends what was written there", async () => {

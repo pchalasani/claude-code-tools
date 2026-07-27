@@ -181,7 +181,11 @@ export function healedStorageKey(): string {
  * @returns The remembered submissions, oldest first.
  */
 export function readSentRecords(): SentRecord[] {
-  const raw = readItem(sentStorageKey());
+  // Two stores that fail independently, exactly as for healed generations:
+  // a browser that silently takes session storage away must not also take
+  // the human's waiting sign and their way back to the conversation.
+  const key = sentStorageKey();
+  const raw = readItem(key) ?? readHistoryItem(key);
   if (raw === null || raw === "") {
     return [];
   }
@@ -199,7 +203,10 @@ export function readSentRecords(): SentRecord[] {
  * @param records - The submissions to carry into the next page load.
  */
 export function saveSentRecords(records: SentRecord[]): void {
-  writeItem(sentStorageKey(), JSON.stringify(records));
+  const key = sentStorageKey();
+  const value = JSON.stringify(records);
+  writeItem(key, value);
+  writeHistoryItem(key, value);
 }
 
 /**
