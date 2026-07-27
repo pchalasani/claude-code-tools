@@ -282,3 +282,100 @@ describe("the painted page", () => {
   });
 });
 
+describe("the Now panel", () => {
+  /** A brief whose middle update is the Now panel. */
+  function briefWithNow() {
+    const brief = sampleBrief();
+    brief.updates.splice(1, 0, {
+      id: "now",
+      timestamp: "2026-07-27 14:00",
+      headline: "Where things stand",
+      summary: "Current state, rewritten in place.",
+      lanes: [
+        {
+          id: "working",
+          name: "Working now",
+          items: [
+            {
+              id: "cursor",
+              glance: "The cursor is visible",
+              explanation: "Selection is painted by the application.",
+              trust: "verified-by-me",
+            },
+          ],
+        },
+      ],
+    });
+    return brief;
+  }
+
+  it("pins the Now update above history wherever it sits in the file", () => {
+    mount(briefWithNow());
+
+    const painted = [...document.querySelectorAll("[data-row-kind='update']")]
+      .map((row) => row.getAttribute("data-row-id"));
+    expect(painted[0]).toBe("now");
+  });
+
+  it("labels the history below it as earlier updates", () => {
+    mount(briefWithNow());
+
+    const heading = document.querySelector(".earlier-heading");
+    expect(heading?.textContent).toBe("Earlier updates");
+    expect(
+      heading?.nextElementSibling?.getAttribute("data-row-id"),
+    ).toBe("newest");
+  });
+
+  it("shows no earlier-updates label without a Now panel", () => {
+    mount();
+
+    expect(document.querySelector(".earlier-heading")).toBeNull();
+  });
+
+  it("drops the label when search leaves no earlier update visible", () => {
+    mount(briefWithNow());
+    press("/");
+    const box = document.querySelector<HTMLInputElement>("#brief-search");
+    if (box === null) {
+      throw new Error("no search box");
+    }
+
+    // Matches only the Now panel's item, so no history survives the filter.
+    box.value = "painted by the application";
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(document.querySelector(".earlier-heading")).toBeNull();
+
+    // Matches nothing at all: still no orphaned divider.
+    box.value = "matches nothing anywhere";
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(document.querySelector(".earlier-heading")).toBeNull();
+
+    // Clearing the search brings the divider back.
+    box.value = "";
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(document.querySelector(".earlier-heading")).not.toBeNull();
+  });
+
+  it("opens the Now panel and its lanes so state reads without a click", () => {
+    mount(briefWithNow());
+
+    expect(paintedOpen("now")).toBe("true");
+    expect(paintedOpen("now/working")).toBe("true");
+    // History without an awaiting question starts folded; "newest" still
+    // opens itself because it holds an unanswered thread, which wins.
+    expect(paintedOpen("older")).toBe("false");
+    expect(paintedOpen("newest")).toBe("true");
+  });
+
+  it("reads as current state, not as a dated event", () => {
+    mount(briefWithNow());
+    const head = document.querySelector('[data-row-id="now"] .row-head');
+
+    expect(head?.querySelector(".now-mark")?.textContent).toBe("Now");
+    expect(head?.querySelector(".update-time")?.textContent).toBe(
+      "as of 2026-07-27 14:00",
+    );
+  });
+});
+

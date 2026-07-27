@@ -23,11 +23,11 @@ let pendingTransitions: (() => void)[] = [];
  *
  * @returns The element the application was mounted into.
  */
-export function mount(): HTMLElement {
+export function mount(brief = sampleBrief()): HTMLElement {
   const container = document.createElement("div");
   document.body.append(container);
   host = container;
-  dispose = render(() => <App brief={sampleBrief()} />, container);
+  dispose = render(() => <App brief={brief} />, container);
   return container;
 }
 

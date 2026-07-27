@@ -89,6 +89,45 @@
   margin-top: 1.5rem;
 }
 
+/* The Now panel: current state, not history. One panel on the page carries
+   this treatment, so the reader's eye lands on where things stand before any
+   dated update. */
+.row-update[data-row-id="now"] {
+  background: color-mix(in srgb, var(--select) 6%, var(--ground));
+  border: 1px solid color-mix(in srgb, var(--select) 35%, var(--rule));
+  border-radius: var(--radius);
+  margin-top: 1.1rem;
+}
+
+.row-update[data-row-id="now"] > .row-head {
+  background: color-mix(in srgb, var(--select) 10%, var(--ground-2));
+}
+
+.now-mark {
+  background: var(--select);
+  border-radius: var(--radius);
+  color: var(--ground);
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 0.1rem 0.45rem;
+  text-transform: uppercase;
+}
+
+.earlier-heading {
+  border-top: 1px solid var(--rule-strong);
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  margin: 2.6rem 0 -0.6rem;
+  padding-top: 0.8rem;
+  text-transform: uppercase;
+}
+
 .row-update > .row-head {
   background: var(--ground-2);
 }

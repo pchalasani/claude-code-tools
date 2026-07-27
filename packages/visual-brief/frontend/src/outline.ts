@@ -19,6 +19,16 @@ import {
   type Update,
 } from "./document";
 
+/**
+ * Reserved update id marking the one "Now" panel.
+ *
+ * The update carrying this id is not history: it states where things stand
+ * at this moment, is rewritten in place on every publish, and is pinned above
+ * the dated updates. Structurally it is an ordinary update, so anchors,
+ * question threads and awaiting counts work on it unchanged.
+ */
+export const NOW_UPDATE_ID = "now";
+
 /** What kind of thing a row stands for. */
 export type RowKind = "update" | "lane" | "item" | "thread";
 
@@ -49,13 +59,18 @@ export interface Row {
 }
 
 /**
- * Order updates newest first.
+ * Order updates for the page: the Now panel first, then newest first.
  *
  * @param brief - A delivered document.
- * @returns The updates with the newest one first.
+ * @returns The Now update, if present, followed by history newest first.
  */
 export function orderedUpdates(brief: BriefDocument): Update[] {
-  return [...brief.updates].reverse();
+  const reversed = [...brief.updates].reverse();
+  const now = reversed.find((update) => update.id === NOW_UPDATE_ID);
+  if (now === undefined) {
+    return reversed;
+  }
+  return [now, ...reversed.filter((update) => update !== now)];
 }
 
 /**
@@ -177,10 +192,12 @@ export function outline(brief: BriefDocument): Row[] {
 /**
  * Choose which rows start out expanded.
  *
- * The newest update opens, lanes that asked to be open or that hold an
- * unanswered question open, and anything awaiting an answer opens itself all
- * the way down. Everything else starts folded, because this page is meant to
- * be scanned before it is read.
+ * The first update on the page opens — the Now panel when one exists,
+ * otherwise the newest update — and the Now panel's lanes open with it,
+ * because current state must be readable without a click. Lanes that asked
+ * to be open or that hold an unanswered question open too, and anything
+ * awaiting an answer opens itself all the way down. Everything else starts
+ * folded, because this page is meant to be scanned before it is read.
  *
  * @param brief - A delivered document.
  * @param rows - The document's rows.
@@ -191,9 +208,14 @@ export function defaultOpenIds(
   rows: Row[],
 ): Set<string> {
   const open = new Set<string>();
-  const newest = orderedUpdates(brief)[0];
-  if (newest !== undefined) {
-    open.add(newest.id);
+  const first = orderedUpdates(brief)[0];
+  if (first !== undefined) {
+    open.add(first.id);
+    if (first.id === NOW_UPDATE_ID) {
+      for (const lane of first.lanes ?? []) {
+        open.add(laneRowId(first.id, lane));
+      }
+    }
   }
   for (const update of brief.updates ?? []) {
     for (const lane of update.lanes ?? []) {

@@ -1,4 +1,4 @@
-import { For, createMemo, onCleanup, onMount, type JSX } from "solid-js";
+import { For, Show, createMemo, onCleanup, onMount, type JSX } from "solid-js";
 
 import {
   TRUST_LABELS,
@@ -7,7 +7,7 @@ import {
   type BriefDocument,
 } from "./document";
 import { TrustChip } from "./item-view";
-import { orderedUpdates } from "./outline";
+import { NOW_UPDATE_ID, orderedUpdates } from "./outline";
 import { HelpOverlay, KeyBar, SearchOverlay } from "./overlays";
 import { VisibleRow } from "./row-shell";
 import { createBriefState, type BriefState } from "./state";
@@ -25,16 +25,32 @@ export function App(props: { brief: BriefDocument }): JSX.Element {
   const onKey = (event: KeyboardEvent): void => state.handleKey(event);
   onMount(() => document.addEventListener("keydown", onKey));
   onCleanup(() => document.removeEventListener("keydown", onKey));
+  const ordered = createMemo(() => orderedUpdates(props.brief));
+  // The divider only earns its place when a Now panel leads AND at least one
+  // dated update survives the search filter; otherwise it would label
+  // nothing.
+  const earlierVisible = (): boolean =>
+    ordered()[0]?.id === NOW_UPDATE_ID &&
+    ordered()
+      .slice(1)
+      .some((update) => state.nav.isVisible(update.id));
   return (
     <div class="shell" data-mounted="true">
       <StructureMap state={state} />
       <main class="stream" onClick={(event) => selectFromClick(state, event)}>
         <Masthead state={state} />
-        <For each={orderedUpdates(props.brief)}>
-          {(update) => (
-            <VisibleRow state={state} id={update.id}>
-              {(row) => <UpdateView state={state} row={row} update={update} />}
-            </VisibleRow>
+        <For each={ordered()}>
+          {(update, index) => (
+            <>
+              <Show when={index() === 1 && earlierVisible()}>
+                <h2 class="earlier-heading">Earlier updates</h2>
+              </Show>
+              <VisibleRow state={state} id={update.id}>
+                {(row) => (
+                  <UpdateView state={state} row={row} update={update} />
+                )}
+              </VisibleRow>
+            </>
           )}
         </For>
       </main>

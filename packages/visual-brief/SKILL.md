@@ -32,16 +32,27 @@ and place each piece at the depth it belongs:
 Length costs you nothing here. A page can be long without being tiring, because
 what is collapsed is invisible until wanted. That is the whole reason to use one.
 
-## What goes at the top
+## The Now panel
 
-The top of the page answers the only questions the human actually has:
+The page distinguishes current state from history, and you maintain that
+distinction:
+
+- **One update carries the reserved id `now`.** It is the Now panel: pinned
+  above everything, visually distinct, its lanes open by default. **Rewrite it
+  in place on every publish** — same id, fresh content, fresh `timestamp`
+  (shown as "as of ..."). Never append a second one, and never leave stale
+  claims in it: it must be true at the moment it is rendered.
+- **Every other update is history.** Append them, dated, and never edit them
+  after the fact. The page shows them collapsed under "Earlier updates".
+
+The Now panel answers the only questions the human actually has:
 
 1. **What works now** — the features they asked for, and whether each one is
    usable yet.
 2. **What is coming next.**
 3. **What needs a decision from them.**
 
-That is the headline and the first lane. Nothing else competes with it.
+Nothing else competes with it.
 
 **Your process is not news.** Test counts, review rounds, repair iterations,
 lint results, how many findings a reviewer returned, how many commits it took —
@@ -101,8 +112,9 @@ Each lane has `id`, `name`, `items`. Each item has a stable `id`, `glance`,
 from your belief.
 
 Append each new update; the page shows newest first. Keep ids unique within
-their collection, with no whitespace, `/` or `#`. Re-render after every change;
-the open page notices and reloads itself.
+their collection, with no whitespace, `/` or `#`. Re-render after every
+change; the
+open page notices and reloads itself.
 
 ## Answering a question
 
