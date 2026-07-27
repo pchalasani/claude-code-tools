@@ -144,17 +144,28 @@ round cap is still wise as a backstop.
 ### The deterministic detector
 
 remove-ai-patterns includes a JSON-emitting detector that needs only a
-`node` binary:
+`node` binary. Resolve it by the skill's absolute path (the command runs
+from your working directory, so a bare relative path fails); under a
+Claude Code plugin install that is `${CLAUDE_PLUGIN_ROOT}`:
 
 ```bash
-node <skill-dir>/scripts/detect.js FILE
+node "${CLAUDE_PLUGIN_ROOT}/skills/remove-ai-patterns/scripts/detect.js" FILE
+
+# technical documentation: suppress checks that are valid in technical prose
+node "${CLAUDE_PLUGIN_ROOT}/skills/remove-ai-patterns/scripts/detect.js" FILE technical
 ```
 
-It reports an overall score, a label, a document classification, and
-per-issue findings with severities and suggestions. For "iterate until
-clean" requests the agent loops revise → detect until findings stop
-improving; the detector is the objective stopping criterion, so the loop
-cannot argue with itself about whether the text is done.
+The optional second argument is the context mode (`general` (default),
+`technical`, `marketing`, `personal`). It reports an overall score, a
+label, a `document_classification`, and per-issue findings with
+severities and suggestions. For "iterate until clean" requests the agent
+loops revise → detect until findings stop improving; the detector is the
+objective stopping criterion, so the loop cannot argue with itself about
+whether the text is done. One caveat: on empty, very short (< ~10 words),
+or very long (> 10,000 words) input the detector returns
+`document_classification: "UNSCORED"` with no issues, which is a refused
+scan rather than a clean document, so an "iterate to clean" loop should
+require a scored result and split or trim over-long files.
 
 ## Updating the vendored catalogs
 

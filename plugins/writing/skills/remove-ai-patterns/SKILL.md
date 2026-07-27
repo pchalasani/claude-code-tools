@@ -25,17 +25,38 @@ vendored at `upstream/` inside this skill directory (commit recorded in
    edit-in-place for files, optional voice profile, and an
    iterate-to-convergence pass.
 2. For a deterministic, machine-checkable audit, run the bundled detector
-   (requires Node.js, no npm install needed):
+   (requires Node.js, no npm install needed). Resolve it by the skill's own
+   absolute path, NOT a bare relative path: the command runs from the
+   user's current working directory, so `node scripts/detect.js` would fail
+   with `MODULE_NOT_FOUND`. When installed as a Claude Code plugin, use
+   `${CLAUDE_PLUGIN_ROOT}`; otherwise substitute this skill's directory:
 
    ```bash
-   node scripts/detect.js FILE
+   node "${CLAUDE_PLUGIN_ROOT}/skills/remove-ai-patterns/scripts/detect.js" FILE
+   # or, for a direct (non-plugin) skill install, the absolute path to it:
+   #   node /abs/path/to/remove-ai-patterns/scripts/detect.js FILE
    ```
 
-   It prints JSON: an overall score, a label, a document classification with
-   class probabilities, and per-issue findings (`type`, matched `text`,
+   Pass a context mode as the second argument when the text is technical
+   documentation, so the detector suppresses checks that are legitimate in
+   technical prose (matches the skill's `technical` voice profile):
+
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/skills/remove-ai-patterns/scripts/detect.js" FILE technical
+   ```
+
+   Valid modes: `general` (default), `technical`, `marketing`, `personal`.
+
+   It prints JSON: an overall `score`, a `label`, a `document_classification`
+   with class probabilities, and per-issue findings (`type`, matched `text`,
    `severity`, `suggestion`). For "iterate until clean/green" requests, loop
-   revise -> detect until the score/label stops improving or issues hit zero;
-   the detector is the objective stopping criterion.
+   revise -> detect until the score/label stops improving or issues hit zero.
+   IMPORTANT: only treat a zero-issue result as clean when it is actually
+   scored. On empty input, under ~10 words, or over 10,000 words the detector
+   returns `document_classification: "UNSCORED"` with an empty `issues` list;
+   that is a refused scan, not a clean document, so convergence must require
+   a scored result (`document_classification` other than `"UNSCORED"`), not
+   merely an empty issue list. Split or trim over-long inputs so they score.
 3. Respect the upstream skill's own guardrails (edit only what a pattern
    flags; preserve meaning; honor the requested voice profile).
 
