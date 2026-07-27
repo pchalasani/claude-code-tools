@@ -152,6 +152,74 @@ describe("jumping by label", () => {
     expect(went).toEqual([]);
   });
 
+  it("stays gone once the page has moved on, even if it moves back", () => {
+    // A row opened with the mouse and shut again paints exactly the list it
+    // painted before. If that were enough to bring the labels back, the mode
+    // would be on with nothing on screen saying so, and every key — ``?``
+    // included — would disappear into it.
+    let painted = someRows(3);
+    const went: string[] = [];
+    const hints = createHints({
+      rows: () => painted,
+      select: (id) => went.push(id),
+      keys: "asd",
+    });
+    hints.enter();
+
+    painted = someRows(8);
+    expect(hints.active()).toBe(false);
+    painted = someRows(3);
+
+    expect(hints.active()).toBe(false);
+    expect(hints.labelFor(painted[0]?.id ?? "")).toBeNull();
+    expect(hints.handleKey("a")).toBe(false);
+    expect(went).toEqual([]);
+  });
+
+  it("does not revive a half-typed label when the rows come back", () => {
+    // Two-key labels make the hazard worse: the second key would land on a
+    // page the human has since changed, and the cursor would leave for
+    // somewhere nobody chose.
+    let painted = someRows(5);
+    const went: string[] = [];
+    const hints = createHints({
+      rows: () => painted,
+      select: (id) => went.push(id),
+      keys: "asd",
+    });
+    hints.enter();
+    hints.handleKey("a");
+    expect(hints.typed()).toBe("a");
+
+    painted = someRows(8);
+    expect(hints.active()).toBe(false);
+    painted = someRows(5);
+
+    expect(hints.active()).toBe(false);
+    expect(hints.labelFor(painted[1]?.id ?? "")).toBeNull();
+    expect(hints.handleKey("s")).toBe(false);
+    expect(went).toEqual([]);
+  });
+
+  it("labels the page again when it is asked for again", () => {
+    // Going stale is permanent, but only until the human asks for the labels
+    // afresh: the key that turns the mode on has to keep working.
+    let painted = someRows(3);
+    const hints = createHints({
+      rows: () => painted,
+      select: () => undefined,
+      keys: "asd",
+    });
+    hints.enter();
+    painted = someRows(8);
+    expect(hints.active()).toBe(false);
+
+    hints.enter();
+
+    expect(hints.active()).toBe(true);
+    expect(painted.every((row) => hints.labelFor(row.id) !== null)).toBe(true);
+  });
+
   it("keeps the labels up while the page stays as it was", () => {
     const { rows, hints } = layer(5);
 

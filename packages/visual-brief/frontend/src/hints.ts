@@ -15,6 +15,12 @@
  * with the mouse, new content arriving — the labels go away and the keyboard
  * goes back to meaning what it usually means, because half a page of labels is
  * worse than none.
+ *
+ * Going away is permanent, not a state the page can wander back into. A row
+ * opened with the mouse and then shut again paints the same list it painted
+ * before, and if that were enough to bring the labels back the human would be
+ * holding a keyboard that had silently stopped answering — including ``?``,
+ * the one key that would have told them Escape was the way out.
  */
 
 import { createSignal, type Accessor } from "solid-js";
@@ -151,21 +157,30 @@ export function createHints(deps: {
   // the same painted page is the same array: the check is an identity test on
   // every read and a walk only when the page has actually been repainted.
   let checked: { rows: Row[]; current: boolean } | null = null;
+  // Set once the page has moved on, and never cleared except by entering or
+  // leaving the mode. A plain flag rather than a signal because it is written
+  // from inside ``labels``, which runs while the page is being painted.
+  let stale = false;
 
   const labels = (): ReadonlyMap<string, string> => {
     const taken = snapshot();
-    if (taken === null) {
+    if (taken === null || stale) {
       return NO_LABELS;
     }
     const rows = deps.rows();
     if (checked === null || checked.rows !== rows) {
       checked = { rows, current: samePage(rows, taken.ids) };
     }
-    return checked.current ? taken.labels : NO_LABELS;
+    if (!checked.current) {
+      stale = true;
+      return NO_LABELS;
+    }
+    return taken.labels;
   };
 
   const leave = (): void => {
     checked = null;
+    stale = false;
     setSnapshot(null);
     setTyped("");
   };
@@ -174,6 +189,7 @@ export function createHints(deps: {
     const rows = deps.rows();
     setTyped("");
     checked = { rows, current: true };
+    stale = false;
     setSnapshot({
       ids: rows.map((row) => row.id),
       labels: labelRows(rows, keys),

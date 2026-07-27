@@ -217,7 +217,7 @@ def test_post_ask_records_optional_parent_id(
         "parent_id": "q-malformed-unsupported",
     }
 
-    status, _ = request(
+    status, body = request(
         server,
         "POST",
         "/r/demo-run/ask",
@@ -232,6 +232,12 @@ def test_post_ask_records_optional_parent_id(
     assert record["anchor_id"] == payload["anchor_id"]
     assert record["text"] == payload["text"]
     assert record["parent_id"] == payload["parent_id"]
+    # The page recognises its own message by those words stamped at that
+    # instant, so the instant it is told about has to be the one written to
+    # the queue. Report a different one and the waiting sign never clears.
+    accepted = json.loads(body)
+    assert accepted["status"] == "queued"
+    assert accepted["timestamp"] == record["timestamp"]
     assert record["type"] == "question"
     assert "timestamp" in record
 

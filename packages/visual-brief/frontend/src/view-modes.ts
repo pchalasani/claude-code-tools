@@ -47,7 +47,13 @@ export interface ViewModeDeps {
   cursorId: () => string | null;
   /** Put the cursor on a row as part of a change already being animated. */
   place: (id: string) => void;
-  /** Told about each row that has just been folded away. */
+  /**
+   * Told about each row that has just been taken off the page.
+   *
+   * Folding a row and filtering it away are the same event to anything
+   * rendered inside it: either way it stops being painted, and whatever was
+   * holding on to it has to let go.
+   */
   onFold: (id: string) => void;
 }
 
@@ -88,7 +94,8 @@ export function createViewModes(deps: ViewModeDeps): ViewModes {
       setChats(false);
       return;
     }
-    const wanted = chatRows(filterRows(deps.rows, deps.query()));
+    const showing = filterRows(deps.rows, deps.query());
+    const wanted = chatRows(showing);
     const here = deps.cursorId();
     // The view is a list of conversations, so the cursor lands on one: the
     // one it was already in, or the first the human wrote.
@@ -99,6 +106,17 @@ export function createViewModes(deps: ViewModeDeps): ViewModes {
       // Nothing to show. Entering an empty view would take the cursor off the
       // page and leave the human with a blank screen and no way back.
       return;
+    }
+    // Everything this view is about to hide is told so before it happens. A
+    // composer left pointed at a row the filter removes is a box nobody can
+    // see holding text nobody can read, and the next Escape would close it
+    // instead of leaving the view — throwing the draft away silently and
+    // looking, from the outside, like a key that did nothing.
+    const kept = new Set(wanted.map((row) => row.id));
+    for (const row of showing) {
+      if (!kept.has(row.id)) {
+        deps.onFold(row.id);
+      }
     }
     const opened = new Set(deps.open());
     for (const row of wanted) {

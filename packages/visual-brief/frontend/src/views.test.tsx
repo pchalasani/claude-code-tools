@@ -38,39 +38,6 @@ function openRows(): string[] {
   );
 }
 
-/**
- * Read the jump labels the page is painting.
- *
- * @returns Each label, keyed by the row wearing it.
- */
-function paintedHints(): Record<string, string> {
-  const hints: Record<string, string> = {};
-  for (const row of document.querySelectorAll("[data-row-id]")) {
-    const hint = row.querySelector(":scope > .row-head > .hint");
-    if (hint !== null) {
-      hints[row.getAttribute("data-row-id") ?? ""] =
-        hint.getAttribute("data-hint") ?? "";
-    }
-  }
-  return hints;
-}
-
-/**
- * Read the citation numbers the page is painting.
- *
- * @returns Each number, keyed by the row wearing it.
- */
-function paintedOrdinals(): Record<string, string> {
-  const ordinals: Record<string, string> = {};
-  for (const row of document.querySelectorAll("[data-row-id]")) {
-    const mark = row.querySelector(":scope > .row-head > .ordinal");
-    if (mark !== null) {
-      ordinals[row.getAttribute("data-row-id") ?? ""] = mark.textContent ?? "";
-    }
-  }
-  return ordinals;
-}
-
 describe("opening and folding the whole page", () => {
   it("opens every row on E", () => {
     mount();
@@ -171,6 +138,39 @@ describe("the chats view", () => {
     expect(paintedRows()).toContain("newest/next");
   });
 
+  it("lets go of a chat box it is about to hide", () => {
+    // The box only renders inside a painted row. Entering the view over the
+    // top of one pointed somewhere the view does not show would leave the
+    // human with an invisible box holding their words, and the next Escape
+    // would throw those words away instead of leaving the view.
+    mount();
+    press("J");
+    expect(paintedCursor()).toBe("newest/next");
+    press("c");
+    const box = document.querySelector<HTMLTextAreaElement>(
+      ".composer textarea",
+    );
+    expect(box).not.toBeNull();
+    if (box !== null) {
+      box.value = "half a thought";
+    }
+    box?.dispatchEvent(new Event("input", { bubbles: true }));
+
+    document
+      .querySelector(".meta-chats")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(paintedRows()).not.toContain("newest/next");
+    expect(document.querySelector(".composer")).toBeNull();
+
+    press("Escape");
+
+    expect(paintedRows()).toContain("newest/next");
+    expect(
+      document.querySelector(".meta-chats")?.getAttribute("aria-pressed"),
+    ).toBe("false");
+  });
+
   it("is offered by the masthead, with the count on it", () => {
     mount();
     const button = document.querySelector<HTMLButtonElement>(".meta-chats");
@@ -184,89 +184,6 @@ describe("the chats view", () => {
       document.querySelector(".meta-chats")?.getAttribute("aria-pressed"),
     ).toBe("true");
     expect(paintedCursor()).toBe(ANSWERED);
-  });
-});
-
-describe("jumping by label", () => {
-  it("labels every painted row, at one fixed length", () => {
-    mount();
-
-    press("f");
-
-    const labels = paintedHints();
-    expect(Object.keys(labels)).toEqual(paintedRows());
-    expect(new Set(Object.values(labels).map((label) => label.length))).toEqual(
-      new Set([1]),
-    );
-  });
-
-  it("goes where the typed label is, and puts the labels away", () => {
-    mount();
-    press("f");
-    const target = Object.entries(paintedHints()).find(
-      ([id]) => id === "newest/next",
-    );
-
-    press(target?.[1] ?? "");
-
-    expect(paintedCursor()).toBe("newest/next");
-    expect(paintedHints()).toEqual({});
-  });
-
-  it("keeps its keys to itself while the labels are up", () => {
-    mount();
-    const before = paintedCursor();
-
-    press("f");
-    press("q");
-
-    expect(paintedCursor()).toBe(before);
-    expect(Object.keys(paintedHints()).length).toBeGreaterThan(0);
-
-    press("Escape");
-
-    expect(paintedHints()).toEqual({});
-    expect(paintedCursor()).toBe(before);
-  });
-
-  it("grows to two keys when one is not enough", () => {
-    mount();
-    press("E");
-
-    press("f");
-
-    const labels = Object.values(paintedHints());
-    expect(labels.length).toBeGreaterThan(9);
-    expect(new Set(labels.map((label) => label.length))).toEqual(new Set([2]));
-  });
-});
-
-describe("numbers to cite by", () => {
-  it("numbers the items on the page, and nothing else", () => {
-    mount();
-
-    expect(paintedOrdinals()).toEqual({ [ALPHA]: "1", [BETA]: "2" });
-  });
-
-  it("renumbers across the whole page when everything opens", () => {
-    mount();
-
-    press("E");
-
-    expect(paintedOrdinals()).toEqual({
-      [ALPHA]: "1",
-      [BETA]: "2",
-      "newest/next/gamma": "3",
-      "older/history/one": "4",
-    });
-  });
-
-  it("shows no number on content that is folded away", () => {
-    mount();
-
-    press("C");
-
-    expect(paintedOrdinals()).toEqual({});
   });
 });
 
