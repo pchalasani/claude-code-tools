@@ -37,9 +37,10 @@ vendored at `upstream/` inside this skill directory (commit recorded in
    ```bash
    # Claude Code plugin install:
    SKILL_DIR="${CLAUDE_PLUGIN_ROOT}/skills/remove-ai-patterns"
-   # Codex plugin or direct skill install: use the absolute path of the
-   # directory this SKILL.md lives in, e.g.
-   #   SKILL_DIR="$HOME/.codex/plugins/.../plugins/writing/skills/remove-ai-patterns"
+   # Codex plugin or direct skill install: the absolute path of the
+   # directory this SKILL.md lives in (it ends in skills/remove-ai-patterns;
+   # the plugin root already is the writing plugin, so there is no extra
+   # plugins/writing segment). Direct installs are simpler, e.g.
    #   SKILL_DIR="$HOME/.local/share/agent-skills/remove-ai-patterns"
 
    node "$SKILL_DIR/scripts/detect.js" FILE
@@ -47,7 +48,9 @@ vendored at `upstream/` inside this skill directory (commit recorded in
 
    Pass a context mode as the second argument when the text is technical
    documentation, so the detector suppresses checks that are legitimate in
-   technical prose (matches the skill's `technical` voice profile):
+   technical prose. (This sets the detector's `contextMode`, which is a
+   separate axis from the skill's voice profile; it does not select the
+   technical voice.)
 
    ```bash
    node "$SKILL_DIR/scripts/detect.js" FILE technical
@@ -58,7 +61,9 @@ vendored at `upstream/` inside this skill directory (commit recorded in
    It prints JSON: an overall `score`, a `label`, a `document_classification`
    with class probabilities, and per-issue findings (`type`, matched `text`,
    `severity`, `suggestion`). For "iterate until clean/green" requests, loop
-   revise -> detect until the score/label stops improving or issues hit zero.
+   revise -> detect until the score/label stops improving or a scored
+   result has zero issues. Respect the upstream skill's iterate cap of 2
+   passes (see `upstream/SKILL.md`); do not invent a larger limit.
    IMPORTANT: only treat a zero-issue result as clean when it is actually
    scored. On empty input, under ~10 words, or over 10,000 words the detector
    returns `document_classification: "UNSCORED"` with an empty `issues` list;
