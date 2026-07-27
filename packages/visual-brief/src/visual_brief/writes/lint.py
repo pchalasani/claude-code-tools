@@ -32,11 +32,17 @@ _NUMBERED_MARKER = re.compile(r"(?<![\w.])\d{1,3}[.)]\s")
 _BULLET_MARKER = re.compile(r"(?m)^[ \t]*[-*•]\s")
 
 
-def lint_document(data: Any) -> list[str]:
+def lint_document(
+    data: Any,
+    settled_pairs: frozenset[tuple[str, str]] = frozenset(),
+) -> list[str]:
     """Check one document for mechanical content faults.
 
     Args:
         data: A parsed content document, before or after normalization.
+        settled_pairs: The anchor path and question text of every legacy
+            pair whose own queue line still matches it. Those pairs are
+            deliberately left as they are, so nothing is said about them.
 
     Returns:
         One message per fault, in document order.
@@ -59,7 +65,9 @@ def lint_document(data: Any) -> list[str]:
             if not isinstance(lane_id, str):
                 continue
             lane_path = f"{update_id}/{lane_id}"
-            warnings.extend(_lint_threads(lane.get("questions"), lane_path))
+            warnings.extend(
+                _lint_threads(lane.get("questions"), lane_path, settled_pairs)
+            )
             items = lane.get("items")
             if not isinstance(items, list):
                 continue
@@ -69,7 +77,9 @@ def lint_document(data: Any) -> list[str]:
                 item_id = item.get("id")
                 if not isinstance(item_id, str):
                     continue
-                warnings.extend(_lint_item(item, f"{lane_path}/{item_id}"))
+                warnings.extend(
+                    _lint_item(item, f"{lane_path}/{item_id}", settled_pairs)
+                )
     return warnings
 
 
@@ -83,7 +93,10 @@ def lint_run(run_dir: Path, data: Any) -> list[str]:
     Returns:
         Every warning, document faults first.
     """
-    return [*lint_document(data), *_lint_queue(run_dir, data)]
+    return [
+        *lint_document(data, _settled_legacy_pairs(run_dir, data)),
+        *_lint_queue(run_dir, data),
+    ]
 
 
 def report_lint(run_dir: Path, data: Any) -> list[str]:
@@ -123,7 +136,11 @@ def lint_command(runs_root: Path, run_id: str | None, strict: bool) -> int:
     return 2 if strict else 0
 
 
-def _lint_item(item: dict[str, Any], path: str) -> list[str]:
+def _lint_item(
+    item: dict[str, Any],
+    path: str,
+    settled_pairs: frozenset[tuple[str, str]] = frozenset(),
+) -> list[str]:
     """Check one item's prose fields and its conversations."""
     warnings: list[str] = []
     glance = item.get("glance")
@@ -142,21 +159,34 @@ def _lint_item(item: dict[str, Any], path: str) -> list[str]:
                 f"{path}: {field} holds an enumeration; N things are N items, "
                 "N table rows or N forensic notes, not one crammed paragraph"
             )
-    warnings.extend(_lint_threads(item.get("questions"), path))
+    warnings.extend(_lint_threads(item.get("questions"), path, settled_pairs))
     return warnings
 
 
-def _lint_threads(questions: Any, path: str) -> list[str]:
-    """Check the conversations hanging from one lane or item."""
+def _lint_threads(
+    questions: Any,
+    path: str,
+    settled_pairs: frozenset[tuple[str, str]] = frozenset(),
+) -> list[str]:
+    """Check the conversations hanging from one lane or item.
+
+    A legacy pair is worth naming only while converting it is still safe.
+    The one conversion that never misdates a pair carries the instant from
+    the pair's own queue line, so a pair that line still matches is left
+    alone on purpose and says nothing here.
+    """
     if not isinstance(questions, list):
         return []
     warnings: list[str] = []
     for entry in questions:
         if is_legacy_pair(entry):
+            if (path, entry.get("question")) in settled_pairs:
+                continue
             warnings.append(
                 f"{path}: a legacy {{question, answer}} pair; write a thread "
-                "of turns — pairs are filed at the 1970 epoch and cannot "
-                "match their queue line"
+                "of turns carrying the instant the question was asked at — "
+                "take it from the pair's own queue line, never from the "
+                "clock and never the 1970 epoch an undated pair lands at"
             )
             continue
         if not isinstance(entry, dict):
@@ -200,6 +230,49 @@ def _lint_turns(turns: list[Any], path: str) -> list[str]:
                 "1970 epoch; carry the real timestamp of the turn"
             )
     return warnings
+
+
+def _settled_legacy_pairs(
+    run_dir: Path,
+    data: Any,
+) -> frozenset[tuple[str, str]]:
+    """Name the legacy pairs whose own queue line still matches them.
+
+    Such a pair is the one shape a verb deliberately preserves: rewriting
+    it moves its instant off the line it was asked on, the accounting stops
+    seeing that line as folded, and the question returns as a phantom
+    duplicate. Telling the agent to convert it would ask for exactly that.
+
+    Args:
+        run_dir: The run directory.
+        data: The document as it now stands on disk.
+
+    Returns:
+        The anchor path and question text of every matched pair.
+    """
+    records = queue_records(run_dir)
+    if not records:
+        return frozenset()
+    legacy_unknown_ids: set[str] = set()
+    sources: dict[str, Any] = {}
+    document = normalize_document(data, legacy_unknown_ids, None, sources)
+    if not sources:
+        return frozenset()
+    view = document_view(document, legacy_unknown_ids)
+    pairs = {
+        (view.thread_anchors[thread_id], pair["question"])
+        for thread_id, pair in sources.items()
+        if thread_id in view.thread_anchors
+        and isinstance(pair.get("question"), str)
+    }
+    settled: set[tuple[str, str]] = set()
+    for record in records:
+        if record.parent_id is not None:
+            continue
+        asked = (record.anchor_id, record.text)
+        if asked in pairs and is_folded(record, view):
+            settled.add(asked)
+    return frozenset(settled)
 
 
 def _lint_queue(run_dir: Path, data: Any) -> list[str]:

@@ -32,7 +32,7 @@ from visual_brief.writes import (
     fold_command,
     publish_now_command,
 )
-from visual_brief.writes.lint import lint_run
+from visual_brief.writes.lint import lint_command, lint_run
 
 ASKED = "Does an old pair keep its place?"
 PAIR = {"question": ASKED, "answer": "Answered long ago."}
@@ -142,6 +142,43 @@ def test_answering_a_legacy_pair_dates_it_from_its_own_queue_line(
         entry["id"] for entry in threads_at(read_content_file(run_dir), ANCHOR)
     ] == [thread_id]
     assert count_unanswered_questions(run_dir) == 0
+
+
+def test_a_matched_legacy_pair_is_left_alone_by_the_checks(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The pair no verb may rewrite is not nagged about on every write.
+
+    Only ``answer`` converts a pair safely, and an answered pair must not be
+    answered again — so a warning here would be one no verb can clear, and
+    obeying it by hand is what brings the phantom duplicate back.
+    """
+    root = tmp_path / "runs"
+    run_dir, _, _ = _legacy_run(root)
+
+    assert lint_command(root, None, strict=True) == 0
+    assert fold_command(root, None) == 0
+    assert publish_now_command(root, None, copy.deepcopy(PANEL)) == 0
+    assert lint_command(root, None, strict=True) == 0
+
+    captured = capsys.readouterr()
+    assert "legacy {question, answer} pair" not in captured.err
+    assert threads_at(read_content_file(run_dir), ANCHOR) == [PAIR]
+
+
+def test_a_legacy_pair_no_queue_line_matches_is_still_reported(
+    tmp_path: Path,
+) -> None:
+    """Where nothing is at stake the old shape is still worth naming."""
+    root = tmp_path / "runs"
+    run_dir = make_run(root, document=with_thread(ANCHOR, PAIR))
+
+    warnings = lint_run(run_dir, read_content_file(run_dir))
+
+    assert len(warnings) == 1
+    assert "legacy {question, answer} pair" in warnings[0]
+    assert "1970 epoch" in warnings[0]
 
 
 def test_a_legacy_pairs_queue_line_is_never_reported_as_still_pending(

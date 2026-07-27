@@ -119,9 +119,7 @@ def _describe_folded(before: Any, after: Any) -> list[FoldedTurn]:
         anchor = new.thread_anchors.get(thread_id, "")
         previous = old.threads.get(thread_id)
         if previous is None:
-            added.append(
-                FoldedTurn(thread_id, anchor, _first_text(thread), True)
-            )
+            added.extend(_describe_new_thread(thread_id, anchor, thread))
             continue
         seen = Counter(_turn_key(turn) for turn in _turns(previous))
         for turn in _turns(thread):
@@ -141,6 +139,47 @@ def _describe_folded(before: Any, after: Any) -> list[FoldedTurn]:
                 )
             )
     return added
+
+
+def _describe_new_thread(
+    thread_id: str,
+    anchor: str,
+    thread: dict[str, Any],
+) -> list[FoldedTurn]:
+    """Describe every human turn a thread this fold created arrived with.
+
+    A brand-new thread can arrive with more than the question that opened
+    it. A human who asks on the served page and then replies to their own
+    still-pending question leaves both lines in the queue, and the merge
+    resolves the reply against the thread it has just created. Reporting
+    only the opening turn would fold that reply into the page and never say
+    it, which is exactly the text the agent is meant to answer next.
+
+    Args:
+        thread_id: Id of the thread the fold created.
+        anchor: Anchor path the thread hangs from.
+        thread: The thread as the merge built it.
+
+    Returns:
+        One entry per human turn, the first marked as starting the thread.
+    """
+    said: list[FoldedTurn] = []
+    for turn in _turns(thread):
+        if turn.get("author") != "human":
+            continue
+        text = turn.get("text")
+        opens_the_thread = not said
+        said.append(
+            FoldedTurn(
+                thread_id,
+                anchor,
+                text if isinstance(text, str) else "",
+                opens_the_thread,
+            )
+        )
+    if not said:
+        said.append(FoldedTurn(thread_id, anchor, _first_text(thread), True))
+    return said
 
 
 def _describe_unfolded(

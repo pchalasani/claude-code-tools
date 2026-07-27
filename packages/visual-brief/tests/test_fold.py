@@ -20,7 +20,10 @@ from write_support import (
     with_thread,
     write_content,
 )
-from visual_brief.server.counting import count_unanswered_questions
+from visual_brief.server.counting import (
+    count_unanswered_questions,
+    merge_pending_followups,
+)
 from visual_brief.writes import fold as fold_module
 from visual_brief.writes import CliError, answer_command, fold_command
 
@@ -174,6 +177,34 @@ def test_fold_appends_a_reply_to_the_thread_it_names(tmp_path: Path) -> None:
         ASKED,
         follow_up["text"],
     ]
+
+
+def test_fold_says_every_turn_a_new_thread_arrives_with(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A reply to a still-pending question is folded, and is also said."""
+    root = tmp_path / "runs"
+    run_dir = make_run(root)
+    queue_line(run_dir, ASKED)
+    pending = merge_pending_followups(run_dir)
+    assert pending is not None
+    thread_id = str(threads_at(pending, ANCHOR)[0]["id"])
+    follow_up = queue_line(
+        run_dir, "And before you answer that?", parent_id=thread_id
+    )
+
+    assert fold_command(root, None) == 0
+
+    thread = _only_thread(run_dir)
+    assert [turn["text"] for turn in thread["turns"]] == [
+        ASKED,
+        follow_up["text"],
+    ]
+    output = capsys.readouterr().out
+    assert ASKED in output
+    assert follow_up["text"] in output
+    assert "fold: folded 2 (1 new, 1 replies)" in output
 
 
 def test_fold_never_guesses_an_unknown_parent(

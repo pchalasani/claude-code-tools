@@ -190,7 +190,8 @@ their own, and `--strict` exits 2 instead of merely warning. They report only
 what a machine can be certain of:
 
 - an enumeration crammed into a `glance`, an `explanation` or a turn
-- a legacy `{question, answer}` pair
+- a legacy `{question, answer}` pair — unless a queue line still matches it,
+  in which case it is deliberately preserved and nothing is said
 - a turn dated at the 1970 epoch
 - a `glance` over 200 characters
 - queued questions still waiting to be folded

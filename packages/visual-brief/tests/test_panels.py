@@ -162,6 +162,103 @@ def test_publish_now_leaves_a_conversation_the_panel_already_carries(
     assert len(threads_at(read_content_file(run_dir), ANCHOR)) == 1
 
 
+def test_publish_now_keeps_the_pages_copy_over_a_stale_panel_copy(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A panel written before the answer does not erase the answer."""
+    root = tmp_path / "runs"
+    run_dir = make_run(root)
+    queue_line(run_dir, "Does the conversation survive a republish?")
+    assert fold_command(root, None) == 0
+    stale = copy.deepcopy(threads_at(read_content_file(run_dir), ANCHOR)[0])
+    thread_id = str(stale["id"])
+    assert answer_command(root, None, thread_id, "It survives.") == 0
+    replacement = _panel()
+    replacement["lanes"][0]["items"][0]["questions"] = [stale]
+
+    assert publish_now_command(root, None, replacement) == 0
+
+    carried = threads_at(read_content_file(run_dir), ANCHOR)
+    assert [thread["id"] for thread in carried] == [thread_id]
+    assert [turn["text"] for turn in carried[0]["turns"]] == [
+        "Does the conversation survive a republish?",
+        "It survives.",
+    ]
+    assert "carried 1 conversation," in capsys.readouterr().out
+
+
+def test_publish_now_prints_the_turns_only_the_panels_copy_held(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A stale panel copy that also says something new says it on stderr."""
+    root = tmp_path / "runs"
+    run_dir = make_run(root)
+    queue_line(run_dir, "Does the conversation survive a republish?")
+    assert fold_command(root, None) == 0
+    diverged = copy.deepcopy(threads_at(read_content_file(run_dir), ANCHOR)[0])
+    thread_id = str(diverged["id"])
+    assert answer_command(root, None, thread_id, "It survives.") == 0
+    diverged["turns"].append(
+        {
+            "author": "agent",
+            "text": "Written into the panel by hand.",
+            "at": "2027-01-01T00:00:00Z",
+        }
+    )
+    replacement = _panel()
+    replacement["lanes"][0]["items"][0]["questions"] = [diverged]
+
+    assert publish_now_command(root, None, replacement) == 0
+
+    saved = threads_at(read_content_file(run_dir), ANCHOR)
+    assert [turn["text"] for turn in saved[0]["turns"]] == [
+        "Does the conversation survive a republish?",
+        "It survives.",
+    ]
+    captured = capsys.readouterr()
+    assert "could not be carried forward" in captured.err
+    assert thread_id in captured.err
+    assert "Written into the panel by hand." in captured.err
+    assert "1 not carried" in captured.out
+
+
+def test_publish_now_will_not_hang_one_conversation_from_two_anchors(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A copy filed under another anchor is reported, never duplicated."""
+    root = tmp_path / "runs"
+    run_dir = make_run(root)
+    queue_line(run_dir, "Does the conversation survive a republish?")
+    assert fold_command(root, None) == 0
+    moved = copy.deepcopy(threads_at(read_content_file(run_dir), ANCHOR)[0])
+    thread_id = str(moved["id"])
+    moved["anchor"]["path"] = "now/state/coverage"
+    replacement = _panel()
+    replacement["lanes"][0]["items"].append(
+        {
+            "id": "coverage",
+            "glance": "The branches are covered.",
+            "explanation": "Carried a copy of its own.",
+            "trust": "verified-by-me",
+            "questions": [moved],
+        }
+    )
+
+    assert publish_now_command(root, None, replacement) == 0
+
+    document = read_content_file(run_dir)
+    assert threads_at(document, ANCHOR) == []
+    assert [
+        thread["id"] for thread in threads_at(document, "now/state/coverage")
+    ] == [thread_id]
+    captured = capsys.readouterr()
+    assert "cannot hang from two anchors" in captured.err
+    assert "1 not carried" in captured.out
+
+
 def test_publish_now_carries_a_lane_conversation_too(tmp_path: Path) -> None:
     """Conversations hanging from a lane are carried like an item's."""
     root = tmp_path / "runs"
