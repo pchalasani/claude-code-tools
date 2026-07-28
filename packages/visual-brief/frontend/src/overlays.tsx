@@ -15,7 +15,9 @@ const KEY_BAR: [string, Action, string][] = [
   ["f", "hints", "Jump to a row"],
   ["E", "expand-all", "Expand all"],
   ["C", "collapse-all", "Collapse all"],
-  ["n", "next-awaiting", "Awaiting"],
+  // Named for what the key DOES, not for the state it hunts: "Awaiting"
+  // described the rows, leaving n unexplained.
+  ["n", "next-awaiting", "Next unanswered"],
   ["m", "chats", "My chats"],
   ["/", "search", "Search"],
   ["g", "top", "Top"],
