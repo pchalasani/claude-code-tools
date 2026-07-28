@@ -119,11 +119,17 @@ export function parseInline(text: string): Inline[] {
     }
   };
 
-  // Remembered failure: once a mark has been shown to have no valid closer
-  // in the remainder, every later opener of that same mark fails too — the
-  // candidates it would search are a subset of the ones already rejected.
-  // Without this, a line like "a *a *a *…" rescanned the tail per asterisk
+  // Remembered EXHAUSTION, and nothing else. When a search has actually
+  // walked the remainder of the line and found no closer for an emphasis
+  // mark, no later opener of that mark can find one either — the candidates
+  // are a subset. Without this, "a *a *a *…" rescanned the tail per asterisk
   // and cost seconds at a few thousand marks.
+  //
+  // Two things this must NOT remember, both learned by getting them wrong.
+  // A locally invalid opener — one followed by a space — says nothing about
+  // the rest of the line: "* bad then *kept*" must still emphasise "kept".
+  // And a link is not monotonic at all: one unclosed "[" must not silence
+  // every later link on the line.
   const exhausted = new Set<string>();
 
   while (rest !== "") {
@@ -138,11 +144,14 @@ export function parseInline(text: string): Inline[] {
     // An underscore inside a word is part of the word: snake_case names are
     // written in briefs constantly, and turning half of one into emphasis
     // would silently change what the agent said.
-    const read = (mark === "_" && /\w$/.test(plain)) || exhausted.has(mark)
+    const inWord = mark === "_" && /\w$/.test(plain);
+    const read = inWord || exhausted.has(mark)
       ? null
       : readMark(mark, after);
     if (read === null) {
-      if (mark !== "_" || !/\w$/.test(plain)) {
+      // Only an emphasis mark that was searched to the end of the line, and
+      // whose own opener was valid, has proved anything about what follows.
+      if (!inWord && isEmphasis(mark) && opensValidly(mark, after)) {
         exhausted.add(mark);
       }
       plain += mark;
@@ -155,6 +164,31 @@ export function parseInline(text: string): Inline[] {
   }
   flush();
   return nodes;
+}
+
+/**
+ * Report whether a mark is one whose closer search runs to end of line.
+ *
+ * @param mark - The mark just read.
+ * @returns True for emphasis marks, whose failure is monotonic.
+ */
+function isEmphasis(mark: string): boolean {
+  return mark === "*" || mark === "**" || mark === "_";
+}
+
+/**
+ * Report whether a mark could open emphasis at all, ignoring any closer.
+ *
+ * A mark followed by whitespace is not an opener, so its failure says
+ * nothing about the rest of the line.
+ *
+ * @param mark - The opening mark.
+ * @param text - The text beginning at that mark.
+ * @returns True when the opener itself is well formed.
+ */
+function opensValidly(mark: string, text: string): boolean {
+  const body = text.slice(mark.length);
+  return body !== "" && !/^\s/.test(body);
 }
 
 /** One inline node and how much of the text it consumed. */
@@ -304,8 +338,8 @@ function readFence(lines: string[], at: number, blocks: Block[]): number {
  * @returns True when this line is that block's closing fence.
  */
 function closesFence(line: string, char: string, width: number): boolean {
-  const indent = line.length - line.trimStart().length;
-  if (indent > 3) {
+  const indent = (/^ */.exec(line)?.[0] ?? "").length;
+  if (indent !== line.length - line.trimStart().length || indent > 3) {
     // Four spaces makes it content, not a fence — which is exactly how a
     // fence character appears inside an indented code sample.
     return false;

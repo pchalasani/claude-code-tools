@@ -217,3 +217,36 @@ describe("pathological and indented input", () => {
     expect(blocks.map((b) => b.kind)).toEqual(["code", "paragraph"]);
   });
 });
+
+describe("what one bad mark must not silence", () => {
+  /**
+   * Read a paragraph's inline kinds.
+   *
+   * @param source - Markdown to parse.
+   * @returns The kinds of the first block's inline nodes.
+   */
+  function kinds(source: string): string[] {
+    const [block] = parseMarkdown(source);
+    return block?.kind === "paragraph" ? block.content.map((n) => n.kind) : [];
+  }
+
+  it("keeps later emphasis after an opener that was never one", () => {
+    // "* bad" is not an opener at all — a space follows it — so it says
+    // nothing about the rest of the line.
+    expect(kinds("see * bad then *kept* here")).toContain("emphasis");
+  });
+
+  it("keeps later links after an unclosed bracket", () => {
+    // Links are not monotonic: one broken bracket must not disable them all.
+    expect(
+      kinds("[broken then [valid](https://example.com) end"),
+    ).toContain("link");
+  });
+
+  it("does not end a block at a tab-indented fence", () => {
+    const blocks = parseMarkdown("```\ncode\n\t```\nstill code\n```");
+    expect(blocks).toHaveLength(1);
+    const text = blocks[0]?.kind === "code" ? blocks[0].text : "";
+    expect(text).toContain("still code");
+  });
+});

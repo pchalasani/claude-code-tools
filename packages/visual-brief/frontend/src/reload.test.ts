@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  MAX_HEALS,
   MAX_POLL_INTERVAL_MS,
   POLL_INTERVAL_MS,
   POLL_META,
@@ -368,56 +367,5 @@ describe("telling the page about polls", () => {
     announcePoll("reload");
 
     expect(heard).toEqual(["same", "retry"]);
-  });
-});
-
-describe("an incompatible daemon whose answer keeps changing", () => {
-  it("spends a bounded budget of heals, not one per differing body", async () => {
-    // A daemon answering "uptime=1", then "uptime=2", presents a brand-new
-    // impasse every poll. The standoff memory cannot stop that — each one
-    // is genuinely different — so the budget does: a tab heals a few times
-    // and then stays put and stays readable.
-    let reloads = 0;
-    for (let poll = 1; poll <= 8; poll += 1) {
-      const watch = healingWatch(
-        "a".repeat(64),
-        async () => `version 2; uptime=${poll}`,
-        () => {
-          reloads += 1;
-        },
-      );
-      await pollOnce(watch);
-    }
-
-    expect(reloads).toBe(MAX_HEALS);
-  });
-});
-
-describe("the heal budget over a long-lived tab", () => {
-  it("is returned once the two ends agree again", async () => {
-    const page = "a".repeat(64);
-    let reloads = 0;
-    // Spend the whole budget on an incompatible daemon.
-    for (let poll = 1; poll <= 6; poll += 1) {
-      await pollOnce(
-        healingWatch(page, async () => `uptime=${poll}`, () => {
-          reloads += 1;
-        }),
-      );
-    }
-    expect(reloads).toBe(MAX_HEALS);
-
-    // The daemon comes back speaking properly, and agreeing.
-    await pollOnce(healingWatch(page, async () => page, () => {
-      reloads += 1;
-    }));
-
-    // A genuinely new incompatible upgrade must still be able to heal.
-    await pollOnce(
-      healingWatch(page, async () => "brief 9: unreadable", () => {
-        reloads += 1;
-      }),
-    );
-    expect(reloads).toBe(MAX_HEALS + 1);
   });
 });

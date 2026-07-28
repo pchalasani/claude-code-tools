@@ -255,41 +255,6 @@ export function consumeSelfReload(): boolean {
 }
 
 /**
- * Read how many times this tab has already healed itself.
- *
- * @returns The count, or zero when it has never healed.
- */
-export function readHealCount(): number {
-  const key = `visual-brief-heals:${runIdFromLocation()}`;
-  // The LARGER of the two, not the first that answers. One store going
-  // unwritable while the other keeps counting would otherwise freeze the
-  // budget at a stale value and let reloads run unbounded again.
-  return Math.max(countIn(readItem(key)), countIn(readHistoryItem(key)));
-}
-
-/**
- * Read one stored heal count.
- *
- * @param raw - What a store answered, or null when it had nothing.
- * @returns The count, or zero when it is not a usable one.
- */
-function countIn(raw: string | null): number {
-  const value = Number.parseInt(raw ?? "", 10);
-  return Number.isFinite(value) && value > 0 ? value : 0;
-}
-
-/**
- * Remember how many times this tab has healed itself.
- *
- * @param count - The new total.
- */
-export function rememberHealCount(count: number): void {
-  const key = `visual-brief-heals:${runIdFromLocation()}`;
-  writeItem(key, String(count));
-  writeHistoryItem(key, String(count));
-}
-
-/**
  * Read the standoff this tab last reloaded itself to escape.
  *
  * A standoff is a pair — what this page is, and what the daemon said about it
