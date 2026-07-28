@@ -32,6 +32,14 @@ export interface Thread {
 }
 
 export interface NestedNote {
+  /**
+   * What this note is called among its siblings, when the author says.
+   *
+   * Optional, and a note without one is named by a slug of its title. Either
+   * way the name belongs to the note rather than to its slot, so a later
+   * publish that inserts a note above it cannot hand its identity away.
+   */
+  id?: string;
   title: string;
   body: string;
   children?: NestedNote[];

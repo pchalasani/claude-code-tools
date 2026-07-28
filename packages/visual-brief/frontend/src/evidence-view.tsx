@@ -1,7 +1,7 @@
-import { For, type JSX } from "solid-js";
+import { createMemo, For, type JSX } from "solid-js";
 
 import type { Forensic, NestedNote } from "./document";
-import { noteRowId } from "./evidence";
+import { paintedEvidence } from "./evidence";
 import { Markdown } from "./markdown-view";
 import type { Row } from "./outline";
 import { RowShell, VisibleRow } from "./row-shell";
@@ -71,8 +71,9 @@ function NoteView(props: {
  *
  * A plain string has no head to fold, so it is content rather than a row and
  * is on the page as soon as its owner opens. A note has a title, so it is a
- * row, numbered by its position among ALL the entries — strings included —
- * because that is the number the outline gave it.
+ * row, and it is painted under the very id the outline gave it: both come
+ * from ``paintedEvidence``, so the page and the cursor cannot disagree about
+ * which note is which.
  *
  * @param props - The owning row's id, its entries and the page state.
  * @returns The rendered entries.
@@ -82,18 +83,18 @@ function EvidenceEntries(props: {
   parentId: string;
   entries: Forensic[];
 }): JSX.Element {
+  const painted = createMemo(() =>
+    paintedEvidence(props.entries, props.parentId),
+  );
   return (
-    <For each={props.entries}>
-      {(entry, index) =>
-        typeof entry === "string" ? (
-          <pre class="evidence">{entry}</pre>
+    <For each={painted()}>
+      {(entry) =>
+        entry.kind === "text" ? (
+          <pre class="evidence">{entry.text}</pre>
         ) : (
-          <VisibleRow
-            state={props.state}
-            id={noteRowId(props.parentId, index())}
-          >
+          <VisibleRow state={props.state} id={entry.id}>
             {(row) => (
-              <NoteView state={props.state} row={row} note={entry} />
+              <NoteView state={props.state} row={row} note={entry.note} />
             )}
           </VisibleRow>
         )

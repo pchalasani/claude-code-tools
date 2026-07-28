@@ -19,9 +19,12 @@ from browser_support import Browser, browser_session
 
 LANE = "current-update/what-i-verified"
 ITEM = f"{LANE}/twelve-inputs"
-EVIDENCE = f"{ITEM}# evidence"
-NOTE = f"{EVIDENCE}# 1"
-DEEPER = f"{NOTE}# 0"
+# A row the page invents for itself opens its segment with '~', which no
+# document identifier may hold, and a note is named for itself rather than
+# for the slot it happens to occupy.
+EVIDENCE = f"{ITEM}#~evidence"
+NOTE = f"{EVIDENCE}#~~agreement-rule"
+DEEPER = f"{NOTE}#~~direction-one"
 
 
 def _open_item(browser: Browser) -> None:
@@ -148,6 +151,40 @@ def test_expand_all_and_collapse_all_take_the_evidence_with_them(
     assert opened["present"] is True, opened
     assert opened["open"] == "true", opened
     assert collapsed["present"] is False, collapsed
+
+
+def test_the_toggle_names_the_one_body_it_opens(
+    browser: Browser,
+) -> None:
+    """Give assistive technology one id reference, not a list of absences.
+
+    ``aria-controls`` is a whitespace-separated list of id references, so a
+    space anywhere in a row id would send a screen reader looking for several
+    elements that do not exist instead of the body the toggle opens.
+    """
+    _open_item(browser)
+    _jump_to(browser, EVIDENCE)
+    browser.press(" ")
+    browser.run("wait", "250")
+
+    named = browser.evaluate(
+        f"""
+        (() => {{
+          const toggle = document.querySelector(
+            '[data-row-id="{EVIDENCE}"] > .row-head > .row-toggle',
+          );
+          const value = toggle?.getAttribute("aria-controls") ?? "";
+          return {{
+            value,
+            spaced: value.includes(" "),
+            found: value !== "" && document.getElementById(value) !== null,
+          }};
+        }})()
+        """
+    )
+
+    assert named["spaced"] is False, named
+    assert named["found"] is True, named
 
 
 def test_the_masthead_still_counts_what_it_always_counted(

@@ -14,9 +14,29 @@
  * and is on the page the moment that row opens.
  *
  * The ids nest with ``#`` the way conversation ids do, so ``ancestorIds``
- * reads them without knowing what they are, and every segment begins with a
- * space — which no thread id may contain — so no document can name a
- * conversation that collides with one.
+ * reads them without knowing what they are, and every segment the page
+ * invents opens with ``~``, which no id under a ``#`` may contain — so no
+ * document can name a conversation that collides with one. The segment
+ * carries no whitespace, because a row id ends up in ``aria-controls``, which
+ * is a whitespace-separated list of id references: a space there would send
+ * assistive technology looking for several ids that do not exist instead of
+ * the one body the toggle opens.
+ *
+ * A note's segment is the note's own name — the ``id`` the author declared,
+ * or a slug of its title — and never its position in the list. Position is
+ * not identity: given notes ``[A, B]`` with the cursor saved on B, a publish
+ * that prepends a note hands B's old position to A, and the restored cursor,
+ * the fold state and every key that acts on a row would then quietly act on
+ * the wrong note.
+ *
+ * The two kinds of name live in namespaces that cannot touch. A declared name
+ * is used exactly as written, and a derived one is marked with the ``~`` a
+ * declared name may not hold, so neither kind can ever spell the other. That
+ * is what stops a name from changing hands between publishes: giving a note
+ * an ``id``, or writing a sibling whose title slugs to that id, renames
+ * nothing that already exists. What is left is the one collision nobody can
+ * resolve — two siblings with the same title and no declared name — and those
+ * are separated in document order, so two rows still can never claim one id.
  */
 
 import type { Forensic, Item, NestedNote } from "./document";
@@ -25,6 +45,37 @@ import type { Row } from "./outline";
 /** What the fold holding an item's evidence is called. */
 export const EVIDENCE_LABEL = "Raw evidence and deeper forensics";
 
+/** Separator opening a row id segment the page invented, not the document. */
+const RESERVED = "#~";
+
+/**
+ * Mark worn by a name the page derived rather than read.
+ *
+ * A declared name may not hold ``~``, so a name opening with one is a name no
+ * document can spell. That is the whole guarantee: the derived names and the
+ * declared ones are separate namespaces, and neither can take from the other.
+ */
+const DERIVED_MARK = "~";
+
+/** Longest name derived from a note's title. */
+const NAME_LIMIT = 48;
+
+/** The name a note falls back to when nothing usable can be slugged. */
+const FALLBACK_NAME = "note";
+
+/**
+ * What a declared name has to look like to be usable as a row id segment.
+ *
+ * The renderer refuses to publish anything else, so this is the front end
+ * holding its own end of that contract rather than trusting the blob it was
+ * handed. What is checked is what would actually break the id the name lands
+ * in: the separators, and the five characters HTML splits an id-reference
+ * list on. Reading it as "whatever JavaScript calls whitespace" would be a
+ * different rule from the renderer's, and a name the renderer accepted would
+ * silently fall back to a title-derived one.
+ */
+const USABLE_NAME = /^[^ \t\n\r\f#/~]+$/u;
+
 /**
  * Return the row id of the evidence hanging from one item.
  *
@@ -32,18 +83,48 @@ export const EVIDENCE_LABEL = "Raw evidence and deeper forensics";
  * @returns The evidence row's id.
  */
 export function evidenceRowId(itemPath: string): string {
-  return `${itemPath}# evidence`;
+  return `${itemPath}${RESERVED}evidence`;
 }
 
 /**
  * Return the row id of one nested note.
  *
  * @param parentId - Row id of the evidence or note holding it.
- * @param index - The note's position among its parent's entries.
+ * @param name - The note's name among its siblings.
  * @returns The note's row id.
  */
-export function noteRowId(parentId: string, index: number): string {
-  return `${parentId}# ${index}`;
+export function noteRowId(parentId: string, name: string): string {
+  return `${parentId}${RESERVED}${name}`;
+}
+
+/** One evidence entry as the page paints it. */
+export type PaintedEvidence =
+  | { kind: "text"; text: string }
+  | { kind: "note"; id: string; note: NestedNote };
+
+/**
+ * Pair every evidence entry with the row id it paints under.
+ *
+ * The outline and the rendered tree both read this one list, so what the
+ * cursor believes about a note and what the page paints for it are the same
+ * string by construction.
+ *
+ * @param entries - The evidence entries of one owner, in document order.
+ * @param parentId - Row id of the owner.
+ * @returns Each entry in document order, notes carrying the row id they own.
+ */
+export function paintedEvidence(
+  entries: Forensic[],
+  parentId: string,
+): PaintedEvidence[] {
+  const taken = new Set<string>();
+  return entries.map((entry): PaintedEvidence => {
+    if (typeof entry === "string") {
+      return { kind: "text", text: entry };
+    }
+    const name = claim(noteName(entry), taken);
+    return { kind: "note", id: noteRowId(parentId, name), note: entry };
+  });
 }
 
 /**
@@ -117,15 +198,70 @@ function collectNotes(
   anchorId: string,
   rows: Row[],
 ): void {
-  entries.forEach((entry, index) => {
-    if (typeof entry === "string") {
-      return;
+  for (const painted of paintedEvidence(entries, parentId)) {
+    if (painted.kind === "text") {
+      continue;
     }
-    const note: NestedNote = entry;
-    const id = noteRowId(parentId, index);
-    rows.push(evidenceRow(id, anchorId, parentId, note.title));
-    collectNotes(note.children ?? [], id, anchorId, rows);
-  });
+    rows.push(evidenceRow(painted.id, anchorId, parentId, painted.note.title));
+    collectNotes(painted.note.children ?? [], painted.id, anchorId, rows);
+  }
+}
+
+/**
+ * Return the name one note answers to.
+ *
+ * A declared name is taken exactly as written: folding its case or cutting it
+ * short would merge names the renderer accepted as different, and merged
+ * names are settled by document order — which is the identity-by-position
+ * this module exists to be rid of. Anything else is derived from the title
+ * and marked as derived.
+ *
+ * @param note - The note to name.
+ * @returns The name, before any collision with a sibling is settled.
+ */
+function noteName(note: NestedNote): string {
+  const declared = note.id;
+  if (declared !== undefined && USABLE_NAME.test(declared)) {
+    return declared;
+  }
+  return `${DERIVED_MARK}${derivedName(note)}`;
+}
+
+/**
+ * Take one name, or the first free variation of it.
+ *
+ * Two siblings that would answer to the same name are separated rather than
+ * allowed to collide: a duplicate id would paint two rows the cursor cannot
+ * tell apart.
+ *
+ * @param base - The name being asked for.
+ * @param taken - Names already claimed by its siblings, added to here.
+ * @returns A name none of those siblings holds.
+ */
+function claim(base: string, taken: Set<string>): string {
+  let candidate = base;
+  let suffix = 1;
+  while (taken.has(candidate)) {
+    suffix += 1;
+    candidate = `${base}-${suffix}`;
+  }
+  taken.add(candidate);
+  return candidate;
+}
+
+/**
+ * Return the name a note that declares none is known by: a slug of its title.
+ *
+ * @param note - The note to name.
+ * @returns A name safe inside a row id, before any collision is settled.
+ */
+function derivedName(note: NestedNote): string {
+  const slug = note.title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "-")
+    .slice(0, NAME_LIMIT)
+    .replace(/^-+|-+$/gu, "");
+  return slug === "" ? FALLBACK_NAME : slug;
 }
 
 /**

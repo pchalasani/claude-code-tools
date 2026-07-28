@@ -111,13 +111,21 @@ def _project_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _project_forensic(entry: Any) -> Any:
-    """Return one forensic entry: raw evidence text or a nested note."""
+    """Return one forensic entry: raw evidence text or a nested note.
+
+    A note's declared id travels with it, because that is the name the page
+    builds its row id from. Dropping it here would leave the note named by its
+    title, so a later edit to that title would rename a row the reader's
+    cursor is sitting on.
+    """
     if isinstance(entry, str):
         return entry
     projected: dict[str, Any] = {
         "title": entry["title"],
         "body": entry["body"],
     }
+    if "id" in entry:
+        projected["id"] = entry["id"]
     children = entry.get("children", [])
     if children:
         projected["children"] = [

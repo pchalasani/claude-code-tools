@@ -73,6 +73,41 @@ def test_focus_identifiers_reject_thread_separator(kind: str) -> None:
         render_content(data)
 
 
+def test_a_thread_identifier_rejects_the_reserved_evidence_separator() -> None:
+    """Keep a document from spelling a row the page invents for itself.
+
+    A thread hangs off its row with ``#``, which is where the page names an
+    item's evidence ``#~evidence``, so a thread id holding ``~`` could name a
+    row that already belongs to something else.
+    """
+    data = _example()
+    _first_item(data)["questions"][0]["id"] = "~evidence"
+
+    with pytest.raises(ValueError, match=r"must not contain '~'"):
+        render_content(data)
+
+
+@pytest.mark.parametrize("kind", ["update", "lane", "item"])
+def test_an_element_identifier_may_still_hold_a_tilde(kind: str) -> None:
+    """Reserve ``~`` only where an invented segment can appear.
+
+    Update, lane and item ids are joined with ``/`` and no invented segment
+    follows a slash, so a document that has always rendered keeps rendering.
+    """
+    data = _example()
+    update = data["updates"][0]
+    lane = update["lanes"][0]
+    item = lane["items"][0]
+    targets = {"update": update, "lane": lane, "item": item}
+    targets[kind]["id"] = f'linux~arm-{targets[kind]["id"]}'
+    for thread in item.get("questions", []):
+        thread["anchor"]["path"] = (
+            f'{update["id"]}/{lane["id"]}/{item["id"]}'
+        )
+
+    assert render_content(data).startswith("<!doctype html>")
+
+
 def test_forensics_must_be_a_list_with_precise_path() -> None:
     """Name the item path when forensics has the known wrong shape."""
     data = _example()
@@ -82,6 +117,21 @@ def test_forensics_must_be_a_list_with_precise_path() -> None:
         ValueError,
         match=r"^updates\[0\]\.lanes\[0\]\.items\[0\]\.forensics "
         r"must be a list$",
+    ):
+        render_content(data)
+
+
+def test_a_note_child_must_be_a_note_with_precise_path() -> None:
+    """Raw evidence sits beside a note, never inside its children."""
+    data = _example()
+    _first_item(data)["forensics"] = [
+        {"title": "A note", "body": "Body.", "children": ["exit status 0"]}
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match=r"^updates\[0\]\.lanes\[0\]\.items\[0\]\.forensics\[0\]"
+        r"\.children\[0\] must be an object$",
     ):
         render_content(data)
 

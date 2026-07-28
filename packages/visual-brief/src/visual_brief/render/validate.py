@@ -36,6 +36,10 @@ def require_text(value: Any, location: str) -> str:
 def identifier(value: Any, location: str) -> str:
     """Validate and return a stable element identifier.
 
+    ``/`` and ``#`` join identifiers into the row ids the page navigates by,
+    so an identifier holding either could spell a row that belongs to
+    something else.
+
     Args:
         value: Candidate identifier.
         location: JSON path used in validation errors.
@@ -56,6 +60,33 @@ def identifier(value: Any, location: str) -> str:
         raise ValueError(
             f"{location} must not contain whitespace, '/' or '#'"
         )
+    return text
+
+
+def segment_identifier(value: Any, location: str) -> str:
+    """Validate an identifier that becomes a ``#``-separated row-id segment.
+
+    Question threads and forensic notes hang off a row with ``#``. The page
+    invents segments of its own in that same place — an item's evidence, and
+    the notes under it — and opens each with ``~``, so an identifier holding
+    ``~`` there could name a row that already belongs to something else. Ids
+    joined by ``/`` are under no such rule: no invented segment follows a
+    slash, and narrowing the reservation keeps a document that has always
+    rendered from being refused for a character it may safely use.
+
+    Args:
+        value: Candidate identifier.
+        location: JSON path used in validation errors.
+
+    Returns:
+        The validated identifier.
+
+    Raises:
+        ValueError: If the identifier is unusable as a row-id segment.
+    """
+    text = identifier(value, location)
+    if "~" in text:
+        raise ValueError(f"{location} must not contain '~'")
     return text
 
 
@@ -131,7 +162,7 @@ def _validate_questions(
         thread_location = f"{location}[{index}]"
         if not isinstance(thread, dict):
             raise ValueError(f"{thread_location} must be an object")
-        thread_id = identifier(
+        thread_id = segment_identifier(
             thread.get("id"), f"{thread_location}.id"
         )
         if len(thread_id) > MAX_THREAD_ID_LENGTH:
@@ -149,17 +180,94 @@ def _validate_questions(
     return thread_ids
 
 
-def _validate_nested(node: Any, location: str) -> None:
-    """Validate one recursively nestable forensic note."""
+def _validate_nested(node: Any, location: str) -> str | None:
+    """Validate one recursively nestable forensic note.
+
+    Args:
+        node: Candidate note.
+        location: JSON path used in validation errors.
+
+    Returns:
+        The note's declared identifier, or None when it declares none.
+
+    Raises:
+        ValueError: If the note violates the forensic note schema.
+    """
     if not isinstance(node, dict):
         raise ValueError(f"{location} must be an object")
+    declared = (
+        segment_identifier(node.get("id"), f"{location}.id")
+        if "id" in node
+        else None
+    )
     require_text(node.get("title"), f"{location}.title")
     require_text(node.get("body"), f"{location}.body")
-    children = node.get("children", [])
+    _validate_children(node.get("children", []), f"{location}.children")
+    return declared
+
+
+def _validate_children(children: Any, location: str) -> None:
+    """Validate the notes nested under one note.
+
+    Args:
+        children: Candidate nested notes; nothing else may appear here.
+        location: JSON path used in validation errors.
+
+    Raises:
+        ValueError: If a child is malformed or two of them share an id.
+    """
     if not isinstance(children, list):
-        raise ValueError(f"{location}.children must be a list")
-    for index, child in enumerate(children):
-        _validate_nested(child, f"{location}.children[{index}]")
+        raise ValueError(f"{location} must be a list")
+    _require_unique_note_ids(
+        [
+            _validate_nested(child, f"{location}[{index}]")
+            for index, child in enumerate(children)
+        ],
+        location,
+    )
+
+
+def _validate_forensics(entries: Any, location: str) -> None:
+    """Validate one item's forensics: raw evidence strings and nested notes.
+
+    Args:
+        entries: Candidate raw-evidence strings and nested notes.
+        location: JSON path used in validation errors.
+
+    Raises:
+        ValueError: If an entry is malformed or two notes share an id.
+    """
+    if not isinstance(entries, list):
+        raise ValueError(f"{location} must be a list")
+    _require_unique_note_ids(
+        [
+            _validate_nested(entry, f"{location}[{index}]")
+            for index, entry in enumerate(entries)
+            if not isinstance(entry, str)
+        ],
+        location,
+    )
+
+
+def _require_unique_note_ids(declared: list[str | None], location: str) -> None:
+    """Refuse two sibling notes that answer to one name.
+
+    A note is a row of the page, and its row id is built from the name it
+    answers to among its siblings. Two siblings claiming one name would paint
+    two rows the cursor cannot tell apart, so the collision is refused at
+    publish time rather than settled behind the reader's back.
+
+    Args:
+        declared: What each sibling note declared, None where it declared
+            nothing.
+        location: JSON path used in validation errors.
+
+    Raises:
+        ValueError: If two siblings declare the same identifier.
+    """
+    named = [value for value in declared if value is not None]
+    if len(named) != len(set(named)):
+        raise ValueError(f"{location} note ids must be unique")
 
 
 def _validate_table(table: Any, location: str) -> None:
@@ -191,12 +299,7 @@ def _validate_item(item: Any, location: str, path: str) -> list[str]:
     trust = require_text(raw_trust, f"{location}.trust")
     if raw_trust != trust or trust not in TRUST_LABELS:
         raise ValueError(f"{location}.trust is not a recognized trust chip")
-    forensics = item.get("forensics", [])
-    if not isinstance(forensics, list):
-        raise ValueError(f"{location}.forensics must be a list")
-    for index, entry in enumerate(forensics):
-        if not isinstance(entry, str):
-            _validate_nested(entry, f"{location}.forensics[{index}]")
+    _validate_forensics(item.get("forensics", []), f"{location}.forensics")
     tables = item.get("tables", [])
     if not isinstance(tables, list):
         raise ValueError(f"{location}.tables must be a list")

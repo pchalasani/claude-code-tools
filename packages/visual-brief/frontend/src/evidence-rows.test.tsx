@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { BriefDocument } from "./document";
+import type { BriefDocument, Forensic } from "./document";
 import { evidenceRowId, noteRowId } from "./evidence";
 import { outline } from "./outline";
 import {
@@ -9,23 +9,25 @@ import {
   paintedCursor,
   paintedOpen,
   press,
+  unmount,
   useHarness,
 } from "../test/harness";
 import { sampleBrief } from "../test/sample-brief";
 
 const ITEM = "newest/changed/alpha";
 const EVIDENCE = evidenceRowId(ITEM);
-const NOTE = noteRowId(EVIDENCE, 1);
-const DEEPER = noteRowId(NOTE, 0);
+const NOTE = noteRowId(EVIDENCE, "~the-reference-run");
+const DEEPER = noteRowId(NOTE, "~the-one-disagreement");
 
 useHarness();
 
 /**
- * Build a page whose first item carries evidence that nests.
+ * Build a page whose first item carries the evidence given to it.
  *
+ * @param entries - What the item's forensics hold.
  * @returns The document.
  */
-function withEvidence(): BriefDocument {
+function withForensics(entries: Forensic[]): BriefDocument {
   const brief = sampleBrief();
   const item = brief.updates
     .find((update) => update.id === "newest")
@@ -34,7 +36,17 @@ function withEvidence(): BriefDocument {
   if (item === undefined) {
     throw new Error("the sample document lost the item this test writes at");
   }
-  item.forensics = [
+  item.forensics = entries;
+  return brief;
+}
+
+/**
+ * Build a page whose first item carries evidence that nests.
+ *
+ * @returns The document.
+ */
+function withEvidence(): BriefDocument {
+  return withForensics([
     "exit status 0",
     {
       title: "The reference run",
@@ -46,8 +58,25 @@ function withEvidence(): BriefDocument {
         },
       ],
     },
-  ];
-  return brief;
+  ]);
+}
+
+/**
+ * Read the head line one row is painting.
+ *
+ * The row is found by comparing the painted attribute, not by handing the id
+ * to a selector: jsdom's selector engine matches these attribute values
+ * without regard to case, which would quietly conflate two rows named ``Aa``
+ * and ``aa`` — a distinction the document is allowed to make.
+ *
+ * @param id - Row id to read.
+ * @returns The head's text, or null when the row is not on the page.
+ */
+function paintedHead(id: string): string | null {
+  const row = [...document.querySelectorAll("[data-row-id]")].find(
+    (candidate) => candidate.getAttribute("data-row-id") === id,
+  );
+  return row?.querySelector(":scope > .row-head")?.textContent ?? null;
 }
 
 /**
@@ -192,5 +221,157 @@ describe("evidence as rows the keyboard can reach", () => {
     expect(paintedRows()).toContain(EVIDENCE);
     expect(paintedRows()).toContain(DEEPER);
     expect(paintedRows()).not.toContain("newest/changed/beta");
+  });
+});
+
+describe("evidence rows are named, not numbered", () => {
+  const FIRST = { title: "The first finding", body: "One." };
+  const SECOND = { title: "The second finding", body: "Two." };
+  const PREPENDED = { title: "What landed first", body: "Zero." };
+
+  /**
+   * Put the cursor on a note by clicking its head, the way a hand does.
+   *
+   * @param title - Head text of the note to land on.
+   * @returns The row id the page says the cursor is on.
+   */
+  function landOn(title: string): string {
+    const rows = [...document.querySelectorAll('[data-row-kind="evidence"]')];
+    const head = rows.find((row) =>
+      (row.querySelector(".row-head")?.textContent ?? "").includes(title),
+    );
+    const id = head?.getAttribute("data-row-id") ?? "";
+    expect(id, `no evidence row headed ${title}`).not.toBe("");
+    click(id);
+    return id;
+  }
+
+  it("puts a reloaded cursor back on the note, not on its neighbour", () => {
+    mount(withForensics([{ ...FIRST }, { ...SECOND }]));
+    press("E");
+    const before = landOn("The second finding");
+    expect(paintedCursor()).toBe(before);
+
+    // The agent publishes again with one more note, written above the two
+    // that were already there. Everything after it shifts down a place.
+    unmount();
+    mount(withForensics([{ ...PREPENDED }, { ...FIRST }, { ...SECOND }]));
+    press("E");
+
+    expect(paintedCursor()).toBe(before);
+    expect(paintedHead(before)).toContain("The second finding");
+  });
+
+  it("takes the name the document declares over the note's title", () => {
+    const brief = withForensics([
+      { id: "reference-run", title: "The reference run", body: "One." },
+    ]);
+    mount(brief);
+    press("E");
+
+    const id = noteRowId(EVIDENCE, "reference-run");
+    expect(paintedRows()).toContain(id);
+    expect(paintedHead(id)).toContain("The reference run");
+    expect(outline(brief).map((row) => row.id)).toContain(id);
+  });
+
+  it("keeps a declared name and a derived one out of each other's way", () => {
+    const declared = {
+      id: "reference-run",
+      title: "The note that says what it is called",
+      body: "Two.",
+    };
+    // This one's title slugs to exactly the name the other one declares.
+    const titled = { title: "Reference run", body: "One." };
+    const byName = noteRowId(EVIDENCE, "reference-run");
+    const byTitle = noteRowId(EVIDENCE, "~reference-run");
+
+    mount(withForensics([{ ...titled }]));
+    press("E");
+    expect(paintedHead(byTitle)).toContain("Reference run");
+
+    // A later publish gives a new note the name the first one's title reads
+    // like. Neither note may be renamed by the other's arrival.
+    unmount();
+    mount(withForensics([{ ...titled }, { ...declared }]));
+    press("E");
+
+    expect(paintedHead(byTitle)).toContain("Reference run");
+    expect(paintedHead(byName)).toContain("says what it is called");
+  });
+
+  it("spells a declared name the way the document spelled it", () => {
+    const brief = withForensics([
+      { id: "Aa", title: "Upper", body: "One." },
+      { id: "aa", title: "Lower", body: "Two." },
+    ]);
+    mount(brief);
+    press("E");
+
+    // Two names the renderer accepts as different stay different here: folded
+    // together, one of them would be settled by its position in the list.
+    expect(paintedHead(noteRowId(EVIDENCE, "Aa"))).toContain("Upper");
+    expect(paintedHead(noteRowId(EVIDENCE, "aa"))).toContain("Lower");
+    expect(paintedRows()).toEqual(outline(brief).map((row) => row.id));
+  });
+
+  it("refuses a declared name that would break the id it lands in", () => {
+    // The renderer never publishes this, so what is being pinned down is what
+    // the page does with a document that reached it anyway: fall back to the
+    // title rather than paint a row id no toggle can point at.
+    const brief = withForensics([
+      { id: "two words", title: "The reference run", body: "One." },
+    ]);
+    mount(brief);
+    press("E");
+
+    const id = noteRowId(EVIDENCE, "~the-reference-run");
+    expect(paintedHead(id)).toContain("The reference run");
+    for (const painted of paintedRows()) {
+      expect(painted).not.toMatch(/[ \t\n\r\f]/u);
+    }
+  });
+
+  it("separates two siblings that would answer to one name", () => {
+    const brief = withForensics([
+      { title: "The same title", body: "One." },
+      { title: "The same title", body: "Two." },
+    ]);
+    mount(brief);
+    press("E");
+
+    const ids = outline(brief)
+      .filter((row) => row.parentId === EVIDENCE)
+      .map((row) => row.id);
+    expect(new Set(ids).size).toBe(2);
+    expect(paintedRows()).toEqual(outline(brief).map((row) => row.id));
+    for (const id of ids) {
+      expect(document.querySelectorAll(`[data-row-id="${id}"]`)).toHaveLength(
+        1,
+      );
+    }
+  });
+
+  it("names every row's body with one id reference, never a list", () => {
+    mount(withEvidence());
+    press("E");
+
+    const toggles = [...document.querySelectorAll("[aria-controls]")];
+    expect(toggles.length).toBeGreaterThan(0);
+    for (const toggle of toggles) {
+      const named = toggle.getAttribute("aria-controls") ?? "";
+      // `aria-controls` is a whitespace-separated list of id references, so a
+      // space in it names several elements that do not exist.
+      expect(named, "an id reference cannot hold whitespace").not.toMatch(
+        /\s/u,
+      );
+      expect(
+        document.getElementById(named),
+        `nothing on the page has the id ${named}`,
+      ).not.toBeNull();
+    }
+    for (const id of paintedRows()) {
+      expect(id, "a row id becomes an id reference").not.toMatch(/\s/u);
+    }
   });
 });

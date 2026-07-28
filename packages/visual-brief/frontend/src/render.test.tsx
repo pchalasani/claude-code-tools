@@ -65,7 +65,7 @@ describe("the painted page", () => {
     expect(paintedCursor()).toBe("newest/changed");
 
     press("G");
-    expect(paintedCursor()).toBe("older/history/one# evidence");
+    expect(paintedCursor()).toBe("older/history/one#~evidence");
 
     press("?");
     expect(document.querySelector('[role="dialog"]')).not.toBeNull();
