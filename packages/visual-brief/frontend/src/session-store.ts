@@ -255,6 +255,29 @@ export function consumeSelfReload(): boolean {
 }
 
 /**
+ * Read how many times this tab has already healed itself.
+ *
+ * @returns The count, or zero when it has never healed.
+ */
+export function readHealCount(): number {
+  const key = `visual-brief-heals:${runIdFromLocation()}`;
+  const raw = readItem(key) ?? readHistoryItem(key);
+  const value = Number.parseInt(raw ?? "", 10);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/**
+ * Remember how many times this tab has healed itself.
+ *
+ * @param count - The new total.
+ */
+export function rememberHealCount(count: number): void {
+  const key = `visual-brief-heals:${runIdFromLocation()}`;
+  writeItem(key, String(count));
+  writeHistoryItem(key, String(count));
+}
+
+/**
  * Read the standoff this tab last reloaded itself to escape.
  *
  * A standoff is a pair — what this page is, and what the daemon said about it

@@ -154,3 +154,40 @@ describe("text that is trying to become markup", () => {
     );
   });
 });
+
+describe("characters an engineer actually writes", () => {
+  it("leaves file globs and arithmetic exactly as written", () => {
+    // Before the flanking rule, both asterisks vanished and the wrong span
+    // was italicised — the page silently altering what the agent said.
+    for (const line of [
+      "I checked *.py and *.ts files",
+      "3 * 4 and 5 * 6 checks",
+    ]) {
+      const [block] = parseMarkdown(line);
+      expect(block?.kind).toBe("paragraph");
+      const text = block?.kind === "paragraph"
+        ? block.content.map((n) => (n.kind === "text" ? n.text : "?")).join("")
+        : "";
+      expect(text).toBe(line);
+    }
+  });
+
+  it("still emphasises when the marks hug their words", () => {
+    const [block] = parseMarkdown("this is *emphatic* indeed");
+    const kinds = block?.kind === "paragraph"
+      ? block.content.map((n) => n.kind)
+      : [];
+    expect(kinds).toContain("emphasis");
+  });
+
+  it("closes a fence only on its own marker", () => {
+    const blocks = parseMarkdown(
+      "~~~~\n<tag>\n```not-a-close\nstill code\n~~~~",
+    );
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]?.kind).toBe("code");
+    const text = blocks[0]?.kind === "code" ? blocks[0].text : "";
+    expect(text).toContain("still code");
+    expect(text).toContain("```not-a-close");
+  });
+});

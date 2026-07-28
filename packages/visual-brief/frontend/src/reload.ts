@@ -36,7 +36,9 @@
 
 import {
   markSelfReload,
+  readHealCount,
   readHealedStandoff,
+  rememberHealCount,
   rememberHealedStandoff,
 } from "./session-store";
 
@@ -47,6 +49,9 @@ export const POLL_INTERVAL_MS = 5000;
 
 /** Slowest the watch backs off to while the daemon is unreachable. */
 export const MAX_POLL_INTERVAL_MS = 60_000;
+
+/** Reloads a tab may spend healing before it stays put and stays readable. */
+export const MAX_HEALS = 3;
 
 /** Longest one version question may hang before it counts as unanswered. */
 export const VERSION_TIMEOUT_MS = 10_000;
@@ -311,8 +316,18 @@ export function healingWatch(
     current,
     read,
     reload,
-    healed: (served) => readHealedStandoff() === standoff(current, served),
-    remember: (served) => rememberHealedStandoff(standoff(current, served)),
+    // Two guards, because they answer different questions. The standoff
+    // stops a page bouncing on the SAME impasse; the budget stops a daemon
+    // whose unreadable answer keeps changing — an uptime counter, a clock —
+    // from presenting a brand-new impasse on every poll and earning a fresh
+    // reload forever. A genuine upgrade still heals; an endless one cannot.
+    healed: (served) =>
+      readHealedStandoff() === standoffName(current, served)
+      || readHealCount() >= MAX_HEALS,
+    remember: (served) => {
+      rememberHealedStandoff(standoffName(current, served));
+      rememberHealCount(readHealCount() + 1);
+    },
   };
 }
 
@@ -327,7 +342,10 @@ export function healingWatch(
  * @param served - What the daemon answered, or null when it did not.
  * @returns A name no other impasse answers to.
  */
-function standoff(current: string, served: string | null): string {
+export function standoffName(
+  current: string,
+  served: string | null,
+): string {
   return JSON.stringify([current, served]);
 }
 

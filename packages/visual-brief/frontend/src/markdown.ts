@@ -201,7 +201,28 @@ function readCode(fence: string, text: string): Read | null {
  */
 function readWrapped(mark: string, text: string): Read | null {
   const body = text.slice(mark.length);
-  const closing = body.indexOf(mark);
+  // CommonMark's flanking rule, for the same reason the underscore has a
+  // word-boundary rule: an opener followed by a space, or a closer preceded
+  // by one, is not emphasis. Without this, "I checked *.py and *.ts files"
+  // and "3 * 4 and 5 * 6" both lose their asterisks and italicise the wrong
+  // span — file globs and arithmetic are ordinary content in a brief, and
+  // the page must not alter what the agent said.
+  if (body === "" || /^\s/.test(body)) {
+    return null;
+  }
+  let closing = -1;
+  let from = 0;
+  while (true) {
+    const found = body.indexOf(mark, from);
+    if (found <= 0) {
+      break;
+    }
+    if (!/\s$/.test(body.slice(0, found))) {
+      closing = found;
+      break;
+    }
+    from = found + mark.length;
+  }
   if (closing <= 0) {
     return null;
   }
@@ -247,14 +268,37 @@ function readLink(text: string): Read | null {
  * @returns The index of the first line after the block.
  */
 function readFence(lines: string[], at: number, blocks: Block[]): number {
+  // A block closes only on its OWN fence: the same character, at least as
+  // long, with nothing after it. Closing on any three backticks meant a
+  // tilde-fenced block ended at a line of backticks inside it, and the rest
+  // of the code was painted as prose.
+  const opener = FENCE.exec(lines[at] ?? "")?.[0].trim() ?? "```";
+  const char = opener[0] ?? "`";
+  const width = opener.length;
   const body: string[] = [];
   let cursor = at + 1;
-  while (cursor < lines.length && !FENCE.test(lines[cursor] ?? "")) {
+  while (cursor < lines.length && !closesFence(lines[cursor] ?? "", char, width)) {
     body.push(lines[cursor] ?? "");
     cursor += 1;
   }
   blocks.push({ kind: "code", text: body.join("\n") });
   return cursor < lines.length ? cursor + 1 : cursor;
+}
+
+/**
+ * Report whether one line closes a fence opened with a given marker.
+ *
+ * @param line - The line to judge.
+ * @param char - The fence character the block was opened with.
+ * @param width - How many of them opened it.
+ * @returns True when this line is that block's closing fence.
+ */
+function closesFence(line: string, char: string, width: number): boolean {
+  const trimmed = line.trim();
+  if (trimmed.length < width) {
+    return false;
+  }
+  return [...trimmed].every((one) => one === char);
 }
 
 /**
