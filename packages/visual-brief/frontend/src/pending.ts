@@ -42,20 +42,40 @@ export const MAX_REFRESHES = 3;
  *
  * @returns True when the human reloaded this page themselves.
  */
+/**
+ * What this page load was, classified exactly once.
+ *
+ * The marker is consumed on first classification; a second look within the
+ * same load would find the marker gone and the navigation entry still
+ * saying "reload", and would misread the page's own reload as the human's.
+ */
+let loadWasHumanRefresh: boolean | null = null;
+
 export function isHumanRefresh(): boolean {
   // The page's own publish-reload uses location.reload() and the browser
   // reports it identically to a manual refresh, so the page announces its
   // own reloads just before making them; an announced reload is not the
-  // human's. The announcement is consumed here exactly once per load.
+  // human's. Classification happens once per load and is remembered.
+  if (loadWasHumanRefresh !== null) {
+    return loadWasHumanRefresh;
+  }
   const selfCaused = consumeSelfReload();
   try {
     const [entry] = performance.getEntriesByType("navigation");
-    return !selfCaused
+    loadWasHumanRefresh = !selfCaused
       && (entry as PerformanceNavigationTiming | undefined)?.type
         === "reload";
   } catch {
-    return false;
+    loadWasHumanRefresh = false;
   }
+  return loadWasHumanRefresh;
+}
+
+/**
+ * Forget the load classification, so a test can simulate a fresh load.
+ */
+export function forgetLoadClassification(): void {
+  loadWasHumanRefresh = null;
 }
 
 

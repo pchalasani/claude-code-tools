@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BriefDocument, Turn } from "./document";
-import { STALL_POLLS, createPending, locateSubmissions } from "./pending";
+import {
+  STALL_POLLS,
+  createPending,
+  forgetLoadClassification,
+  locateSubmissions,
+} from "./pending";
 import {
   markSelfReload,
   readSentRecords,
@@ -78,6 +83,7 @@ function sent(text: string, at: string = SENT_AT, loads = 0): SentRecord {
 beforeEach(() => {
   window.sessionStorage.clear();
   window.history.replaceState(null, "");
+  forgetLoadClassification();
 });
 
 describe("finding what a sent message became", () => {
@@ -263,14 +269,41 @@ describe("the sign a page load carries over", () => {
       .mockReturnValue([navigation as unknown as PerformanceEntry]);
     try {
       saveSentRecords([sent("Will this ever land?")]);
+      forgetLoadClassification();
       createPending(briefWith([]));
+      forgetLoadClassification();
       createPending(briefWith([]));
       expect(readSentRecords()).toHaveLength(1);
 
+      forgetLoadClassification();
       const after = createPending(briefWith([]));
 
       expect(after.at(ITEM)).toHaveLength(0);
       expect(readSentRecords()).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("classifies one load once, however many times state is built", () => {
+    // The marker is consumed on first classification. A second createPending
+    // in the SAME self-caused load must reuse that answer — re-reading the
+    // navigation entry with the marker gone would misread the page's own
+    // reload as the human's and age the record.
+    const navigation = { type: "reload" };
+    const spy = vi
+      .spyOn(performance, "getEntriesByType")
+      .mockReturnValue([navigation as unknown as PerformanceEntry]);
+    try {
+      saveSentRecords([sent("Still waiting")]);
+      markSelfReload();
+      forgetLoadClassification();
+      createPending(briefWith([]));
+      createPending(briefWith([]));
+      createPending(briefWith([]));
+
+      expect(readSentRecords()).toHaveLength(1);
+      expect(readSentRecords()[0]?.refreshes ?? 0).toBe(0);
     } finally {
       spy.mockRestore();
     }
@@ -288,6 +321,7 @@ describe("the sign a page load carries over", () => {
       saveSentRecords([sent("Still waiting")]);
       for (let load = 0; load < 5; load += 1) {
         markSelfReload();
+        forgetLoadClassification();
         createPending(briefWith([]));
       }
 
