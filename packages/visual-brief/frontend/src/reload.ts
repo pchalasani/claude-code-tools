@@ -3,13 +3,22 @@
  *
  * The agent rewrites the page whenever it publishes, so a page left open must
  * notice. It compares the generation baked into its own markup with the one
- * the local daemon reports and reloads when they diverge.
+ * the local daemon reports, and when the two differ it fetches the new
+ * document and hands it to the running application. The page stays alive and
+ * changes. It used to throw itself away instead, which is why it flickered,
+ * why content jumped under the reader, and why anything the reader was in the
+ * middle of — a scroll position, a half-written message — was lost every time
+ * the agent said anything.
  *
- * The hard part is not the comparison, it is everything that can go wrong
- * around it. A tab left open across an upgrade of the daemon met a
- * ``render-version`` answer it could not read, swallowed it, and sat there
- * showing a working sign forever until it was reloaded by hand. So the rules
- * here are deliberately blunt:
+ * A reload is still the answer to two situations, and only these two:
+ *
+ * - the served page carries a DIFFERENT front-end bundle. Only a reload loads
+ *   code, and a document patched into a tab running last week's code leaves
+ *   that tab running last week's code forever.
+ * - the page cannot be patched at all — no document endpoint, nothing
+ *   readable, or an application that refused what it was given.
+ *
+ * Everything else about this watch is unchanged, and deliberately blunt:
  *
  * - An answer the client cannot interpret is not an error to swallow, it is
  *   an instruction to reload. The two ends no longer speak the same language,
@@ -23,47 +32,45 @@
  *   carries its own deadline, because the next cycle is scheduled only once
  *   this one settles and one frozen daemon must not end the watch for the
  *   life of the tab.
- * - Healing is remembered, so a page that comes back exactly as
- *   unintelligible as it left does not reload forever. What is remembered is
- *   the STANDOFF — this page's own generation and the answer it could not
- *   reconcile with — and not merely the page. Remembering only the page was a
- *   way for a tab to go stale for good: a page carrying no generation at all
- *   can never match anything, so after one heal it treated every later answer
- *   as the same impasse and stopped noticing publishes for the life of the
- *   tab, still running whatever code it was serving. A changed answer is a
- *   changed situation and is worth exactly one more reload.
+ * - Healing is remembered, so a page that comes back exactly as it left does
+ *   not reload forever. What is remembered is the STANDOFF — this page's own
+ *   generation and the answer it could not reconcile with — and not merely the
+ *   page. Remembering only the page was a way for a tab to go stale for good:
+ *   a page carrying no generation at all can never match anything, so after
+ *   one heal it treated every later answer as the same impasse and stopped
+ *   noticing publishes for the life of the tab, still running whatever code it
+ *   was serving. A changed answer is a changed situation and is worth exactly
+ *   one more reload.
  */
 
+import type { BriefDocument } from "./document";
 import {
-  markSelfReload,
-  readHealedStandoff,
-  rememberHealedStandoff,
-} from "./session-store";
-
-export const VERSION_META = "visual-brief-render-version";
-export const POLL_META = "visual-brief-poll-ms";
-export const VERSION_PATH = "render-version";
-export const POLL_INTERVAL_MS = 5000;
+  isGeneration,
+  readDocumentPayload,
+  readServedDocument,
+  readServedVersion,
+  type DocumentPayload,
+} from "./document-feed";
+import { pageAssets, pageVersion, pollInterval } from "./page-meta";
+import { readHealedStandoff, rememberHealedStandoff } from "./session-store";
 
 /** Slowest the watch backs off to while the daemon is unreachable. */
 export const MAX_POLL_INTERVAL_MS = 60_000;
 
-/** Longest one version question may hang before it counts as unanswered. */
-export const VERSION_TIMEOUT_MS = 10_000;
-
-/** Narrowest and widest poll interval a page may ask for. */
-const POLL_BOUNDS = [100, 600_000] as const;
-
-/** The shape every generation this client understands has. */
-const GENERATION = /^[0-9a-f]{64}$/;
-
 /** What one poll cycle concluded. */
-export type PollOutcome = "same" | "reload" | "retry";
+export type PollOutcome = "same" | "patched" | "reload" | "retry";
 
 /** Everything one poll needs, injected so it can be driven in tests. */
 export interface VersionWatch {
-  /** Generation the loaded page was rendered from. */
+  /**
+   * Generation the page is currently showing.
+   *
+   * Written by a successful patch, because after one the page is showing
+   * something other than what it was rendered from.
+   */
   current: string;
+  /** Identity of the front-end bundle this page is running. */
+  assets: string;
   /**
    * Read what the server would serve right now.
    *
@@ -72,6 +79,10 @@ export interface VersionWatch {
    * speaking, and is judged on whether it can be understood.
    */
   read: () => Promise<string | null>;
+  /** Fetch the document the daemon is serving; throws when it cannot. */
+  fetchPayload: () => Promise<unknown>;
+  /** Show a newly delivered document; throws when it cannot be shown. */
+  apply: (document: BriefDocument) => void;
   /** Replace the loaded page with the current one. */
   reload: () => void;
   /**
@@ -87,48 +98,30 @@ export interface VersionWatch {
   remember: (served: string | null) => void;
 }
 
-/**
- * Report whether a value is a generation this client can compare.
- *
- * @param value - Text from the page or from the daemon.
- * @returns True when it is a generation in the form this client speaks.
- */
-export function isGeneration(value: string): boolean {
-  return GENERATION.test(value);
-}
-
-/**
- * Read the generation embedded in a rendered page.
- *
- * @param root - Document to read.
- * @returns The generation, or an empty string when the page has none.
- */
-export function pageVersion(root: Document): string {
-  return metaContent(root, VERSION_META) ?? "";
-}
-
-/**
- * Read how often this page asks to be checked.
- *
- * @param root - Document to read.
- * @param fallback - Interval to use when the page does not say.
- * @returns The interval in milliseconds.
- */
-export function pollInterval(
-  root: Document,
-  fallback: number = POLL_INTERVAL_MS,
-): number {
-  const asked = Number.parseInt(metaContent(root, POLL_META) ?? "", 10);
-  if (!Number.isFinite(asked)) {
-    return fallback;
-  }
-  return Math.min(Math.max(asked, POLL_BOUNDS[0]), POLL_BOUNDS[1]);
+/** How a real page answers the questions a watch asks. */
+export interface WatchSources {
+  /** Generation the loaded page was rendered from. */
+  current: string;
+  /** Identity of the front-end bundle the loaded page carries. */
+  assets: string;
+  /** How to ask the daemon what it would serve. */
+  read: () => Promise<string | null>;
+  /** How to fetch the document the daemon is serving. */
+  fetchPayload: () => Promise<unknown>;
+  /** What showing a newly delivered document does. */
+  apply: (document: BriefDocument) => void;
+  /** What replacing the loaded page does. */
+  reload: () => void;
 }
 
 /**
  * Decide what one answer from the daemon means.
  *
- * @param current - Generation the loaded page was rendered from.
+ * "Reload" here means only that the page has fallen behind. Whether it is
+ * brought up to date by patching or by replacing itself is settled afterwards,
+ * by whether the new document can be fetched and shown.
+ *
+ * @param current - Generation the page is showing.
  * @param served - What the daemon answered, or null when it did not.
  * @param healed - Whether this page already reloaded itself out of this state.
  * @returns What the page should do about it.
@@ -155,7 +148,7 @@ export function decidePoll(
 /**
  * Run one poll, whatever happens.
  *
- * @param watch - Injected generation source and reload action.
+ * @param watch - Injected generation source, patcher and reload action.
  * @returns What the cycle concluded; never throws.
  */
 export async function pollOnce(watch: VersionWatch): Promise<PollOutcome> {
@@ -165,19 +158,30 @@ export async function pollOnce(watch: VersionWatch): Promise<PollOutcome> {
   } catch {
     return "retry";
   }
+  let healed = false;
   let outcome: PollOutcome = "retry";
   try {
-    outcome = decidePoll(watch.current, served, watch.healed(served));
+    healed = watch.healed(served);
+    outcome = decidePoll(watch.current, served, healed);
   } catch {
     return "retry";
   }
   if (outcome !== "reload") {
     return outcome;
   }
-  try {
-    if (served !== null && !comparable(watch.current, served)) {
-      watch.remember(served);
+  if (served !== null && comparable(watch.current, served)) {
+    if (await patchInPlace(watch)) {
+      return "patched";
     }
+    // The page has fallen behind and cannot be brought forward without being
+    // replaced. A page that already replaced itself out of this exact standoff
+    // and came back to it stays put, and stays readable.
+    if (healed) {
+      return "same";
+    }
+  }
+  try {
+    watch.remember(served);
   } catch {
     // Being unable to remember is not a reason to stay stranded.
   }
@@ -186,9 +190,39 @@ export async function pollOnce(watch: VersionWatch): Promise<PollOutcome> {
 }
 
 /**
+ * Bring the running page up to date without replacing it.
+ *
+ * @param watch - The watch to patch through.
+ * @returns True when the page is now showing the served document.
+ */
+async function patchInPlace(watch: VersionWatch): Promise<boolean> {
+  let payload: DocumentPayload | null = null;
+  try {
+    payload = readDocumentPayload(await watch.fetchPayload());
+  } catch {
+    return false;
+  }
+  if (payload === null || payload.assets !== watch.assets) {
+    // Either the daemon cannot be understood, or what it is serving is built
+    // from different code. Code arrives only by loading a page.
+    return false;
+  }
+  try {
+    watch.apply(payload.document);
+  } catch {
+    return false;
+  }
+  // The generation adopted is the one the payload carried, not the one the
+  // poll reported. A second publish landing between the two would otherwise
+  // leave the page believing it is showing something it is not.
+  watch.current = payload.generation;
+  return true;
+}
+
+/**
  * Report whether two ends are speaking about generations at all.
  *
- * @param current - Generation the loaded page was rendered from.
+ * @param current - Generation the page is showing.
  * @param served - What the daemon answered.
  * @returns True when both are generations this client can compare.
  */
@@ -252,79 +286,44 @@ export function announcePoll(outcome: PollOutcome): void {
 }
 
 /**
- * Ask the local daemon which generation it would serve right now.
- *
- * The question is given a deadline, because ``fetch`` has none: a daemon that
- * accepts the connection and then never answers would otherwise leave this
- * promise pending forever, and the next cycle is only scheduled once this one
- * settles. One hung request would end the watch for the life of the tab. A
- * request that runs out of time is no answer at all, which is the case the
- * poller already knows how to back off from.
- *
- * @param timeoutMs - How long to wait before giving up on this question.
- * @returns What the daemon said, or null when the question did not get
- *     through.
- */
-export async function readServedVersion(
-  timeoutMs: number = VERSION_TIMEOUT_MS,
-): Promise<string | null> {
-  const giveUp = new AbortController();
-  const deadline = setTimeout(() => giveUp.abort(), timeoutMs);
-  try {
-    const response = await fetch(VERSION_PATH, {
-      cache: "no-store",
-      signal: giveUp.signal,
-    });
-    if (!response.ok) {
-      return null;
-    }
-    return (await response.text()).trim();
-  } catch {
-    // Refused, aborted, or out of time: all of them mean the page learned
-    // nothing this cycle, and none of them mean it should reload.
-    return null;
-  } finally {
-    clearTimeout(deadline);
-  }
-}
-
-/**
  * Build the watch a real page polls on, memory and all.
  *
  * The memory is the whole reason this is a named thing rather than an object
- * literal inside the watch: "reload once out of a state you cannot read" is
- * only true if the page can still say, after the reload, that it was here
+ * literal inside the watch: "reload once out of a state you cannot get out of"
+ * is only true if the page can still say, after the reload, that it was here
  * before. That claim is worth testing against the store it is actually kept
  * in, so this is what the tests drive too.
  *
- * @param current - Generation the loaded page was rendered from.
- * @param read - How to ask the daemon what it would serve.
- * @param reload - What replacing the loaded page does.
+ * @param sources - How this page answers the watch's questions.
  * @returns The watch.
  */
-export function healingWatch(
-  current: string,
-  read: () => Promise<string | null>,
-  reload: () => void,
-): VersionWatch {
-  return {
-    current,
-    read,
-    reload,
-    healed: (served) => readHealedStandoff() === standoffName(current, served),
+export function healingWatch(sources: WatchSources): VersionWatch {
+  const watch: VersionWatch = {
+    current: sources.current,
+    assets: sources.assets,
+    read: sources.read,
+    fetchPayload: sources.fetchPayload,
+    apply: sources.apply,
+    reload: sources.reload,
+    // Both read `watch.current` rather than the generation this page was
+    // rendered from: a patched page is showing something else, and a standoff
+    // is about what is on the screen now.
+    healed: (served) =>
+      readHealedStandoff() === standoffName(watch.current, served),
     remember: (served) =>
-      rememberHealedStandoff(standoffName(current, served)),
+      rememberHealedStandoff(standoffName(watch.current, served)),
   };
+  return watch;
 }
 
 /**
  * Name one impasse between a loaded page and the daemon's answer.
  *
- * Both halves are unreadable by definition — that is what an impasse is — so
- * the name is built by a encoder that cannot be confused by their contents
- * rather than by joining them with a separator one of them might contain.
+ * Both halves may be unreadable — that is what an impasse is — so the name is
+ * built by an encoder that cannot be confused by their contents rather than by
+ * joining them with a separator one of them might contain.
  *
- * @param current - Generation the loaded page was rendered from.
+ * @param current - Generation the page is showing.
  * @param served - What the daemon answered, or null when it did not.
  * @returns A name no other impasse answers to.
  */
@@ -336,24 +335,37 @@ export function standoffName(
 }
 
 /**
- * Start polling the local daemon for a newer generation of this page.
+ * Refuse to show a document, for a page that has no application to show it.
  *
- * @param root - Document holding the generation meta element.
+ * A page whose bundle failed to read its own embedded document has nothing to
+ * patch into, and is exactly the page that has to replace itself with one that
+ * works.
+ */
+function refuseToPatch(): never {
+  throw new Error("this page has no live document to patch");
+}
+
+/**
+ * Start watching the local daemon for a newer generation of this page.
+ *
+ * @param root - Document holding the generation and bundle meta elements.
+ * @param apply - How to show a newly delivered document.
  * @param intervalMs - Milliseconds between polls when all is well.
  * @returns A function that stops the watch.
  */
 export function startVersionWatch(
   root: Document,
+  apply: (document: BriefDocument) => void = refuseToPatch,
   intervalMs: number = pollInterval(root),
 ): () => void {
-  const watch = healingWatch(
-    pageVersion(root),
-    readServedVersion,
-    () => {
-      markSelfReload();
-      window.location.reload();
-    },
-  );
+  const watch = healingWatch({
+    current: pageVersion(root),
+    assets: pageAssets(root),
+    read: readServedVersion,
+    fetchPayload: readServedDocument,
+    apply,
+    reload: () => window.location.reload(),
+  });
   let timer = 0;
   let delay = intervalMs;
   let stopped = false;
@@ -374,16 +386,4 @@ export function startVersionWatch(
     stopped = true;
     window.clearTimeout(timer);
   };
-}
-
-/**
- * Read one meta element's content.
- *
- * @param root - Document to read.
- * @param name - Name of the meta element.
- * @returns Its content, or null when the page carries none.
- */
-function metaContent(root: Document, name: string): string | null {
-  const meta = root.querySelector<HTMLMetaElement>(`meta[name="${name}"]`);
-  return meta?.content ?? null;
 }

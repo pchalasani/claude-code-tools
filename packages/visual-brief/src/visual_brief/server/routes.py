@@ -103,6 +103,7 @@ def _run_endpoint(path: str) -> str | None:
         "/": "run",
         "/version": "version",
         "/render-version": "render_version",
+        "/document": "document",
         "/ask": "ask",
         "/signal": "signal",
     }

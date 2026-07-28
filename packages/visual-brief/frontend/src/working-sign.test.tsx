@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import type { BriefDocument } from "./document";
-import { forgetLoadClassification } from "./pending";
 import { announcePoll } from "./reload";
 import { saveSentRecords } from "./session-store";
 import { mount, useHarness } from "../test/harness";
@@ -14,24 +13,19 @@ const FOLDED = `${ITEM}#q-pending-9f2`;
 // point: one question's sign is not the page's only sign.
 const ALREADY_OPEN = "newest/changed/beta#q-open";
 const STAMP = "2026-07-27T09:00:00.000Z";
-const ASKED = "Does the sign survive the reload?";
+const ASKED = "Does the sign survive a page load?";
 
 useHarness();
 
 /**
  * Say that this tab sent a message and has not yet seen it arrive.
  *
- * This is the whole memory a reload carries: it is written the instant the
+ * This is the whole memory a page load carries: it is written the instant the
  * daemon accepts a message, and it is what the very next page load reads
  * before it paints anything.
- *
- * @param loads - How many page loads it has already survived.
  */
-function sentBeforeTheReload(loads = 0): void {
-  forgetLoadClassification();
-  saveSentRecords([
-    { rowId: ITEM, anchorId: ITEM, text: ASKED, at: STAMP, loads },
-  ]);
+function sentBeforeTheLoad(): void {
+  saveSentRecords([{ rowId: ITEM, anchorId: ITEM, text: ASKED, at: STAMP }]);
 }
 
 /**
@@ -81,9 +75,9 @@ function chips(): string[] {
   );
 }
 
-describe("the sign across the reload a send causes", () => {
+describe("the sign across a page load that followed a send", () => {
   it("is up at the first paint of a page that has not caught up yet", () => {
-    sentBeforeTheReload();
+    sentBeforeTheLoad();
 
     mount();
 
@@ -96,7 +90,7 @@ describe("the sign across the reload a send causes", () => {
   });
 
   it("is up at the first paint of the page that folded the question in", () => {
-    sentBeforeTheReload();
+    sentBeforeTheLoad();
 
     mount(foldedIn());
 
@@ -107,7 +101,7 @@ describe("the sign across the reload a send causes", () => {
   });
 
   it("stands beside the awaiting chips rather than being replaced by them", () => {
-    sentBeforeTheReload();
+    sentBeforeTheLoad();
 
     mount(foldedIn());
 
@@ -119,7 +113,7 @@ describe("the sign across the reload a send causes", () => {
   });
 
   it("says it once for one question, not once per source", () => {
-    sentBeforeTheReload();
+    sentBeforeTheLoad();
 
     mount(foldedIn());
 
@@ -137,10 +131,8 @@ describe("the sign across the reload a send causes", () => {
         anchorId: ITEM,
         text: "A follow-up nobody ever saw",
         at: STAMP,
-        loads: 1,
       },
     ]);
-    forgetLoadClassification();
     mount(foldedIn());
     for (let poll = 0; poll < 3; poll += 1) {
       announcePoll("same");
@@ -158,7 +150,7 @@ describe("the sign across the reload a send causes", () => {
   });
 
   it("keeps the words legible rather than painting them through anything", () => {
-    sentBeforeTheReload();
+    sentBeforeTheLoad();
 
     mount();
 

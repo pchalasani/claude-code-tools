@@ -252,7 +252,7 @@ describe("chatting wherever the cursor is", () => {
   });
 });
 
-describe("after the reload a send causes", () => {
+describe("after a page load that followed a send", () => {
   it("opens on the conversation the human just wrote in", () => {
     saveSentRecords([
       {
@@ -260,7 +260,6 @@ describe("after the reload a send causes", () => {
         anchorId: ALPHA,
         text: "Is alpha checked?",
         at: "2026-07-25T11:00:00Z",
-        loads: 0,
       },
     ]);
 
@@ -283,7 +282,6 @@ describe("after the reload a send causes", () => {
         anchorId: "newest/next/gamma",
         text: "Will this outlast the reload?",
         at: "2026-07-25T13:00:00Z",
-        loads: 0,
       },
     ]);
 

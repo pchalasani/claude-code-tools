@@ -6,6 +6,8 @@
  * browser what is selected, which is the whole point of the rewrite.
  */
 
+import type { Accessor } from "solid-js";
+
 import { composeRow } from "./cursor";
 import {
   createComposer,
@@ -27,8 +29,8 @@ import { focusLater } from "./reveal";
 
 /** Everything the page reads and writes. */
 export interface BriefState {
-  /** The document being shown. */
-  brief: BriefDocument;
+  /** The document being shown, read live: a publish replaces it in place. */
+  readonly brief: BriefDocument;
   /** Cursor, folding and search. */
   nav: Navigation;
   /** What the human is writing. */
@@ -46,13 +48,13 @@ export interface BriefState {
 }
 
 /**
- * Build the state for one delivered document.
+ * Build the state for a document that can change under the page.
  *
- * @param brief - The document the page is showing.
+ * @param brief - The document the page is showing, read live.
  * @returns The live page state.
  */
-export function createBriefState(brief: BriefDocument): BriefState {
-  // Read before anything is built: a message this tab sent just before the
+export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
+  // Read before anything is built: a message this tab sent just before a
   // reload names the conversation this load should open on, which the cursor
   // has to know before it decides where it is.
   const pending = createPending(brief);
@@ -224,7 +226,9 @@ export function createBriefState(brief: BriefDocument): BriefState {
   };
 
   return {
-    brief,
+    get brief(): BriefDocument {
+      return brief();
+    },
     nav,
     composer,
     hints,

@@ -1,15 +1,16 @@
 /**
  * What changed since the human last looked.
  *
- * The page reloads itself the moment the agent publishes, and a reload rebuilds
- * every row from scratch. Rows hold themselves open while they are *awaiting*
- * an answer, which means the one row the human is waiting on is the one row
- * that folds shut the instant its answer arrives. That is the moment this
- * module exists for: an answer that landed since the last look is new, it opens
- * itself, and it stays marked until the human goes to it.
+ * Rows hold themselves open while they are *awaiting* an answer, which means
+ * the one conversation the human is waiting on is the one that would fold shut
+ * the instant its answer arrived. That is the moment this module exists for:
+ * an answer that landed since the last look is new, it opens itself, and it
+ * stays marked until the human goes to it.
  *
- * Everything here is a pure function over the rows and one remembered record,
- * so freshness can be tested without a browser, a clock or a timer.
+ * The answer can land two ways — carried in by a reload, or patched into the
+ * open page — and both come through ``settle``, so it makes no difference
+ * which. Everything here is a pure function over the rows and one remembered
+ * record, so freshness can be tested without a browser, a clock or a timer.
  */
 
 import { createSignal } from "solid-js";
@@ -104,7 +105,7 @@ export function rememberSeen(
   return remembered;
 }
 
-/** What one page load knows about answers it has not been shown before. */
+/** What one open page knows about answers it has not been shown before. */
 export interface Freshness {
   /** Whether one conversation's answer arrived since the last look. */
   isFresh: (id: string) => boolean;
@@ -112,29 +113,54 @@ export interface Freshness {
   visit: (id: string) => void;
   /** The conversations still marked new. */
   ids: () => ReadonlySet<string>;
+  /**
+   * Take in a newly delivered document.
+   *
+   * Called once at construction and again for every document patched into the
+   * open page, so an answer that arrives without a reload is marked exactly as
+   * one that arrives with one.
+   */
+  settle: (rows: Row[]) => void;
 }
 
 /**
- * Build the freshness state for one page load.
+ * Build the freshness state for one open page.
  *
- * What the human has seen is written now rather than on the way out: this page
- * is closed by being replaced, so there is no later moment to write in. What
- * is still marked new is deliberately left out of that record, which is what
- * keeps it marked across further reloads until it is visited.
+ * What the human has seen is written as it is settled rather than on the way
+ * out: a page can be replaced at any moment, so there is no later moment to
+ * write in. What is still marked new is deliberately left out of that record,
+ * which is what keeps it marked — across further publishes and across a
+ * reload — until it is visited.
  *
- * @param rows - Every row of the document.
+ * @param rows - Every row of the document, as it stands now.
  * @returns The live freshness state.
  */
 export function createFreshness(rows: Row[]): Freshness {
-  const states = answerStates(rows);
-  const [fresh, setFresh] = createSignal<ReadonlySet<string>>(
-    freshAnswers(states, readSeenAnswers()),
-  );
-  let seen: SeenAnswers = rememberSeen(states, fresh());
-  saveSeenAnswers(seen);
+  let states = answerStates(rows);
+  const [fresh, setFresh] = createSignal<ReadonlySet<string>>(new Set());
+  // Null until the first settle: a page with no record at all is a first
+  // look, and nothing on a first look is new.
+  let seen: SeenAnswers | null = readSeenAnswers();
+
+  const settle = (current: Row[]): void => {
+    states = answerStates(current);
+    const arrived = freshAnswers(states, seen);
+    const marked =
+      arrived.size === 0
+        ? fresh()
+        : new Set([...fresh(), ...arrived]);
+    if (arrived.size > 0) {
+      setFresh(marked);
+    }
+    seen = rememberSeen(states, marked);
+    saveSeenAnswers(seen);
+  };
+  settle(rows);
+
   return {
     isFresh: (id) => fresh().has(id),
     ids: fresh,
+    settle,
     visit: (id) => {
       if (!fresh().has(id)) {
         return;
@@ -144,7 +170,7 @@ export function createFreshness(rows: Row[]): Freshness {
         next.delete(id);
         return next;
       });
-      seen = { ...seen, [id]: states[id] ?? "" };
+      seen = { ...(seen ?? {}), [id]: states[id] ?? "" };
       saveSeenAnswers(seen);
     },
   };

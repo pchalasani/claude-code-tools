@@ -35,8 +35,8 @@ export interface ViewModes {
 
 /** What the view commands need from the navigable state around them. */
 export interface ViewModeDeps {
-  /** Every row of the document, in order. */
-  rows: Row[];
+  /** Every row of the document, in order, as it stands now. */
+  rows: Accessor<Row[]>;
   /** The current search text. */
   query: Accessor<string>;
   /** The rows currently expanded. */
@@ -94,7 +94,7 @@ export function createViewModes(deps: ViewModeDeps): ViewModes {
       setChats(false);
       return;
     }
-    const showing = filterRows(deps.rows, deps.query());
+    const showing = filterRows(deps.rows(), deps.query());
     const wanted = chatRows(showing);
     const here = deps.cursorId();
     // The view is a list of conversations, so the cursor lands on one: the
@@ -136,7 +136,7 @@ export function createViewModes(deps: ViewModeDeps): ViewModes {
     chats,
     setChats,
     toggleChats,
-    expandAll: () => refold(expandAllIds(deps.rows)),
-    collapseAll: () => refold(collapseToLaneIds(deps.rows)),
+    expandAll: () => refold(expandAllIds(deps.rows())),
+    collapseAll: () => refold(collapseToLaneIds(deps.rows())),
   };
 }

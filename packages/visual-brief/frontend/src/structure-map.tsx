@@ -50,10 +50,11 @@ export function StructureMap(props: { state: BriefState }): JSX.Element {
                 {(lane) => {
                   const id = laneRowId(update.id, lane);
                   const row = () => props.state.nav.row(id);
-                  const width = Math.min(
-                    MAX_TICK,
-                    10 + (lane.items ?? []).length * 8,
-                  );
+                  // Read rather than measured once: a lane that gains items
+                  // while the page is open grows its tick, because the map is
+                  // a picture of the document as it stands.
+                  const width = (): number =>
+                    Math.min(MAX_TICK, 10 + (lane.items ?? []).length * 8);
                   return (
                     <li>
                       <button
@@ -68,7 +69,7 @@ export function StructureMap(props: { state: BriefState }): JSX.Element {
                       >
                         <span
                           class="map-tick"
-                          style={{ width: `${width}px` }}
+                          style={{ width: `${width()}px` }}
                           aria-hidden="true"
                         />
                         <span class="map-label">{lane.name}</span>

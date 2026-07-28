@@ -78,23 +78,30 @@ Inside the chat box plain `Enter` starts a new line; sending is the chord.
 still opens the way it does anywhere else.
 
 While a message is on its way and until its answer arrives, the page says
-`agent is working` where the answer will land. When an answer arrives during a
-self-reload, its conversation opens itself and is marked `New answer` until you
-go to it.
+`agent is working` where the answer will land. When an answer arrives, its
+conversation opens itself and is marked `New answer` until you go to it.
 
-Sending makes the agent republish, which reloads the page under you. The page
-comes back on the conversation you just wrote in, scrolled to it, with the
-waiting sign still up: the message is recognised again by its own words and the
-instant the daemon queued them, so the sign follows it wherever the fold puts
-it. A message that never appears at all stops claiming progress and says
-`submitted — refresh if this persists` instead.
+A publish does not take the page away from you. The tab fetches the new
+document and changes only what actually changed: your scroll position, your
+cursor, every fold you chose, an open chat box and the words in it, the search
+you were running and any panel you had up all stay exactly as they were, and
+rows nobody edited keep the very elements they were drawn as. New material
+arrives under the ordinary rules, so nothing lands hidden.
+
+The waiting sign follows the message rather than the page. It is recognised by
+its own words and the instant the daemon queued them, so it is retired wherever
+the fold puts it. A message that never appears at all stops claiming progress
+and says `submitted — refresh if this persists` instead — and then stays,
+because a message you wrote that the page cannot account for is worth showing.
 
 An open tab also looks after itself. It asks the local daemon for the current
 page generation on a timer, backs off while the daemon is unreachable, and
-replaces itself when the answer is one it cannot interpret — which is what a
-tab left open across an upgrade used to sit through, silently, forever. It does
-that once per unreadable state, so a page that comes back the same stays
-readable instead of reloading in a loop.
+replaces itself in exactly two situations: the daemon is serving a different
+front-end bundle — only loading a page loads code — or the new document cannot
+be fetched or understood at all, which is what a tab left open across an
+upgrade used to sit through, silently, forever. It replaces itself once per
+such state, so a page that comes back the same stays readable instead of
+reloading in a loop.
 
 ## Development
 

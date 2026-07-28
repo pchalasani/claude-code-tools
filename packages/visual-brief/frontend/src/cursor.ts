@@ -104,14 +104,16 @@ export function nextAwaiting(
 }
 
 /**
- * Choose where the cursor belongs on a freshly loaded page.
+ * Choose where the cursor belongs given a document it may not be in.
  *
- * The page reloads itself whenever the agent publishes, so the cursor is
- * restored by id. When that exact row is gone the nearest surviving container
- * takes it, and only a document with nothing in common falls back to the top.
+ * This answers two moments with one rule. A page that has just loaded restores
+ * the cursor it remembered, and a page that has just been handed a new
+ * document keeps the cursor it has. Either way, when that exact row is gone
+ * the nearest surviving container takes it, and only a document with nothing
+ * in common falls back to the top.
  *
- * @param rows - Rows on the newly loaded page, in document order.
- * @param savedId - Row id the cursor was on before the reload.
+ * @param rows - Rows of the document now being shown, in document order.
+ * @param savedId - Row id the cursor was on.
  * @returns The row id to select, or null when the page has no rows.
  */
 export function restoreCursor(

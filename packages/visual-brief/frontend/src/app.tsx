@@ -1,4 +1,12 @@
-import { For, Show, createMemo, onCleanup, onMount, type JSX } from "solid-js";
+import {
+  For,
+  Show,
+  createEffect,
+  createMemo,
+  onCleanup,
+  onMount,
+  type JSX,
+} from "solid-js";
 
 import {
   TRUST_LABELS,
@@ -18,13 +26,20 @@ import { UpdateView } from "./update-view";
 /**
  * The briefing surface.
  *
- * @param props - The delivered document.
+ * @param props - The delivered document, which a publish may replace under
+ *     the running page.
  * @returns The rendered page.
  */
 export function App(props: { brief: BriefDocument }): JSX.Element {
-  const state = createBriefState(props.brief);
+  const state = createBriefState(() => props.brief);
   const onKey = (event: KeyboardEvent): void => state.handleKey(event);
   let stopWatching: (() => void) | null = null;
+  // The tab's own name for this run follows the document rather than the page
+  // it was served in: a patched page whose title still said what it said an
+  // hour ago would be lying in the one place the human cannot expand.
+  createEffect(() => {
+    document.title = props.brief.title;
+  });
   onMount(() => {
     document.addEventListener("keydown", onKey);
     // A message that never appears has to stop claiming progress eventually,

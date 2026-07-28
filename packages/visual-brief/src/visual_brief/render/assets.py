@@ -7,6 +7,7 @@ so it works the same from a source checkout, a wheel and a zipped install.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from functools import lru_cache
 from importlib import resources
@@ -119,3 +120,37 @@ def bundle_style() -> str:
         CSS safe to inline in a ``<style>`` element.
     """
     return _require_inlinable(STYLE_NAME, _read(STYLE_NAME))
+
+
+def stamp_bundle(script: str, style: str) -> str:
+    """Return an identity for one pair of inlined front-end artifacts.
+
+    Args:
+        script: The JavaScript bundle.
+        style: The stylesheet.
+
+    Returns:
+        The SHA-256 of the two, as hex.
+    """
+    digest = hashlib.sha256()
+    for name, text in ((SCRIPT_NAME, script), (STYLE_NAME, style)):
+        # Both the name and the length are part of the stamp, so no pair of
+        # artifacts can be rearranged into the same byte stream as another.
+        digest.update(f"{name}:{len(text)}:".encode("utf-8"))
+        digest.update(text.encode("utf-8"))
+    return digest.hexdigest()
+
+
+@lru_cache(maxsize=1)
+def bundle_stamp() -> str:
+    """Return the identity of the front-end bundle a page inlines.
+
+    It is derived from the script and the stylesheet and from nothing else, so
+    it changes when the code changes and stays put when the document changes.
+    That distinction is the whole point: an open page can tell a new document
+    it may patch into itself from new code, which only a reload can load.
+
+    Returns:
+        The SHA-256 of the two inlined artifacts, as hex.
+    """
+    return stamp_bundle(bundle_script(), bundle_style())

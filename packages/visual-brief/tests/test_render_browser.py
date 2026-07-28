@@ -2,9 +2,9 @@
 
 These assert the delivery contract rather than the interface: the inlined
 bundle executes, the embedded document reaches it intact, the page fetches
-nothing but the local reload channel, and a republished run reloads itself.
-The reading interface and its keyboard surface are asserted separately once
-they exist.
+nothing but its own local channel, and a republished run takes the new
+document in without replacing itself. The reading interface and its keyboard
+surface are asserted separately once they exist.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from typing import Iterator
 
 import pytest
 
-from browser_support import Browser, browser_session
+from browser_support import FIRST_ITEM, Browser, browser_session
 from page_document import embedded_document, is_awaiting, iter_threads
 from visual_brief.render import render_content
 
@@ -81,10 +81,15 @@ def test_the_page_agrees_with_the_document_on_what_awaits_an_answer(
     assert int(shown) == len(awaiting) == 2
 
 
-def test_page_makes_no_request_other_than_its_own_reload_channel(
+def test_page_makes_no_request_other_than_its_own_local_channel(
     browser: Browser,
 ) -> None:
-    """Keep the page self-contained: no subresource ever leaves the file."""
+    """Keep the page self-contained: no subresource ever leaves the file.
+
+    Two requests are the page's own channel back to the daemon that served
+    it: the generation it polls, and the document it fetches when that
+    generation has moved on. Nothing else may ever be asked for.
+    """
     browser.run("wait", "300")
     requested = browser.evaluate(
         """
@@ -92,10 +97,11 @@ def test_page_makes_no_request_other_than_its_own_reload_channel(
         """
     )
 
+    own = {f"{browser.url}render-version", f"{browser.url}document"}
     off_page = [
         name
         for name in requested
-        if not name.startswith("data:") and name != f"{browser.url}render-version"
+        if not name.startswith("data:") and name not in own
     ]
     assert off_page == [], requested
     assert "http://" not in browser.server.html
@@ -133,13 +139,73 @@ def test_untrusted_question_text_stays_inert_data(browser: Browser) -> None:
     ) == [True, True, False]
 
 
-def test_first_version_poll_reloads_a_page_that_lost_render_race(
+def test_first_version_poll_catches_up_a_page_that_lost_render_race(
     browser: Browser,
 ) -> None:
-    """Reload stale HTML when replacement wins before its first poll."""
+    """Catch up stale HTML when replacement wins before its first poll."""
     browser.data["title"] = "Race winner"
     browser.server.replacement_html = render_content(browser.data)
 
     browser.run("open", browser.url)
+    marked = browser.mark()
 
     browser.wait_for_title("Race winner")
+    # The page that lost the race is the page that caught up: it was never
+    # thrown away and rebuilt.
+    assert browser.marked() == marked
+
+
+def test_a_publish_changes_the_page_without_navigating_away_from_it(
+    browser: Browser,
+) -> None:
+    """The whole point: an open page takes the new content and stays open.
+
+    The mark is written into the loaded document and belongs to it alone, so
+    a reload — however brief, however invisible — takes it. Finding both the
+    new content and the same mark is the proof that the human reading this
+    page kept the page they were reading.
+    """
+    update_id, lane_id, _ = FIRST_ITEM.split("/")
+    marked = browser.mark()
+    before = browser.evaluate(
+        f'document.querySelector(\'[data-row-id="{FIRST_ITEM}"]\') !== null'
+    )
+
+    lane = next(
+        lane
+        for update in browser.data["updates"]
+        if update["id"] == update_id
+        for lane in update["lanes"]
+        if lane["id"] == lane_id
+    )
+    lane["items"].append(
+        {
+            "id": "arrived-without-a-reload",
+            "glance": "This item arrived while the page stayed open",
+            "explanation": "It was patched in.",
+            "trust": "reported-by-agent",
+        }
+    )
+    browser.data["title"] = "Published under an open page"
+    browser.publish()
+    browser.wait_for_title("Published under an open page")
+    arrived_id = f"{update_id}/{lane_id}/arrived-without-a-reload"
+    arrived = browser.read_until(
+        f"""
+        (() => {{
+          const row = document.querySelector('[data-row-id="{arrived_id}"]');
+          return {{
+            painted: row !== null,
+            glance: row?.querySelector(".glance")?.textContent ?? null,
+            mark: window.__brief_mark ?? null,
+          }};
+        }})()
+        """,
+        lambda seen: seen["painted"] is True,
+        timeout=7,
+    )
+
+    assert before is True
+    assert arrived["painted"] is True, arrived
+    assert arrived["glance"] == "This item arrived while the page stayed open"
+    assert arrived["mark"] == marked, arrived

@@ -2,12 +2,12 @@
  * Whether the page owes one row the sign that the agent is working.
  *
  * A waiting human's only question is whether anything is happening, and the
- * answer has to survive the reload the agent's next publish causes. It used
+ * answer has to survive everything the agent's next publish changes. It used
  * to be assembled from three places that each painted their own sign and
  * stood one another down to avoid painting two: a request in flight, a
  * message this page sent, and the document's own record of an unanswered
- * question. Standing down is how a sign disappears — one source retires at
- * the reload boundary and another has already been suppressed.
+ * question. Standing down is how a sign disappears — one source retires as a
+ * new document arrives and another has already been suppressed.
  *
  * So the question is asked once, of all three sources at once, and answered
  * with a single sign. The three cover the whole life of a question with no
@@ -17,7 +17,7 @@
  * - the daemon has it and the document has not caught up, which is a fact
  *   kept in storage and read back on the very next paint, before any poll;
  * - the document says the conversation is still waiting, which survives every
- *   reload for as long as it is true.
+ *   publish for as long as it is true.
  *
  * A submission that never appears anywhere still stops promising progress, as
  * it did before: that promise is about the message, and a page cannot keep it

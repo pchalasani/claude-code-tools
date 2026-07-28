@@ -1,10 +1,11 @@
-"""Real-browser proof that a message survives the reload it causes.
+"""Real-browser proof that a message survives the publish that follows it.
 
 A question sent seconds before the daemon republishes used to lose its place
-and its sign in the repaint that followed. So the page carries the waiting
-sign across the reload, comes back to the conversation the human was writing
-in, retires the sign the moment those exact words appear on the page, and
-stops promising progress when they never do.
+and its sign in the repaint that followed, because the publish threw the page
+away. It no longer does: the new document is patched into the page the human
+is reading. The sign is retired the moment those exact words appear on the
+page, it stops promising progress when they never do, and the reader is left
+exactly where they were throughout.
 
 What a tab does when it cannot make sense of the daemon at all lives next
 door, in ``test_healing_browser``.
@@ -94,34 +95,12 @@ def _thread_sign(row_id: str) -> str:
     """
 
 
-def _placement(row_id: str) -> str:
-    """Return a script reading where one row sits in the window.
-
-    Args:
-        row_id: Identifier of the row to measure.
-
-    Returns:
-        JavaScript returning the row's position on the screen.
-    """
-    return f"""
-    (() => {{
-      const head = document.querySelector(
-        '[data-row-id="{row_id}"] > .row-head',
-      );
-      if (head === null) {{
-        return {{ present: false }};
-      }}
-      const box = head.getBoundingClientRect();
-      return {{
-        present: true,
-        top: box.top,
-        bottom: box.bottom,
-        height: window.innerHeight,
-        cursor:
-          document.querySelector('[data-cursor="true"]')?.dataset.rowId
-          ?? null,
-      }};
-    }})()
+_PLACE = """
+    (() => ({
+      scroll: Math.round(window.scrollY),
+      cursor:
+        document.querySelector('[data-cursor="true"]')?.dataset.rowId ?? null,
+    }))()
     """
 
 
@@ -201,8 +180,9 @@ def test_the_waiting_sign_clears_when_those_words_appear_on_the_page(
     assert after["notes"] == 0, after
     # One sign, now the document's own, under the conversation it belongs to.
     assert after["working"] == 1, after
-    # And the human is put back where they were writing, not at the top.
-    assert after["cursor"] == folded, after
+    # The human was never taken anywhere, so there is nowhere to put them
+    # back: the cursor is on the row they were writing at, as it was before.
+    assert after["cursor"] == ITEM, after
 
 
 def test_a_question_that_never_appears_stops_promising_progress(
@@ -231,40 +211,41 @@ def test_a_question_that_never_appears_stops_promising_progress(
     assert stalled["text"] == "submitted — refresh if this persists", stalled
 
 
-def test_the_reload_after_a_send_comes_back_where_the_human_was_writing(
+def test_a_publish_does_not_move_the_page_under_the_reader(
     browser: Browser,
 ) -> None:
-    """Return the reader to their conversation, in reading position.
+    """Leave the reader exactly where they were, scroll and cursor alike.
 
-    The reload a send causes used to hand the human a page scrolled somewhere
-    else entirely. The page they get back opens on the conversation they just
-    wrote in, and puts it where it can be read.
+    A publish used to hand the human a page scrolled somewhere else entirely,
+    because it handed them a different page. It no longer does: the new
+    conversation appears where it belongs and nothing else moves at all. This
+    is deliberately measured deep in the document, where a reload's scroll
+    restoration had the furthest to throw them.
     """
     deep = "review-round-four/round-four-next/manual-parity-review"
-    question = "Does the page come back to this conversation?"
+    question = "Does the page stay where it is?"
     browser.press("E")
     browser.run("wait", "400")
     browser.compose_at(deep)
     browser.send(question)
     browser.read_until(landing_at(deep), lambda seen: seen["note"] is not None)
     stamp = browser.server.stamps[0]
+    # One key press hands the cursor back to the keyboard, so nothing sliding
+    # under a stationary mouse can move it while this is being measured.
+    browser.press("j")
+    browser.run("wait", "400")
+    before = browser.evaluate(_PLACE)
 
     _fold_into_content(browser, "q-deep-fold", question, stamp, anchor=deep)
-    # Whatever the browser would restore on its own is now the top of the
-    # page, so anything the conversation gets is the page's own doing.
-    browser.evaluate("window.scrollTo(0, 0); true")
-    browser.data["title"] = "Published while writing at the bottom"
+    browser.data["title"] = "Published while reading at the bottom"
     browser.publish()
-    browser.wait_for_title("Published while writing at the bottom")
+    browser.wait_for_title("Published while reading at the bottom")
     folded = f"{deep}#q-deep-fold"
-    placed = browser.read_until(
-        _placement(folded), lambda seen: seen.get("cursor") == folded
-    )
+    browser.wait_for_row(folded)
+    after = browser.evaluate(_PLACE)
 
-    assert placed["present"] is True, placed
-    assert placed["cursor"] == folded, placed
-    assert placed["top"] >= 0, placed
-    assert placed["bottom"] <= placed["height"], placed
+    assert before["cursor"] is not None, before
+    assert after == before, (before, after)
 
 
 def test_the_awaiting_chips_arrive_in_order_rather_than_all_at_once(

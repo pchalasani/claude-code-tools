@@ -189,7 +189,7 @@ def test_the_mouse_and_the_keyboard_share_one_cursor(browser: Browser) -> None:
     assert browser.cursor_row() == FIRST_ITEM
 
 
-def test_the_cursor_returns_to_its_row_after_the_page_reloads_itself(
+def test_the_cursor_stays_on_its_row_when_the_agent_publishes(
     browser: Browser,
 ) -> None:
     """Keep the human's place when the agent publishes new content."""

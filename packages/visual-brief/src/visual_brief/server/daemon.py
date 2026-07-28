@@ -7,7 +7,7 @@ import json
 import sys
 import threading
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -22,9 +22,11 @@ from visual_brief.server.queue import (
     build_signal_record,
 )
 from visual_brief.server.registry import discover_runs, resolve_run_path
+from visual_brief.server.responses import JsonResponder
 from visual_brief.server.routes import Route, route_request
 from visual_brief.server.served_page import (
     read_file_generation,
+    read_served_document,
     read_served_generation,
     read_served_page,
 )
@@ -55,11 +57,10 @@ class VisualBriefServer(ThreadingHTTPServer):
         self.queue_lock = threading.RLock()
         super().__init__((host, port), VisualBriefHandler)
 
-class VisualBriefHandler(BaseHTTPRequestHandler):
+class VisualBriefHandler(JsonResponder):
     """Serve all registered briefs and accept inert questions."""
 
     server: VisualBriefServer
-    protocol_version = "HTTP/1.1"
 
     def do_GET(self) -> None:
         """Handle readable endpoints."""
@@ -108,7 +109,7 @@ class VisualBriefHandler(BaseHTTPRequestHandler):
                 send_body=send_body,
             )
             return
-        readable = {"run", "version", "render_version"}
+        readable = {"run", "version", "render_version", "document"}
         if route.run_id is None or route.endpoint not in readable:
             self._json_error(
                 HTTPStatus.NOT_FOUND,
@@ -123,6 +124,8 @@ class VisualBriefHandler(BaseHTTPRequestHandler):
             self._serve_file(run_dir, send_body=send_body)
         elif route.endpoint == "version":
             self._serve_version(run_dir, send_body=send_body)
+        elif route.endpoint == "document":
+            self._serve_document(run_dir, send_body=send_body)
         else:
             self._serve_render_version(run_dir, send_body=send_body)
 
@@ -172,6 +175,23 @@ class VisualBriefHandler(BaseHTTPRequestHandler):
             "text/html; charset=utf-8",
             send_body=send_body,
         )
+
+    def _serve_document(self, run_dir: Path, *, send_body: bool) -> None:
+        """Serve a run's document, generation and bundle stamp together.
+
+        All three come out of one read of the page ``/`` would serve right
+        now, so an open page can never patch a document that belongs to a
+        generation the daemon is not serving.
+        """
+        payload = read_served_document(run_dir)
+        if payload is None:
+            self._json_error(
+                HTTPStatus.NOT_FOUND,
+                "Rendered page is unavailable",
+                send_body=send_body,
+            )
+            return
+        self._send_json(HTTPStatus.OK, payload, send_body=send_body)
 
     def _serve_version(self, run_dir: Path, *, send_body: bool) -> None:
         """Serve the SHA-256 hash of a run's source content."""
@@ -315,57 +335,6 @@ class VisualBriefHandler(BaseHTTPRequestHandler):
             )
             return None
         return data
-
-    def _send_json(
-        self,
-        status: HTTPStatus,
-        value: dict[str, str],
-        *,
-        send_body: bool = True,
-    ) -> None:
-        """Send a JSON response."""
-        body = json.dumps(value, ensure_ascii=False).encode("utf-8")
-        self._send(
-            status,
-            body,
-            "application/json; charset=utf-8",
-            send_body=send_body,
-        )
-
-    def _json_error(
-        self,
-        status: HTTPStatus,
-        message: str,
-        *,
-        send_body: bool = True,
-    ) -> None:
-        """Send a JSON error response."""
-        self._send_json(status, {"error": message}, send_body=send_body)
-
-    def _send(
-        self,
-        status: HTTPStatus,
-        body: bytes,
-        content_type: str,
-        *,
-        send_body: bool,
-    ) -> None:
-        """Send response headers and an optional body."""
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        if send_body:
-            self.wfile.write(body)
-
-    def log_message(self, format_string: str, *args: Any) -> None:
-        """Write a concise request log to standard error."""
-        print(
-            f"{self.address_string()} - {format_string % args}",
-            file=sys.stderr,
-        )
 
 def runs_root_id(runs_root: Path) -> str:
     """Return a stable identity for a normalized runs root."""

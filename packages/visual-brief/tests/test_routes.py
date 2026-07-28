@@ -28,6 +28,8 @@ def test_both_url_forms_reach_same_run(host: str, path: str) -> None:
         ("localhost", "/r/demo-run/version", "version"),
         ("demo-run.localhost", "/render-version", "render_version"),
         ("localhost", "/r/demo-run/render-version", "render_version"),
+        ("demo-run.localhost", "/document", "document"),
+        ("localhost", "/r/demo-run/document", "document"),
         ("demo-run.localhost", "/ask", "ask"),
         ("localhost", "/r/demo-run/ask", "ask"),
         ("demo-run.localhost", "/signal", "signal"),

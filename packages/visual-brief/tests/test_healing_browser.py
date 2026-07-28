@@ -119,7 +119,12 @@ def test_a_page_it_cannot_compare_still_notices_the_next_publish(
     see that the answer is not the one it gave up on, and that is worth one
     more reload: the page it fetches is the page being served now, bundle
     and all.
+
+    The daemon is made as old as the page it is serving: a release that
+    rendered pages without a generation had no document endpoint either, so
+    there is nothing here to patch from and a reload is the only way forward.
     """
+    browser.server.document_status = 404
     browser.server.version_body = "a" * 64
     browser.server.html = _without_its_generation(browser)
     unreadable = browser.read_until(

@@ -1,14 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRoot, createSignal } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { BriefDocument, Turn } from "./document";
 import {
   STALL_POLLS,
   createPending,
-  forgetLoadClassification,
   locateSubmissions,
+  type Pending,
 } from "./pending";
 import {
-  markSelfReload,
   readSentRecords,
   saveSentRecords,
   type SentRecord,
@@ -16,6 +16,27 @@ import {
 
 const ITEM = "u/l/i";
 const SENT_AT = "2026-07-27T09:00:00.000Z";
+
+let disposers: (() => void)[] = [];
+
+/**
+ * Build the waiting state inside a root, so its computations are disposable.
+ *
+ * The page runs this inside a rendered application; a test has to give it the
+ * same footing, or the computations that keep it in step with the document are
+ * created with nothing to dispose them.
+ *
+ * @param brief - The document being shown, read live.
+ * @returns The live waiting state.
+ */
+function pendingFor(
+  brief: () => BriefDocument | null = () => null,
+): Pending {
+  return createRoot((dispose) => {
+    disposers.push(dispose);
+    return createPending(brief);
+  });
+}
 
 /**
  * Build a document whose one item carries the given conversations.
@@ -73,17 +94,22 @@ function asked(text: string, at: string = SENT_AT): Turn {
  *
  * @param text - What was sent.
  * @param at - The queue timestamp, if the daemon reported one.
- * @param loads - How many page loads it has already survived.
  * @returns The record.
  */
-function sent(text: string, at: string = SENT_AT, loads = 0): SentRecord {
-  return { rowId: ITEM, anchorId: ITEM, text, at, loads };
+function sent(text: string, at: string = SENT_AT): SentRecord {
+  return { rowId: ITEM, anchorId: ITEM, text, at };
 }
 
 beforeEach(() => {
   window.sessionStorage.clear();
   window.history.replaceState(null, "");
-  forgetLoadClassification();
+});
+
+afterEach(() => {
+  for (const dispose of disposers) {
+    dispose();
+  }
+  disposers = [];
 });
 
 describe("finding what a sent message became", () => {
@@ -182,7 +208,7 @@ describe("the sign a page load carries over", () => {
     saveSentRecords([sent("Why this way?")]);
     const brief = briefWith([["q-pending-1", [asked("Why this way?")]]]);
 
-    const pending = createPending(brief);
+    const pending = pendingFor(() => brief);
 
     expect(pending.at(ITEM)).toEqual([]);
     expect(pending.landing()).toBe(`${ITEM}#q-pending-1`);
@@ -191,7 +217,7 @@ describe("the sign a page load carries over", () => {
   it("keeps the sign up for a submission that has not appeared", () => {
     saveSentRecords([sent("Why this way?")]);
 
-    const pending = createPending(briefWith([]));
+    const pending = pendingFor(() => briefWith([]));
 
     expect(pending.at(ITEM)).toEqual([
       { rowId: ITEM, text: "Why this way?", at: SENT_AT, stalled: false },
@@ -199,9 +225,30 @@ describe("the sign a page load carries over", () => {
     expect(pending.landing()).toBeNull();
   });
 
-  it("stops spinning once a load and enough polls have gone by", () => {
+  it("has nothing to say when there is no document to match against", () => {
     saveSentRecords([sent("Why this way?")]);
-    const pending = createPending(briefWith([]));
+
+    const pending = pendingFor();
+
+    expect(pending.at(ITEM)).toHaveLength(1);
+    expect(pending.landing()).toBeNull();
+  });
+
+  it("writes back exactly what it is still waiting on", () => {
+    saveSentRecords([sent("Why this way?"), sent("And this one?")]);
+
+    pendingFor(() => briefWith([["q-late", [asked("Why this way?")]]]));
+
+    expect(readSentRecords().map((record) => record.text)).toEqual([
+      "And this one?",
+    ]);
+  });
+});
+
+describe("a submission that keeps not appearing", () => {
+  it("stops promising progress once enough polls have gone by", () => {
+    saveSentRecords([sent("Why this way?")]);
+    const pending = pendingFor(() => briefWith([]));
 
     for (let poll = 0; poll < STALL_POLLS - 1; poll += 1) {
       pending.tick();
@@ -213,131 +260,61 @@ describe("the sign a page load carries over", () => {
     expect(pending.at(ITEM)[0]?.stalled).toBe(true);
   });
 
-  it("keeps a message sent in this load spinning: its reload is still due", () => {
-    const pending = createPending(briefWith([]));
-    pending.add({ rowId: ITEM, anchorId: ITEM, text: "Just now", at: SENT_AT });
-
-    for (let poll = 0; poll <= STALL_POLLS; poll += 1) {
+  it("counts a message's polls from when it was sent, not from the load", () => {
+    // The page no longer reloads when the agent publishes, so a message sent
+    // an hour into a session must be given the same few polls as one sent at
+    // the first paint rather than being declared stalled on arrival.
+    const pending = pendingFor(() => briefWith([]));
+    for (let poll = 0; poll < 20; poll += 1) {
       pending.tick();
     }
 
-    expect(pending.at(ITEM)).toEqual([
-      { rowId: ITEM, text: "Just now", at: SENT_AT, stalled: false },
-    ]);
+    pending.add({ rowId: ITEM, anchorId: ITEM, text: "Just now", at: SENT_AT });
+
+    expect(pending.at(ITEM)[0]?.stalled).toBe(false);
+    for (let poll = 0; poll < STALL_POLLS; poll += 1) {
+      pending.tick();
+    }
+    expect(pending.at(ITEM)[0]?.stalled).toBe(true);
   });
 
-  it("carries an unfound submission across loads, counting them", () => {
-    saveSentRecords([sent("Why this way?")]);
+  it("is never let go of, however long it goes unfound", () => {
+    // A message the human wrote and the page cannot account for is worth
+    // showing for as long as the page is open. Deleting it would be the page
+    // quietly losing something they said.
+    saveSentRecords([sent("Where did this go?")]);
+    const pending = pendingFor(() => briefWith([]));
 
-    createPending(briefWith([]));
-    const second = createPending(briefWith([]));
-
-    second.tick();
-    second.tick();
-    second.tick();
-
-    expect(second.at(ITEM)[0]?.stalled).toBe(true);
-  });
-
-  it("is never aged by loads the human did not cause", () => {
-    // Publishes reload the page; however many arrive before the fold, the
-    // waiting sign and the way back to the conversation both survive until
-    // the message actually appears.
-    saveSentRecords([sent("Why this way?", SENT_AT, 40)]);
-
-    const pending = createPending(briefWith([]));
+    for (let poll = 0; poll < 200; poll += 1) {
+      pending.tick();
+    }
 
     expect(pending.at(ITEM)).toHaveLength(1);
     expect(readSentRecords()).toHaveLength(1);
-    expect(readSentRecords()[0]?.refreshes ?? 0).toBe(0);
-
-    // And the moment it appears, it retires and lands as usual.
-    const found = createPending(
-      briefWith([["q-late", [asked("Why this way?", SENT_AT)]]]),
-    );
-    expect(found.at(ITEM)).toHaveLength(0);
-    expect(found.landing()).toBe(`${ITEM}#q-late`);
   });
+});
 
-  it("lets go after the human refreshes it away, and only then", () => {
-    // The degraded advice is "refresh if this persists": the human's own
-    // refreshes are the one exit, so the advice is true and an agent's
-    // publishing can never trigger it.
-    const navigation = { type: "reload" };
-    const spy = vi
-      .spyOn(performance, "getEntriesByType")
-      .mockReturnValue([navigation as unknown as PerformanceEntry]);
-    try {
-      saveSentRecords([sent("Will this ever land?")]);
-      forgetLoadClassification();
-      createPending(briefWith([]));
-      forgetLoadClassification();
-      createPending(briefWith([]));
-      expect(readSentRecords()).toHaveLength(1);
-
-      forgetLoadClassification();
-      const after = createPending(briefWith([]));
-
-      expect(after.at(ITEM)).toHaveLength(0);
-      expect(readSentRecords()).toHaveLength(0);
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
-  it("classifies one load once, however many times state is built", () => {
-    // The marker is consumed on first classification. A second createPending
-    // in the SAME self-caused load must reuse that answer — re-reading the
-    // navigation entry with the marker gone would misread the page's own
-    // reload as the human's and age the record.
-    const navigation = { type: "reload" };
-    const spy = vi
-      .spyOn(performance, "getEntriesByType")
-      .mockReturnValue([navigation as unknown as PerformanceEntry]);
-    try {
-      saveSentRecords([sent("Still waiting")]);
-      markSelfReload();
-      forgetLoadClassification();
-      createPending(briefWith([]));
-      createPending(briefWith([]));
-      createPending(briefWith([]));
-
-      expect(readSentRecords()).toHaveLength(1);
-      expect(readSentRecords()[0]?.refreshes ?? 0).toBe(0);
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
-  it("is not aged by the page reloading itself, refresh type and all", () => {
-    // The page's own publish-reload is reported by the browser exactly like
-    // a manual refresh; only the marker written before location.reload()
-    // tells them apart, and it must protect the record.
-    const navigation = { type: "reload" };
-    const spy = vi
-      .spyOn(performance, "getEntriesByType")
-      .mockReturnValue([navigation as unknown as PerformanceEntry]);
-    try {
-      saveSentRecords([sent("Still waiting")]);
-      for (let load = 0; load < 5; load += 1) {
-        markSelfReload();
-        forgetLoadClassification();
-        createPending(briefWith([]));
-      }
-
-      expect(readSentRecords()).toHaveLength(1);
-      expect(readSentRecords()[0]?.refreshes ?? 0).toBe(0);
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
-  it("has nothing to say when there is no document to match against", () => {
+describe("a submission that arrives without a page load", () => {
+  it("retires the moment its words appear in the document", () => {
     saveSentRecords([sent("Why this way?")]);
+    const [brief, publish] = createSignal<BriefDocument>(briefWith([]));
+    const pending = pendingFor(brief);
+    expect(pending.at(ITEM)).toHaveLength(1);
 
-    const pending = createPending();
+    publish(briefWith([["q-late", [asked("Why this way?")]]]));
+
+    expect(pending.at(ITEM)).toHaveLength(0);
+    expect(readSentRecords()).toHaveLength(0);
+  });
+
+  it("keeps waiting when the publish carried something else", () => {
+    saveSentRecords([sent("Why this way?")]);
+    const [brief, publish] = createSignal<BriefDocument>(briefWith([]));
+    const pending = pendingFor(brief);
+
+    publish(briefWith([["q-other", [asked("Somebody else's question")]]]));
 
     expect(pending.at(ITEM)).toHaveLength(1);
-    expect(pending.landing()).toBeNull();
+    expect(readSentRecords()).toHaveLength(1);
   });
 });

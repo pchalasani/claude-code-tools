@@ -12,6 +12,8 @@ import { render } from "solid-js/web";
 import { afterEach, beforeEach, expect } from "vitest";
 
 import { App } from "../src/app";
+import type { BriefDocument } from "../src/document";
+import { createLiveDocument } from "../src/live-document";
 import { sampleBrief } from "./sample-brief";
 
 let dispose: (() => void) | null = null;
@@ -21,14 +23,34 @@ let pendingTransitions: (() => void)[] = [];
 /**
  * Mount the interface the way the page does.
  *
+ * @param brief - The document to open on.
  * @returns The element the application was mounted into.
  */
 export function mount(brief = sampleBrief()): HTMLElement {
+  return mountLive(brief).container;
+}
+
+/**
+ * Mount the interface over a document a later publish can replace.
+ *
+ * This is the whole of what the poller does to a live page, minus the poll:
+ * it hands a newly delivered document to the application and nothing else
+ * happens. Everything a publish must leave alone is asserted by publishing
+ * through this and then reading the page.
+ *
+ * @param brief - The document to open on.
+ * @returns The mount point and the way to publish into it.
+ */
+export function mountLive(brief = sampleBrief()): {
+  container: HTMLElement;
+  publish: (next: BriefDocument) => void;
+} {
+  const live = createLiveDocument(brief);
   const container = document.createElement("div");
   document.body.append(container);
   host = container;
-  dispose = render(() => <App brief={brief} />, container);
-  return container;
+  dispose = render(() => <App brief={live.brief} />, container);
+  return { container, publish: live.apply };
 }
 
 /** Tear the mounted interface back down, the way a reload does. */

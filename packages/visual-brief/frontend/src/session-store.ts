@@ -1,9 +1,12 @@
 /**
- * The little the page remembers about itself across its own reloads.
+ * The little the page remembers about itself across a reload.
  *
- * The agent rewrites this page whenever it publishes, so every reload is an
- * amnesia event. One session-storage record, keyed by the run rather than by
- * the address the run was reached through, carries the human's place forward:
+ * A publish no longer reloads anything — the new document is patched into the
+ * page that is already open — but a reload still happens when the tool is
+ * reinstalled with a new bundle, when the two ends stop understanding each
+ * other, and whenever the human presses refresh. Each of those is an amnesia
+ * event. One session-storage record, keyed by the run rather than by the
+ * address the run was reached through, carries the human's place forward:
  * where the cursor was, and which answers they had already seen. Both live
  * here so there is exactly one store to reason about — a second one would
  * drift out of step with the first at the first bug.
@@ -57,17 +60,6 @@ export interface SentRecord {
   text: string;
   /** Timestamp the daemon recorded, or empty when it did not say. */
   at: string;
-  /** How many page loads it has survived without being found. */
-  loads: number;
-  /**
-   * How many HUMAN-caused reloads it has survived without being found.
-   *
-   * Publishes reload the page too, and a publish the human did not cause
-   * must never age their waiting sign away. Only a manual refresh counts,
-   * which is also what makes the degraded advice — "refresh if this
-   * persists" — genuinely actionable: refreshes are the way out.
-   */
-  refreshes?: number;
 }
 
 /**
@@ -219,42 +211,6 @@ export function saveSentRecords(records: SentRecord[]): void {
 }
 
 /**
- * Return the key a self-caused reload is announced under.
- *
- * @returns The session-storage key for the run being shown.
- */
-function selfReloadKey(): string {
-  return `visual-brief-self-reload:${runIdFromLocation()}`;
-}
-
-/**
- * Announce that the page is about to reload itself.
- *
- * The browser reports every ``location.reload()`` as a "reload" navigation,
- * exactly as it reports the human pressing refresh, so the page marks its
- * own reloads the moment before it makes them. Written to both stores, like
- * everything whose loss would mislead.
- */
-export function markSelfReload(): void {
-  const key = selfReloadKey();
-  writeItem(key, "1");
-  writeHistoryItem(key, "1");
-}
-
-/**
- * Consume the self-reload announcement, if one was made.
- *
- * @returns True when this load was caused by the page itself.
- */
-export function consumeSelfReload(): boolean {
-  const key = selfReloadKey();
-  const marked = readItem(key) ?? readHistoryItem(key);
-  writeItem(key, "");
-  writeHistoryItem(key, "");
-  return marked !== null && marked !== "";
-}
-
-/**
  * Read the standoff this tab last reloaded itself to escape.
  *
  * A standoff is a pair — what this page is, and what the daemon said about it
@@ -307,9 +263,6 @@ function isSentRecord(value: unknown): value is SentRecord {
     && typeof record.anchorId === "string"
     && typeof record.text === "string"
     && typeof record.at === "string"
-    && typeof record.loads === "number"
-    && (record.refreshes === undefined
-      || typeof record.refreshes === "number")
   );
 }
 

@@ -136,3 +136,52 @@ export function openedFor(
   }
   return opened;
 }
+
+/**
+ * Carry folding across a newly delivered document.
+ *
+ * A publish patched into an open page must not refold it. Every row the human
+ * expanded stays expanded and every row they folded stays folded, because
+ * those are decisions they made about a page they are reading and the agent
+ * publishing is not a reason to undo them.
+ *
+ * Only two things move. A row that was not in the previous document has no
+ * decision behind it, so it gets the ordinary default treatment — which is
+ * what keeps new material from arriving hidden. And a conversation whose
+ * answer has just landed opens itself and everything holding it, because an
+ * answer nobody can see is an answer that did not arrive.
+ *
+ * @param brief - The newly delivered document.
+ * @param rows - Its rows.
+ * @param open - The rows that are expanded right now.
+ * @param arrived - Ids of the rows that were not in the previous document.
+ * @param fresh - Conversations answered since the human last looked.
+ * @returns The rows that should be expanded now.
+ */
+export function carriedOpen(
+  brief: BriefDocument,
+  rows: Row[],
+  open: ReadonlySet<string>,
+  arrived: ReadonlySet<string>,
+  fresh: ReadonlySet<string>,
+): Set<string> {
+  const present = new Set(rows.map((row) => row.id));
+  const next = new Set([...open].filter((id) => present.has(id)));
+  if (arrived.size > 0) {
+    for (const id of defaultOpenIds(brief, rows)) {
+      if (arrived.has(id)) {
+        next.add(id);
+      }
+    }
+  }
+  for (const id of fresh) {
+    if (!present.has(id)) {
+      continue;
+    }
+    next.add(id);
+    for (const ancestor of ancestorIds(id)) {
+      next.add(ancestor);
+    }
+  }
+  return next;
+}

@@ -208,15 +208,38 @@ class Browser:
             yield
 
     def publish(self) -> None:
-        """Publish current data under a new self-reload version."""
+        """Serve the current data as the page the daemon would now serve."""
         self.server.html = served_page(self.data)
 
-    def wait_for_row(self, row_id: str) -> None:
-        """Wait for the page to reload itself and paint one row.
+    def mark(self) -> str:
+        """Write a mark into the page that only a navigation could remove.
 
-        Publishing is enough on its own: the page notices the new generation
-        and replaces itself. Asking the browser to navigate as well races that
-        reload and loses, which is what a cancelled navigation looks like.
+        Anything on ``window`` belongs to one loaded document and nothing
+        else: a reload, however brief, takes it. That is what makes it a
+        proof — the page either kept living through the publish or it did not.
+
+        Returns:
+            The mark that was written.
+        """
+        token = uuid.uuid4().hex
+        self.evaluate(f"window.__brief_mark = {json.dumps(token)}; true")
+        return token
+
+    def marked(self) -> str | None:
+        """Read the mark the page is still carrying.
+
+        Returns:
+            The mark, or None when the page has been replaced since.
+        """
+        read = self.evaluate("window.__brief_mark ?? null")
+        return None if read is None else str(read)
+
+    def wait_for_row(self, row_id: str) -> None:
+        """Wait for the page to take in a publish and paint one row.
+
+        Publishing is enough on its own: the page notices the new generation,
+        fetches the new document and patches it in. Asking the browser to
+        navigate as well would throw away the very page under test.
 
         Args:
             row_id: Identifier of the row the new content must carry.
@@ -229,7 +252,7 @@ class Browser:
         assert painted is True, f"the page never painted {row_id!r}"
 
     def wait_for_title(self, title: str) -> None:
-        """Wait for self-reload to display one document title."""
+        """Wait for a publish to reach the open page's own title."""
         deadline = time.monotonic() + 7
         while time.monotonic() < deadline:
             actual = self.evaluate("document.title")

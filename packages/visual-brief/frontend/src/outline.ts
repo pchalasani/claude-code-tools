@@ -75,8 +75,8 @@ export interface Row {
    * How a conversation stands, as a value two loads of the page can compare.
    *
    * Only conversation rows carry one. It changes whenever a turn is added, so
-   * a reload can tell an answer that arrived while the human was away from one
-   * they have already read.
+   * the page can tell an answer that arrived while the human was away from one
+   * they have already read, whether it arrived by a publish or by a reload.
    */
   answerState?: string;
 }

@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from .assets import bundle_script, bundle_style
+from .assets import bundle_script, bundle_stamp, bundle_style
 from .embed import DOCUMENT_ELEMENT_ID, ROOT_ELEMENT_ID, embed_document, escape
 
 _GENERATION_PLACEHOLDER = "0" * 64
@@ -39,6 +39,11 @@ def render_page(data: dict[str, Any]) -> str:
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<meta name="visual-brief-render-version" '
         f'content="{_GENERATION_PLACEHOLDER}">'
+        # What a generation change MEANS depends on this stamp. New content is
+        # patched into the open page; new code can only arrive by reloading it,
+        # and a page that patched a document into last week's bundle would run
+        # last week's bundle for the rest of its life.
+        f'<meta name="visual-brief-assets-version" content="{bundle_stamp()}">'
         f'<meta name="visual-brief-poll-ms" content="{POLL_INTERVAL_MS}">'
         '<link rel="icon" href="data:,">'
         f"<title>{escape(data['title'])}</title>"

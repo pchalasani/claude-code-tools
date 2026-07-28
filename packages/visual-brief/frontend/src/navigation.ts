@@ -9,8 +9,8 @@
 
 import { createMemo, createSignal, type Accessor } from "solid-js";
 
+import { carryAcrossPublishes } from "./carry-over";
 import {
-  countChats,
   countItems,
   edgeRow,
   filterRows,
@@ -23,13 +23,8 @@ import {
 import type { BriefDocument } from "./document";
 import { itemOrdinals, openedFor, paintedRows } from "./folding";
 import { createFreshness } from "./freshness";
-import {
-  ancestorIds,
-  awaitingThreadCount,
-  outline,
-  type Row,
-  type RowKind,
-} from "./outline";
+import { createRowIndex } from "./live-rows";
+import { ancestorIds, type Row, type RowKind } from "./outline";
 import { revealRowSoon, scrollRowIntoView } from "./reveal";
 import { readSavedCursor, saveCursor } from "./session-store";
 import { withTransition } from "./transitions";
@@ -134,11 +129,11 @@ export interface Navigation {
 }
 
 /**
- * Build the navigable state for one delivered document.
+ * Build the navigable state for a document that can change under it.
  *
- * @param brief - The document the page is showing.
- * @param onFold - Told each time a row is folded, so anything rendered inside
- *     that row can let go of it.
+ * @param brief - The document the page is showing, read live.
+ * @param onFold - Told each time a row leaves the page, by being folded or by
+ *     going away, so anything rendered inside it can let go of it.
  * @param anchorId - Row this load should open on, overriding the remembered
  *     cursor: the conversation the human wrote in just before the reload.
  * @param waiting - Rows whose waiting sign has to be visible from the first
@@ -146,14 +141,14 @@ export interface Navigation {
  * @returns The live cursor, folding and search state.
  */
 export function createNavigation(
-  brief: BriefDocument,
+  brief: Accessor<BriefDocument>,
   onFold: (id: string) => void = () => undefined,
   anchorId: string | null = null,
   waiting: string[] = [],
 ): Navigation {
-  const rows = outline(brief);
-  const rowIds = new Set(rows.map((row) => row.id));
-  const restored = restoreCursor(rows, anchorId ?? readSavedCursor());
+  const index = createRowIndex(brief);
+  const rows = index.rows;
+  const restored = restoreCursor(rows(), anchorId ?? readSavedCursor());
   if (restored !== null) {
     // The landing is written into the store, not just painted from it: an
     // anchored load (the human's own message) must survive the NEXT reload
@@ -167,9 +162,9 @@ export function createNavigation(
   // two keys pressed within one frame would otherwise both move from the same
   // row and one of the two presses would be lost.
   let selected: string | null = restored;
-  const fresh = createFreshness(rows);
+  const fresh = createFreshness(rows());
   const [open, setOpen] = createSignal<ReadonlySet<string>>(
-    openedFor(brief, rows, restored, fresh.ids(), waiting),
+    openedFor(brief(), rows(), restored, fresh.ids(), waiting),
   );
   const [query, setQueryValue] = createSignal("");
   const [overlay, setOverlay] = createSignal<Overlay>("none");
@@ -200,7 +195,7 @@ export function createNavigation(
   });
 
   const visible = createMemo(() => {
-    const matching = filterRows(rows, query());
+    const matching = filterRows(rows(), query());
     return modes.chats() ? chatRows(matching) : matching;
   });
   const painted = createMemo(() => paintedRows(visible(), open()));
@@ -208,9 +203,20 @@ export function createNavigation(
   const visibleIds = createMemo(
     () => new Set(visible().map((row) => row.id)),
   );
-  const byId = new Map(rows.map((row) => [row.id, row]));
-  const awaiting = awaitingThreadCount(rows);
-  const chatting = countChats(rows);
+
+  // Everything a newly delivered document changes about this state happens
+  // in one place and in one order. Nothing else in the page is allowed to
+  // notice a publish, which is what makes the publish invisible.
+  carryAcrossPublishes({
+    brief,
+    rows,
+    ids: index.ids,
+    fresh,
+    setOpen: (update) => setOpen(update),
+    cursorId: () => selected,
+    place,
+    onFold,
+  });
 
   const expand = (id: string, current: ReadonlySet<string>): Set<string> => {
     const next = new Set(current);
@@ -236,7 +242,7 @@ export function createNavigation(
     && ancestorIds(id).every((one) => open().has(one));
 
   const select = (id: string, options?: { scroll?: boolean }): void => {
-    if (!rowIds.has(id)) {
+    if (!index.ids().has(id)) {
       return;
     }
     const filtered = !visibleIds().has(id);
@@ -299,7 +305,7 @@ export function createNavigation(
     visible,
     painted,
     isVisible: (id) => visibleIds().has(id),
-    row: (id) => byId.get(id),
+    row: index.row,
     cursorId,
     currentId: () => selected,
     isCursor: (id) => cursorId() === id,
@@ -357,7 +363,7 @@ export function createNavigation(
     collapseAll: modes.collapseAll,
     chats: modes.chats,
     toggleChats: modes.toggleChats,
-    chatCount: () => chatting,
+    chatCount: index.chatCount,
     ordinal: (id) => ordinals().get(id) ?? null,
     query,
     setQuery: search,
@@ -365,7 +371,7 @@ export function createNavigation(
     overlay,
     openOverlay: setOverlay,
     closeOverlay: () => setOverlay("none"),
-    awaitingCount: () => awaiting,
+    awaitingCount: index.awaitingCount,
     revealAnchor: () => {
       if (anchorId !== null && restored !== null) {
         revealRowSoon(restored);

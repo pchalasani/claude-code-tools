@@ -4,80 +4,41 @@
  * Sending is the one moment where the page and the document disagree: the
  * human has written something, the daemon has it, and the delivered document
  * still knows nothing about it. Until the two agree the page owes the human a
- * sign that their words are somewhere, and that sign has to survive the reload
- * the daemon triggers seconds later.
+ * sign that their words are somewhere.
  *
- * So a submission is remembered by what the queue line says — its verbatim
- * text and the timestamp the daemon wrote — and is retired the moment those
- * exact words appear anywhere on the page, under whatever id the fold gave
- * them. A submission that never appears stops pretending: after a page load
- * and a few polls it degrades to a plain statement that it was submitted,
- * rather than an animation that never ends.
+ * One rule governs a submission, and it is about the document rather than
+ * about page loads: it is retired the moment its exact words and the timestamp
+ * the daemon stamped them with appear in the document, under whatever id the
+ * fold gave them. Nothing else retires it. Nothing deletes it either — after
+ * ``STALL_POLLS`` polls without appearing it stops claiming that something is
+ * happening and says the smaller true thing instead, and then it stays. A
+ * message the human wrote and the page cannot account for is worth showing for
+ * as long as the page is open; making it disappear would be the page quietly
+ * losing something the human said.
+ *
+ * There used to be a second rule, counted in page loads and in the human's own
+ * refreshes, and a whole apparatus for telling the page's own reloads from
+ * theirs. A publish no longer reloads anything, so there is nothing to tell
+ * apart and nothing to count.
  */
 
-import { createSignal } from "solid-js";
+import {
+  createComputed,
+  createMemo,
+  createSignal,
+  type Accessor,
+} from "solid-js";
 
 import type { BriefDocument, Thread } from "./document";
 import { itemRowId, laneRowId, threadRowId } from "./outline";
 import {
-  consumeSelfReload,
   readSentRecords,
   saveSentRecords,
   type SentRecord,
 } from "./session-store";
 
-/** Polls a submission survives after a page load before it stops spinning. */
+/** Polls a submission survives before it stops claiming progress. */
 export const STALL_POLLS = 3;
-
-/** Manual refreshes an unfound submission survives before it is let go. */
-export const MAX_REFRESHES = 3;
-
-/**
- * Report whether this page load was caused by the human refreshing.
- *
- * A publish also reloads the page, and a publish the human did not cause
- * must never age their waiting sign. The browser records which kind of
- * navigation this load was; anything unreadable counts as not-a-refresh,
- * which errs toward keeping the sign.
- *
- * @returns True when the human reloaded this page themselves.
- */
-/**
- * What this page load was, classified exactly once.
- *
- * The marker is consumed on first classification; a second look within the
- * same load would find the marker gone and the navigation entry still
- * saying "reload", and would misread the page's own reload as the human's.
- */
-let loadWasHumanRefresh: boolean | null = null;
-
-export function isHumanRefresh(): boolean {
-  // The page's own publish-reload uses location.reload() and the browser
-  // reports it identically to a manual refresh, so the page announces its
-  // own reloads just before making them; an announced reload is not the
-  // human's. Classification happens once per load and is remembered.
-  if (loadWasHumanRefresh !== null) {
-    return loadWasHumanRefresh;
-  }
-  const selfCaused = consumeSelfReload();
-  try {
-    const [entry] = performance.getEntriesByType("navigation");
-    loadWasHumanRefresh = !selfCaused
-      && (entry as PerformanceNavigationTiming | undefined)?.type
-        === "reload";
-  } catch {
-    loadWasHumanRefresh = false;
-  }
-  return loadWasHumanRefresh;
-}
-
-/**
- * Forget the load classification, so a test can simulate a fresh load.
- */
-export function forgetLoadClassification(): void {
-  loadWasHumanRefresh = null;
-}
-
 
 /** What the page says about one message it is still waiting on. */
 export interface PendingNote {
@@ -96,20 +57,21 @@ export interface Pending {
   /** The notes belonging under one row. */
   at: (rowId: string) => PendingNote[];
   /** Remember one message that was just accepted by the daemon. */
-  add: (sent: Omit<SentRecord, "loads">) => void;
+  add: (sent: SentRecord) => void;
   /**
    * The rows carrying a note this load has to show.
    *
    * A note renders inside its row's body, so a row folded shut hides the very
-   * reassurance the reload was supposed to carry over. This is what the page
+   * reassurance a reload was supposed to carry over. This is what the page
    * opens before it paints.
    */
   waiting: () => string[];
   /**
    * Row the human's newest message was found in on this page load.
    *
-   * This is where the viewport belongs after the reload a send causes: the
-   * conversation they just wrote in, not wherever the cursor happened to be.
+   * A reload after a send — the human pressing refresh, or a new bundle
+   * arriving — has to come back to the conversation they were writing in
+   * rather than to wherever the cursor happened to be.
    */
   landing: () => string | null;
   /** Note that one poll cycle finished without bringing new content. */
@@ -122,6 +84,14 @@ interface Located {
   id: string;
   /** Its turns, oldest first. */
   turns: Thread["turns"];
+}
+
+/** One remembered submission and the poll it started waiting at. */
+interface Waiting {
+  /** What was sent. */
+  record: SentRecord;
+  /** How many polls this page had seen when it started waiting. */
+  since: number;
 }
 
 /**
@@ -212,57 +182,51 @@ export function locateSubmissions(
 }
 
 /**
- * Build the waiting state for one page load.
+ * Build the waiting state for one open page.
  *
- * @param brief - The delivered document, when there is one to match against.
+ * @param brief - The document being shown, read live, or one that reads null
+ *     when there is no document to match against.
  * @returns The live waiting state.
  */
-export function createPending(brief: BriefDocument | null = null): Pending {
-  const stored = readSentRecords();
-  const located = brief === null
-    ? stored.map(() => null)
-    : locateSubmissions(brief, stored);
-  // Publishes the human did not cause never age a record: only their own
-  // refreshes do, so the degraded advice — "refresh if this persists" — is
-  // the genuine way out, and a sign can neither be deleted by the agent's
-  // publishing nor hold its row open for the life of the tab.
-  const refreshed = isHumanRefresh();
-  const aged = stored.map((record) => ({
-    ...record,
-    refreshes: (record.refreshes ?? 0) + (refreshed ? 1 : 0),
-  }));
-  // The count is aged BEFORE the survivor check, so the third manual
-  // refresh is the one that lets go — as the degraded advice promises.
-  const survivors = aged.filter(
-    (record, index) =>
-      located[index] === null && record.refreshes < MAX_REFRESHES,
+export function createPending(
+  brief: Accessor<BriefDocument | null> = () => null,
+): Pending {
+  const [held, setHeld] = createSignal<Waiting[]>(
+    // Everything already remembered was already waiting when this page
+    // started, so all of it is counted from this page's first poll.
+    readSentRecords().map((record) => ({ record, since: 0 })),
   );
-  const carried = survivors.map((record) => ({
-    ...record,
-    loads: record.loads + 1,
-  }));
-  saveSentRecords(carried);
-  const [live, setLive] = createSignal<SentRecord[]>(carried);
   const [polls, setPolls] = createSignal(0);
-  const landed = [...located].reverse().find((id) => id !== null) ?? null;
+  const located = createMemo(() => {
+    const document = brief();
+    const waiting = held();
+    return document === null
+      ? waiting.map(() => null)
+      : locateSubmissions(document, waiting.map((one) => one.record));
+  });
+  const live = createMemo(() =>
+    held().filter((_, index) => located()[index] === null),
+  );
+  // What survives is written back on every change, so a reload for any other
+  // reason — a new bundle, the human refreshing — finds exactly the messages
+  // this page is still waiting on.
+  createComputed(() => saveSentRecords(live().map((one) => one.record)));
+  const landed = [...located()].reverse().find((id) => id !== null) ?? null;
+  const opened = live().map((one) => one.record.rowId);
 
-  const note = (record: SentRecord): PendingNote => ({
-    rowId: record.rowId,
-    text: record.text,
-    at: record.at,
-    // A message sent in this page load has not yet had its reload, so it is
-    // still early; one that came through a reload without being found has had
-    // its chance, and the polls since then are what run out.
-    stalled: record.loads > 0 && polls() >= STALL_POLLS,
+  const note = (one: Waiting): PendingNote => ({
+    rowId: one.record.rowId,
+    text: one.record.text,
+    at: one.record.at,
+    stalled: polls() - one.since >= STALL_POLLS,
   });
 
   return {
-    at: (rowId) => live().filter((r) => r.rowId === rowId).map(note),
-    waiting: () => carried.map((record) => record.rowId),
+    at: (rowId) =>
+      live().filter((one) => one.record.rowId === rowId).map(note),
+    waiting: () => opened,
     add: (sent) => {
-      const next = [...live(), { ...sent, loads: 0 }];
-      saveSentRecords(next);
-      setLive(next);
+      setHeld((current) => [...current, { record: sent, since: polls() }]);
     },
     landing: () => landed,
     tick: () => setPolls((count) => count + 1),

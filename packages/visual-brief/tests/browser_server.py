@@ -17,7 +17,7 @@ from typing import Any, Iterator
 
 from visual_brief.render import render_content
 from visual_brief.render.page import POLL_INTERVAL_MS
-from visual_brief.server.served_page import page_generation
+from visual_brief.server.served_page import page_generation, page_payload
 
 EXAMPLE_PATH = Path(__file__).parents[1] / "example.json"
 
@@ -88,6 +88,23 @@ class PageHandler(BaseHTTPRequestHandler):
                 else page_generation(self.server.html.encode())
             )
             content_type = "text/plain"
+        elif self.path.endswith("/document"):
+            # The real daemon derives all three fields from one read of the
+            # page it would serve, and so does this: an open page must never
+            # be handed a document that belongs to something else.
+            if self.server.document_status != 200:
+                self.send_response(self.server.document_status)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            payload = page_payload(self.server.html.encode())
+            if payload is None:
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            body = json.dumps(payload).encode()
+            content_type = "application/json"
         else:
             html = self.server.html
             if self.server.replacement_html is not None:
@@ -141,6 +158,7 @@ class PageServer(ThreadingHTTPServer):
     refuse: bool = False
     version_body: str | None = None
     version_status: int = 200
+    document_status: int = 200
 
 
 @contextmanager
@@ -162,6 +180,7 @@ def serving(data: dict[str, Any]) -> Iterator[PageServer]:
     server.refuse = False
     server.version_body = None
     server.version_status = 200
+    server.document_status = 200
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:

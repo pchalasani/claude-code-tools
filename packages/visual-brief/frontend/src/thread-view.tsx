@@ -70,7 +70,7 @@ export function ThreadView(props: {
         The document, not this page load, is what keeps the sign up. A human
         who asks a question and then watches the agent republish something
         else must not see the reassurance vanish: the conversation is still
-        awaiting, so it still says so, reload after reload.
+        awaiting, so it still says so, publish after publish.
       */}
       <WorkingSign state={props.state} row={props.row} />
       <ComposeBox state={props.state} row={props.row} />
