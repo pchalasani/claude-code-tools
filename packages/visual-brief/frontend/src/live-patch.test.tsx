@@ -7,74 +7,33 @@
  * notice. What must survive is not a list of internals but a list of places a
  * human has been thrown out of — their cursor, their folds, what they were in
  * the middle of writing.
+ *
+ * This half is about the places that must not move. What a publish is allowed
+ * to change, and what it does to something half-written, is next door in
+ * ``live-publish.test.tsx``.
  */
 
 import { describe, expect, it } from "vitest";
 
-import type { BriefDocument, Item, Lane, Update } from "./document";
-import { saveSentRecords } from "./session-store";
+import type { Item } from "./document";
 import {
   click,
   mountLive,
   paintedCursor,
   paintedOpen,
   press,
+  rowNode,
+  typeInto,
   useHarness,
 } from "../test/harness";
-import { sampleBrief } from "../test/sample-brief";
+import { itemOf, laneOf, sampleBrief } from "../test/sample-brief";
 
 const ALPHA = "newest/changed/alpha";
 const BETA = "newest/changed/beta";
 const OPEN_THREAD = `${BETA}#q-open`;
 const NEXT_LANE = "newest/next";
-const GAMMA = "newest/next/gamma";
 
 useHarness();
-
-/**
- * Find one lane of the sample document.
- *
- * @param brief - The document to look in.
- * @param updateId - Id of the update holding it.
- * @param laneId - Id of the lane.
- * @returns The lane.
- */
-function laneOf(brief: BriefDocument, updateId: string, laneId: string): Lane {
-  const update = brief.updates.find((one: Update) => one.id === updateId);
-  const lane = update?.lanes.find((one: Lane) => one.id === laneId);
-  if (lane === undefined) {
-    throw new Error(`the sample document lost the lane ${laneId}`);
-  }
-  return lane;
-}
-
-/**
- * Find one item of the sample document.
- *
- * @param brief - The document to look in.
- * @param path - The item's row id.
- * @returns The item.
- */
-function itemOf(brief: BriefDocument, path: string): Item {
-  const [updateId = "", laneId = "", itemId = ""] = path.split("/");
-  const item = laneOf(brief, updateId, laneId).items.find(
-    (one: Item) => one.id === itemId,
-  );
-  if (item === undefined) {
-    throw new Error(`the sample document lost the item ${path}`);
-  }
-  return item;
-}
-
-/**
- * Read one row's article element.
- *
- * @param id - Row id to look for.
- * @returns The element, or null when the page is not painting it.
- */
-function rowNode(id: string): Element | null {
-  return document.querySelector(`[data-row-id="${id}"]`);
-}
 
 /**
  * Read the jump labels the page is painting.
@@ -91,34 +50,6 @@ function paintedHints(): Record<string, string> {
     }
   }
   return hints;
-}
-
-/**
- * Open the chat box at one row through the affordance a hand would use.
- *
- * @param id - Row to write against.
- */
-function composeAt(id: string): void {
-  document
-    .querySelector(`[data-row-id="${id}"] > .row-head .chat-button`)
-    ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-}
-
-/**
- * Write into whatever text box is open, the way a keyboard does.
- *
- * @param selector - The box to write into.
- * @param text - What to write.
- */
-function type(selector: string, text: string): void {
-  const box = document.querySelector<HTMLTextAreaElement | HTMLInputElement>(
-    selector,
-  );
-  if (box === null) {
-    throw new Error(`nothing to write into at ${selector}`);
-  }
-  box.value = text;
-  box.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 describe("what a publish leaves exactly where it was", () => {
@@ -172,6 +103,27 @@ describe("what a publish leaves exactly where it was", () => {
     expect(paintedCursor()).toBe("newest/changed");
   });
 
+  it("lands a vanished cursor somewhere the search still paints", () => {
+    // Alpha and gamma both match; the cursor is on alpha, and alpha goes. Its
+    // lane survives the publish but not the search, so landing there would
+    // leave the human looking at a page with nothing marked on it while gamma
+    // is still in front of them. The filter is theirs and stays.
+    const { publish } = mountLive();
+    press("/");
+    typeInto("#brief-search", "parity");
+    expect(paintedCursor()).toBe(ALPHA);
+
+    const next = sampleBrief();
+    const lane = laneOf(next, "newest", "changed");
+    lane.items = lane.items.filter((item: Item) => item.id !== "alpha");
+    publish(next);
+
+    expect(paintedCursor()).toBe("newest");
+    expect(
+      document.querySelector<HTMLInputElement>("#brief-search")?.value,
+    ).toBe("parity");
+  });
+
   it("keeps every fold the human chose, and opens only what is new", () => {
     const { publish } = mountLive();
     click(NEXT_LANE);
@@ -209,10 +161,36 @@ describe("what a publish leaves exactly where it was", () => {
     expect(rowNode("newest/next/delta#q-delta")).not.toBeNull();
   });
 
+  it("opens what holds a new question, rather than hiding it", () => {
+    // A fold is a decision about material the human has already seen. A
+    // question arriving underneath one is material they have not seen, and a
+    // question the page paints nowhere has not arrived at all.
+    const { publish } = mountLive();
+    click(BETA);
+    expect(paintedOpen(BETA)).toBe("false");
+
+    const next = sampleBrief();
+    itemOf(next, BETA).questions?.push({
+      id: "q-later",
+      anchor: { kind: "element", path: BETA },
+      turns: [
+        {
+          author: "human",
+          text: "And the fifth case?",
+          at: "2026-07-25T16:00:00Z",
+        },
+      ],
+    });
+    publish(next);
+
+    expect(paintedOpen(BETA)).toBe("true");
+    expect(rowNode(`${BETA}#q-later`)).not.toBeNull();
+  });
+
   it("keeps the search text and the rows it is showing", () => {
     const { publish } = mountLive();
     press("/");
-    type("#brief-search", "parity");
+    typeInto("#brief-search", "parity");
     const showing = [...document.querySelectorAll('[data-row-kind="item"]')]
       .map((row) => row.getAttribute("data-row-id"));
 
@@ -273,128 +251,5 @@ describe("what a publish leaves exactly where it was", () => {
         .querySelector(".meta-chats")
         ?.getAttribute("aria-pressed"),
     ).toBe("true");
-  });
-});
-
-describe("what a publish does to something half-written", () => {
-  it("leaves an open chat box open, with the words still in it", () => {
-    const { publish } = mountLive();
-    composeAt(BETA);
-    type(".composer textarea", "Half a question about beta");
-
-    const next = sampleBrief();
-    itemOf(next, ALPHA).glance = "Something else entirely";
-    publish(next);
-
-    expect(
-      document.querySelector<HTMLTextAreaElement>(".composer textarea")?.value,
-    ).toBe("Half a question about beta");
-    expect(
-      document.querySelector(".composer")?.getAttribute("data-anchor-id"),
-    ).toBe(BETA);
-  });
-
-  it("closes the chat box when the row it was written at has gone", () => {
-    const { publish } = mountLive();
-    composeAt(BETA);
-    type(".composer textarea", "A question about a row that is leaving");
-
-    const next = sampleBrief();
-    const lane = laneOf(next, "newest", "changed");
-    lane.items = lane.items.filter((item: Item) => item.id !== "beta");
-    publish(next);
-
-    expect(document.querySelector(".composer")).toBeNull();
-  });
-});
-
-describe("what a publish tells the human has changed", () => {
-  it("retires a waiting sign the moment its words arrive", () => {
-    saveSentRecords([
-      {
-        rowId: GAMMA,
-        anchorId: GAMMA,
-        text: "Did this land?",
-        at: "2026-07-25T15:00:00Z",
-      },
-    ]);
-    const { container, publish } = mountLive();
-    const shell = container.firstElementChild;
-    expect(document.querySelectorAll("p.pending")).toHaveLength(1);
-
-    const next = sampleBrief();
-    itemOf(next, GAMMA).questions = [
-      {
-        id: "q-folded",
-        anchor: { kind: "element", path: GAMMA },
-        turns: [
-          {
-            author: "human",
-            text: "Did this land?",
-            at: "2026-07-25T15:00:00Z",
-          },
-        ],
-      },
-    ];
-    publish(next);
-
-    expect(document.querySelectorAll("p.pending")).toHaveLength(0);
-    // The conversation the daemon folded it into now carries the sign, and
-    // the page it is on is the page it was on: nothing was replaced.
-    expect(
-      document.querySelectorAll(
-        `[data-row-id="${GAMMA}#q-folded"] > .row-body > p.working`,
-      ),
-    ).toHaveLength(1);
-    expect(container.firstElementChild).toBe(shell);
-  });
-
-  it("marks an answer that arrived as new, until it is visited", () => {
-    const { publish } = mountLive();
-    expect(rowNode(OPEN_THREAD)?.getAttribute("data-fresh")).toBe("false");
-
-    const next = sampleBrief();
-    const beta = itemOf(next, BETA);
-    beta.questions?.[0]?.turns.push({
-      author: "agent",
-      text: "These four, with a case each.",
-      at: "2026-07-25T13:00:00Z",
-    });
-    publish(next);
-
-    expect(rowNode(OPEN_THREAD)?.getAttribute("data-fresh")).toBe("true");
-    expect(
-      rowNode(OPEN_THREAD)?.querySelector(".chip-new")?.textContent,
-    ).toContain("New answer");
-    // Only going to it clears the mark; nothing else does.
-    click(OPEN_THREAD);
-    expect(rowNode(OPEN_THREAD)?.getAttribute("data-fresh")).toBe("false");
-  });
-
-  it("follows the new document on counts, on the map and on the title", () => {
-    const { publish } = mountLive();
-
-    const next = sampleBrief();
-    next.title = "A different brief";
-    laneOf(next, "newest", "next").items.push({
-      id: "delta",
-      glance: "One more thing",
-      explanation: "Added since.",
-      trust: "unverified",
-    });
-    publish(next);
-
-    expect(document.title).toBe("A different brief");
-    // Four items in the sample document, and the one that just arrived.
-    expect(
-      document.querySelector('[data-count="items"] b')?.textContent,
-    ).toBe("5");
-    expect(document.querySelector(".brief-title")?.textContent).toBe(
-      "A different brief",
-    );
-    expect(
-      document.querySelector(`[data-map-lane="${NEXT_LANE}"] .map-label`)
-        ?.textContent,
-    ).toBe("What is next");
   });
 });

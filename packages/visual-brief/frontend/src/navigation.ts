@@ -210,6 +210,7 @@ export function createNavigation(
   carryAcrossPublishes({
     brief,
     rows,
+    painted,
     ids: index.ids,
     fresh,
     setOpen: (update) => setOpen(update),

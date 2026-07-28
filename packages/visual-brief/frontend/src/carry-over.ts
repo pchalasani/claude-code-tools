@@ -11,7 +11,7 @@
  * Only two things move, and each is a thing the human would want moved: a row
  * that was not in the previous document has no decision behind it and takes
  * the ordinary defaults, and a cursor whose row has gone climbs to the nearest
- * container that survives.
+ * container the page is still painting.
  */
 
 import { createComputed, on, type Accessor } from "solid-js";
@@ -28,6 +28,14 @@ export interface CarryOverDeps {
   brief: Accessor<BriefDocument>;
   /** Its rows, as they stand now. */
   rows: Accessor<Row[]>;
+  /**
+   * The rows the page is actually painting, as they stand now.
+   *
+   * A cursor has to land on one of these. A search or the chats view can be
+   * hiding the row a structural climb would choose, and a cursor on a row
+   * nobody is looking at is a cursor that cannot be seen, moved or folded.
+   */
+  painted: Accessor<Row[]>;
   /** The ids of those rows. */
   ids: Accessor<ReadonlySet<string>>;
   /** What has been answered since the human last looked. */
@@ -71,9 +79,15 @@ export function carryAcrossPublishes(deps: CarryOverDeps): void {
         // The cursor holds its row. Only a row that is no longer in the
         // document moves it, and then only as far as the nearest surviving
         // container — never to the top of the page and never to nothing.
+        //
+        // It climbs through what the page is painting rather than through the
+        // document, because a container the search has filtered away is as
+        // unreachable as one that has gone: landing there would leave nothing
+        // marked on a page still showing the other matches. The filter is the
+        // human's and is not dropped to make room for the cursor.
         const here = deps.cursorId();
         if (here !== null && !present.has(here)) {
-          const landing = restoreCursor(current, here);
+          const landing = restoreCursor(deps.painted(), here);
           if (landing !== null) {
             deps.place(landing);
           }

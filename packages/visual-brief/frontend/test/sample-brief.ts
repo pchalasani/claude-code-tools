@@ -7,7 +7,7 @@
  * tests rather than in ``src`` because nothing ships it.
  */
 
-import type { BriefDocument } from "../src/document";
+import type { BriefDocument, Item, Lane, Update } from "../src/document";
 
 /**
  * Build an independent copy of the sample document.
@@ -125,4 +125,43 @@ export function sampleBrief(): BriefDocument {
       },
     ],
   };
+}
+
+/**
+ * Find one lane of the sample document.
+ *
+ * @param brief - The document to look in.
+ * @param updateId - Id of the update holding it.
+ * @param laneId - Id of the lane.
+ * @returns The lane.
+ */
+export function laneOf(
+  brief: BriefDocument,
+  updateId: string,
+  laneId: string,
+): Lane {
+  const update = brief.updates.find((one: Update) => one.id === updateId);
+  const lane = update?.lanes.find((one: Lane) => one.id === laneId);
+  if (lane === undefined) {
+    throw new Error(`the sample document lost the lane ${laneId}`);
+  }
+  return lane;
+}
+
+/**
+ * Find one item of the sample document.
+ *
+ * @param brief - The document to look in.
+ * @param path - The item's row id.
+ * @returns The item.
+ */
+export function itemOf(brief: BriefDocument, path: string): Item {
+  const [updateId = "", laneId = "", itemId = ""] = path.split("/");
+  const item = laneOf(brief, updateId, laneId).items.find(
+    (one: Item) => one.id === itemId,
+  );
+  if (item === undefined) {
+    throw new Error(`the sample document lost the item ${path}`);
+  }
+  return item;
 }

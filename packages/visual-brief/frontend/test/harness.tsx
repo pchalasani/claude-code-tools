@@ -85,6 +85,44 @@ export function pressAt(target: Element, key: string): void {
 }
 
 /**
+ * Read one row's element.
+ *
+ * @param id - Row id to look for.
+ * @returns The element, or null when the page is not painting it.
+ */
+export function rowNode(id: string): Element | null {
+  return document.querySelector(`[data-row-id="${id}"]`);
+}
+
+/**
+ * Open the chat box at one row through the affordance a hand would use.
+ *
+ * @param id - Row to write against.
+ */
+export function composeAt(id: string): void {
+  document
+    .querySelector(`[data-row-id="${id}"] > .row-head .chat-button`)
+    ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+}
+
+/**
+ * Write into whatever text box is open, the way a keyboard does.
+ *
+ * @param selector - The box to write into.
+ * @param text - What to write.
+ */
+export function typeInto(selector: string, text: string): void {
+  const box = document.querySelector<HTMLTextAreaElement | HTMLInputElement>(
+    selector,
+  );
+  if (box === null) {
+    throw new Error(`nothing to write into at ${selector}`);
+  }
+  box.value = text;
+  box.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+/**
  * Read the row the interface says the cursor is on.
  *
  * @returns The row id, or null when nothing is marked.

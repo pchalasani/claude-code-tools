@@ -146,10 +146,11 @@ export function openedFor(
  * publishing is not a reason to undo them.
  *
  * Only two things move. A row that was not in the previous document has no
- * decision behind it, so it gets the ordinary default treatment — which is
- * what keeps new material from arriving hidden. And a conversation whose
- * answer has just landed opens itself and everything holding it, because an
- * answer nobody can see is an answer that did not arrive.
+ * decision behind it, so it gets the ordinary default treatment, and whatever
+ * holds it opens with it — which is what keeps new material from arriving
+ * hidden. And a conversation whose answer has just landed opens itself and
+ * everything holding it, because an answer nobody can see is an answer that
+ * did not arrive.
  *
  * @param brief - The newly delivered document.
  * @param rows - Its rows.
@@ -169,8 +170,17 @@ export function carriedOpen(
   const next = new Set([...open].filter((id) => present.has(id)));
   if (arrived.size > 0) {
     for (const id of defaultOpenIds(brief, rows)) {
-      if (arrived.has(id)) {
-        next.add(id);
+      if (!arrived.has(id)) {
+        continue;
+      }
+      next.add(id);
+      // Opening a new row inside a folded one paints nothing. An unanswered
+      // question arriving under an item or a lane the human folded is material
+      // they have not seen, so the rows holding it give way and open too.
+      for (const ancestor of ancestorIds(id)) {
+        if (present.has(ancestor)) {
+          next.add(ancestor);
+        }
       }
     }
   }
