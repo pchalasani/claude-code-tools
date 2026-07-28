@@ -59,6 +59,15 @@ export interface SentRecord {
   at: string;
   /** How many page loads it has survived without being found. */
   loads: number;
+  /**
+   * How many HUMAN-caused reloads it has survived without being found.
+   *
+   * Publishes reload the page too, and a publish the human did not cause
+   * must never age their waiting sign away. Only a manual refresh counts,
+   * which is also what makes the degraded advice — "refresh if this
+   * persists" — genuinely actionable: refreshes are the way out.
+   */
+  refreshes?: number;
 }
 
 /**
@@ -262,6 +271,8 @@ function isSentRecord(value: unknown): value is SentRecord {
     && typeof record.text === "string"
     && typeof record.at === "string"
     && typeof record.loads === "number"
+    && (record.refreshes === undefined
+      || typeof record.refreshes === "number")
   );
 }
 

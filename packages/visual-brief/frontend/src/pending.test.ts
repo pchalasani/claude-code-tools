@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BriefDocument, Turn } from "./document";
 import { STALL_POLLS, createPending, locateSubmissions } from "./pending";
@@ -232,16 +232,17 @@ describe("the sign a page load carries over", () => {
     expect(second.at(ITEM)[0]?.stalled).toBe(true);
   });
 
-  it("never expires a submission by reload count", () => {
-    // Publishes the human did not cause reload the page; however many arrive
-    // before the fold, the waiting sign and the way back to the conversation
-    // must both survive until the message actually appears.
+  it("is never aged by loads the human did not cause", () => {
+    // Publishes reload the page; however many arrive before the fold, the
+    // waiting sign and the way back to the conversation both survive until
+    // the message actually appears.
     saveSentRecords([sent("Why this way?", SENT_AT, 40)]);
 
     const pending = createPending(briefWith([]));
 
     expect(pending.at(ITEM)).toHaveLength(1);
     expect(readSentRecords()).toHaveLength(1);
+    expect(readSentRecords()[0]?.refreshes ?? 0).toBe(0);
 
     // And the moment it appears, it retires and lands as usual.
     const found = createPending(
@@ -249,6 +250,30 @@ describe("the sign a page load carries over", () => {
     );
     expect(found.at(ITEM)).toHaveLength(0);
     expect(found.landing()).toBe(`${ITEM}#q-late`);
+  });
+
+  it("lets go after the human refreshes it away, and only then", () => {
+    // The degraded advice is "refresh if this persists": the human's own
+    // refreshes are the one exit, so the advice is true and an agent's
+    // publishing can never trigger it.
+    const navigation = { type: "reload" };
+    const spy = vi
+      .spyOn(performance, "getEntriesByType")
+      .mockReturnValue([navigation as unknown as PerformanceEntry]);
+    try {
+      saveSentRecords([sent("Will this ever land?")]);
+      createPending(briefWith([]));
+      createPending(briefWith([]));
+      expect(readSentRecords()).toHaveLength(1);
+
+      createPending(briefWith([]));
+      const after = createPending(briefWith([]));
+
+      expect(after.at(ITEM)).toHaveLength(0);
+      expect(readSentRecords()).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("has nothing to say when there is no document to match against", () => {

@@ -28,6 +28,29 @@ import {
 /** Polls a submission survives after a page load before it stops spinning. */
 export const STALL_POLLS = 3;
 
+/** Manual refreshes an unfound submission survives before it is let go. */
+export const MAX_REFRESHES = 3;
+
+/**
+ * Report whether this page load was caused by the human refreshing.
+ *
+ * A publish also reloads the page, and a publish the human did not cause
+ * must never age their waiting sign. The browser records which kind of
+ * navigation this load was; anything unreadable counts as not-a-refresh,
+ * which errs toward keeping the sign.
+ *
+ * @returns True when the human reloaded this page themselves.
+ */
+export function isHumanRefresh(): boolean {
+  try {
+    const [entry] = performance.getEntriesByType("navigation");
+    return (entry as PerformanceNavigationTiming | undefined)?.type
+      === "reload";
+  } catch {
+    return false;
+  }
+}
+
 
 /** What the page says about one message it is still waiting on. */
 export interface PendingNote {
@@ -172,14 +195,20 @@ export function createPending(brief: BriefDocument | null = null): Pending {
   const located = brief === null
     ? stored.map(() => null)
     : locateSubmissions(brief, stored);
-  // A record is never expired by reload count: publishes the human did not
-  // cause must not delete their waiting sign or their way back to the
-  // conversation when it finally appears. The loads counter only feeds the
-  // visible stalled degradation.
-  const survivors = stored.filter((_, index) => located[index] === null);
+  // Publishes the human did not cause never age a record: only their own
+  // refreshes do, so the degraded advice — "refresh if this persists" — is
+  // the genuine way out, and a sign can neither be deleted by the agent's
+  // publishing nor hold its row open for the life of the tab.
+  const refreshed = isHumanRefresh();
+  const survivors = stored.filter(
+    (record, index) =>
+      located[index] === null
+      && (record.refreshes ?? 0) < MAX_REFRESHES,
+  );
   const carried = survivors.map((record) => ({
     ...record,
     loads: record.loads + 1,
+    refreshes: (record.refreshes ?? 0) + (refreshed ? 1 : 0),
   }));
   saveSentRecords(carried);
   const [live, setLive] = createSignal<SentRecord[]>(carried);
