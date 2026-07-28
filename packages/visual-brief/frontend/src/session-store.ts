@@ -261,7 +261,19 @@ export function consumeSelfReload(): boolean {
  */
 export function readHealCount(): number {
   const key = `visual-brief-heals:${runIdFromLocation()}`;
-  const raw = readItem(key) ?? readHistoryItem(key);
+  // The LARGER of the two, not the first that answers. One store going
+  // unwritable while the other keeps counting would otherwise freeze the
+  // budget at a stale value and let reloads run unbounded again.
+  return Math.max(countIn(readItem(key)), countIn(readHistoryItem(key)));
+}
+
+/**
+ * Read one stored heal count.
+ *
+ * @param raw - What a store answered, or null when it had nothing.
+ * @returns The count, or zero when it is not a usable one.
+ */
+function countIn(raw: string | null): number {
   const value = Number.parseInt(raw ?? "", 10);
   return Number.isFinite(value) && value > 0 ? value : 0;
 }

@@ -392,3 +392,32 @@ describe("an incompatible daemon whose answer keeps changing", () => {
     expect(reloads).toBe(MAX_HEALS);
   });
 });
+
+describe("the heal budget over a long-lived tab", () => {
+  it("is returned once the two ends agree again", async () => {
+    const page = "a".repeat(64);
+    let reloads = 0;
+    // Spend the whole budget on an incompatible daemon.
+    for (let poll = 1; poll <= 6; poll += 1) {
+      await pollOnce(
+        healingWatch(page, async () => `uptime=${poll}`, () => {
+          reloads += 1;
+        }),
+      );
+    }
+    expect(reloads).toBe(MAX_HEALS);
+
+    // The daemon comes back speaking properly, and agreeing.
+    await pollOnce(healingWatch(page, async () => page, () => {
+      reloads += 1;
+    }));
+
+    // A genuinely new incompatible upgrade must still be able to heal.
+    await pollOnce(
+      healingWatch(page, async () => "brief 9: unreadable", () => {
+        reloads += 1;
+      }),
+    );
+    expect(reloads).toBe(MAX_HEALS + 1);
+  });
+});

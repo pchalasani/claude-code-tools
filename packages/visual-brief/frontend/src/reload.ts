@@ -90,6 +90,8 @@ export interface VersionWatch {
   healed: (served: string | null) => boolean;
   /** Remember that this page reloaded itself out of this standoff. */
   remember: (served: string | null) => void;
+  /** Note that the two ends understand each other again. */
+  recovered: () => void;
 }
 
 /**
@@ -177,6 +179,16 @@ export async function pollOnce(watch: VersionWatch): Promise<PollOutcome> {
     return "retry";
   }
   if (outcome !== "reload") {
+    if (outcome === "same" && served !== null && comparable(watch.current, served)) {
+      // The two ends speak the same language again. Whatever budget earlier
+      // trouble spent is returned, so a long-lived tab can still heal a
+      // genuine upgrade months later.
+      try {
+        watch.recovered();
+      } catch {
+        // Forgetting is not worth failing a poll over.
+      }
+    }
     return outcome;
   }
   try {
@@ -327,6 +339,11 @@ export function healingWatch(
     remember: (served) => {
       rememberHealedStandoff(standoffName(current, served));
       rememberHealCount(readHealCount() + 1);
+    },
+    recovered: () => {
+      if (readHealCount() !== 0) {
+        rememberHealCount(0);
+      }
     },
   };
 }

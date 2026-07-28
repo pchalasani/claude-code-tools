@@ -119,6 +119,13 @@ export function parseInline(text: string): Inline[] {
     }
   };
 
+  // Remembered failure: once a mark has been shown to have no valid closer
+  // in the remainder, every later opener of that same mark fails too — the
+  // candidates it would search are a subset of the ones already rejected.
+  // Without this, a line like "a *a *a *…" rescanned the tail per asterisk
+  // and cost seconds at a few thousand marks.
+  const exhausted = new Set<string>();
+
   while (rest !== "") {
     const found = MARK.exec(rest);
     if (found === null || found.index === undefined) {
@@ -131,10 +138,13 @@ export function parseInline(text: string): Inline[] {
     // An underscore inside a word is part of the word: snake_case names are
     // written in briefs constantly, and turning half of one into emphasis
     // would silently change what the agent said.
-    const read = mark === "_" && /\w$/.test(plain)
+    const read = (mark === "_" && /\w$/.test(plain)) || exhausted.has(mark)
       ? null
       : readMark(mark, after);
     if (read === null) {
+      if (mark !== "_" || !/\w$/.test(plain)) {
+        exhausted.add(mark);
+      }
       plain += mark;
       rest = after.slice(mark.length);
       continue;
@@ -294,11 +304,17 @@ function readFence(lines: string[], at: number, blocks: Block[]): number {
  * @returns True when this line is that block's closing fence.
  */
 function closesFence(line: string, char: string, width: number): boolean {
-  const trimmed = line.trim();
-  if (trimmed.length < width) {
+  const indent = line.length - line.trimStart().length;
+  if (indent > 3) {
+    // Four spaces makes it content, not a fence — which is exactly how a
+    // fence character appears inside an indented code sample.
     return false;
   }
-  return [...trimmed].every((one) => one === char);
+  const body = line.trim();
+  if (body.length < width) {
+    return false;
+  }
+  return [...body].every((one) => one === char);
 }
 
 /**

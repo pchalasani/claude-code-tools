@@ -191,3 +191,29 @@ describe("characters an engineer actually writes", () => {
     expect(text).toContain("```not-a-close");
   });
 });
+
+describe("pathological and indented input", () => {
+  it("stays fast on a line of many non-closing marks", () => {
+    // Rescanning the tail per rejected opener made this quadratic: about a
+    // second at eight thousand marks, enough to freeze the tab.
+    const line = "a *".repeat(8000);
+    const started = Date.now();
+    parseMarkdown(line);
+    expect(Date.now() - started).toBeLessThan(250);
+  });
+
+  it("does not end a block at an indented fence inside it", () => {
+    const blocks = parseMarkdown(
+      "```\ncode\n    ```\nstill code\n```",
+    );
+    expect(blocks).toHaveLength(1);
+    const text = blocks[0]?.kind === "code" ? blocks[0].text : "";
+    expect(text).toContain("still code");
+    expect(text).toContain("    ```");
+  });
+
+  it("closes on a fence carrying only trailing spaces", () => {
+    const blocks = parseMarkdown("```\ncode\n```   \nafter");
+    expect(blocks.map((b) => b.kind)).toEqual(["code", "paragraph"]);
+  });
+});
