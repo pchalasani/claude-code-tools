@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { BriefDocument } from "./document";
+import { STALL_POLLS } from "./pending";
 import { announcePoll } from "./reload";
 import { saveSentRecords } from "./session-store";
 import { mount, useHarness } from "../test/harness";
@@ -161,5 +162,28 @@ describe("the sign across a page load that followed a send", () => {
     // The part that moves is a mark of its own, so the words never depend on
     // where an animation happens to be when the page repaints.
     expect(sign?.querySelector(".working-mark")).not.toBeNull();
+  });
+
+  it("holds the note still while the polls go by", () => {
+    // The note is painted inside a ``For``, which pairs elements with values
+    // by identity, so a note rebuilt on every poll is torn out of the page and
+    // an identical one put back — fading itself in again every few seconds,
+    // for as long as the message goes unanswered. The element is what is
+    // asserted, because a blink is a new element rather than new words.
+    sentBeforeTheLoad();
+    mount();
+    const held = document.querySelector(`[data-row-id="${ITEM}"] p.pending`);
+    expect(held).not.toBeNull();
+
+    for (let poll = 0; poll < STALL_POLLS; poll += 1) {
+      announcePoll("same");
+    }
+
+    expect(document.querySelector(`[data-row-id="${ITEM}"] p.pending`)).toBe(
+      held,
+    );
+    // The same element throughout, and still keeping up with how long the
+    // human has been waiting.
+    expect(held?.getAttribute("data-stalled")).toBe("true");
   });
 });

@@ -214,12 +214,31 @@ export function createPending(
   const landed = [...located()].reverse().find((id) => id !== null) ?? null;
   const opened = live().map((one) => one.record.rowId);
 
-  const note = (one: Waiting): PendingNote => ({
-    rowId: one.record.rowId,
-    text: one.record.text,
-    at: one.record.at,
-    stalled: polls() - one.since >= STALL_POLLS,
-  });
+  // One view per waiting message, kept rather than rebuilt. The note is
+  // painted inside a ``For`` that pairs elements with values by identity, so a
+  // fresh object each read would tear the note out of the page and put an
+  // identical one back — every poll, for as long as the message waits. What
+  // the human sees is their own words blinking at them every few seconds,
+  // which is the flicker this whole change exists to remove, in miniature.
+  // ``stalled`` is therefore read through the view rather than frozen into it:
+  // the object stays the same one while what it says stays live.
+  const views = new WeakMap<Waiting, PendingNote>();
+  const note = (one: Waiting): PendingNote => {
+    const shown = views.get(one);
+    if (shown !== undefined) {
+      return shown;
+    }
+    const view: PendingNote = {
+      rowId: one.record.rowId,
+      text: one.record.text,
+      at: one.record.at,
+      get stalled(): boolean {
+        return polls() - one.since >= STALL_POLLS;
+      },
+    };
+    views.set(one, view);
+    return view;
+  };
 
   return {
     at: (rowId) =>
