@@ -332,10 +332,16 @@ describe("evidence rows are named, not numbered", () => {
     }
   });
 
-  it("separates two siblings that would answer to one name", () => {
+  it("hands a name two siblings answer to to neither of them", () => {
+    // The renderer refuses to publish this. What is pinned down is what the
+    // page does with a document that reached it anyway: it invents no
+    // identity, because the only one left is the note's place in the list,
+    // and that moves the moment a note is written above it. Nothing is hidden
+    // either — evidence with no name of its own is still evidence.
     const brief = withForensics([
-      { title: "The same title", body: "One." },
-      { title: "The same title", body: "Two." },
+      { title: "Log", body: "One.", children: [{ title: "D", body: "Deep." }] },
+      { title: "Log", body: "Two." },
+      { title: "The other finding", body: "Three." },
     ]);
     mount(brief);
     press("E");
@@ -343,12 +349,16 @@ describe("evidence rows are named, not numbered", () => {
     const ids = outline(brief)
       .filter((row) => row.parentId === EVIDENCE)
       .map((row) => row.id);
-    expect(new Set(ids).size).toBe(2);
+    expect(ids).toEqual([noteRowId(EVIDENCE, "~the-other-finding")]);
     expect(paintedRows()).toEqual(outline(brief).map((row) => row.id));
-    for (const id of ids) {
-      expect(document.querySelectorAll(`[data-row-id="${id}"]`)).toHaveLength(
-        1,
-      );
+    expect(new Set(paintedRows()).size).toBe(paintedRows().length);
+    expect(paintedRows()).not.toContain(noteRowId(EVIDENCE, "~log"));
+    expect(paintedRows()).not.toContain(noteRowId(EVIDENCE, "~log-2"));
+    const body =
+      document.querySelector(`[data-row-id="${EVIDENCE}"] > .row-body`)
+        ?.textContent ?? "";
+    for (const written of ["Log", "One.", "Two.", "Deep."]) {
+      expect(body, `${written} fell off the page`).toContain(written);
     }
   });
 

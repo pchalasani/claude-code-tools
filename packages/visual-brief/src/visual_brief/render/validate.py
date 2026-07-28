@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from visual_brief import MAX_THREAD_ID_LENGTH
+from visual_brief.render.note_names import note_name, require_distinct_note_names
 
 TRUST_LABELS = {
     "verified-by-me": "Verified by me",
@@ -180,7 +181,7 @@ def _validate_questions(
     return thread_ids
 
 
-def _validate_nested(node: Any, location: str) -> str | None:
+def _validate_nested(node: Any, location: str) -> str:
     """Validate one recursively nestable forensic note.
 
     Args:
@@ -188,7 +189,8 @@ def _validate_nested(node: Any, location: str) -> str | None:
         location: JSON path used in validation errors.
 
     Returns:
-        The note's declared identifier, or None when it declares none.
+        The name the note answers to among its siblings: the id it declared,
+        or a marked slug of its title.
 
     Raises:
         ValueError: If the note violates the forensic note schema.
@@ -200,10 +202,10 @@ def _validate_nested(node: Any, location: str) -> str | None:
         if "id" in node
         else None
     )
-    require_text(node.get("title"), f"{location}.title")
+    title = require_text(node.get("title"), f"{location}.title")
     require_text(node.get("body"), f"{location}.body")
     _validate_children(node.get("children", []), f"{location}.children")
-    return declared
+    return note_name(declared, title)
 
 
 def _validate_children(children: Any, location: str) -> None:
@@ -214,11 +216,11 @@ def _validate_children(children: Any, location: str) -> None:
         location: JSON path used in validation errors.
 
     Raises:
-        ValueError: If a child is malformed or two of them share an id.
+        ValueError: If a child is malformed or two of them answer to one name.
     """
     if not isinstance(children, list):
         raise ValueError(f"{location} must be a list")
-    _require_unique_note_ids(
+    require_distinct_note_names(
         [
             _validate_nested(child, f"{location}[{index}]")
             for index, child in enumerate(children)
@@ -235,11 +237,11 @@ def _validate_forensics(entries: Any, location: str) -> None:
         location: JSON path used in validation errors.
 
     Raises:
-        ValueError: If an entry is malformed or two notes share an id.
+        ValueError: If an entry is malformed or two notes answer to one name.
     """
     if not isinstance(entries, list):
         raise ValueError(f"{location} must be a list")
-    _require_unique_note_ids(
+    require_distinct_note_names(
         [
             _validate_nested(entry, f"{location}[{index}]")
             for index, entry in enumerate(entries)
@@ -247,27 +249,6 @@ def _validate_forensics(entries: Any, location: str) -> None:
         ],
         location,
     )
-
-
-def _require_unique_note_ids(declared: list[str | None], location: str) -> None:
-    """Refuse two sibling notes that answer to one name.
-
-    A note is a row of the page, and its row id is built from the name it
-    answers to among its siblings. Two siblings claiming one name would paint
-    two rows the cursor cannot tell apart, so the collision is refused at
-    publish time rather than settled behind the reader's back.
-
-    Args:
-        declared: What each sibling note declared, None where it declared
-            nothing.
-        location: JSON path used in validation errors.
-
-    Raises:
-        ValueError: If two siblings declare the same identifier.
-    """
-    named = [value for value in declared if value is not None]
-    if len(named) != len(set(named)):
-        raise ValueError(f"{location} note ids must be unique")
 
 
 def _validate_table(table: Any, location: str) -> None:

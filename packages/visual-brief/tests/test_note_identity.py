@@ -18,6 +18,7 @@ import pytest
 
 from page_document import embedded_document
 from visual_brief.render import render_content
+from visual_brief.render.note_names import derived_name
 
 EXAMPLE_PATH = Path(__file__).parents[1] / "example.json"
 
@@ -129,6 +130,147 @@ def test_two_nested_notes_may_not_claim_one_id() -> None:
         r"\.children note ids must be unique$",
     ):
         render_content(data)
+
+
+@pytest.mark.parametrize(
+    ("title", "name"),
+    [
+        ("Agreement rule", "agreement-rule"),
+        ("  log!  ", "log"),
+        ("!!!", "note"),
+        ("x" * 60, "x" * 48),
+    ],
+)
+def test_the_name_a_title_reads_as(title: str, name: str) -> None:
+    """Derive the name the page derives, character for character.
+
+    Refusing a collision is only worth anything if the two sides agree on
+    which titles collide, so the rule checked here is the rule the front end
+    slugs titles by: lowercase, runs of anything else become one dash, cut at
+    the limit, no dash on either end, and a fallback when nothing is left.
+    ``Agreement rule`` is the note the browser suite reads off the real page.
+    """
+    assert derived_name(title) == name
+
+
+def test_two_siblings_named_by_one_title_are_refused() -> None:
+    """Refuse the collision the page cannot settle without using positions.
+
+    Named by their titles, both notes answer to one name. Anything the page
+    could do to tell them apart — numbering them, taking the first — reads
+    their positions, and a publish that writes a third ``Log`` above them
+    would hand each note the identity of its neighbour.
+    """
+    data = _example()
+    _first_item(data)["forensics"] = [
+        {"title": "Log", "body": "First."},
+        {"title": "Log", "body": "Second."},
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match=r"^updates\[0\]\.lanes\[0\]\.items\[0\]\.forensics notes whose "
+        r"titles read as one name must declare unique ids$",
+    ):
+        render_content(data)
+
+
+def test_two_titles_that_slug_to_one_name_are_refused() -> None:
+    """Compare the names the page derives, not the titles as written."""
+    data = _example()
+    _first_item(data)["forensics"] = [
+        {"title": "Log", "body": "First."},
+        {"title": "  log!  ", "body": "Second."},
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match=r"^updates\[0\]\.lanes\[0\]\.items\[0\]\.forensics notes whose "
+        r"titles read as one name must declare unique ids$",
+    ):
+        render_content(data)
+
+
+def test_nested_siblings_named_by_one_title_are_refused() -> None:
+    """Apply the rule to the notes hanging under a note, with its path."""
+    data = _example()
+    _first_item(data)["forensics"] = [
+        {
+            "title": "A note",
+            "body": "Body.",
+            "children": [
+                {"title": "Log", "body": "First."},
+                {"title": "Log", "body": "Second."},
+            ],
+        }
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match=r"^updates\[0\]\.lanes\[0\]\.items\[0\]\.forensics\[0\]\.children"
+        r" notes whose titles read as one name must declare unique ids$",
+    ):
+        render_content(data)
+
+
+def test_declared_ids_settle_a_title_collision() -> None:
+    """Let the author say which note is which, and publish it unchanged."""
+    data = _example()
+    _first_item(data)["forensics"] = [
+        {"id": "first-log", "title": "Log", "body": "First."},
+        {"id": "second-log", "title": "Log", "body": "Second."},
+    ]
+
+    delivered = embedded_document(render_content(data))
+
+    item = delivered["updates"][0]["lanes"][0]["items"][0]
+    assert [note["id"] for note in item["forensics"]] == [
+        "first-log",
+        "second-log",
+    ]
+
+
+def test_a_title_may_read_like_the_id_a_sibling_declares() -> None:
+    """Keep the two namespaces apart: a derived name wears a ``~``.
+
+    The note named by its title answers to ``~log``, which no declared id can
+    spell, so the sibling calling itself ``log`` takes nothing from it.
+    """
+    data = _example()
+    _first_item(data)["forensics"] = [
+        {"title": "Log", "body": "First."},
+        {"id": "log", "title": "The other one", "body": "Second."},
+    ]
+
+    delivered = embedded_document(render_content(data))
+
+    item = delivered["updates"][0]["lanes"][0]["items"][0]
+    assert [note.get("id") for note in item["forensics"]] == [None, "log"]
+
+
+def test_two_notes_in_different_lists_may_share_a_title() -> None:
+    """A name only has to belong to one note among the siblings it sits with."""
+    data = _example()
+    _first_item(data)["forensics"] = [
+        {
+            "title": "First note",
+            "body": "Body.",
+            "children": [{"title": "Log", "body": "First."}],
+        },
+        {
+            "title": "Second note",
+            "body": "Body.",
+            "children": [{"title": "Log", "body": "Second."}],
+        },
+    ]
+
+    delivered = embedded_document(render_content(data))
+
+    item = delivered["updates"][0]["lanes"][0]["items"][0]
+    assert [note["children"][0]["title"] for note in item["forensics"]] == [
+        "Log",
+        "Log",
+    ]
 
 
 def test_the_same_id_under_two_different_notes_is_allowed() -> None:

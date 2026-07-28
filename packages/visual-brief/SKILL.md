@@ -136,6 +136,12 @@ is appended, never rewritten, so a duplicate id is refused.
 `known-limitation`. Use it honestly — it is how the human tells your evidence
 from your belief.
 
+A `forensics` entry is either a raw string or a note with `title`, `body` and
+optional `children`. A note is a row the human's cursor can rest on, and it is
+identified by its title unless you give it an `id`. Two notes side by side
+whose titles read as the same name are refused: only you can say which is
+which, so give each of them its own `id`.
+
 Prose is read as markdown: `explanation`, the body of a forensic note, and the
 text of a turn. Emphasis, strong emphasis, inline code, fenced blocks, lists
 and headings work; a link works only if its scheme is `https`, `http` or

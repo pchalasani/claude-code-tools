@@ -34,9 +34,17 @@
  * declared name may not hold, so neither kind can ever spell the other. That
  * is what stops a name from changing hands between publishes: giving a note
  * an ``id``, or writing a sibling whose title slugs to that id, renames
- * nothing that already exists. What is left is the one collision nobody can
- * resolve — two siblings with the same title and no declared name — and those
- * are separated in document order, so two rows still can never claim one id.
+ * nothing that already exists.
+ *
+ * What is left is the one collision nobody here can resolve — two siblings
+ * answering to one name. The renderer refuses to publish it, because only the
+ * author can say which note is which and saying so costs one ``id``. Should
+ * such a document reach the page anyway, this module invents no identity to
+ * tell the two apart: numbering them by their positions is exactly the
+ * identity-by-position it exists to be rid of, and the numbers would move the
+ * moment a note is inserted above them. A name two siblings answer to belongs
+ * to neither, so neither of them becomes a row, and both are painted as the
+ * unnamed evidence they are — visible, searchable, and claiming no id.
  */
 
 import type { Forensic, Item, NestedNote } from "./document";
@@ -102,6 +110,11 @@ export type PaintedEvidence =
   | { kind: "text"; text: string }
   | { kind: "note"; id: string; note: NestedNote };
 
+/** One evidence entry, notes carrying the name they answer to. */
+type NamedEvidence =
+  | { kind: "text"; text: string }
+  | { kind: "note"; name: string; note: NestedNote };
+
 /**
  * Pair every evidence entry with the row id it paints under.
  *
@@ -117,13 +130,20 @@ export function paintedEvidence(
   entries: Forensic[],
   parentId: string,
 ): PaintedEvidence[] {
-  const taken = new Set<string>();
-  return entries.map((entry): PaintedEvidence => {
-    if (typeof entry === "string") {
-      return { kind: "text", text: entry };
+  const named: NamedEvidence[] = entries.map((entry) =>
+    typeof entry === "string"
+      ? { kind: "text", text: entry }
+      : { kind: "note", name: noteName(entry), note: entry },
+  );
+  const shared = sharedNames(named);
+  return named.map((one): PaintedEvidence => {
+    if (one.kind === "text") {
+      return one;
     }
-    const name = claim(noteName(entry), taken);
-    return { kind: "note", id: noteRowId(parentId, name), note: entry };
+    if (shared.has(one.name)) {
+      return { kind: "text", text: forensicText(one.note) };
+    }
+    return { kind: "note", id: noteRowId(parentId, one.name), note: one.note };
   });
 }
 
@@ -211,13 +231,13 @@ function collectNotes(
  * Return the name one note answers to.
  *
  * A declared name is taken exactly as written: folding its case or cutting it
- * short would merge names the renderer accepted as different, and merged
- * names are settled by document order — which is the identity-by-position
- * this module exists to be rid of. Anything else is derived from the title
- * and marked as derived.
+ * short would merge names the renderer accepted as different, and a merged
+ * name is a name neither note can keep. Anything else is derived from the
+ * title and marked as derived.
  *
  * @param note - The note to name.
- * @returns The name, before any collision with a sibling is settled.
+ * @returns The name, before its siblings are asked whether they answer to it
+ *     too.
  */
 function noteName(note: NestedNote): string {
   const declared = note.id;
@@ -228,32 +248,35 @@ function noteName(note: NestedNote): string {
 }
 
 /**
- * Take one name, or the first free variation of it.
+ * Return the names more than one sibling answers to.
  *
- * Two siblings that would answer to the same name are separated rather than
- * allowed to collide: a duplicate id would paint two rows the cursor cannot
- * tell apart.
+ * A name two notes answer to identifies neither of them, so it is given to
+ * neither: both are painted as content, and no row on the page holds an id
+ * another row could just as well have claimed.
  *
- * @param base - The name being asked for.
- * @param taken - Names already claimed by its siblings, added to here.
- * @returns A name none of those siblings holds.
+ * @param named - One owner's evidence, notes carrying the name they answer to.
+ * @returns Every name claimed more than once.
  */
-function claim(base: string, taken: Set<string>): string {
-  let candidate = base;
-  let suffix = 1;
-  while (taken.has(candidate)) {
-    suffix += 1;
-    candidate = `${base}-${suffix}`;
+function sharedNames(named: NamedEvidence[]): Set<string> {
+  const seen = new Set<string>();
+  const shared = new Set<string>();
+  for (const one of named) {
+    if (one.kind === "text") {
+      continue;
+    }
+    if (seen.has(one.name)) {
+      shared.add(one.name);
+    }
+    seen.add(one.name);
   }
-  taken.add(candidate);
-  return candidate;
+  return shared;
 }
 
 /**
  * Return the name a note that declares none is known by: a slug of its title.
  *
  * @param note - The note to name.
- * @returns A name safe inside a row id, before any collision is settled.
+ * @returns A name safe inside a row id.
  */
 function derivedName(note: NestedNote): string {
   const slug = note.title
