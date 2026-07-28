@@ -182,3 +182,26 @@ describe("the chord that sends", () => {
     expect(isApplePlatform("Win32")).toBe(false);
   });
 });
+
+describe("shift with an arrow", () => {
+  it("moves by lane, exactly as the shifted letters do", () => {
+    expect(
+      resolveAction({ key: "ArrowDown", shiftKey: true }),
+    ).toBe("next-lane");
+    expect(resolveAction({ key: "ArrowUp", shiftKey: true })).toBe(
+      "previous-lane",
+    );
+  });
+
+  it("leaves the unshifted arrows moving by item", () => {
+    expect(resolveAction({ key: "ArrowDown" })).toBe("next-item");
+    expect(resolveAction({ key: "ArrowUp", shiftKey: false })).toBe(
+      "previous-item",
+    );
+  });
+
+  it("does not invent a shifted meaning for keys that lack one", () => {
+    expect(resolveAction({ key: "/", shiftKey: true })).toBe("search");
+    expect(resolveAction({ key: "Escape", shiftKey: true })).toBe("close");
+  });
+});

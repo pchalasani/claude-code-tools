@@ -36,6 +36,8 @@ export interface KeyEventLike {
   metaKey?: boolean;
   /** Whether the alt key was held. */
   altKey?: boolean;
+  /** Whether shift was held, which turns an arrow into a lane move. */
+  shiftKey?: boolean;
   /** Element the key was delivered to. */
   target?: EventTarget | null;
 }
@@ -121,10 +123,21 @@ export const BINDINGS: Record<string, Action> = {
   Escape: "close",
 };
 
+/**
+ * Bindings that only apply while Shift is held.
+ *
+ * Only keys whose ``key`` value does not already change under Shift belong
+ * here: a letter arrives as "J" rather than "j" and is bound directly.
+ */
+export const SHIFTED_BINDINGS: Record<string, Action> = {
+  ArrowDown: "next-lane",
+  ArrowUp: "previous-lane",
+};
+
 /** The bindings as the help overlay lists them. */
 export const KEY_HELP: [string, string][] = [
   ["j / k  or  ↓ / ↑", "Next / previous item"],
-  ["J / K", "Next / previous lane"],
+  ["J / K  or  ⇧↓ / ⇧↑", "Next / previous lane"],
   ["Space", "Open or close the selected row"],
   ["E / C", "Expand everything / collapse back to lanes"],
   ["f", "Label every row, then type a label to jump there"],
@@ -183,7 +196,12 @@ export function resolveAction(event: KeyEventLike): Action | null {
   if (event.ctrlKey === true || event.metaKey === true || event.altKey === true) {
     return null;
   }
-  const action = BINDINGS[event.key];
+  // Shift with an arrow moves by lane, mirroring how Shift turns j/k into
+  // J/K. The letters already carry their shift in the key value; the arrows
+  // do not, so the modifier is read here.
+  const action = event.shiftKey === true
+    ? SHIFTED_BINDINGS[event.key] ?? BINDINGS[event.key]
+    : BINDINGS[event.key];
   if (action === undefined) {
     return null;
   }
