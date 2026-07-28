@@ -120,43 +120,53 @@
 
 /*
  * A waiting human's only question is whether anything is happening. A static
- * line cannot answer it, so the words themselves carry a light travelling
- * across them. Where motion is unwelcome the same words stay, unmoving and
- * fully coloured — the reduced-motion rule has to put the fill back, because
- * the shimmer paints through transparent text.
+ * line cannot answer it, so something in the sign moves — but never the
+ * words. They used to be painted through a travelling gradient, which meant
+ * that for most of every cycle they were the faintest ink on the page and at
+ * the start of each cycle fainter still: a sign that fades out and comes back
+ * is a sign that disappeared, which is exactly what it was reported as doing
+ * at the reload, where the animation starts again from the beginning.
+ *
+ * So the words are one solid, legible colour at every instant, and the motion
+ * is a mark beside them. Where motion is unwelcome the mark stands still and
+ * stays fully visible; nothing about the words changes either way.
  */
 .working {
+  align-items: baseline;
+  display: flex;
   font-family: var(--mono);
   font-size: var(--t-xs);
+  gap: 0.45rem;
   letter-spacing: 0.14em;
   margin: 0.35rem 0 0.55rem;
   text-transform: uppercase;
 }
 
 .working-text {
-  animation: agent-working 1.6s linear infinite;
-  background: linear-gradient(
-    100deg,
-    var(--ink-faint) 20%,
-    var(--select-edge) 42%,
-    var(--ink) 50%,
-    var(--select-edge) 58%,
-    var(--ink-faint) 80%
-  );
-  background-clip: text;
-  background-size: 260% 100%;
-  color: transparent;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: var(--ink-quiet);
+}
+
+.working-mark {
+  animation: agent-working 1.4s ease-in-out infinite;
+  color: var(--select-edge);
+  font-size: 0.85em;
+  line-height: 1;
 }
 
 @keyframes agent-working {
   from {
-    background-position: 160% 0;
+    opacity: 0.45;
+    transform: translateY(0.5px);
+  }
+
+  50% {
+    opacity: 1;
+    transform: translateY(-1.5px);
   }
 
   to {
-    background-position: -60% 0;
+    opacity: 0.45;
+    transform: translateY(0.5px);
   }
 }
 
@@ -312,11 +322,10 @@
     animation: none !important;
   }
 
-  .working-text {
+  .working-mark {
     animation: none !important;
-    background: none;
-    color: var(--ink-quiet);
-    -webkit-text-fill-color: currentcolor;
+    opacity: 1;
+    transform: none;
   }
 }
 

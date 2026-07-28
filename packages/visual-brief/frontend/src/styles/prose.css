@@ -1,0 +1,67 @@
+/*
+ * What agent-written markdown looks like once the page has read it.
+ *
+ * The rules are deliberately small: the page is a briefing, not a document
+ * viewer, so a heading inside an item is a strong line rather than a title,
+ * and a list is a list. Everything keeps the page's own rhythm instead of
+ * introducing a second one.
+ */
+
+.md-paragraph {
+  margin: 0 0 0.5rem;
+  /* Soft line breaks are the author's: an agent that lays out a short list
+     with newlines meant those newlines. */
+  white-space: pre-wrap;
+}
+
+.md-paragraph:last-child,
+.md-list:last-child,
+.md-code-block:last-child {
+  margin-bottom: 0;
+}
+
+.md-heading {
+  font-size: var(--t-base);
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  margin: 0.7rem 0 0.3rem;
+}
+
+.md-heading:first-child {
+  margin-top: 0;
+}
+
+.md-list {
+  margin: 0 0 0.5rem;
+  padding-left: 1.2rem;
+}
+
+.md-list li {
+  margin: 0.1rem 0;
+}
+
+.md-code {
+  background: var(--ground-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: 0.9em;
+  padding: 0.05em 0.3em;
+}
+
+.md-code-block {
+  background: var(--ground-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: var(--t-sm);
+  margin: 0.4rem 0 0.55rem;
+  overflow-x: auto;
+  padding: 0.5rem 0.65rem;
+  white-space: pre-wrap;
+}
+
+.md-link {
+  color: var(--select-edge);
+  text-underline-offset: 2px;
+}

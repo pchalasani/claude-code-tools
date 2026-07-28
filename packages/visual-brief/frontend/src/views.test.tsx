@@ -295,8 +295,9 @@ describe("after the reload a send causes", () => {
     expect(note?.textContent).toContain("Will this outlast the reload?");
     expect(note?.getAttribute("data-stalled")).toBe("false");
     expect(
-      document.querySelector('[data-row-id="newest/next/gamma"] p.working')
-        ?.textContent,
+      document.querySelector(
+        '[data-row-id="newest/next/gamma"] p.working .working-text',
+      )?.textContent,
     ).toBe("agent is working");
   });
 });

@@ -119,7 +119,9 @@ describe("writing where the cursor is", () => {
     );
 
     expect(rows).toEqual(["newest/changed/beta#q-open"]);
-    expect(signs[0]?.textContent).toBe("agent is working");
+    expect(signs[0]?.querySelector(".working-text")?.textContent).toBe(
+      "agent is working",
+    );
   });
 
   it("leaves a row the human opened alone when the composer closes", () => {

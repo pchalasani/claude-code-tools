@@ -2,18 +2,24 @@
  * The document flattened into the rows the cursor can occupy.
  *
  * Every navigable thing on the page — an update, a lane, an item, a question
- * thread — is one row with a stable id. The id is the anchor path the rest of
- * the system already speaks: ``update``, ``update/lane``, ``update/lane/item``
- * and ``update/lane/item#thread``. Movement, restoration after a reload and
- * the structure map all read this one list, so what the human sees and what
- * the cursor believes cannot drift apart.
+ * thread, a piece of raw evidence — is one row with a stable id. The id is the
+ * anchor path the rest of the system already speaks: ``update``,
+ * ``update/lane``, ``update/lane/item`` and ``update/lane/item#thread``, with
+ * evidence nesting further hashes under the item it belongs to. Movement,
+ * restoration after a reload and the structure map all read this one list, so
+ * what the human sees and what the cursor believes cannot drift apart.
+ *
+ * The order here is the order the page paints, and that is a rule rather than
+ * a coincidence: a lane's own conversations come before its items because they
+ * are painted there, and an item's evidence comes before its conversations for
+ * the same reason.
  */
 
+import { evidenceRows, itemSearchText } from "./evidence";
 import { conversationState } from "./freshness";
 import {
   threadIsAwaiting,
   type BriefDocument,
-  type Forensic,
   type Item,
   type Lane,
   type Thread,
@@ -31,7 +37,7 @@ import {
 export const NOW_UPDATE_ID = "now";
 
 /** What kind of thing a row stands for. */
-export type RowKind = "update" | "lane" | "item" | "thread";
+export type RowKind = "update" | "lane" | "item" | "thread" | "evidence";
 
 /** One navigable row of the document. */
 export interface Row {
@@ -180,6 +186,15 @@ export function outline(brief: BriefDocument): Row[] {
         human: false,
       };
       rows.push(laneRow);
+      // A lane's own conversations sit directly under its head, above its
+      // items, because that is where the page paints them: a conversation
+      // about a lane belongs next to the lane, not past everything in it.
+      // This list and the rendered tree are one thing, so the order here is
+      // the order there.
+      for (const thread of lane.questions ?? []) {
+        rows.push(threadRow(thread, lanePath, lanePath));
+        laneRow.awaiting ||= threadIsAwaiting(thread);
+      }
       for (const item of lane.items ?? []) {
         const itemPath = itemRowId(lanePath, item);
         const itemRow: Row = {
@@ -193,15 +208,12 @@ export function outline(brief: BriefDocument): Row[] {
           human: false,
         };
         rows.push(itemRow);
+        rows.push(...evidenceRows(item, itemPath));
         for (const thread of item.questions ?? []) {
           rows.push(threadRow(thread, itemPath, itemPath));
           itemRow.awaiting ||= threadIsAwaiting(thread);
         }
         laneRow.awaiting ||= itemRow.awaiting;
-      }
-      for (const thread of lane.questions ?? []) {
-        rows.push(threadRow(thread, lanePath, lanePath));
-        laneRow.awaiting ||= threadIsAwaiting(thread);
       }
       updateRow.awaiting ||= laneRow.awaiting;
     }
@@ -289,40 +301,4 @@ function threadRow(thread: Thread, anchorId: string, parentId: string): Row {
     human: opening !== undefined,
     answerState: conversationState(thread.turns.length, awaiting),
   };
-}
-
-/**
- * Collect every word of an item that search should reach.
- *
- * @param item - A delivered item.
- * @returns The item's searchable text, lowercased.
- */
-function itemSearchText(item: Item): string {
-  const parts: string[] = [item.glance, item.explanation];
-  for (const entry of item.forensics ?? []) {
-    parts.push(forensicText(entry));
-  }
-  for (const table of item.tables ?? []) {
-    parts.push(table.caption, ...table.columns, ...table.rows.flat());
-  }
-  for (const thread of item.questions ?? []) {
-    for (const turn of thread.turns) {
-      parts.push(turn.text);
-    }
-  }
-  return parts.join(" ").toLowerCase();
-}
-
-/**
- * Flatten one forensic entry to text.
- *
- * @param entry - Raw evidence or a nested note.
- * @returns The entry's text.
- */
-function forensicText(entry: Forensic): string {
-  if (typeof entry === "string") {
-    return entry;
-  }
-  const children = (entry.children ?? []).map(forensicText);
-  return [entry.title, entry.body, ...children].join(" ");
 }

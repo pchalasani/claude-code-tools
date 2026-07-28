@@ -1,11 +1,32 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { createComposer, sentFromThisPage, type Post } from "./composer";
+import { createComposer, type Post } from "./composer";
+import type { Row } from "./outline";
+import { isWorking } from "./working";
 
 /** One recorded call to the daemon. */
 interface Sent {
   path: string;
   payload: unknown;
+}
+
+/**
+ * Build the row an item would have in the outline.
+ *
+ * @param id - The row's id, which is also its anchor.
+ * @returns The row.
+ */
+function itemRow(id: string): Row {
+  return {
+    id,
+    kind: "item",
+    anchorId: id,
+    parentId: null,
+    label: id,
+    search: "",
+    awaiting: false,
+    human: false,
+  };
 }
 
 /**
@@ -199,20 +220,25 @@ describe("composition", () => {
   });
 
   it("owns the waiting sign from the moment of sending until a reload", async () => {
+    // The seam this closes: the request in the air and the note that
+    // replaces it are two different facts, and a sign built out of two facts
+    // can flicker between them. One question, asked of both at once, cannot.
     const daemon = recorder();
     const composer = createComposer(daemon.post);
+    const here = itemRow("u/l/i");
+    const elsewhere = itemRow("u/l/other");
 
-    expect(sentFromThisPage(composer, "u/l/i")).toBe(false);
+    expect(isWorking({ composer }, here)).toBe(false);
     composer.toggleAt({ rowId: "u/l/i", anchorId: "u/l/i" });
     composer.setText("Is anything happening?");
     const inFlight = composer.submit();
 
-    expect(sentFromThisPage(composer, "u/l/i")).toBe(true);
-    expect(sentFromThisPage(composer, "u/l/other")).toBe(false);
+    expect(isWorking({ composer }, here)).toBe(true);
+    expect(isWorking({ composer }, elsewhere)).toBe(false);
     daemon.release();
     await inFlight;
 
-    expect(sentFromThisPage(composer, "u/l/i")).toBe(true);
+    expect(isWorking({ composer }, here)).toBe(true);
   });
 
   it("reports one-click feedback against the anchor it belongs to", async () => {

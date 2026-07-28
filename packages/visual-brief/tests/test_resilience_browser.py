@@ -1,15 +1,13 @@
-"""Real-browser proof that a tab left open looks after itself.
+"""Real-browser proof that a message survives the reload it causes.
 
-Two failures reported from live use are pinned here. A tab open across an
-upgrade of the daemon met a ``render-version`` answer it could not read, said
-nothing, and sat showing a working sign until it was reloaded by hand. And a
-question sent seconds before the daemon republished lost its place and its
-sign in the repaint that followed.
-
-So the page reloads itself out of a conversation it cannot follow — once, not
-in a loop — keeps a transient outage readable, carries the waiting sign across
-the reload, retires it the moment those exact words appear on the page, and
+A question sent seconds before the daemon republishes used to lose its place
+and its sign in the repaint that followed. So the page carries the waiting
+sign across the reload, comes back to the conversation the human was writing
+in, retires the sign the moment those exact words appear on the page, and
 stops promising progress when they never do.
+
+What a tab does when it cannot make sense of the daemon at all lives next
+door, in ``test_healing_browser``.
 """
 
 from __future__ import annotations
@@ -21,21 +19,6 @@ import pytest
 from browser_support import FIRST_ITEM, Browser, browser_session, landing_at
 
 ITEM = FIRST_ITEM
-
-_MARK = "window.__watched = true"
-_STILL_MARKED = "(() => window.__watched === true)()"
-
-_READABLE = """
-    (() => {
-      const rows = [...document.querySelectorAll("[data-row-id]")];
-      return {
-        rows: rows.length,
-        cursor:
-          document.querySelector('[data-cursor="true"]')?.dataset.rowId
-          ?? null,
-      };
-    })()
-    """
 
 _CHIP_MOTION = """
     (() => {
@@ -186,48 +169,6 @@ def browser() -> Iterator[Browser]:
     """Serve a brief and open it in an isolated real browser."""
     with browser_session() as driver:
         yield driver
-
-
-def test_a_page_the_daemon_stopped_speaking_to_reloads_itself_once(
-    browser: Browser,
-) -> None:
-    """Replace a stranded page, and then leave it alone.
-
-    An answer the client cannot read means the two ends have drifted apart,
-    and the page is the end that can be replaced. But a page that comes back
-    exactly as unintelligible must stay readable instead of reloading forever.
-    """
-    browser.evaluate(_MARK)
-    browser.server.version_body = "visual-brief 2: generation eyJ2IjoyfQ"
-
-    healed = browser.read_until(_STILL_MARKED, lambda seen: seen is False)
-
-    browser.evaluate(_MARK)
-    browser.run("wait", "1500")
-    settled = browser.evaluate(_STILL_MARKED)
-    readable = browser.evaluate(_READABLE)
-
-    assert healed is False, "the stranded page never reloaded itself"
-    assert settled is True, "the page reloaded itself in a loop"
-    assert readable["rows"] > 0
-    assert readable["cursor"] == FIRST_ITEM
-
-
-def test_a_daemon_that_stops_answering_does_not_reload_anything(
-    browser: Browser,
-) -> None:
-    """Keep a page readable while the local server is simply not there.
-
-    Not being answered is different from being answered incomprehensibly: a
-    saved page opened without its daemon has to stay put and stay readable.
-    """
-    browser.evaluate(_MARK)
-    browser.server.version_status = 404
-
-    browser.run("wait", "1500")
-
-    assert browser.evaluate(_STILL_MARKED) is True
-    assert browser.evaluate(_READABLE)["rows"] > 0
 
 
 def test_the_waiting_sign_clears_when_those_words_appear_on_the_page(

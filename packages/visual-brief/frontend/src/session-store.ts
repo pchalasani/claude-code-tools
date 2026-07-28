@@ -255,24 +255,25 @@ export function consumeSelfReload(): boolean {
 }
 
 /**
- * Read the page generation this tab last reloaded itself to escape.
+ * Read the standoff this tab last reloaded itself to escape.
  *
- * A generation that was stored as an empty string is a memory like any other,
- * not an absence. A page served without a generation of its own is exactly the
- * page that heals — it is unintelligible to the daemon by definition — and
- * reading its memory back as "never happened" is what made such a page reload
- * on every single load rather than once.
+ * A standoff is a pair — what this page is, and what the daemon said about it
+ * — because remembering only the first of those is what let a tab go stale
+ * for good. An empty string is a memory like any other, not an absence: a
+ * page served without a generation of its own is exactly the page that heals,
+ * and reading its memory back as "never happened" is what made such a page
+ * reload on every single load rather than once.
  *
- * @returns The generation, or null when this tab has never had to.
+ * @returns The remembered standoff, or null when this tab has never had one.
  */
-export function readHealedGeneration(): string | null {
+export function readHealedStandoff(): string | null {
   const key = healedStorageKey();
   const stored = readItem(key);
   return stored !== null ? stored : readHistoryItem(key);
 }
 
 /**
- * Remember that this tab reloaded itself to escape one page generation.
+ * Remember the standoff this tab reloaded itself to escape.
  *
  * It is written twice, to two stores that fail independently. Session storage
  * is the right home for it and is also the first thing a browser takes away —
@@ -281,13 +282,13 @@ export function readHealedGeneration(): string | null {
  * escape a state it cannot read, comes back into the same state, and reloads
  * again, for as long as the tab is open.
  *
- * @param generation - The generation the tab was showing when it gave up on
- *     understanding the daemon.
+ * @param standoff - What the page was showing and what the daemon answered
+ *     when the two could not be reconciled.
  */
-export function rememberHealedGeneration(generation: string): void {
+export function rememberHealedStandoff(standoff: string): void {
   const key = healedStorageKey();
-  writeItem(key, generation);
-  writeHistoryItem(key, generation);
+  writeItem(key, standoff);
+  writeHistoryItem(key, standoff);
 }
 
 /**

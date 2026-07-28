@@ -136,6 +136,16 @@ is appended, never rewritten, so a duplicate id is refused.
 `known-limitation`. Use it honestly — it is how the human tells your evidence
 from your belief.
 
+Prose is read as markdown: `explanation`, the body of a forensic note, and the
+text of a turn. Emphasis, strong emphasis, inline code, fenced blocks, lists
+and headings work; a link works only if its scheme is `https`, `http` or
+`mailto`. Anything else stays the characters you wrote, and no markup you write
+is ever markup on the page.
+
+`glance` is the exception and stays plain text: it is the row's name, and the
+same string is read aloud by the chat control and matched by the search, so
+asterisks in it would be asterisks.
+
 Both verbs take `--file F` or a bare `-` for standard input. `visual-brief
 render <run-id>` still exists for a file that was edited by hand.
 

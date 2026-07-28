@@ -28,12 +28,17 @@ def browser() -> Iterator[Browser]:
         yield driver
 
 
+# The evidence fold, which is an ordinary row now: the control a keyboard
+# reader tabs to is its head's toggle, exactly like every other row's.
+EVIDENCE_FOLD = ".row-evidence > .row-head > .row-toggle"
+
 _FOCUSED_FOLD = """
     (() => {
       const fold = document.activeElement;
       return {
         expanded: fold.getAttribute('aria-expanded'),
         control: fold.className,
+        row: fold.closest('[data-row-id]')?.dataset.rowKind ?? null,
       };
     })()
     """
@@ -194,15 +199,19 @@ def test_space_belongs_to_the_page_not_to_a_focused_disclosure(
     browser focuses a button when it is clicked, and the cursor is not the
     browser's focus, so Space aimed itself at whatever the mouse last touched.
     """
-    browser.run("scrollintoview", ".fold-head")
-    browser.run("focus", ".fold-head")
+    browser.run("scrollintoview", EVIDENCE_FOLD)
+    browser.run("focus", EVIDENCE_FOLD)
     before = browser.evaluate(_FOCUSED_FOLD)
     assert browser.cursor_row() == FIRST_ITEM
 
     browser.press(" ")
     browser.run("wait", "300")
 
-    assert before == {"expanded": "false", "control": "fold-head"}
+    assert before == {
+        "expanded": "false",
+        "control": "row-toggle",
+        "row": "evidence",
+    }
     assert browser.evaluate(_FOCUSED_FOLD) == before
     assert browser.cursor_row() == FIRST_ITEM
     assert browser.evaluate(_CURSOR_IS_OPEN) == "true"
@@ -215,8 +224,8 @@ def test_the_page_leaves_enter_to_the_browser(browser: Browser) -> None:
     which is what a ``<button>`` answers to natively. The page's only job is
     never to consume it.
     """
-    browser.run("scrollintoview", ".fold-head")
-    browser.run("focus", ".fold-head")
+    browser.run("scrollintoview", EVIDENCE_FOLD)
+    browser.run("focus", EVIDENCE_FOLD)
     browser.evaluate(_ENTER_SPY)
 
     browser.press("Enter")

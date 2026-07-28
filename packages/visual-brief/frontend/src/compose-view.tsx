@@ -4,6 +4,7 @@ import { SIGNALS } from "./composer";
 import { SEND_CHORD_LABEL, isSendChord } from "./keys";
 import type { Row } from "./outline";
 import type { BriefState } from "./state";
+import { isWorking } from "./working";
 
 /** The word this page uses for writing to the agent, wherever it writes it. */
 const CHAT_LABEL = "Chat";
@@ -106,18 +107,46 @@ export function ComposeBox(props: {
 /**
  * The sign that the other end of the conversation is busy.
  *
- * It sits where the answer will appear, and it moves, because the whole
- * question a waiting human has is whether anything is happening at all. The
- * wording never names a product: whichever agent is behind this page, it is
- * "agent". Where motion is unwelcome the same words stay put.
+ * It sits where the answer will appear, and something in it moves, because
+ * the whole question a waiting human has is whether anything is happening at
+ * all. The words themselves never move and are never painted through
+ * anything: they are one solid colour at every instant, so the sign cannot
+ * fade out and come back while it is still true. The motion is carried by a
+ * mark beside them, which is also the only part that stands still where
+ * motion is unwelcome. The wording never names a product: whichever agent is
+ * behind this page, it is "agent".
  *
  * @returns The indicator.
  */
 export function AgentWorking(): JSX.Element {
   return (
     <p class="working" role="status">
+      <span class="working-mark" aria-hidden="true">
+        ●
+      </span>
       <span class="working-text">agent is working</span>
     </p>
+  );
+}
+
+/**
+ * The one place any row says the agent is working.
+ *
+ * Every row that can be waiting on the agent renders exactly this, and the
+ * decision behind it is made in one function, so two sources of the same
+ * truth can neither stack up into two signs nor cancel each other into none.
+ *
+ * @param props - The row and its state.
+ * @returns The sign, or nothing.
+ */
+export function WorkingSign(props: {
+  state: BriefState;
+  row: Row;
+}): JSX.Element {
+  return (
+    <Show when={isWorking(props.state, props.row)}>
+      <AgentWorking />
+    </Show>
   );
 }
 
@@ -142,38 +171,36 @@ export function SubmissionStalled(): JSX.Element {
 /**
  * Everything this page has sent from one row and not yet seen answered.
  *
+ * The notes say what was sent; whether the agent is working is said once, by
+ * the sign, and never from here. A note that has waited too long adds the
+ * smaller true statement beside itself rather than replacing anything.
+ *
  * @param props - The row and its state.
- * @returns The pending notes, each with the sign that an answer is coming.
+ * @returns The pending notes.
  */
 export function PendingNotes(props: {
   state: BriefState;
   row: Row;
 }): JSX.Element {
-  const composer = props.state.composer;
   return (
-    <>
-      <Show when={composer.sendingAt(props.row.id)}>
-        <AgentWorking />
-      </Show>
-      <For each={composer.pendingAt(props.row.id)}>
-        {(note) => (
-          <>
-            <p class="pending" data-stalled={note.stalled ? "true" : "false"}>
-              <span class="chip chip-awaiting">
-                <span class="chip-mark" aria-hidden="true">
-                  ●
-                </span>
-                Sent
+    <For each={props.state.composer.pendingAt(props.row.id)}>
+      {(note) => (
+        <>
+          <p class="pending" data-stalled={note.stalled ? "true" : "false"}>
+            <span class="chip chip-awaiting">
+              <span class="chip-mark" aria-hidden="true">
+                ●
               </span>
-              You asked: {note.text} — awaiting an answer
-            </p>
-            <Show when={!note.stalled} fallback={<SubmissionStalled />}>
-              <AgentWorking />
-            </Show>
-          </>
-        )}
-      </For>
-    </>
+              Sent
+            </span>
+            You asked: {note.text} — awaiting an answer
+          </p>
+          <Show when={note.stalled}>
+            <SubmissionStalled />
+          </Show>
+        </>
+      )}
+    </For>
   );
 }
 

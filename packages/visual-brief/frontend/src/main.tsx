@@ -8,6 +8,7 @@ import "./styles/base.css";
 import "./styles/rows.css";
 import "./styles/chrome.css";
 import "./styles/marks.css";
+import "./styles/prose.css";
 
 export const ROOT_ID = "visual-brief-root";
 

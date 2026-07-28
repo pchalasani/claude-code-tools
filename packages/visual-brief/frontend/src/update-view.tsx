@@ -1,6 +1,11 @@
 import { For, Show, type JSX } from "solid-js";
 
-import { ComposeBox, ComposeButton, PendingNotes } from "./compose-view";
+import {
+  ComposeBox,
+  ComposeButton,
+  PendingNotes,
+  WorkingSign,
+} from "./compose-view";
 import type { Lane, Update } from "./document";
 import {
   NOW_UPDATE_ID,
@@ -98,13 +103,14 @@ export function LaneView(props: {
         />
       }
     >
-      <For each={props.lane.items ?? []}>
-        {(item) => (
-          <VisibleRow state={props.state} id={itemRowId(props.row.id, item)}>
-            {(row) => <ItemView state={props.state} row={row} item={item} />}
-          </VisibleRow>
-        )}
-      </For>
+      {/*
+        A conversation about the lane sits with the lane, directly under its
+        head and above its items. Down at the bottom of a long lane it was
+        nowhere near the thing it was about, and the chat box opened there
+        too — the human clicked a control on the header and had to go looking
+        for the box. The outline lists these rows in this same order, because
+        the two are one list.
+      */}
       <For each={props.lane.questions ?? []}>
         {(thread) => (
           <VisibleRow
@@ -118,7 +124,15 @@ export function LaneView(props: {
         )}
       </For>
       <PendingNotes state={props.state} row={props.row} />
+      <WorkingSign state={props.state} row={props.row} />
       <ComposeBox state={props.state} row={props.row} />
+      <For each={props.lane.items ?? []}>
+        {(item) => (
+          <VisibleRow state={props.state} id={itemRowId(props.row.id, item)}>
+            {(row) => <ItemView state={props.state} row={row} item={item} />}
+          </VisibleRow>
+        )}
+      </For>
     </RowShell>
   );
 }

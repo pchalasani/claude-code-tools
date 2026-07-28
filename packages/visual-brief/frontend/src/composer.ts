@@ -127,25 +127,6 @@ async function queuedTimestamp(response: Response): Promise<string> {
 }
 
 /**
- * Whether this page load is already showing work in progress at one row.
- *
- * The sign that an answer is coming has two independent sources: a message
- * this page sent, which lives only as long as the page load that sent it, and
- * a conversation the delivered document says is still awaiting an answer,
- * which survives every reload. The two overlap for the seconds between
- * sending and the agent republishing, and two signs stacked under one
- * conversation read as two unanswered questions — so the document-backed one
- * stands down wherever this is true.
- *
- * @param composer - The page's composition state.
- * @param rowId - The row to ask about.
- * @returns True when a message written in this page already carries the sign.
- */
-export function sentFromThisPage(composer: Composer, rowId: string): boolean {
-  return composer.sendingAt(rowId) || composer.pendingAt(rowId).length > 0;
-}
-
-/**
  * Build the composition state for one open brief.
  *
  * @param post - How records reach the daemon.

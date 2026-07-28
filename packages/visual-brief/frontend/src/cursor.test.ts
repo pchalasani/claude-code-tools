@@ -61,6 +61,10 @@ describe("the outline the cursor moves over", () => {
       "older",
       "older/history",
       "older/history/one",
+      // Evidence is a row too, so the keyboard reaches it. It comes after
+      // the item it belongs to and before that item's conversations, which
+      // is where the page paints it.
+      "older/history/one# evidence",
     ]);
   });
 
@@ -157,7 +161,7 @@ describe("moving between lanes", () => {
 describe("jumping", () => {
   it("goes to the first and last row of the document", () => {
     expect(edgeRow(ROWS, "top")).toBe("newest");
-    expect(edgeRow(ROWS, "bottom")).toBe("older/history/one");
+    expect(edgeRow(ROWS, "bottom")).toBe("older/history/one# evidence");
   });
 
   it("walks every unanswered question and then returns to the first", () => {

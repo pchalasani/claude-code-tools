@@ -24,13 +24,20 @@
  *   this one settles and one frozen daemon must not end the watch for the
  *   life of the tab.
  * - Healing is remembered, so a page that comes back exactly as
- *   unintelligible as it left does not reload forever.
+ *   unintelligible as it left does not reload forever. What is remembered is
+ *   the STANDOFF — this page's own generation and the answer it could not
+ *   reconcile with — and not merely the page. Remembering only the page was a
+ *   way for a tab to go stale for good: a page carrying no generation at all
+ *   can never match anything, so after one heal it treated every later answer
+ *   as the same impasse and stopped noticing publishes for the life of the
+ *   tab, still running whatever code it was serving. A changed answer is a
+ *   changed situation and is worth exactly one more reload.
  */
 
 import {
   markSelfReload,
-  readHealedGeneration,
-  rememberHealedGeneration,
+  readHealedStandoff,
+  rememberHealedStandoff,
 } from "./session-store";
 
 export const VERSION_META = "visual-brief-render-version";
@@ -67,10 +74,17 @@ export interface VersionWatch {
   read: () => Promise<string | null>;
   /** Replace the loaded page with the current one. */
   reload: () => void;
-  /** Whether this page already reloaded itself out of this exact state. */
-  healed: () => boolean;
-  /** Remember that this page reloaded itself out of this state. */
-  remember: () => void;
+  /**
+   * Whether this page already reloaded itself out of this exact standoff.
+   *
+   * The daemon's answer is part of the standoff: coming back to the same
+   * impasse is a reason to stay put, but a DIFFERENT answer means something
+   * changed at the other end, and a page that cannot read the answer cannot
+   * tell whether what changed is the very thing it is showing.
+   */
+  healed: (served: string | null) => boolean;
+  /** Remember that this page reloaded itself out of this standoff. */
+  remember: (served: string | null) => void;
 }
 
 /**
@@ -153,7 +167,7 @@ export async function pollOnce(watch: VersionWatch): Promise<PollOutcome> {
   }
   let outcome: PollOutcome = "retry";
   try {
-    outcome = decidePoll(watch.current, served, watch.healed());
+    outcome = decidePoll(watch.current, served, watch.healed(served));
   } catch {
     return "retry";
   }
@@ -161,16 +175,25 @@ export async function pollOnce(watch: VersionWatch): Promise<PollOutcome> {
     return outcome;
   }
   try {
-    if (served !== null && !isGeneration(served)) {
-      watch.remember();
-    } else if (!isGeneration(watch.current)) {
-      watch.remember();
+    if (served !== null && !comparable(watch.current, served)) {
+      watch.remember(served);
     }
   } catch {
     // Being unable to remember is not a reason to stay stranded.
   }
   watch.reload();
   return "reload";
+}
+
+/**
+ * Report whether two ends are speaking about generations at all.
+ *
+ * @param current - Generation the loaded page was rendered from.
+ * @param served - What the daemon answered.
+ * @returns True when both are generations this client can compare.
+ */
+function comparable(current: string, served: string): boolean {
+  return isGeneration(served) && isGeneration(current);
 }
 
 /**
@@ -288,9 +311,24 @@ export function healingWatch(
     current,
     read,
     reload,
-    healed: () => readHealedGeneration() === current,
-    remember: () => rememberHealedGeneration(current),
+    healed: (served) => readHealedStandoff() === standoff(current, served),
+    remember: (served) => rememberHealedStandoff(standoff(current, served)),
   };
+}
+
+/**
+ * Name one impasse between a loaded page and the daemon's answer.
+ *
+ * Both halves are unreadable by definition — that is what an impasse is — so
+ * the name is built by a encoder that cannot be confused by their contents
+ * rather than by joining them with a separator one of them might contain.
+ *
+ * @param current - Generation the loaded page was rendered from.
+ * @param served - What the daemon answered, or null when it did not.
+ * @returns A name no other impasse answers to.
+ */
+function standoff(current: string, served: string | null): string {
+  return JSON.stringify([current, served]);
 }
 
 /**

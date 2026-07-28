@@ -1,18 +1,21 @@
-import { For, Show, createSignal, type JSX } from "solid-js";
+import { For, Show, type JSX } from "solid-js";
 
 import {
   ComposeBox,
   ComposeButton,
   PendingNotes,
   SignalBar,
+  WorkingSign,
 } from "./compose-view";
 import {
   TRUST_LABELS,
   TRUST_MARKS,
-  type Forensic,
   type Item,
   type Table,
 } from "./document";
+import { evidenceRowId } from "./evidence";
+import { EvidenceView } from "./evidence-view";
+import { Markdown } from "./markdown-view";
 import { threadRowId, type Row } from "./outline";
 import { AwaitingChip, RowShell, VisibleRow } from "./row-shell";
 import type { BriefState } from "./state";
@@ -48,16 +51,28 @@ export function ItemView(props: {
         />
       }
     >
-      <p class="explanation">{props.item.explanation}</p>
+      {/*
+        The glance stays plain text: it is this row's name, and the same
+        string is the chat control's accessible label and part of what the
+        search reads. The explanation is prose, and prose is where agents
+        write markdown.
+      */}
+      <div class="explanation">
+        <Markdown text={props.item.explanation} />
+      </div>
       <For each={props.item.tables ?? []}>
         {(table) => <TableView table={table} />}
       </For>
       <Show when={(props.item.forensics ?? []).length > 0}>
-        <Disclosure label="Raw evidence and deeper forensics">
-          <For each={props.item.forensics ?? []}>
-            {(entry) => <ForensicView entry={entry} />}
-          </For>
-        </Disclosure>
+        <VisibleRow state={props.state} id={evidenceRowId(props.row.id)}>
+          {(row) => (
+            <EvidenceView
+              state={props.state}
+              row={row}
+              entries={props.item.forensics ?? []}
+            />
+          )}
+        </VisibleRow>
       </Show>
       <For each={props.item.questions ?? []}>
         {(thread) => (
@@ -72,6 +87,7 @@ export function ItemView(props: {
         )}
       </For>
       <PendingNotes state={props.state} row={props.row} />
+      <WorkingSign state={props.state} row={props.row} />
       <ComposeBox state={props.state} row={props.row} />
       <SignalBar state={props.state} row={props.row} />
     </RowShell>
@@ -92,64 +108,6 @@ export function TrustChip(props: { trust: Item["trust"] }): JSX.Element {
       </span>
       {TRUST_LABELS[props.trust]}
     </span>
-  );
-}
-
-/**
- * A fold that is part of the reading, not part of the navigation.
- *
- * Evidence nests arbitrarily deep and is not something the cursor steps
- * through, so these keep their own open state rather than becoming rows.
- *
- * @param props - The summary label and the content it hides.
- * @returns The rendered fold.
- */
-function Disclosure(props: {
-  label: string;
-  children: JSX.Element;
-}): JSX.Element {
-  const [open, setOpen] = createSignal(false);
-  return (
-    <div class="fold" data-open={open() ? "true" : "false"}>
-      <button
-        type="button"
-        class="fold-head"
-        aria-expanded={open()}
-        onClick={() => setOpen(!open())}
-      >
-        <span class="row-fold" aria-hidden="true">
-          {open() ? "▾" : "▸"}
-        </span>
-        {props.label}
-      </button>
-      <Show when={open()}>
-        <div class="fold-body">{props.children}</div>
-      </Show>
-    </div>
-  );
-}
-
-/**
- * One piece of evidence: raw text, or a note that nests further.
- *
- * @param props - The forensic entry.
- * @returns The rendered evidence.
- */
-function ForensicView(props: { entry: Forensic }): JSX.Element {
-  return (
-    <Show
-      when={typeof props.entry === "string" ? undefined : props.entry}
-      fallback={<pre class="evidence">{String(props.entry)}</pre>}
-    >
-      {(note) => (
-        <Disclosure label={note().title}>
-          <p class="note-body">{note().body}</p>
-          <For each={note().children ?? []}>
-            {(child) => <ForensicView entry={child} />}
-          </For>
-        </Disclosure>
-      )}
-    </Show>
   );
 }
 

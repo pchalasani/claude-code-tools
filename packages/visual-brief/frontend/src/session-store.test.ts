@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
-  readHealedGeneration,
+  readHealedStandoff,
   readSentRecords,
-  rememberHealedGeneration,
+  rememberHealedStandoff,
   saveSentRecords,
 } from "./session-store";
 import { forgetStores, withoutSessionStorage } from "../test/storage";
@@ -14,54 +14,54 @@ beforeEach(() => {
 
 describe("what a tab remembers about reloading itself", () => {
   it("has nothing to say before anything has happened", () => {
-    expect(readHealedGeneration()).toBeNull();
+    expect(readHealedStandoff()).toBeNull();
   });
 
-  it("reads back the generation it was told to remember", () => {
-    rememberHealedGeneration("a".repeat(64));
+  it("reads back the standoff it was told to remember", () => {
+    rememberHealedStandoff("a".repeat(64));
 
-    expect(readHealedGeneration()).toBe("a".repeat(64));
+    expect(readHealedStandoff()).toBe("a".repeat(64));
   });
 
-  it("remembers a page that had no generation of its own", () => {
+  it("remembers a standoff a page with no generation was in", () => {
     // The page most likely to heal is the one served without a generation at
     // all: it cannot be compared with anything, so it reloads. Reading that
     // memory back as "never happened" is what made such a page reload on
     // every load for as long as the tab stayed open.
-    rememberHealedGeneration("");
+    rememberHealedStandoff("");
 
-    expect(readHealedGeneration()).toBe("");
+    expect(readHealedStandoff()).toBe("");
   });
 
   it("keeps remembering when session storage is refused outright", async () => {
     await withoutSessionStorage(() => {
-      rememberHealedGeneration("b".repeat(64));
+      rememberHealedStandoff("b".repeat(64));
 
-      expect(readHealedGeneration()).toBe("b".repeat(64));
+      expect(readHealedStandoff()).toBe("b".repeat(64));
     });
   });
 
-  it("keeps remembering the empty generation without that store too", async () => {
+  it("keeps remembering the empty standoff without that store too", async () => {
     await withoutSessionStorage(() => {
-      rememberHealedGeneration("");
+      rememberHealedStandoff("");
 
-      expect(readHealedGeneration()).toBe("");
+      expect(readHealedStandoff()).toBe("");
     });
   });
 
   it("still has nothing to say when both stores are empty", async () => {
     await withoutSessionStorage(() => {
-      expect(readHealedGeneration()).toBeNull();
+      expect(readHealedStandoff()).toBeNull();
     });
   });
 
   it("leaves whatever else the history entry was carrying alone", async () => {
     window.history.replaceState({ somebodyElse: "keep me" }, "");
 
-    rememberHealedGeneration("c".repeat(64));
+    rememberHealedStandoff("c".repeat(64));
 
     await withoutSessionStorage(() => {
-      expect(readHealedGeneration()).toBe("c".repeat(64));
+      expect(readHealedStandoff()).toBe("c".repeat(64));
     });
     expect(window.history.state).toMatchObject({ somebodyElse: "keep me" });
   });
@@ -76,7 +76,7 @@ describe("what a tab remembers about what it sent", () => {
     loads: 0,
   };
 
-  it("survives without session storage, like a healed generation", async () => {
+  it("survives without session storage, like a healed standoff", async () => {
     // A publish the human did not cause reloads the page; a browser that has
     // taken session storage away must not also take the waiting sign.
     saveSentRecords([record]);
@@ -95,7 +95,7 @@ describe("what a tab remembers about what it sent", () => {
   it("still remembers through the history entry without a store", async () => {
     // The reviewer's case: a browser that silently takes session storage
     // away must not also take the waiting sign. The history entry carries
-    // the records instead, exactly as it does for healed generations.
+    // the records instead, exactly as it does for healed standoffs.
     saveSentRecords([record]);
 
     await withoutSessionStorage(() => {

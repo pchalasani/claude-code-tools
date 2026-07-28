@@ -1,13 +1,13 @@
-import { For, Show, type JSX } from "solid-js";
+import { For, type JSX } from "solid-js";
 
 import {
-  AgentWorking,
   ComposeBox,
   ComposeButton,
   PendingNotes,
+  WorkingSign,
 } from "./compose-view";
-import { sentFromThisPage } from "./composer";
 import type { Thread } from "./document";
+import { Markdown } from "./markdown-view";
 import type { Row } from "./outline";
 import { AwaitingChip, NewAnswerChip, RowShell } from "./row-shell";
 import type { BriefState } from "./state";
@@ -53,7 +53,15 @@ export function ThreadView(props: {
               <span class="turn-author">{turn.author}</span>
               <time>{turn.at}</time>
             </div>
-            <p class="turn-text">{turn.text}</p>
+            {/*
+              Both authors' words go through the same renderer, which builds
+              elements out of a closed grammar and can produce no markup at
+              all. There is therefore no unescaped path for either of them to
+              travel down, and one path is easier to keep safe than two.
+            */}
+            <div class="turn-text">
+              <Markdown text={turn.text} />
+            </div>
           </div>
         )}
       </For>
@@ -64,14 +72,7 @@ export function ThreadView(props: {
         else must not see the reassurance vanish: the conversation is still
         awaiting, so it still says so, reload after reload.
       */}
-      <Show
-        when={
-          props.row.awaiting &&
-          !sentFromThisPage(props.state.composer, props.row.id)
-        }
-      >
-        <AgentWorking />
-      </Show>
+      <WorkingSign state={props.state} row={props.row} />
       <ComposeBox state={props.state} row={props.row} />
     </RowShell>
   );

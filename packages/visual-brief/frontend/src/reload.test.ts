@@ -96,9 +96,9 @@ function watching(
     reloads += 1;
   });
   const remember = watch.remember;
-  watch.remember = () => {
+  watch.remember = (served) => {
     remembered += 1;
-    remember();
+    remember(served);
   };
   return {
     watch,
@@ -201,7 +201,7 @@ describe("one poll cycle", () => {
 
   it("survives a page that cannot even remember it healed", async () => {
     const driver = watching(async () => "not a generation");
-    driver.watch.remember = () => {
+    driver.watch.remember = (): never => {
       throw new Error("storage is disabled");
     };
 
@@ -250,6 +250,38 @@ describe("healing, remembered where the page really keeps it", () => {
       expect(await pollOnce(second.watch)).toBe("same");
       expect(second.reloads()).toBe(0);
     });
+  });
+
+  it("still notices a publish after healing out of a page it cannot read", async () => {
+    // The gap a stale tab could hide in. A page served with no generation of
+    // its own can never be compared with anything, so it heals once — and,
+    // when what it remembered was only itself, it then read EVERY later
+    // answer as the same impasse. It stopped reloading for good and went on
+    // running whatever code it had been served, which is exactly what a tab
+    // showing withdrawn wording looks like.
+    const first = watching(async () => "c".repeat(64), { current: "" });
+    expect(await pollOnce(first.watch)).toBe("reload");
+
+    const settled = watching(async () => "c".repeat(64), { current: "" });
+    expect(await pollOnce(settled.watch)).toBe("same");
+
+    // The agent publishes. The tab cannot compare the two generations, but
+    // it can see that the answer is not the one it gave up on, and one more
+    // reload is what fetches the page — and the bundle — being served now.
+    const republished = watching(async () => "d".repeat(64), { current: "" });
+
+    expect(await pollOnce(republished.watch)).toBe("reload");
+    expect(republished.reloads()).toBe(1);
+  });
+
+  it("reloads again when the daemon starts saying something different", async () => {
+    const first = watching(async () => "visual-brief 2: unreadable");
+    expect(await pollOnce(first.watch)).toBe("reload");
+
+    const upgraded = watching(async () => "visual-brief 3: also unreadable");
+
+    expect(await pollOnce(upgraded.watch)).toBe("reload");
+    expect(upgraded.reloads()).toBe(1);
   });
 
   it("keeps reloading for content that simply moved on", async () => {

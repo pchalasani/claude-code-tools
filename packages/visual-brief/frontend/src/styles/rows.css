@@ -251,39 +251,30 @@
   text-transform: uppercase;
 }
 
+/* The blocks inside carry their own spacing and their own handling of the
+   author's line breaks, so the container does neither. */
 .turn-text {
   margin: 0.15rem 0 0;
   max-width: 68ch;
-  white-space: pre-wrap;
 }
 
 /* ---------- evidence ---------- */
 
-.fold {
-  margin: 0.4rem 0;
+/* Evidence is a row like any other, so it wears the cursor and answers the
+   keyboard; it is just quieter, because it is the layer you go to when you
+   have decided to check something rather than the layer you read. */
+.row-evidence {
+  margin: 0.35rem 0;
 }
 
-.fold-head {
-  background: none;
-  border: 0;
+.evidence-title {
   color: var(--ink-quiet);
-  cursor: pointer;
-  display: flex;
   font-family: var(--mono);
   font-size: var(--t-sm);
-  gap: 0.45rem;
-  padding: 0.2rem 0;
-  text-align: left;
 }
 
-.fold-head:hover {
+.row-evidence[data-cursor="true"] > .row-head .evidence-title {
   color: var(--ink);
-}
-
-.fold-body {
-  border-left: 1px solid var(--rule);
-  margin-left: 0.35rem;
-  padding-left: 0.75rem;
 }
 
 .evidence {

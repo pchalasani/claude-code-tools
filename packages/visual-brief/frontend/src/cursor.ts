@@ -134,8 +134,12 @@ export function restoreCursor(
  * Keep only the rows a search query leaves on the page.
  *
  * Items match; the lanes and updates that hold a match stay so the match can
- * be reached, and the threads hanging from a surviving row stay with it. An
- * empty query keeps everything.
+ * be reached, and everything hanging from a surviving row — its conversations
+ * and its evidence — stays with it. An empty query keeps everything.
+ *
+ * The second pass walks in document order, which is what lets evidence nest:
+ * a note is kept because the note above it was kept, and the note above it
+ * has already been decided by the time its children are looked at.
  *
  * @param rows - Every row of the document, in document order.
  * @param query - The human's search text.
@@ -160,10 +164,9 @@ export function filterRows(rows: Row[], query: string): Row[] {
     }
   }
   for (const row of rows) {
-    if (row.kind === "thread" && row.parentId !== null) {
-      if (kept.has(row.parentId)) {
-        kept.add(row.id);
-      }
+    const hangs = row.kind === "thread" || row.kind === "evidence";
+    if (hangs && row.parentId !== null && kept.has(row.parentId)) {
+      kept.add(row.id);
     }
   }
   return rows.filter((row) => kept.has(row.id));
@@ -219,7 +222,10 @@ export function countItems(rows: Row[]): number {
  *
  * Composition always has a target. An item or a lane is its own target; a
  * thread targets its anchor and continues itself; an update has no anchor of
- * its own, so it hands the cursor to the first lane it holds.
+ * its own, so it hands the cursor to the first lane it holds. A piece of
+ * evidence hands the cursor to the item it is evidence for: the chat box is
+ * painted in that item's body, and a question about a log line is a question
+ * about the claim the log line is under.
  *
  * @param rows - Rows currently on the page, in document order.
  * @param rowId - Row the cursor is on.
@@ -229,6 +235,10 @@ export function composeRow(rows: Row[], rowId: string | null): Row | null {
   const row = rows.find((candidate) => candidate.id === rowId);
   if (row === undefined) {
     return null;
+  }
+  if (row.kind === "evidence") {
+    const owner = rows.find((candidate) => candidate.id === row.anchorId);
+    return owner ?? null;
   }
   if (row.kind !== "update") {
     return row;

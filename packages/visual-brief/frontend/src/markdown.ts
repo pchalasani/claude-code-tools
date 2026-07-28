@@ -1,0 +1,335 @@
+/**
+ * Markdown, parsed into a tree of things this page is willing to paint.
+ *
+ * Agents write markdown by habit, so the page has to read it. The text it
+ * reads is untrusted — the human's own words come back through the daemon,
+ * and the agent's words are only as careful as the agent — so the rule here
+ * is not "sanitize the markup", it is that no markup is ever produced.
+ *
+ * This module turns text into a small, closed set of nodes. There is no node
+ * for raw HTML, so there is no way for any input to become one; anything the
+ * grammar does not recognize stays a text node and is painted as the
+ * characters it is. The renderer next door builds elements from these nodes,
+ * so escaping is not a step that can be forgotten: a text node cannot be
+ * markup in the first place.
+ *
+ * The allowlist is deliberately small: emphasis, strong, inline code, fenced
+ * code, lists, headings, and links whose scheme is one of a named few.
+ */
+
+/** One piece of a line, after the inline grammar has been read. */
+export type Inline =
+  | { kind: "text"; text: string }
+  | { kind: "code"; text: string }
+  | { kind: "strong"; children: Inline[] }
+  | { kind: "emphasis"; children: Inline[] }
+  | { kind: "link"; href: string; children: Inline[] };
+
+/** One block of a document, after the block grammar has been read. */
+export type Block =
+  | { kind: "paragraph"; content: Inline[] }
+  | { kind: "heading"; level: number; content: Inline[] }
+  | { kind: "code"; text: string }
+  | { kind: "list"; ordered: boolean; items: Inline[][] };
+
+/**
+ * The only link schemes a brief may paint as a link.
+ *
+ * Everything else — ``javascript:``, ``data:``, ``vbscript:``, a scheme
+ * nobody has invented yet — falls through to being painted as the literal
+ * characters the author wrote. The page never has to decide whether an
+ * unusual scheme is safe, because it never builds a link out of one.
+ */
+const ALLOWED_SCHEME = /^(?:https?|mailto):[^\s]/i;
+
+/** A line that opens or closes a fenced code block. */
+const FENCE = /^ {0,3}(?:`{3,}|~{3,})/;
+
+/** A heading line, with its level and its text. */
+const HEADING = /^ {0,3}(#{1,6})[ \t]+(.*)$/;
+
+/** A bullet line, with its text. */
+const BULLET = /^ {0,3}[-*+][ \t]+(.*)$/;
+
+/** A numbered line, with its text. */
+const NUMBERED = /^ {0,3}\d{1,9}[.)][ \t]+(.*)$/;
+
+/** Where the next inline mark might begin. */
+const MARK = /`+|\*\*|[*_]|\[/;
+
+/** A link, matched only at the position its bracket was found at. */
+const LINK = /^\[([^\][]*)\]\(([^\s()]*)\)/;
+
+/**
+ * Read text into the blocks the page will paint.
+ *
+ * @param text - Untrusted text written by an agent or a human.
+ * @returns The blocks, in document order. Text that matches nothing in the
+ *     grammar comes back as paragraphs of plain text.
+ */
+export function parseMarkdown(text: string): Block[] {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const blocks: Block[] = [];
+  let at = 0;
+  while (at < lines.length) {
+    const line = lines[at] ?? "";
+    if (line.trim() === "") {
+      at += 1;
+      continue;
+    }
+    if (FENCE.test(line)) {
+      at = readFence(lines, at, blocks);
+      continue;
+    }
+    const heading = HEADING.exec(line);
+    if (heading !== null) {
+      blocks.push({
+        kind: "heading",
+        level: (heading[1] ?? "#").length,
+        content: parseInline(stripClosingHashes(heading[2] ?? "")),
+      });
+      at += 1;
+      continue;
+    }
+    if (BULLET.test(line) || NUMBERED.test(line)) {
+      at = readList(lines, at, blocks);
+      continue;
+    }
+    at = readParagraph(lines, at, blocks);
+  }
+  return blocks;
+}
+
+/**
+ * Read one line into the inline nodes the page will paint.
+ *
+ * @param text - One line, or several lines of one paragraph.
+ * @returns The inline nodes, in order.
+ */
+export function parseInline(text: string): Inline[] {
+  const nodes: Inline[] = [];
+  let rest = text;
+  let plain = "";
+
+  /** Flush whatever plain text has accumulated into a text node. */
+  const flush = (): void => {
+    if (plain !== "") {
+      nodes.push({ kind: "text", text: plain });
+      plain = "";
+    }
+  };
+
+  while (rest !== "") {
+    const found = MARK.exec(rest);
+    if (found === null || found.index === undefined) {
+      plain += rest;
+      break;
+    }
+    plain += rest.slice(0, found.index);
+    const mark = found[0];
+    const after = rest.slice(found.index);
+    // An underscore inside a word is part of the word: snake_case names are
+    // written in briefs constantly, and turning half of one into emphasis
+    // would silently change what the agent said.
+    const read = mark === "_" && /\w$/.test(plain)
+      ? null
+      : readMark(mark, after);
+    if (read === null) {
+      plain += mark;
+      rest = after.slice(mark.length);
+      continue;
+    }
+    flush();
+    nodes.push(read.node);
+    rest = after.slice(read.length);
+  }
+  flush();
+  return nodes;
+}
+
+/** One inline node and how much of the text it consumed. */
+interface Read {
+  /** The node that was read. */
+  node: Inline;
+  /** How many characters it accounted for. */
+  length: number;
+}
+
+/**
+ * Read whichever inline form begins at the front of the text.
+ *
+ * @param mark - The mark that was found.
+ * @param text - The text beginning at that mark.
+ * @returns The node and its length, or null when the mark opens nothing.
+ */
+function readMark(mark: string, text: string): Read | null {
+  if (mark.startsWith("`")) {
+    return readCode(mark, text);
+  }
+  if (mark === "[") {
+    return readLink(text);
+  }
+  return readWrapped(mark, text);
+}
+
+/**
+ * Read a code span, which nothing inside it may reopen.
+ *
+ * @param fence - The run of backticks that opened it.
+ * @param text - The text beginning at that run.
+ * @returns The code node and its length, or null when it never closes.
+ */
+function readCode(fence: string, text: string): Read | null {
+  const body = text.slice(fence.length);
+  const closing = body.indexOf(fence);
+  if (closing < 0) {
+    return null;
+  }
+  const inner = body.slice(0, closing);
+  return {
+    node: { kind: "code", text: unpad(inner) },
+    length: fence.length * 2 + closing,
+  };
+}
+
+/**
+ * Read emphasis or strong emphasis.
+ *
+ * @param mark - The opening mark, ``**``, ``*`` or ``_``.
+ * @param text - The text beginning at that mark.
+ * @returns The node and its length, or null when it never closes.
+ */
+function readWrapped(mark: string, text: string): Read | null {
+  const body = text.slice(mark.length);
+  const closing = body.indexOf(mark);
+  if (closing <= 0) {
+    return null;
+  }
+  const inner = body.slice(0, closing);
+  return {
+    node: {
+      kind: mark === "**" ? "strong" : "emphasis",
+      children: parseInline(inner),
+    },
+    length: mark.length * 2 + closing,
+  };
+}
+
+/**
+ * Read a link, and only one whose scheme is on the allowlist.
+ *
+ * @param text - The text beginning at the opening bracket.
+ * @returns The link node and its length, or null when this is not a link the
+ *     page will paint — in which case the characters stay characters.
+ */
+function readLink(text: string): Read | null {
+  const found = LINK.exec(text);
+  if (found === null) {
+    return null;
+  }
+  const href = (found[2] ?? "").trim();
+  const label = found[1] ?? "";
+  if (!ALLOWED_SCHEME.test(href) || label.trim() === "") {
+    return null;
+  }
+  return {
+    node: { kind: "link", href, children: parseInline(label) },
+    length: found[0].length,
+  };
+}
+
+/**
+ * Read a fenced code block, ending at its fence or at the end of the text.
+ *
+ * @param lines - Every line of the document.
+ * @param at - Index of the opening fence.
+ * @param blocks - Blocks read so far, appended to.
+ * @returns The index of the first line after the block.
+ */
+function readFence(lines: string[], at: number, blocks: Block[]): number {
+  const body: string[] = [];
+  let cursor = at + 1;
+  while (cursor < lines.length && !FENCE.test(lines[cursor] ?? "")) {
+    body.push(lines[cursor] ?? "");
+    cursor += 1;
+  }
+  blocks.push({ kind: "code", text: body.join("\n") });
+  return cursor < lines.length ? cursor + 1 : cursor;
+}
+
+/**
+ * Read one run of list lines of the same kind.
+ *
+ * @param lines - Every line of the document.
+ * @param at - Index of the first list line.
+ * @param blocks - Blocks read so far, appended to.
+ * @returns The index of the first line after the list.
+ */
+function readList(lines: string[], at: number, blocks: Block[]): number {
+  const ordered = NUMBERED.test(lines[at] ?? "");
+  const pattern = ordered ? NUMBERED : BULLET;
+  const items: Inline[][] = [];
+  let cursor = at;
+  while (cursor < lines.length) {
+    const found = pattern.exec(lines[cursor] ?? "");
+    if (found === null) {
+      break;
+    }
+    items.push(parseInline(found[1] ?? ""));
+    cursor += 1;
+  }
+  blocks.push({ kind: "list", ordered, items });
+  return cursor;
+}
+
+/**
+ * Read one paragraph, up to a blank line or the start of another block.
+ *
+ * @param lines - Every line of the document.
+ * @param at - Index of the paragraph's first line.
+ * @param blocks - Blocks read so far, appended to.
+ * @returns The index of the first line after the paragraph.
+ */
+function readParagraph(lines: string[], at: number, blocks: Block[]): number {
+  const body: string[] = [];
+  let cursor = at;
+  while (cursor < lines.length) {
+    const line = lines[cursor] ?? "";
+    if (
+      line.trim() === ""
+      || FENCE.test(line)
+      || HEADING.test(line)
+      || BULLET.test(line)
+      || NUMBERED.test(line)
+    ) {
+      break;
+    }
+    body.push(line);
+    cursor += 1;
+  }
+  blocks.push({ kind: "paragraph", content: parseInline(body.join("\n")) });
+  return cursor;
+}
+
+/**
+ * Drop the optional closing hashes of an ATX heading.
+ *
+ * @param text - The heading's text.
+ * @returns The text without its trailing hashes.
+ */
+function stripClosingHashes(text: string): string {
+  return text.replace(/[ \t]+#+[ \t]*$/, "").trim();
+}
+
+/**
+ * Drop the one space a code span may use to hold a backtick away from a fence.
+ *
+ * @param text - The span's raw content.
+ * @returns The content as it should be painted.
+ */
+function unpad(text: string): string {
+  if (text.length > 2 && text.startsWith(" ") && text.endsWith(" ")) {
+    return text.slice(1, -1);
+  }
+  return text;
+}
