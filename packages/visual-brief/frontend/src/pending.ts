@@ -20,6 +20,7 @@ import { createSignal } from "solid-js";
 import type { BriefDocument, Thread } from "./document";
 import { itemRowId, laneRowId, threadRowId } from "./outline";
 import {
+  consumeSelfReload,
   readSentRecords,
   saveSentRecords,
   type SentRecord,
@@ -42,10 +43,16 @@ export const MAX_REFRESHES = 3;
  * @returns True when the human reloaded this page themselves.
  */
 export function isHumanRefresh(): boolean {
+  // The page's own publish-reload uses location.reload() and the browser
+  // reports it identically to a manual refresh, so the page announces its
+  // own reloads just before making them; an announced reload is not the
+  // human's. The announcement is consumed here exactly once per load.
+  const selfCaused = consumeSelfReload();
   try {
     const [entry] = performance.getEntriesByType("navigation");
-    return (entry as PerformanceNavigationTiming | undefined)?.type
-      === "reload";
+    return !selfCaused
+      && (entry as PerformanceNavigationTiming | undefined)?.type
+        === "reload";
   } catch {
     return false;
   }
@@ -200,15 +207,19 @@ export function createPending(brief: BriefDocument | null = null): Pending {
   // the genuine way out, and a sign can neither be deleted by the agent's
   // publishing nor hold its row open for the life of the tab.
   const refreshed = isHumanRefresh();
-  const survivors = stored.filter(
+  const aged = stored.map((record) => ({
+    ...record,
+    refreshes: (record.refreshes ?? 0) + (refreshed ? 1 : 0),
+  }));
+  // The count is aged BEFORE the survivor check, so the third manual
+  // refresh is the one that lets go — as the degraded advice promises.
+  const survivors = aged.filter(
     (record, index) =>
-      located[index] === null
-      && (record.refreshes ?? 0) < MAX_REFRESHES,
+      located[index] === null && record.refreshes < MAX_REFRESHES,
   );
   const carried = survivors.map((record) => ({
     ...record,
     loads: record.loads + 1,
-    refreshes: (record.refreshes ?? 0) + (refreshed ? 1 : 0),
   }));
   saveSentRecords(carried);
   const [live, setLive] = createSignal<SentRecord[]>(carried);

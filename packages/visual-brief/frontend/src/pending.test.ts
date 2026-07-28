@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BriefDocument, Turn } from "./document";
 import { STALL_POLLS, createPending, locateSubmissions } from "./pending";
 import {
+  markSelfReload,
   readSentRecords,
   saveSentRecords,
   type SentRecord,
@@ -266,11 +267,32 @@ describe("the sign a page load carries over", () => {
       createPending(briefWith([]));
       expect(readSentRecords()).toHaveLength(1);
 
-      createPending(briefWith([]));
       const after = createPending(briefWith([]));
 
       expect(after.at(ITEM)).toHaveLength(0);
       expect(readSentRecords()).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("is not aged by the page reloading itself, refresh type and all", () => {
+    // The page's own publish-reload is reported by the browser exactly like
+    // a manual refresh; only the marker written before location.reload()
+    // tells them apart, and it must protect the record.
+    const navigation = { type: "reload" };
+    const spy = vi
+      .spyOn(performance, "getEntriesByType")
+      .mockReturnValue([navigation as unknown as PerformanceEntry]);
+    try {
+      saveSentRecords([sent("Still waiting")]);
+      for (let load = 0; load < 5; load += 1) {
+        markSelfReload();
+        createPending(briefWith([]));
+      }
+
+      expect(readSentRecords()).toHaveLength(1);
+      expect(readSentRecords()[0]?.refreshes ?? 0).toBe(0);
     } finally {
       spy.mockRestore();
     }

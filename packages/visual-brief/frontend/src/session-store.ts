@@ -219,6 +219,42 @@ export function saveSentRecords(records: SentRecord[]): void {
 }
 
 /**
+ * Return the key a self-caused reload is announced under.
+ *
+ * @returns The session-storage key for the run being shown.
+ */
+function selfReloadKey(): string {
+  return `visual-brief-self-reload:${runIdFromLocation()}`;
+}
+
+/**
+ * Announce that the page is about to reload itself.
+ *
+ * The browser reports every ``location.reload()`` as a "reload" navigation,
+ * exactly as it reports the human pressing refresh, so the page marks its
+ * own reloads the moment before it makes them. Written to both stores, like
+ * everything whose loss would mislead.
+ */
+export function markSelfReload(): void {
+  const key = selfReloadKey();
+  writeItem(key, "1");
+  writeHistoryItem(key, "1");
+}
+
+/**
+ * Consume the self-reload announcement, if one was made.
+ *
+ * @returns True when this load was caused by the page itself.
+ */
+export function consumeSelfReload(): boolean {
+  const key = selfReloadKey();
+  const marked = readItem(key) ?? readHistoryItem(key);
+  writeItem(key, "");
+  writeHistoryItem(key, "");
+  return marked !== null && marked !== "";
+}
+
+/**
  * Read the page generation this tab last reloaded itself to escape.
  *
  * A generation that was stored as an empty string is a memory like any other,

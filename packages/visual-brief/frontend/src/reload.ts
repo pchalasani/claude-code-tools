@@ -28,6 +28,7 @@
  */
 
 import {
+  markSelfReload,
   readHealedGeneration,
   rememberHealedGeneration,
 } from "./session-store";
@@ -306,7 +307,10 @@ export function startVersionWatch(
   const watch = healingWatch(
     pageVersion(root),
     readServedVersion,
-    () => window.location.reload(),
+    () => {
+      markSelfReload();
+      window.location.reload();
+    },
   );
   let timer = 0;
   let delay = intervalMs;
