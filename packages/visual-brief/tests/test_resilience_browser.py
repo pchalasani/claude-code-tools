@@ -17,22 +17,34 @@ from typing import Any, Iterator
 
 import pytest
 
-from browser_support import FIRST_ITEM, Browser, browser_session, landing_at
+from browser_support import (
+    AWAITING_THREAD,
+    FIRST_ITEM,
+    Browser,
+    browser_session,
+    landing_at,
+)
 
 ITEM = FIRST_ITEM
+OLDER_AWAITING_THREAD = (
+    "review-round-four/round-four-change/three-verdict-contract"
+    "#q-unsupported-valid"
+)
 
 _WAITING_RAILS = """
     (() => {
-      const marked = {};
-      for (const row of document.querySelectorAll("[data-waiting]")) {
+      const marked = [
+        ...document.querySelectorAll("[data-waiting]"),
+      ].flatMap((row) => {
         const head = row.querySelector(":scope > .row-head");
-        if (head !== null) {
-          marked[row.dataset.rowKind] = {
+        return head === null
+          ? []
+          : [{
+            id: row.dataset.rowId,
             strength: row.dataset.waiting,
             color: getComputedStyle(head).borderLeftColor,
-          };
-        }
-      }
+          }];
+      });
       return {
         marked,
         chips: document.querySelectorAll(".chip-awaiting").length,
@@ -42,6 +54,15 @@ _WAITING_RAILS = """
       };
     })()
     """
+
+FOLD_MAP = {
+    "current-update": "true",
+    "current-update/what-changed": "false",
+    "current-update/why-it-matters": "true",
+    "review-round-four": "true",
+    "review-round-four/round-four-change": "false",
+    "review-round-four/round-four-next": "true",
+}
 
 
 def _note_state(row_id: str) -> str:
@@ -105,6 +126,30 @@ _PLACE = """
         document.querySelector('[data-cursor="true"]')?.dataset.rowId ?? null,
     }))()
     """
+
+
+def _set_fold(browser: Browser, row_id: str, open_state: str) -> None:
+    """Set one disclosure through its real control."""
+    script = (
+        f'document.querySelector(\'[data-row-id="{row_id}"]\')'
+        ".dataset.open"
+    )
+    if browser.evaluate(script) != open_state:
+        browser.click_row(row_id)
+    assert browser.evaluate(script) == open_state
+
+
+def _fold_map(browser: Browser) -> dict[str, str]:
+    """Read the arbitrary disclosures used by the live-publish proof."""
+    return {
+        row_id: str(
+            browser.evaluate(
+                f'document.querySelector(\'[data-row-id="{row_id}"]\')'
+                ".dataset.open"
+            )
+        )
+        for row_id in FOLD_MAP
+    }
 
 
 def _fold_into_content(
@@ -209,7 +254,7 @@ def test_the_waiting_sign_clears_when_those_words_appear_on_the_page(
     )
 
     assert before["note"] is not None
-    assert before["stalled"] == "false"
+    assert before["working"] == 1, before
     assert after["notes"] == 0, after
     # One sign, now the document's own, under the conversation it belongs to.
     assert after["working"] == 1, after
@@ -281,18 +326,55 @@ def test_a_publish_does_not_move_the_page_under_the_reader(
     assert after == before, (before, after)
 
 
+def test_a_publish_preserves_the_readers_fold_map(browser: Browser) -> None:
+    """Keep several independently chosen disclosures open and closed."""
+    for row_id, open_state in FOLD_MAP.items():
+        _set_fold(browser, row_id, open_state)
+    before = _fold_map(browser)
+
+    browser.data["title"] = "Published with a hand-picked fold map"
+    browser.publish()
+    browser.wait_for_title("Published with a hand-picked fold map")
+    after = _fold_map(browser)
+
+    assert before == FOLD_MAP
+    assert after == before
+
+
 def test_waiting_paints_one_direct_rail_and_quiet_container_rails(
     browser: Browser,
 ) -> None:
     """Put the alarm on its conversation and containment on ancestors."""
+    browser.press("E")
+    browser.run("wait", "200")
     waiting = browser.evaluate(_WAITING_RAILS)
     marked = waiting["marked"]
+    direct_ids = [
+        row["id"] for row in marked if row["strength"] == "direct"
+    ]
+    contained_ids = {
+        "current-update",
+        "current-update/why-it-matters",
+        "current-update/why-it-matters/repair-loop-routing",
+        "review-round-four",
+        "review-round-four/round-four-change",
+        "review-round-four/round-four-change/three-verdict-contract",
+    }
+    by_id = {row["id"]: row for row in marked}
 
-    assert marked["thread"]["strength"] == "direct", waiting
-    assert marked["item"]["strength"] == "contained", waiting
-    assert marked["lane"]["strength"] == "contained", waiting
-    assert marked["update"]["strength"] == "contained", waiting
-    assert marked["thread"]["color"] != marked["item"]["color"], waiting
-    assert marked["item"]["color"] == marked["lane"]["color"], waiting
+    assert sorted(direct_ids) == sorted(
+        [AWAITING_THREAD, OLDER_AWAITING_THREAD]
+    ), waiting
+    assert set(by_id) == contained_ids | set(direct_ids), waiting
+    assert all(
+        by_id[row_id]["strength"] == "contained"
+        for row_id in contained_ids
+    ), waiting
+    direct_colors = {by_id[row_id]["color"] for row_id in direct_ids}
+    contained_colors = {
+        by_id[row_id]["color"] for row_id in contained_ids
+    }
+    assert direct_colors.isdisjoint(contained_colors), waiting
+    assert len(contained_colors) == 1, waiting
     assert waiting["chips"] == 0, waiting
     assert waiting["labels"] == 0, waiting

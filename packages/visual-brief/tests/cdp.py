@@ -139,6 +139,41 @@ def emulated_media(
         page.close()
 
 
+def press_enter(cdp_url: str, page_url: str) -> None:
+    """Send Chrome's complete native Enter sequence to an attached tab.
+
+    The attached-browser driver omits the character event, so Chrome delivers
+    ``keydown`` but performs neither button activation nor textarea insertion.
+    Sending the complete protocol sequence preserves those browser defaults.
+
+    Args:
+        cdp_url: Browser-level socket URL.
+        page_url: Address of the tab receiving Enter.
+    """
+    page = DevToolsPage(page_socket_url(cdp_url, page_url))
+    event = {
+        "key": "Enter",
+        "code": "Enter",
+        "windowsVirtualKeyCode": 13,
+        "nativeVirtualKeyCode": 13,
+        "modifiers": 0,
+    }
+    try:
+        page.call("Input.dispatchKeyEvent", {"type": "rawKeyDown", **event})
+        page.call(
+            "Input.dispatchKeyEvent",
+            {
+                "type": "char",
+                "text": "\r",
+                "unmodifiedText": "\r",
+                **event,
+            },
+        )
+        page.call("Input.dispatchKeyEvent", {"type": "keyUp", **event})
+    finally:
+        page.close()
+
+
 def _handshake(socket_url: str) -> socket.socket:
     """Open a WebSocket connection to one DevTools target.
 

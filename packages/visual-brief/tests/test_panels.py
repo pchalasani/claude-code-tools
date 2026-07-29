@@ -128,6 +128,51 @@ def test_add_update_migrates_now_without_moving_eighteen_conversations(
     ]
 
 
+def test_migration_keeps_now_before_history_appended_after_final_publish(
+    tmp_path: Path,
+) -> None:
+    """Chronology, not the former pinned position, decides migration order."""
+    root = tmp_path / "runs"
+    document = base_document()
+    document["updates"].insert(0, copy.deepcopy(CREATED))
+    later_history = copy.deepcopy(HISTORY)
+    later_history["id"] = "history-after-now"
+    later_history["timestamp"] = "2026-07-28 09:00 EDT"
+    document["updates"].append(later_history)
+    make_run(root, document=document)
+    next_update = copy.deepcopy(UPDATE)
+    next_update["timestamp"] = "2026-07-29 09:00 EDT"
+
+    assert add_update_command(root, None, next_update) == 0
+
+    saved = read_content_file(root / "write-run")
+    assert [update["id"] for update in saved["updates"]] == [
+        "created",
+        "now",
+        "history-after-now",
+        "review-round-one",
+    ]
+
+
+def test_migration_preserves_now_position_for_incomparable_dates(
+    tmp_path: Path,
+) -> None:
+    """An undated history label gives migration no basis to move ``now``."""
+    root = tmp_path / "runs"
+    document = base_document()
+    history = copy.deepcopy(HISTORY)
+    history["timestamp"] = "Written after the final Now publish"
+    document["updates"].append(history)
+    make_run(root, document=document)
+
+    assert add_update_command(root, None, copy.deepcopy(UPDATE)) == 0
+
+    assert [
+        update["id"]
+        for update in read_content_file(root / "write-run")["updates"]
+    ] == ["now", "earlier-history", "review-round-one"]
+
+
 def test_migration_fails_loudly_if_a_saved_anchor_does_not_resolve(
     tmp_path: Path,
 ) -> None:

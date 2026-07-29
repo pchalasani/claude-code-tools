@@ -141,20 +141,20 @@ def test_plain_enter_stays_in_the_box_and_the_chord_sends(
     belonging to the box. The real key press proves the page does not claim it;
     the chord then sends everything written, newline and all.
     """
-    written = "First line\nsecond line"
+    written = "First line"
+    with_paragraph = f"{written}\n"
+    submitted = f"{with_paragraph}second line"
     browser.compose_at(ITEM)
     browser.run("fill", ".composer textarea", written)
     browser.evaluate(_ENTER_SPY)
 
-    # Enter leaving the box alone is proved by nothing happening, and nothing
-    # is not something to wait for: this one moment is read after a settling
-    # wait. Everything the send does paint is polled for instead.
     browser.press("Enter")
     browser.run("wait", "400")
     delivered = browser.evaluate("window.__enter")
     after_enter = browser.evaluate(landing_at(ITEM))
     unsent = list(browser.server.posts)
 
+    browser.run("type", ".composer textarea", "second line")
     consumed = browser.evaluate(_SEND_CHORD)
     landed = browser.read_until(
         landing_at(ITEM), lambda seen: seen["note"] is not None
@@ -162,12 +162,12 @@ def test_plain_enter_stays_in_the_box_and_the_chord_sends(
 
     assert delivered == [False]
     assert after_enter["composer"] is True, after_enter
-    assert after_enter["typed"] == written, after_enter
+    assert after_enter["typed"] == with_paragraph, after_enter
     assert after_enter["notes"] == 0, after_enter
     assert unsent == []
     assert consumed is True
     assert browser.server.posts == [
-        ("/ask", {"anchor_id": ITEM, "text": written})
+        ("/ask", {"anchor_id": ITEM, "text": submitted})
     ]
     assert landed["composer"] is False, landed
     assert landed["open"] == "true", landed

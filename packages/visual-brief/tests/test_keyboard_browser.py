@@ -243,14 +243,6 @@ def test_enter_natively_opens_a_disclosure_tabbed_to(
     assert delivered, "the browser delivered no Enter key press"
     assert not any(delivered), delivered
     assert before["expanded"] == "false"
-    if after["expanded"] == "false":
-        # An externally attached Chrome can deliver an unconsumed Enter
-        # without running its native button activation. Exercise that same
-        # activation behavior explicitly after proving the app stood aside.
-        browser.evaluate(
-            f"document.querySelector({EVIDENCE_FOLD!r})?.click(); true"
-        )
-        after = browser.evaluate(_FOCUSED_FOLD)
     assert after["expanded"] == "true"
 
 

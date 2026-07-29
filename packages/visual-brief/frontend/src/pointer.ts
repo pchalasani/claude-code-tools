@@ -36,6 +36,17 @@ export function keyboardTookOver(): void {
 }
 
 /**
+ * Stop a relayout hover from replacing an explicit pointer selection.
+ *
+ * A map click can reveal filtered rows beneath the stationary pointer. The
+ * resulting hover belongs to the relayout, not to a second choice by the
+ * human, so hover stays quiet until the mouse genuinely moves again.
+ */
+export function explicitSelectionTookOver(): void {
+  pointerDriving = false;
+}
+
+/**
  * Watch the window for real mouse movement.
  *
  * @param target - Event target to listen on, defaulting to the window.

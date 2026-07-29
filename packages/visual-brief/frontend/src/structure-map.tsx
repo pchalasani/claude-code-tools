@@ -1,6 +1,7 @@
 import { For, type JSX } from "solid-js";
 
 import { ancestorIds, laneRowId, orderedUpdates } from "./outline";
+import { explicitSelectionTookOver } from "./pointer";
 import type { BriefState } from "./state";
 
 /** How wide a lane's tick can grow, in pixels. */
@@ -65,7 +66,10 @@ export function StructureMap(props: { state: BriefState }): JSX.Element {
                         data-awaiting={
                           row()?.awaiting === true ? "true" : "false"
                         }
-                        onClick={() => props.state.nav.select(id)}
+                        onClick={() => {
+                          explicitSelectionTookOver();
+                          props.state.nav.select(id);
+                        }}
                       >
                         <span
                           class="map-tick"

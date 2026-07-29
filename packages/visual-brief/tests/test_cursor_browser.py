@@ -24,6 +24,14 @@ from browser_support import (
 )
 
 _NUMBERS = re.compile(r"[-+]?\d*\.?\d+")
+_PAINTED_CONTENT = [
+    (FIRST_ITEM, "item"),
+    (SECOND_ITEM, "item"),
+    (f"{SECOND_ITEM}#~evidence", "evidence"),
+    ("current-update/why-it-matters/repair-loop-routing", "item"),
+    (AWAITING_THREAD, "thread"),
+    ("current-update/what-i-verified#q-parser-parity", "thread"),
+]
 
 
 @pytest.fixture
@@ -112,6 +120,37 @@ def item_heads(browser: Browser) -> dict[str, Any]:
     )
 
 
+def walk_content(
+    browser: Browser,
+    key: str,
+    count: int,
+) -> list[tuple[str, str]]:
+    """Press one movement key and record each exact painted landing.
+
+    Args:
+        browser: The open browser.
+        key: Real browser key to press.
+        count: Number of rows to visit.
+
+    Returns:
+        Each cursor row identifier and its painted row kind.
+    """
+    landed: list[tuple[str, str]] = []
+    for _ in range(count):
+        browser.press(key)
+        browser.run("wait", "180")
+        landed.append(
+            (
+                browser.cursor_row(),
+                browser.evaluate(
+                    "document.querySelector('[data-cursor=\"true\"]')"
+                    ".dataset.rowKind"
+                ),
+            )
+        )
+    return landed
+
+
 def test_the_cursor_row_is_painted_unlike_every_other_item(
     browser: Browser,
 ) -> None:
@@ -198,32 +237,20 @@ def test_the_mouse_and_the_keyboard_share_one_cursor(browser: Browser) -> None:
 def test_plain_movement_walks_painted_evidence_and_conversations(
     browser: Browser,
 ) -> None:
-    """Visit every kind of painted content row in its visible order."""
+    """Walk exact painted order forward and backward with letters and arrows."""
     browser.press("E")
     browser.run("wait", "300")
-    assert browser.cursor_row() == FIRST_ITEM
+    assert (browser.cursor_row(), "item") == _PAINTED_CONTENT[0]
 
-    landed: list[tuple[str, str]] = []
-    for _ in range(5):
-        browser.press("j")
-        browser.run("wait", "180")
-        landed.append(
-            (
-                browser.cursor_row(),
-                browser.evaluate(
-                    "document.querySelector('[data-cursor=\"true\"]')"
-                    ".dataset.rowKind"
-                ),
-            )
-        )
-
-    assert landed == [
-        (SECOND_ITEM, "item"),
-        (f"{SECOND_ITEM}#~evidence", "evidence"),
-        ("current-update/why-it-matters/repair-loop-routing", "item"),
-        (AWAITING_THREAD, "thread"),
-        ("current-update/what-i-verified#q-parser-parity", "thread"),
-    ]
+    steps = len(_PAINTED_CONTENT) - 1
+    assert walk_content(browser, "j", steps) == _PAINTED_CONTENT[1:]
+    assert walk_content(browser, "k", steps) == list(
+        reversed(_PAINTED_CONTENT[:-1])
+    )
+    assert walk_content(browser, "ArrowDown", steps) == _PAINTED_CONTENT[1:]
+    assert walk_content(browser, "ArrowUp", steps) == list(
+        reversed(_PAINTED_CONTENT[:-1])
+    )
 
 
 def test_the_cursor_stays_on_its_row_when_the_agent_publishes(

@@ -28,7 +28,7 @@ from browser_server import (
     served_page,
     serving,
 )
-from cdp import emulated_media
+from cdp import emulated_media, press_enter
 
 __all__ = [
     "AWAITING_THREAD",
@@ -137,6 +137,9 @@ class Browser:
 
     def press(self, key: str) -> None:
         """Press a real browser key."""
+        if key == "Enter" and os.environ.get("AGENT_BROWSER_CDP"):
+            press_enter(self.run("get", "cdp-url").strip(), self.url)
+            return
         self.run("press", key)
 
     def click_row(self, row_id: str) -> None:

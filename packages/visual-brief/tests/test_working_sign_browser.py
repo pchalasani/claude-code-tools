@@ -1,15 +1,4 @@
-"""Real-browser proof that the waiting sign is continuous.
-
-A human who asks a question watches one thing: whether anything is happening.
-The page has three ways of knowing — a request in the air, a message the
-daemon has taken but the document has not caught up with, and a conversation
-the document itself says is unanswered — and they used to paint three signs
-that stood one another down. Standing down is how a sign disappears at a
-reload boundary, which is what was reported from live use.
-
-So there is one sign, asked once of all three, and its words are never the
-part that moves.
-"""
+"""Prove the working sign lasts from submission through the agent answer."""
 
 from __future__ import annotations
 
@@ -32,20 +21,7 @@ OLDER_UPDATE = "review-round-four"
 
 
 def _working_at(row_id: str) -> str:
-    """Return a script reading the waiting sign one row paints for itself.
-
-    Rows nest, so the sign is looked for among the row's own body children:
-    a conversation's sign belongs to the conversation, not to the item it
-    hangs from. What moves is the mark beside the words; the words are read
-    separately, because a sign whose words come and go is a sign that
-    disappears.
-
-    Args:
-        row_id: Identifier of the row to read.
-
-    Returns:
-        JavaScript returning what a human sees of that row's waiting sign.
-    """
+    """Read the waiting sign one row paints among its own body children."""
     return f"""
     (() => {{
       const row = document.querySelector('[data-row-id="{row_id}"]');
@@ -107,20 +83,8 @@ def _still_at(row_id: str) -> str:
 
 def _fold_question_into_content(
     browser: Browser, thread_id: str, text: str, at: str
-) -> None:
-    """Publish a sent question as the awaiting conversation it becomes.
-
-    This is what the daemon does on its next publish: a queued question the
-    agent has not answered yet is folded into the served content as a
-    conversation whose newest turn is the human's, carrying the queue line's
-    own timestamp.
-
-    Args:
-        browser: The open browser, whose ``data`` is the served document.
-        thread_id: Identifier to give the folded conversation.
-        text: What the human asked.
-        at: Timestamp the daemon stamped the queue line with.
-    """
+) -> dict[str, Any]:
+    """Add a sent question as the awaiting conversation it becomes."""
     update_id, lane_id, item_id = ITEM.split("/")
     item = next(
         item
@@ -131,13 +95,13 @@ def _fold_question_into_content(
         for item in lane["items"]
         if item["id"] == item_id
     )
-    item.setdefault("questions", []).append(
-        {
-            "id": thread_id,
-            "anchor": {"kind": "element", "path": ITEM},
-            "turns": [{"author": "human", "text": text, "at": at}],
-        }
-    )
+    thread = {
+        "id": thread_id,
+        "anchor": {"kind": "element", "path": ITEM},
+        "turns": [{"author": "human", "text": text, "at": at}],
+    }
+    item.setdefault("questions", []).append(thread)
+    return thread
 
 
 def _accessible_toggle(browser: Browser, row_id: str) -> dict[str, Any]:
@@ -185,10 +149,14 @@ def test_the_page_says_the_agent_is_working_until_the_answer_lands(
     browser: Browser,
 ) -> None:
     """Move something where the answer will appear, from send until arrival."""
+    question = "Is anything happening?"
+    answer = "Yes. The answer has landed."
+    thread_id = "q-complete-working-lifecycle"
+    folded = f"{ITEM}#{thread_id}"
     browser.server.post_gate = threading.Event()
     try:
         browser.compose_at(ITEM)
-        browser.run("fill", ".composer textarea", "Is anything happening?")
+        browser.run("fill", ".composer textarea", question)
         browser.submit()
         deadline = time.monotonic() + 2
         while browser.server.post_count < 1 and time.monotonic() < deadline:
@@ -199,8 +167,37 @@ def test_the_page_says_the_agent_is_working_until_the_answer_lands(
     finally:
         browser.server.post_gate.set()
     browser.read_until(landing_at(ITEM), lambda seen: seen["note"] is not None)
-
     landed = browser.evaluate(_working_at(ITEM))
+    thread = _fold_question_into_content(
+        browser, thread_id, question, browser.server.stamps[0]
+    )
+    browser.data["title"] = "Question awaiting its answer"
+    browser.publish()
+    browser.wait_for_title("Question awaiting its answer")
+    awaiting = browser.read_until(
+        _working_at(folded), lambda seen: seen["count"] == 1
+    )
+
+    thread["turns"].append(
+        {"author": "agent", "text": answer, "at": "2026-07-25T21:00:02Z"}
+    )
+    browser.data["title"] = "Agent answer landed"
+    browser.publish()
+    browser.wait_for_title("Agent answer landed")
+    answered = browser.read_until(
+        f"""
+        (() => {{
+          const row = document.querySelector('[data-row-id="{folded}"]');
+          return {{
+            answer: row?.querySelector(".turn-agent .turn-text")?.textContent,
+            working: row?.querySelectorAll(
+              ":scope > .row-body > p.working",
+            ).length ?? 0,
+          }};
+        }})()
+        """,
+        lambda seen: seen["answer"] == answer,
+    )
 
     expected = {
         "count": 1,
@@ -210,6 +207,8 @@ def test_the_page_says_the_agent_is_working_until_the_answer_lands(
     }
     assert in_flight == expected
     assert landed == expected
+    assert awaiting == expected
+    assert answered == {"answer": answer, "working": 0}
 
 
 def test_the_working_sign_stands_still_where_motion_is_unwelcome(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime
 from typing import Any
 
 LEGACY_TIMESTAMP = "1970-01-01T00:00:00Z"
@@ -94,15 +95,14 @@ def _migrate_pinned_now(
     document: dict[str, Any],
     updates: list[Any],
 ) -> list[Any]:
-    """Move the former pinned panel into chronological append order.
+    """Place the former pinned panel into chronological append order.
 
-    The old writer kept its rewritten ``now`` update in place while later
-    history accumulated behind it. A run's initial ``created`` update may
-    precede that panel. Moving ``now`` behind the existing history records its
-    final timestamp in append chronology. The new writer persists
-    ``updates_order: append``, which explicitly distinguishes a migrated
-    document from an old pinned-panel document. A sole update remains in place;
-    the marker is persisted before a writer appends its successor.
+    The old writer kept its rewritten ``now`` update in place while history
+    accumulated around it. Comparable neighboring timestamps determine where
+    its final value belongs. An unparseable label such as ``Created`` remains a
+    boundary, preserving ``now``'s existing position when chronology cannot be
+    established. The new writer persists ``updates_order: append``, which
+    distinguishes a migrated document from an old pinned-panel document.
 
     Args:
         document: The complete saved document.
@@ -114,11 +114,63 @@ def _migrate_pinned_now(
     copied = list(updates)
     if document.get(UPDATES_ORDER_FIELD) == APPEND_ORDER:
         return copied
-    for index, update in enumerate(copied[:-1]):
+    for index, update in enumerate(copied):
         if isinstance(update, dict) and update.get("id") == "now":
-            copied.append(copied.pop(index))
+            _place_now_chronologically(copied, index)
             break
     return copied
+
+
+def _place_now_chronologically(updates: list[Any], index: int) -> None:
+    """Move ``now`` only across updates with comparable timestamps."""
+    now_timestamp = _migration_timestamp(updates[index])
+    if now_timestamp is None:
+        return
+    while index > 0:
+        prior_timestamp = _migration_timestamp(updates[index - 1])
+        if (
+            prior_timestamp is None
+            or prior_timestamp[0] != now_timestamp[0]
+            or prior_timestamp[1] <= now_timestamp[1]
+        ):
+            break
+        updates[index - 1], updates[index] = updates[index], updates[index - 1]
+        index -= 1
+    while index + 1 < len(updates):
+        next_timestamp = _migration_timestamp(updates[index + 1])
+        if (
+            next_timestamp is None
+            or next_timestamp[0] != now_timestamp[0]
+            or now_timestamp[1] <= next_timestamp[1]
+        ):
+            break
+        updates[index], updates[index + 1] = updates[index + 1], updates[index]
+        index += 1
+
+
+def _migration_timestamp(update: Any) -> tuple[str, datetime] | None:
+    """Parse an update timestamp and identify its comparison timezone."""
+    if not isinstance(update, dict):
+        return None
+    value = update.get("timestamp")
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    iso_text = f"{text[:-1]}+00:00" if text.endswith("Z") else text
+    zone = ""
+    try:
+        timestamp = datetime.fromisoformat(iso_text)
+    except ValueError:
+        timestamp_text, separator, zone = text.rpartition(" ")
+        if not separator or not zone.isalpha():
+            return None
+        try:
+            timestamp = datetime.fromisoformat(timestamp_text)
+        except ValueError:
+            return None
+    if timestamp.tzinfo is not None:
+        zone = "aware"
+    return zone, timestamp
 
 
 def thread_is_awaiting(thread: Any) -> bool:
