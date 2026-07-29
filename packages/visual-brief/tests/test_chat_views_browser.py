@@ -120,6 +120,19 @@ def _record_submit_frames(question: str, answer: str, folded: str) -> str:
       const rowIds = [{json.dumps(ITEM)}, {json.dumps(folded)}];
       const frames = [];
       let started = false;
+      const presentation = (element) => {{
+        if (element === undefined) return null;
+        const style = getComputedStyle(element);
+        return {{
+          classes: [...element.classList],
+          color: style.color,
+          background: style.background,
+          fontStyle: style.fontStyle,
+          fontWeight: style.fontWeight,
+          opacity: style.opacity,
+          border: style.border,
+        }};
+      }};
       const readFrame = () => {{
         const humanTurns = [...document.querySelectorAll(".turn-human")]
           .filter(
@@ -128,23 +141,24 @@ def _record_submit_frames(question: str, answer: str, folded: str) -> str:
         const humanRows = humanTurns.map(
           (turn) => turn.closest("[data-row-id]")?.dataset.rowId ?? null,
         );
-        const working = [...document.querySelectorAll("[data-row-id]")]
+        const workingSigns = [...document.querySelectorAll("[data-row-id]")]
           .filter((row) => rowIds.includes(row.dataset.rowId ?? ""))
-          .reduce(
-            (count, row) => count + row.querySelectorAll(
+          .flatMap(
+            (row) => [...row.querySelectorAll(
               ":scope > .row-body > p.working",
-            ).length,
-            0,
+            )],
           );
         const answers = [...document.querySelectorAll(
           ".turn-agent .turn-text",
         )].filter((turn) => turn.textContent === answer).length;
-        if (started || humanTurns.length > 0 || working > 0) {{
+        if (started || humanTurns.length > 0 || workingSigns.length > 0) {{
           started = true;
           frames.push({{
             human: humanTurns.length,
             humanRows,
-            working,
+            humanPresentation: presentation(humanTurns[0]),
+            working: workingSigns.length,
+            workingPresentation: presentation(workingSigns[0]),
             answers,
           }});
         }}
@@ -391,10 +405,22 @@ def test_submit_keeps_one_human_turn_until_the_answer_replaces_working(
         and frame["answers"] == 0
         for frame in frames[:-1]
     ), frames
-    assert frames[-1] == {
+    assert {
+        key: frames[-1][key]
+        for key in ("human", "humanRows", "working", "answers")
+    } == {
         "human": 1,
         "humanRows": [folded],
         "working": 0,
         "answers": 1,
     }
+    assert frames[-1]["workingPresentation"] is None
     assert {frame["humanRows"][0] for frame in frames} == {ITEM, folded}
+    assert {
+        json.dumps(frame["humanPresentation"], sort_keys=True)
+        for frame in frames
+    } == {json.dumps(frames[0]["humanPresentation"], sort_keys=True)}
+    assert {
+        json.dumps(frame["workingPresentation"], sort_keys=True)
+        for frame in frames[:-1]
+    } == {json.dumps(frames[0]["workingPresentation"], sort_keys=True)}
