@@ -217,3 +217,13 @@ connection above, or through the package's own CDP harness in
     text, differentiated by colour or some other cue instead. Decision
     postponed to the design overhaul, along with the larger question of how
     chat threads relate to lanes/items visually.
+
+26. **Bring back the colour-wave on "agent is working."** The human wants the
+    Claude-Code-style shimmer sweeping through the text, alongside the pulsing
+    dot. History: v1 had exactly that and it was removed deliberately — the
+    travelling gradient left the words nearly invisible at the start of each
+    cycle, which fed the "sign disappeared" reports. The redesign version must
+    keep every glyph legible at every instant (e.g. a highlight sweeping OVER
+    solid-colour text, never the text painted BY the gradient). Also note the
+    per-frame fingerprint test asserts constant computed colour/background on
+    the sign; restyling it means updating that test with it.
