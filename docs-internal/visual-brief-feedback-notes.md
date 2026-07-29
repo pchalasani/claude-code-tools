@@ -234,3 +234,10 @@ connection above, or through the package's own CDP harness in
     everything. Whatever level is showing should mark containers with chats
     beneath — a variant of the containment rail, a count, or colour. Design
     decision deferred to the overhaul.
+
+28. **A long question makes an awkward thread header.** The thread row titles
+    itself with the question text; a long question overwhelms the header line
+    and misplaces the controls beside it. Truncate the header to a short
+    recognisable stub (the full text lives in the thread body anyway) so the
+    row stays one tidy line. Ties into note 25's larger question of how thread
+    rows are presented; small enough to fix before the overhaul if convenient.
