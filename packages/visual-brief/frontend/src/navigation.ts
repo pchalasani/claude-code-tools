@@ -190,7 +190,6 @@ export function createNavigation(
 
   const modes = createViewModes({
     rows,
-    query,
     open,
     setOpen: (next) => setOpen(next),
     cursorId: () => selected,
@@ -199,8 +198,9 @@ export function createNavigation(
   });
 
   const visible = createMemo(() => {
-    const matching = filterRows(rows(), query());
-    return modes.chats() ? chatRows(matching) : matching;
+    return modes.chats()
+      ? chatRows(rows())
+      : filterRows(rows(), query());
   });
   const painted = createMemo(() => paintedRows(visible(), open()));
   const ordinals = createMemo(() => itemOrdinals(painted()));

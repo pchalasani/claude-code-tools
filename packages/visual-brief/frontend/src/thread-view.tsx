@@ -7,10 +7,10 @@ import {
   WorkingSign,
 } from "./compose-view";
 import type { Thread } from "./document";
-import { Markdown } from "./markdown-view";
 import type { Row } from "./outline";
 import { NewAnswerChip, RowShell } from "./row-shell";
 import type { BriefState } from "./state";
+import { TurnView } from "./turn-view";
 
 /**
  * One conversation, oldest turn first, with its reply slot underneath.
@@ -46,23 +46,7 @@ export function ThreadView(props: {
       }
     >
       <For each={props.thread.turns}>
-        {(turn) => (
-          <div class={`turn turn-${turn.author}`}>
-            <div class="turn-meta">
-              <span class="turn-author">{turn.author}</span>
-              <time>{turn.at}</time>
-            </div>
-            {/*
-              Both authors' words go through the same renderer, which builds
-              elements out of a closed grammar and can produce no markup at
-              all. There is therefore no unescaped path for either of them to
-              travel down, and one path is easier to keep safe than two.
-            */}
-            <div class="turn-text">
-              <Markdown text={turn.text} />
-            </div>
-          </div>
-        )}
+        {(turn) => <TurnView turn={turn} />}
       </For>
       <PendingNotes state={props.state} row={props.row} />
       {/*

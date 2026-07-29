@@ -84,7 +84,9 @@ describe("the sign across a page load that followed a send", () => {
     // happens to it.
     expect(signs()).toContain(ITEM);
     expect(
-      document.querySelector(`[data-row-id="${ITEM}"] p.pending`)?.textContent,
+      document.querySelector(
+        `[data-row-id="${ITEM}"] [data-pending="true"]`,
+      )?.textContent,
     ).toContain(ASKED);
   });
 
@@ -96,7 +98,9 @@ describe("the sign across a page load that followed a send", () => {
     expect(signs()).toEqual([ALREADY_OPEN, FOLDED]);
     // The note has been retired — the words are on the page now — and the
     // sign did not go with it.
-    expect(document.querySelectorAll("p.pending")).toHaveLength(0);
+    expect(
+      document.querySelectorAll('[data-pending="true"]'),
+    ).toHaveLength(0);
   });
 
   it("keeps one direct rail and quiet rails on its containers", () => {
@@ -130,7 +134,9 @@ describe("the sign across a page load that followed a send", () => {
     }
 
     expect(
-      document.querySelector(`[data-row-id="${ITEM}"] p.pending`)
+      document.querySelector(
+        `[data-row-id="${ITEM}"] [data-pending="true"]`,
+      )
         ?.getAttribute("data-stalled"),
     ).toBe("true");
     expect(
@@ -162,16 +168,20 @@ describe("the sign across a page load that followed a send", () => {
     // asserted, because a blink is a new element rather than new words.
     sentBeforeTheLoad();
     mount();
-    const held = document.querySelector(`[data-row-id="${ITEM}"] p.pending`);
+    const held = document.querySelector(
+      `[data-row-id="${ITEM}"] [data-pending="true"]`,
+    );
     expect(held).not.toBeNull();
 
     for (let poll = 0; poll < STALL_POLLS; poll += 1) {
       announcePoll("same");
     }
 
-    expect(document.querySelector(`[data-row-id="${ITEM}"] p.pending`)).toBe(
-      held,
-    );
+    expect(
+      document.querySelector(
+        `[data-row-id="${ITEM}"] [data-pending="true"]`,
+      ),
+    ).toBe(held);
     // The same element throughout, and still keeping up with how long the
     // human has been waiting.
     expect(held?.getAttribute("data-stalled")).toBe("true");

@@ -4,6 +4,7 @@ import { SIGNALS } from "./composer";
 import { SEND_CHORD_LABEL, isSendChord } from "./keys";
 import type { Row } from "./outline";
 import type { BriefState } from "./state";
+import { TurnView } from "./turn-view";
 import { isWorking } from "./working";
 
 /** The word this page uses for writing to the agent, wherever it writes it. */
@@ -196,10 +197,11 @@ export function PendingNotes(props: {
     <For each={props.state.composer.pendingAt(props.row.id)}>
       {(note) => (
         <>
-          <p class="pending" data-stalled={note.stalled ? "true" : "false"}>
-            <span class="pending-label">Sent</span> You asked: {note.text} —
-            awaiting an answer
-          </p>
+          <TurnView
+            turn={{ author: "human", text: note.text, at: note.at }}
+            pending
+            stalled={note.stalled}
+          />
           <Show when={note.stalled}>
             <SubmissionStalled />
           </Show>

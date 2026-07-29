@@ -254,8 +254,9 @@ describe("writing where the cursor is", () => {
       expect(paintedOpen("newest/changed")).toBe("true");
       expect(paintedOpen("newest/changed/alpha")).toBe("true");
       expect(
-        document.querySelector('[data-row-id="newest/changed/alpha"] p.pending')
-          ?.textContent,
+        document.querySelector(
+          '[data-row-id="newest/changed/alpha"] [data-pending="true"]',
+        )?.textContent,
       ).toContain("Does this survive a fold?");
     } finally {
       globalThis.fetch = realFetch;

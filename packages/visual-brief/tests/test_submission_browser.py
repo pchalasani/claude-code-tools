@@ -88,9 +88,9 @@ def test_double_click_sends_one_question_while_request_is_in_flight(
     assert browser.evaluate(
         """
         [
-          document.querySelectorAll("p.pending").length,
+          document.querySelectorAll('[data-pending="true"]').length,
           document.querySelector(".composer") === null,
-          document.querySelector("p.pending").textContent.includes(
+          document.querySelector('[data-pending="true"]').textContent.includes(
             "Send this only once",
           ),
         ]
@@ -120,7 +120,7 @@ def test_escape_during_a_send_still_shows_the_question_landing(
         f"""
         (() => {{
           const row = document.querySelector('[data-row-id="{ITEM}"]');
-          const note = row.querySelector("p.pending");
+          const note = row.querySelector('[data-pending="true"]');
           return [
             row.dataset.open,
             note === null ? "" : note.textContent.includes(
@@ -188,7 +188,7 @@ def test_a_question_the_daemon_refuses_is_not_lost(browser: Browser) -> None:
         [
           document.querySelector(".composer textarea").value,
           document.querySelector(".composer .status").textContent,
-          document.querySelectorAll("p.pending").length,
+          document.querySelectorAll('[data-pending="true"]').length,
         ]
         """
     ) == ["Does this survive a refusal?", REFUSED, 0]

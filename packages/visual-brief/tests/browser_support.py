@@ -61,8 +61,8 @@ def landing_at(row_id: str) -> str:
       return {{
         composer: box !== null,
         open: row?.dataset.open ?? null,
-        notes: document.querySelectorAll("p.pending").length,
-        note: row?.querySelector("p.pending")?.textContent ?? null,
+        notes: document.querySelectorAll('[data-pending="true"]').length,
+        note: row?.querySelector('[data-pending="true"]')?.textContent ?? null,
         typed: box?.querySelector("textarea")?.value ?? null,
         status: box?.querySelector(".status")?.textContent ?? null,
       }};

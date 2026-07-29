@@ -97,7 +97,9 @@ describe("what a publish tells the human has changed", () => {
     ]);
     const { container, publish } = mountLive();
     const shell = container.firstElementChild;
-    expect(document.querySelectorAll("p.pending")).toHaveLength(1);
+    expect(
+      document.querySelectorAll('[data-pending="true"]'),
+    ).toHaveLength(1);
 
     const next = sampleBrief();
     itemOf(next, GAMMA).questions = [
@@ -115,7 +117,9 @@ describe("what a publish tells the human has changed", () => {
     ];
     publish(next);
 
-    expect(document.querySelectorAll("p.pending")).toHaveLength(0);
+    expect(
+      document.querySelectorAll('[data-pending="true"]'),
+    ).toHaveLength(0);
     // The conversation the daemon folded it into now carries the sign, and
     // the page it is on is the page it was on: nothing was replaced.
     expect(

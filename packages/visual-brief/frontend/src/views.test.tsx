@@ -268,7 +268,7 @@ describe("after a page load that followed a send", () => {
 
     expect(paintedCursor()).toBe(ANSWERED);
     expect(paintedOpen(ANSWERED)).toBe("true");
-    expect(document.querySelector("p.pending")).toBeNull();
+    expect(document.querySelector('[data-pending="true"]')).toBeNull();
     // The anchored landing must be written into the real cursor store, not
     // just painted: the NEXT reload (the agent's answer arriving) restores
     // from storage, and forgetting to write meant that second reload threw
@@ -289,7 +289,7 @@ describe("after a page load that followed a send", () => {
     mount();
 
     const note = document.querySelector(
-      '[data-row-id="newest/next/gamma"] p.pending',
+      '[data-row-id="newest/next/gamma"] [data-pending="true"]',
     );
     expect(note?.textContent).toContain("Will this outlast the reload?");
     expect(note?.getAttribute("data-stalled")).toBe("false");

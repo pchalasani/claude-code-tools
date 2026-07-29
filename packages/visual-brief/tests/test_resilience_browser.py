@@ -77,7 +77,9 @@ def _note_state(row_id: str) -> str:
     return f"""
     (() => {{
       const row = document.querySelector('[data-row-id="{row_id}"]');
-      const note = row?.querySelector(":scope > .row-body > p.pending")
+      const note = row?.querySelector(
+        ':scope > .row-body > [data-pending="true"]',
+      )
         ?? null;
       const stalled = row?.querySelector(":scope > .row-body > p.stalled")
         ?? null;
@@ -110,7 +112,7 @@ def _thread_sign(row_id: str) -> str:
         working: row === null
           ? 0
           : row.querySelectorAll(":scope > .row-body > p.working").length,
-        notes: document.querySelectorAll("p.pending").length,
+        notes: document.querySelectorAll('[data-pending="true"]').length,
         cursor:
           document.querySelector('[data-cursor="true"]')?.dataset.rowId
           ?? null,

@@ -13,7 +13,7 @@
 
 import { createSignal, type Accessor } from "solid-js";
 
-import { chatRows, filterRows } from "./cursor";
+import { chatRows } from "./cursor";
 import { collapseToLaneIds, expandAllIds, nearestPainted } from "./folding";
 import { ancestorIds, type Row } from "./outline";
 import { scrollRowIntoView } from "./reveal";
@@ -37,8 +37,6 @@ export interface ViewModes {
 export interface ViewModeDeps {
   /** Every row of the document, in order, as it stands now. */
   rows: Accessor<Row[]>;
-  /** The current search text. */
-  query: Accessor<string>;
   /** The rows currently expanded. */
   open: Accessor<ReadonlySet<string>>;
   /** Replace the expanded rows. */
@@ -94,7 +92,7 @@ export function createViewModes(deps: ViewModeDeps): ViewModes {
       setChats(false);
       return;
     }
-    const showing = filterRows(deps.rows(), deps.query());
+    const showing = deps.rows();
     const wanted = chatRows(showing);
     const here = deps.cursorId();
     // The view is a list of conversations, so the cursor lands on one: the
