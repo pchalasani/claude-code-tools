@@ -163,3 +163,18 @@ connection above, or through the package's own CDP harness in
     the key does. It should read as an action — "next unanswered chat" — so the
     letter explains itself. (Reported earlier; verify whether it was already
     changed before spending anything on it.)
+
+## Left undone after the updates-not-state pass (2026-07-29)
+
+18. **The browser suite is flaky under load.** A full serial run passes 78 of
+    78, but under contention a test occasionally fails and then passes alone —
+    key delivery and observation race with the paint. The gate is therefore a
+    weaker alarm than it looks. Fix by dispatching every tested key through the
+    CDP harness and replacing fixed post-key sleeps with waits for the expected
+    painted state.
+
+19. **A draft does not follow the reader between the run's two addresses.**
+    `<run>.localhost:PORT/` and `localhost:PORT/r/<run>/` are separate origins,
+    so session storage is separate too. The cursor and the seen-answer marks
+    have always had this limitation, and the store's own docstring claims
+    otherwise. Either canonicalize onto one origin or stop claiming it.
