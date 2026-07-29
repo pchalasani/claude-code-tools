@@ -185,3 +185,27 @@ connection above, or through the package's own CDP harness in
     carrying on into the next one. Same going up. The human's model is one
     continuous walk down everything painted, headers included, with the shifted
     keys as a fast skip between lanes rather than the only way to reach them.
+
+## Confirmed working by the human on the live page (2026-07-29)
+
+21. **`j` and the down arrow reach conversations as well as items.** Verified by
+    the human on the live page, not only by a test. Note 11 is closed. Note 20
+    (the walk stopping at a lane boundary) is the remaining half.
+
+22. **An answered thread folds itself out of sight.** A conversation is opened
+    while it is *awaiting*; the moment it is answered it stops qualifying and
+    disappears inside its item, so the human went looking for a chat we had just
+    finished and could not find it. A thread whose answer has not been read yet
+    must stay open, and keep its new-answer mark, until it has been visited.
+
+23. **The "N my chats" count grows forever and has stopped being useful.** It
+    counts every conversation the human has ever written on the page, which
+    under append-only updates only ever increases. Scope it to what is
+    outstanding, or to the newest updates.
+
+24. **Unreproduced: `m` showed only one conversation.** The human saw the
+    my-chats view holding a single chat and one lane. Driving the live page from
+    a fresh load, one press painted all twenty conversations across both
+    updates. The one mechanism that would produce their reading is a search
+    still being active, since entering the view only considers rows the search
+    leaves on the page — awaiting confirmation from them before chasing it.
