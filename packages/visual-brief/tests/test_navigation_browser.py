@@ -58,6 +58,12 @@ _CHATS_STATE = """
         cursor:
           document.querySelector('[data-cursor="true"]')?.dataset.rowId
           ?? null,
+        query: document.querySelector("#brief-search")?.value ?? null,
+        composer:
+          document.querySelector(".composer")?.closest("[data-row-id]")
+            ?.dataset.rowId ?? null,
+        draft:
+          document.querySelector(".composer textarea")?.value ?? null,
       };
     })()
     """
@@ -154,47 +160,80 @@ def browser() -> Iterator[Browser]:
 def test_one_key_opens_the_whole_page_and_another_folds_it_back(
     browser: Browser,
 ) -> None:
-    """Open everything, then fold back to lanes, and watch the page do it."""
+    """Bulk folds change choices without reconciling the human's cursor."""
     browser.press("E")
     browser.run("wait", "300")
+    browser.press("g")
+    browser.press("n")
+    browser.run("wait", "250")
     opened = browser.evaluate(_FOLD_STATE)
 
     browser.press("C")
     browser.run("wait", "300")
     folded = browser.evaluate(_FOLD_STATE)
 
+    browser.press("n")
+    browser.run("wait", "300")
+    revealed = browser.evaluate(_FOLD_STATE)
+
+    browser.press("E")
+    browser.run("wait", "300")
+    reopened = browser.evaluate(_FOLD_STATE)
+
     assert opened["open"] == opened["rows"], opened
     assert opened["threads"] == 3, opened
-    assert folded["openKinds"] == ["update"], folded
-    assert folded["open"] == 2, folded
+    assert opened["cursor"] == AWAITING_THREAD, opened
+    assert folded["openKinds"] == [], folded
+    assert folded["open"] == 0, folded
     assert folded["threads"] == 0, folded
-    # Lanes stay on the page: a fold that hid them would leave the reader
-    # holding two headlines and nowhere to go.
-    assert folded["rows"] == 9, folded
-    # And the cursor comes up with it rather than folding out of sight.
-    assert folded["cursor"] == LANE, folded
+    assert folded["rows"] == 2, folded
+    # The selected conversation is temporarily not painted. Collapse-all may
+    # write fold choices, but it must not move the human-owned cursor.
+    assert folded["cursor"] is None, folded
+    assert revealed["cursor"] is not None, revealed
+    assert revealed["threads"] > 0, revealed
+    assert reopened["cursor"] == revealed["cursor"], reopened
 
 
 def test_the_chats_view_finds_conversations_folding_took_away(
     browser: Browser,
 ) -> None:
-    """Surface every conversation the human wrote in, answered or not."""
+    """Filter chats without changing cursor, search, composer, or draft."""
+    draft = "Keep these words through both pure filters."
+    browser.press("E")
+    browser.run("wait", "300")
+    browser.click_row(AWAITING_THREAD)
+    browser.compose_at(AWAITING_THREAD)
+    browser.run("fill", ".composer textarea", draft)
+    browser.evaluate(
+        "document.querySelector('.composer textarea')?.blur(); true"
+    )
+
     browser.press("C")
     browser.run("wait", "300")
     assert browser.evaluate(_FOLD_STATE)["threads"] == 0
+
+    browser.press("/")
+    browser.run("fill", "#brief-search", "Cedar CLI 4.11.2")
+    browser.evaluate("document.querySelector('#brief-search')?.blur(); true")
+    before = browser.evaluate(_CHATS_STATE)
 
     browser.press("m")
     browser.run("wait", "300")
     inside = browser.evaluate(_CHATS_STATE)
 
-    browser.press("j")
-    browser.run("wait", "250")
-    stepped = browser.cursor_row()
-
-    browser.press("m")
+    browser.press("Escape")
     browser.run("wait", "300")
     outside = browser.evaluate(_CHATS_STATE)
 
+    browser.press("Escape")
+    browser.press("E")
+    browser.run("wait", "300")
+    restored = browser.evaluate(_CHATS_STATE)
+
+    assert before["cursor"] is None, before
+    assert before["query"] == "Cedar CLI 4.11.2", before
+    assert before["composer"] is None, before
     assert inside["threads"] == [
         AWAITING_THREAD,
         ANSWERED_THREAD,
@@ -208,9 +247,16 @@ def test_the_chats_view_finds_conversations_folding_took_away(
         for row in inside["painted"]
     ), inside
     assert inside["cursor"] == AWAITING_THREAD, inside
-    assert stepped == ANSWERED_THREAD
+    assert inside["query"] == "Cedar CLI 4.11.2", inside
+    assert inside["composer"] == AWAITING_THREAD, inside
+    assert inside["draft"] == draft, inside
     assert outside["pressed"] == "false", outside
-    assert len(outside["painted"]) > len(inside["painted"]), outside
+    assert outside["cursor"] is None, outside
+    assert outside["query"] == "Cedar CLI 4.11.2", outside
+    assert outside["composer"] is None, outside
+    assert restored["cursor"] == AWAITING_THREAD, restored
+    assert restored["composer"] == AWAITING_THREAD, restored
+    assert restored["draft"] == draft, restored
 
 
 def test_escape_leaves_the_chats_view(browser: Browser) -> None:
@@ -244,7 +290,6 @@ def test_the_masthead_offers_the_same_view_to_a_hand_on_the_mouse(
 
 def test_typing_a_label_jumps_straight_to_that_row(browser: Browser) -> None:
     """Label every painted row and go to the one whose label was typed."""
-    before = browser.cursor_row()
     browser.press("f")
     browser.run("wait", "300")
     labelled = browser.evaluate(_HINT_STATE)
@@ -256,7 +301,6 @@ def test_typing_a_label_jumps_straight_to_that_row(browser: Browser) -> None:
     browser.run("wait", "200")
     jumped = browser.evaluate(_HINT_STATE)
 
-    assert before == FIRST_ITEM
     assert len(labelled["labels"]) == labelled["rows"], labelled
     # One length for the whole page, so no label is a prefix of another and
     # no typed label has to wait to see whether more is coming.
@@ -269,6 +313,7 @@ def test_typing_a_label_jumps_straight_to_that_row(browser: Browser) -> None:
 
 def test_escape_takes_the_labels_away_without_moving(browser: Browser) -> None:
     """Let a human change their mind about jumping."""
+    before = browser.evaluate(_HINT_STATE)["cursor"]
     browser.press("f")
     browser.run("wait", "250")
     assert browser.evaluate(_HINT_STATE)["labels"] != {}
@@ -278,7 +323,7 @@ def test_escape_takes_the_labels_away_without_moving(browser: Browser) -> None:
     left = browser.evaluate(_HINT_STATE)
 
     assert left["labels"] == {}
-    assert left["cursor"] == FIRST_ITEM
+    assert left["cursor"] == before
 
 
 def test_the_page_numbers_what_it_is_showing_so_it_can_be_cited(
@@ -310,6 +355,7 @@ def test_a_lane_chat_opens_from_the_keyboard_as_it_does_from_its_button(
     The rule this enforces: whatever the mouse can start a conversation
     against, ``J``/``K`` onto that row and ``c`` starts the same one.
     """
+    browser.click_row(FIRST_ITEM)
     browser.press("J")
     browser.run("wait", "250")
     assert browser.cursor_row() == "current-update/why-it-matters"
@@ -371,7 +417,7 @@ def test_the_page_says_which_keys_do_the_new_things(browser: Browser) -> None:
     assert named["collapse-all"] == ("C", "Collapse all")
     assert named["chats"] == ("m", "My chats")
     assert named["hints"] == ("f", "Jump to a row")
-    assert named["next-item"] == ("j", "Next row")
+    assert named["next-row"] == ("j", "Next row")
     assert named["next-awaiting"] == ("n", "Next open chat")
     # The key bar has to say that chatting is not an item-only affordance.
     assert named["compose"] == ("c", "Chat here")

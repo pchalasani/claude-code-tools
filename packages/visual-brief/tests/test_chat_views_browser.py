@@ -9,6 +9,7 @@ import pytest
 from browser_support import AWAITING_THREAD, Browser, browser_session, landing_at
 
 ITEM = AWAITING_THREAD.split("#", maxsplit=1)[0]
+ANSWERED_THREAD = "current-update/what-i-verified#q-parser-parity"
 SEARCH_MARKER = "repro-sign-only"
 
 
@@ -109,10 +110,10 @@ def _pending_presentation(row_id: str) -> str:
     """
 
 
-def test_my_chats_ignores_a_search_left_active_through_a_live_answer(
+def test_my_chats_keeps_search_and_counts_only_outstanding_chats(
     browser: Browser,
 ) -> None:
-    """Show all twenty chats after searching, sending, and live publishing."""
+    """Show twenty total chats while excluding one visited answer from badge."""
     _make_twenty_chats(browser.data)
     target = _target_thread(browser.data)
     target["turns"][-1]["text"] = "The working sign is ready."
@@ -123,9 +124,9 @@ def test_my_chats_ignores_a_search_left_active_through_a_live_answer(
     browser.publish()
     browser.wait_for_title("Twenty conversations across two updates")
 
+    browser.click_row(ANSWERED_THREAD)
+    browser.run("wait", "250")
     thread_row = f"{ITEM}#{target['id']}"
-    browser.press("/")
-    browser.run("fill", "#brief-search", SEARCH_MARKER)
     browser.compose_at(thread_row)
     question = "Does my-chats still find everything after this answer?"
     browser.send(question)
@@ -133,6 +134,8 @@ def test_my_chats_ignores_a_search_left_active_through_a_live_answer(
         landing_at(thread_row),
         lambda seen: seen["note"] is not None,
     )
+    browser.press("/")
+    browser.run("fill", "#brief-search", SEARCH_MARKER)
 
     target["turns"].append(
         {
@@ -155,6 +158,7 @@ def test_my_chats_ignores_a_search_left_active_through_a_live_answer(
     browser.publish()
     browser.wait_for_title("The live answer landed")
 
+    browser.evaluate("document.activeElement?.blur()")
     browser.press("m")
     painted = browser.evaluate(
         """
@@ -172,7 +176,7 @@ def test_my_chats_ignores_a_search_left_active_through_a_live_answer(
     )
 
     assert painted == {
-        "badge": "20",
+        "badge": "19",
         "threads": 20,
         "updates": 2,
         "query": SEARCH_MARKER,
@@ -182,9 +186,16 @@ def test_my_chats_ignores_a_search_left_active_through_a_live_answer(
 def test_a_conversation_patched_after_my_chats_open_is_painted(
     browser: Browser,
 ) -> None:
-    """Paint a newly collected conversation without reopening the view."""
+    """Add one unseen answer without making badge equal all-time chats."""
+    browser.click_row(ANSWERED_THREAD)
+    browser.run("wait", "250")
+    outstanding_before = int(
+        browser.evaluate(
+            "document.querySelector('.meta-chats')?.dataset.chatsCount"
+        )
+    )
     browser.press("m")
-    before = len(_threads(browser.data))
+    total_before = len(_threads(browser.data))
     update_id, lane_id, item = next(
         (update, lane, item)
         for update, lane, item in _items(browser.data)
@@ -223,16 +234,21 @@ def test_a_conversation_patched_after_my_chats_open_is_painted(
           thread: document.querySelector(
             '[data-row-id="{thread_row}"]',
           ) !== null,
+          threads: document.querySelectorAll(
+            '[data-row-kind="thread"]',
+          ).length,
         }}))()
         """,
         lambda seen: seen["thread"] is True,
     )
 
     assert painted == {
-        "badge": str(before + 1),
+        "badge": str(outstanding_before + 1),
         "pressed": "true",
         "thread": True,
+        "threads": total_before + 1,
     }
+    assert painted["badge"] != str(painted["threads"])
 
 
 def test_submit_keeps_one_human_turn_until_the_answer_replaces_working(

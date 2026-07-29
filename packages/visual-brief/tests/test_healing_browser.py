@@ -23,7 +23,7 @@ from typing import Iterator
 import pytest
 
 from browser_server import served_page
-from browser_support import FIRST_ITEM, Browser, browser_session
+from browser_support import Browser, browser_session
 
 GENERATION_META = re.compile(
     r'<meta name="visual-brief-render-version" content="[0-9a-f]{64}">'
@@ -88,7 +88,7 @@ def test_a_page_the_daemon_stopped_speaking_to_reloads_itself_once(
     assert healed is False, "the stranded page never reloaded itself"
     assert settled is True, "the page reloaded itself in a loop"
     assert readable["rows"] > 0
-    assert readable["cursor"] == FIRST_ITEM
+    assert readable["cursor"] is None
 
 
 def test_a_daemon_that_stops_answering_does_not_reload_anything(

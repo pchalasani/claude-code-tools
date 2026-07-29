@@ -126,9 +126,6 @@ def test_a_lanes_own_conversation_is_painted_under_its_head(
     It used to be painted past every item in the lane, which on a long lane
     is nowhere near the header it belongs to.
     """
-    browser.click_row(LANE)
-    browser.run("wait", "200")
-
     lane_head = _head_top(browser, LANE)
     conversation = _head_top(browser, LANE_CHAT)
     first_item = _head_top(browser, FIRST_ITEM_OF_LANE)

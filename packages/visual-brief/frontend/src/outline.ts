@@ -1,22 +1,4 @@
-/**
- * The document flattened into the rows the cursor can occupy.
- *
- * Every navigable thing on the page — an update, a lane, an item, a question
- * thread, a piece of raw evidence — is one row with a stable id. The id is the
- * anchor path the rest of the system already speaks: ``update``,
- * ``update/lane``, ``update/lane/item`` and ``update/lane/item#thread``, with
- * evidence nesting further hashes under the item it belongs to. Movement,
- * restoration after a reload and the structure map all read this one list, so
- * what the human sees and what the cursor believes cannot drift apart.
- *
- * The order here is the order the page paints, and that is a rule rather than
- * a coincidence: a lane's own conversations come before its items because they
- * are painted there, and an item's evidence comes before its conversations for
- * the same reason.
- */
-
 import { evidenceRows, itemSearchText } from "./evidence";
-import { conversationState } from "./freshness";
 import {
   threadIsAwaiting,
   type BriefDocument,
@@ -25,111 +7,34 @@ import {
   type Thread,
   type Update,
 } from "./document";
-
-/** What kind of thing a row stands for. */
 export type RowKind = "update" | "lane" | "item" | "thread" | "evidence";
-
-/** One navigable row of the document. */
 export interface Row {
-  /** Stable anchor-shaped identity, unique in the page. */
   id: string;
-  /** What the row stands for. */
   kind: RowKind;
-  /** Anchor path a message composed here would be attached to. */
   anchorId: string;
-  /** Thread a message composed here would continue. */
   parentThreadId?: string;
-  /** Id of the row that contains this one. */
   parentId: string | null;
-  /** Short text shown for the row in the structure map. */
   label: string;
-  /**
-   * Lowercased text the search filter matches against.
-   *
-   * Only items carry any: search is item search, as the overlay's own label
-   * says, and an item's text already includes the conversations hanging from
-   * it. Everything else is empty rather than dead weight the filter ignores.
-   */
   search: string;
-  /** Whether this row holds a question still waiting for an answer. */
   awaiting: boolean;
-  /**
-   * Whether the human has written in this conversation.
-   *
-   * Only conversation rows are ever true. The chats view is built from it: a
-   * conversation the human wrote in is theirs whether or not it has been
-   * answered, and after a collapse-all it is the only way back to it.
-   */
   human: boolean;
-  /**
-   * How a conversation stands, as a value two loads of the page can compare.
-   *
-   * Only conversation rows carry one. It changes whenever a turn is added, so
-   * the page can tell an answer that arrived while the human was away from one
-   * they have already read, whether it arrived by a publish or by a reload.
-   */
   answerState?: string;
 }
-
-/**
- * Order append-only updates newest first.
- *
- * @param brief - A delivered document.
- * @returns The document's updates in reverse publication order.
- */
 export function orderedUpdates(brief: BriefDocument): Update[] {
   return [...brief.updates].reverse();
 }
-
-/**
- * Order append-only conversations newest first within their owner.
- *
- * @param threads - Conversations in saved append order.
- * @returns A reversed copy, leaving the delivered document untouched.
- */
 export function orderedThreads(threads: Thread[] | undefined): Thread[] {
   return [...(threads ?? [])].reverse();
 }
-
-/**
- * Return the row id of one lane.
- *
- * @param updateId - Id of the update holding the lane.
- * @param lane - The lane.
- * @returns The lane's row id.
- */
 export function laneRowId(updateId: string, lane: Lane): string {
   return `${updateId}/${lane.id}`;
 }
-
-/**
- * Return the row id of one item.
- *
- * @param lanePath - Row id of the lane holding the item.
- * @param item - The item.
- * @returns The item's row id.
- */
 export function itemRowId(lanePath: string, item: Item): string {
   return `${lanePath}/${item.id}`;
 }
-
-/**
- * Return the row id of one question thread.
- *
- * @param anchorId - Row id of the lane or item the thread hangs from.
- * @param thread - The thread.
- * @returns The thread's row id.
- */
 export function threadRowId(anchorId: string, thread: Thread): string {
   return `${anchorId}#${thread.id}`;
 }
-
-/**
- * List a row id's containing rows, nearest first.
- *
- * @param id - A row id.
- * @returns Ids of the rows that contain it, nearest ancestor first.
- */
 export function ancestorIds(id: string): string[] {
   const found: string[] = [];
   let current = id;
@@ -147,13 +52,6 @@ export function ancestorIds(id: string): string[] {
     found.push(current);
   }
 }
-
-/**
- * Flatten a document into rows in the order the page paints them.
- *
- * @param brief - A delivered document.
- * @returns Every navigable row, in document order.
- */
 export function outline(brief: BriefDocument): Row[] {
   const rows: Row[] = [];
   for (const update of orderedUpdates(brief)) {
@@ -181,11 +79,6 @@ export function outline(brief: BriefDocument): Row[] {
         human: false,
       };
       rows.push(laneRow);
-      // A lane's own conversations sit directly under its head, above its
-      // items, because that is where the page paints them: a conversation
-      // about a lane belongs next to the lane, not past everything in it.
-      // This list and the rendered tree are one thing, so the order here is
-      // the order there.
       for (const thread of orderedThreads(lane.questions)) {
         rows.push(threadRow(thread, lanePath, lanePath));
         laneRow.awaiting ||= threadIsAwaiting(thread);
@@ -215,75 +108,9 @@ export function outline(brief: BriefDocument): Row[] {
   }
   return rows;
 }
-
-/**
- * Choose which rows start out expanded.
- *
- * The newest update opens and every older update stays folded. Lanes that
- * asked to be open retain that choice, while anything awaiting an answer
- * opens itself inside its update. Waiting content in an older update does not
- * open that historical update root: its containing rail says it is there,
- * and opening the update reveals the already-open path to it.
- *
- * @param brief - A delivered document.
- * @param rows - The document's rows.
- * @returns Ids of the rows that begin expanded.
- */
-export function defaultOpenIds(
-  brief: BriefDocument,
-  rows: Row[],
-): Set<string> {
-  const open = new Set<string>();
-  const ordered = orderedUpdates(brief);
-  const first = ordered[0];
-  const updateIds = new Set(ordered.map((update) => update.id));
-  if (first !== undefined) {
-    open.add(first.id);
-  }
-  for (const update of brief.updates ?? []) {
-    for (const lane of update.lanes ?? []) {
-      if (lane.open === true) {
-        open.add(laneRowId(update.id, lane));
-      }
-    }
-  }
-  for (const row of rows) {
-    if (!row.awaiting) {
-      continue;
-    }
-    if (row.kind !== "update" || row.id === first?.id) {
-      open.add(row.id);
-    }
-    for (const ancestor of ancestorIds(row.id)) {
-      const isOlderUpdate =
-        ancestor !== first?.id &&
-        updateIds.has(ancestor);
-      if (!isOlderUpdate) {
-        open.add(ancestor);
-      }
-    }
-  }
-  return open;
-}
-
-/**
- * Count the threads still waiting for an answer.
- *
- * @param rows - The document's rows.
- * @returns How many question threads await an agent answer.
- */
 export function awaitingThreadCount(rows: Row[]): number {
   return rows.filter((row) => row.kind === "thread" && row.awaiting).length;
 }
-
-/**
- * Build one thread row.
- *
- * @param thread - The delivered thread.
- * @param anchorId - Row id of the lane or item it hangs from.
- * @param parentId - Row id of its container.
- * @returns The thread's row.
- */
 function threadRow(thread: Thread, anchorId: string, parentId: string): Row {
   const opening = thread.turns.find((turn) => turn.author === "human");
   const awaiting = threadIsAwaiting(thread);
@@ -294,9 +121,9 @@ function threadRow(thread: Thread, anchorId: string, parentId: string): Row {
     parentThreadId: thread.id,
     parentId,
     label: opening?.text ?? "Conversation",
-    search: "",
+    search: thread.turns.map((turn) => turn.text).join(" ").toLowerCase(),
     awaiting,
     human: opening !== undefined,
-    answerState: conversationState(thread.turns.length, awaiting),
+    answerState: `${thread.turns.length}:${awaiting ? "asked" : "answered"}`,
   };
 }

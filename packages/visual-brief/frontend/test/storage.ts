@@ -16,6 +16,7 @@
  */
 export function forgetStores(): void {
   window.sessionStorage.clear();
+  window.localStorage.clear();
   window.history.replaceState(null, "");
 }
 

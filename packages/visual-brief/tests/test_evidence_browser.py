@@ -33,8 +33,6 @@ def _open_item(browser: Browser) -> None:
     Args:
         browser: The open browser.
     """
-    browser.click_row(LANE)
-    browser.run("wait", "200")
     browser.click_row(ITEM)
     browser.run("wait", "200")
 

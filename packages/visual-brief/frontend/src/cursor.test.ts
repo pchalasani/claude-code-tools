@@ -1,264 +1,79 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  chatRows,
   composeRow,
-  countItems,
-  edgeRow,
+  effectiveCursor,
   filterRows,
-  moveByContent,
   moveByKind,
-  nextOutstanding,
-  restoreCursor,
+  moveByRow,
 } from "./cursor";
-import { ancestorIds, outline, type Row } from "./outline";
+import { outline } from "./outline";
 import { sampleBrief } from "../test/sample-brief";
 
-const ROWS = outline(sampleBrief());
+const rows = outline(sampleBrief());
 
-const ITEMS = [
-  "newest/changed/alpha",
-  "newest/changed/beta",
-  "newest/next/gamma",
-  "older/history/one",
-];
+describe("v2 cursor arithmetic", () => {
+  it("walks every painted row, including update and lane headers", () => {
+    expect(moveByRow(rows, null, 1)).toBe("newest");
+    expect(moveByRow(rows, "newest", 1)).toBe("newest/changed");
+    expect(moveByRow(rows, "newest/changed", -1)).toBe("newest");
+  });
 
-/**
- * Walk the painted content rows with one key.
- *
- * @param rows - Painted rows to move over.
- * @param start - Where the cursor starts.
- * @param delta - Direction of travel.
- * @param steps - How many times to press.
- * @returns Each landing place in order.
- */
-function walkContent(
-  rows: Row[],
-  start: string | null,
-  delta: number,
-  steps: number,
-): (string | null)[] {
-  const seen: (string | null)[] = [];
-  let at = start;
-  for (let step = 0; step < steps; step += 1) {
-    at = moveByContent(rows, at, delta);
-    seen.push(at);
-  }
-  return seen;
-}
+  it("jumps between lanes without wrapping", () => {
+    expect(moveByKind(rows, null, "lane", 1)).toBe("newest/changed");
+    expect(moveByKind(rows, "newest/changed", "lane", 1)).toBe(
+      "newest/next",
+    );
+    expect(moveByKind(rows, "older/history", "lane", 1)).toBe(
+      "older/history",
+    );
+  });
 
-describe("the outline the cursor moves over", () => {
-  it("lists every navigable row newest update first", () => {
-    expect(ROWS.map((row) => row.id)).toEqual([
+  it("does not invent or repair a human cursor for paint", () => {
+    expect(effectiveCursor(rows, null)).toBeNull();
+    expect(effectiveCursor(rows, "removed")).toBeNull();
+    expect(effectiveCursor(rows, "newest")).toBe("newest");
+  });
+});
+
+describe("pure views", () => {
+  it("search keeps a matching item and only its ancestors", () => {
+    const filtered = filterRows(rows, "Four edge cases");
+    expect(filtered.map((row) => row.id)).toEqual([
       "newest",
       "newest/changed",
-      "newest/changed/alpha",
-      "newest/changed/alpha#q-answered",
       "newest/changed/beta",
-      "newest/changed/beta#q-open",
-      "newest/next",
-      "newest/next/gamma",
+    ]);
+  });
+
+  it("search paints matching evidence and conversations with ancestors", () => {
+    expect(filterRows(rows, "exit status 0").map((row) => row.id)).toEqual([
       "older",
       "older/history",
       "older/history/one",
-      // Evidence is a row too, so the keyboard reaches it. It comes after
-      // the item it belongs to and before that item's conversations, which
-      // is where the page paints it.
       "older/history/one#~evidence",
     ]);
-  });
-
-  it("marks the rows that hold an unanswered question", () => {
-    const awaiting = ROWS.filter((row) => row.awaiting).map((row) => row.id);
-
-    expect(awaiting).toEqual([
+    expect(filterRows(rows, "Is alpha checked").map((row) => row.id)).toEqual([
       "newest",
       "newest/changed",
-      "newest/changed/beta",
-      "newest/changed/beta#q-open",
-    ]);
-  });
-
-  it("names each row's containers, nearest first", () => {
-    expect(ancestorIds("newest/changed/beta#q-open")).toEqual([
-      "newest/changed/beta",
-      "newest/changed",
-      "newest",
-    ]);
-  });
-});
-
-describe("moving through painted content", () => {
-  it("steps through items, conversations and evidence in painted order", () => {
-    expect(walkContent(ROWS, ITEMS[0] ?? null, 1, 6)).toEqual([
+      "newest/changed/alpha",
       "newest/changed/alpha#q-answered",
-      "newest/changed/beta",
-      "newest/changed/beta#q-open",
-      "newest/next/gamma",
-      "older/history/one",
-      "older/history/one#~evidence",
     ]);
   });
 
-  it("steps back through painted content again", () => {
-    expect(
-      walkContent(ROWS, "older/history/one#~evidence", -1, 3),
-    ).toEqual([
-      "older/history/one",
-      "newest/next/gamma",
-      "newest/changed/beta#q-open",
-    ]);
+  it("my chats keeps human threads and their paths", () => {
+    const filtered = chatRows(rows);
+    expect(filtered.filter((row) => row.kind === "thread")).toHaveLength(2);
+    expect(filtered).toContainEqual(
+      expect.objectContaining({ id: "newest/changed" }),
+    );
   });
 
-  it("stays put at the last content row instead of wrapping", () => {
-    // Wrapping threw the reader from the newest entry to the oldest one at the
-    // very bottom of the page, which reads as losing your place.
-    expect(
-      moveByContent(ROWS, "older/history/one#~evidence", 1),
-    ).toBe("older/history/one#~evidence");
-  });
-
-  it("stays put at the first content row instead of wrapping", () => {
-    expect(moveByContent(ROWS, "newest/changed/alpha", -1)).toBe(
+  it("routes composition at evidence and update rows", () => {
+    expect(composeRow(rows, "newest")?.id).toBe("newest/changed");
+    expect(composeRow(rows, "newest/changed/alpha")?.id).toBe(
       "newest/changed/alpha",
     );
-  });
-
-  it("starts at the first content row when the cursor is nowhere", () => {
-    expect(moveByContent(ROWS, null, 1)).toBe(ITEMS[0]);
-  });
-
-  it("never stops on content a fold took off the painted page", () => {
-    const painted = ROWS.filter(
-      (row) => row.id !== "newest/changed/alpha#q-answered",
-    );
-    expect(moveByContent(painted, "newest/changed/alpha", 1)).toBe(
-      "newest/changed/beta",
-    );
-  });
-});
-
-describe("moving between lanes", () => {
-  it("is a different motion from moving between items", () => {
-    expect(moveByKind(ROWS, "newest/changed", "lane", 1)).toBe("newest/next");
-    expect(moveByKind(ROWS, "newest/changed", "item", 1)).toBe(
-      "newest/changed/alpha",
-    );
-  });
-
-  it("carries an item to the next lane below it", () => {
-    expect(moveByKind(ROWS, "newest/changed/alpha", "lane", 1)).toBe(
-      "newest/next",
-    );
-  });
-
-  it("carries an item back to the lane holding it", () => {
-    expect(moveByKind(ROWS, "newest/next/gamma", "lane", -1)).toBe(
-      "newest/next",
-    );
-  });
-
-  it("stops at the ends of the document rather than wrapping", () => {
-    expect(moveByKind(ROWS, "older/history", "lane", 1)).toBe("older/history");
-    expect(moveByKind(ROWS, "newest/changed", "lane", -1)).toBe(
-      "newest/changed",
-    );
-  });
-});
-
-describe("jumping", () => {
-  it("goes to the first and last row of the document", () => {
-    expect(edgeRow(ROWS, "top")).toBe("newest");
-    expect(edgeRow(ROWS, "bottom")).toBe("older/history/one#~evidence");
-  });
-
-  it("walks awaiting and newly answered chats, then wraps", () => {
-    const fresh = new Set(["newest/changed/alpha#q-answered"]);
-    const first = nextOutstanding(ROWS, null, fresh);
-
-    expect(first).toBe("newest/changed/alpha#q-answered");
-    expect(nextOutstanding(ROWS, first, fresh)).toBe(
-      "newest/changed/beta#q-open",
-    );
-    expect(
-      nextOutstanding(ROWS, "newest/changed/beta#q-open", fresh),
-    ).toBe(first);
-  });
-
-  it("stays put when no chat is outstanding", () => {
-    const answered = ROWS.filter((row) => !row.awaiting);
-
-    expect(
-      nextOutstanding(answered, "newest/changed/alpha", new Set()),
-    ).toBe(
-      "newest/changed/alpha",
-    );
-  });
-});
-
-describe("restoring the cursor after the page reloads itself", () => {
-  it("returns to the same row when it survived", () => {
-    expect(restoreCursor(ROWS, "newest/next/gamma")).toBe("newest/next/gamma");
-  });
-
-  it("falls back to the nearest surviving container", () => {
-    expect(restoreCursor(ROWS, "newest/changed/alpha#q-gone")).toBe(
-      "newest/changed/alpha",
-    );
-    expect(restoreCursor(ROWS, "newest/changed/vanished")).toBe(
-      "newest/changed",
-    );
-  });
-
-  it("falls back to the first item when nothing is recognised", () => {
-    expect(restoreCursor(ROWS, "some-other-run/lane/item")).toBe(ITEMS[0]);
-    expect(restoreCursor(ROWS, null)).toBe(ITEMS[0]);
-  });
-});
-
-describe("searching", () => {
-  it("keeps matching items with the lanes that hold them", () => {
-    const kept = filterRows(ROWS, "edge cases");
-
-    expect(kept.map((row) => row.id)).toEqual([
-      "newest",
-      "newest/changed",
-      "newest/changed/beta",
-      "newest/changed/beta#q-open",
-    ]);
-    expect(countItems(kept)).toBe(1);
-  });
-
-  it("reaches evidence, tables and conversations", () => {
-    expect(countItems(filterRows(ROWS, "exit status"))).toBe(1);
-    expect(countItems(filterRows(ROWS, "WRONG"))).toBe(1);
-    expect(countItems(filterRows(ROWS, "reference"))).toBe(1);
-  });
-
-  it("keeps everything for an empty query", () => {
-    expect(filterRows(ROWS, "   ")).toHaveLength(ROWS.length);
-  });
-
-  it("moves the cursor only between rows the search left behind", () => {
-    const kept = filterRows(ROWS, "still open");
-
-    expect(moveByKind(kept, "newest/changed/beta", "item", 1)).toBe(
-      "newest/changed/beta",
-    );
-  });
-});
-
-describe("where composition points", () => {
-  it("targets an item, a lane and a thread as themselves", () => {
-    expect(composeRow(ROWS, "newest/changed/alpha")?.anchorId).toBe(
-      "newest/changed/alpha",
-    );
-    expect(composeRow(ROWS, "newest/next")?.anchorId).toBe("newest/next");
-    const thread = composeRow(ROWS, "newest/changed/beta#q-open");
-    expect(thread?.anchorId).toBe("newest/changed/beta");
-    expect(thread?.parentThreadId).toBe("q-open");
-  });
-
-  it("hands an update to the first lane it holds", () => {
-    expect(composeRow(ROWS, "newest")?.id).toBe("newest/changed");
   });
 });

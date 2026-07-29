@@ -1,5 +1,4 @@
 import { For, type JSX } from "solid-js";
-
 import {
   ComposeBox,
   ComposeButton,
@@ -11,13 +10,6 @@ import type { Row } from "./outline";
 import { NewAnswerChip, RowShell } from "./row-shell";
 import type { BriefState } from "./state";
 import { TurnView } from "./turn-view";
-
-/**
- * One conversation, oldest turn first, with its reply slot underneath.
- *
- * @param props - The thread, its row and the page state.
- * @returns The rendered conversation.
- */
 export function ThreadView(props: {
   state: BriefState;
   row: Row;
@@ -49,12 +41,6 @@ export function ThreadView(props: {
         {(turn) => <TurnView turn={turn} />}
       </For>
       <PendingNotes state={props.state} row={props.row} />
-      {/*
-        The document, not this page load, is what keeps the sign up. A human
-        who asks a question and then watches the agent republish something
-        else must not see the reassurance vanish: the conversation is still
-        awaiting, so it still says so, publish after publish.
-      */}
       <WorkingSign state={props.state} row={props.row} />
       <ComposeBox state={props.state} row={props.row} />
     </RowShell>

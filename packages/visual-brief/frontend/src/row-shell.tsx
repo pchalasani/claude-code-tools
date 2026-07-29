@@ -1,31 +1,13 @@
 import { Show, type JSX } from "solid-js";
-
 import type { Row } from "./outline";
 import { pointerIsDriving } from "./pointer";
 import type { BriefState } from "./state";
-import { CURSOR_TRANSITION_NAME } from "./transitions";
-
-/**
- * The chrome every navigable row shares.
- *
- * One element carries the row's identity, whether it is the cursor and
- * whether it is expanded. The cursor's paint hangs off ``data-cursor`` on the
- * head, so the thing the application believes and the thing the human sees
- * are the same attribute.
- *
- * @param props - The row, its state, its head line and its body.
- * @returns The rendered row.
- */
 export function RowShell(props: {
   state: BriefState;
   row: Row;
-  /** Content of the clickable head line. */
   head: JSX.Element;
-  /** Keep rich head content beside, rather than inside, its disclosure. */
   separateHead?: boolean;
-  /** Controls shown at the right of the head line. */
   actions?: JSX.Element;
-  /** Content revealed when the row is expanded. */
   children?: JSX.Element;
 }): JSX.Element {
   const isCursor = () => props.state.nav.isCursor(props.row.id);
@@ -41,7 +23,9 @@ export function RowShell(props: {
     ) {
       return "direct";
     }
-    return props.row.awaiting ? "contained" : undefined;
+    return props.row.awaiting || props.state.pending.within(props.row.id)
+      ? "contained"
+      : undefined;
   };
   const waitingDescription = (): string | undefined => {
     if (waiting() === "direct") {
@@ -61,21 +45,10 @@ export function RowShell(props: {
       data-awaiting={props.row.awaiting ? "true" : "false"}
       data-waiting={waiting()}
       data-fresh={props.state.nav.isFresh(props.row.id) ? "true" : "false"}
-      onPointerOver={(event) => {
-        // Hover IS selection: the row under the pointer becomes the cursor, so
-        // whatever you press next acts on the row you are looking at. Guarded
-        // on pointerType so a stationary mouse cannot steal the cursor back
-        // while the keyboard is driving, and on the row id so entering a child
-        // element does not re-fire.
+      onPointerMove={(event) => {
         if (event.pointerType !== "mouse" || !pointerIsDriving()) {
-          // Not a real hover: the keyboard moved the cursor, the page scrolled,
-          // and this row slid under a stationary mouse. Believing it would move
-          // the cursor a second time for one key press.
           return;
         }
-        // Rows nest, so the event bubbles through every ancestor row and the
-        // outermost one would win. Stop it here: the innermost row under the
-        // pointer is the one the reader is looking at.
         event.stopPropagation();
         props.state.nav.pointAt(props.row.id);
       }}
@@ -84,7 +57,7 @@ export function RowShell(props: {
         class="row-head"
         style={{
           "view-transition-name": isCursor()
-            ? CURSOR_TRANSITION_NAME
+            ? "brief-cursor"
             : undefined,
         }}
       >
@@ -120,11 +93,6 @@ export function RowShell(props: {
           )}
         </Show>
         <Show when={ordinal() !== null}>
-          {/*
-            A number to say "item 12" by, and nothing more: it is not a key,
-            not a link, and not read aloud, because it means nothing to anyone
-            who is not looking at the same screen.
-          */}
           <span class="ordinal" aria-hidden="true">
             {ordinal()}
           </span>
@@ -141,17 +109,6 @@ export function RowShell(props: {
     </article>
   );
 }
-
-/**
- * The label a row wears while the jump keys are showing.
- *
- * It is painted state, not a tooltip: the label is on the row, in the page,
- * in whichever theme the reader is using, and the part of it already typed is
- * marked so a two-key label can be seen half-finished.
- *
- * @param props - The row's label and what has been typed so far.
- * @returns The rendered label.
- */
 function HintLabel(props: { label: string; typed: string }): JSX.Element {
   const done = () =>
     props.label.startsWith(props.typed) ? props.typed : "";
@@ -162,13 +119,6 @@ function HintLabel(props: { label: string; typed: string }): JSX.Element {
     </span>
   );
 }
-
-/**
- * Render one row only while the search leaves it on the page.
- *
- * @param props - The row id to resolve and what to render for it.
- * @returns The rendered row, or nothing when it is filtered out.
- */
 export function VisibleRow(props: {
   state: BriefState;
   id: string;
@@ -180,13 +130,6 @@ export function VisibleRow(props: {
       : undefined;
   return <Show when={resolved()}>{(row) => props.children(row())}</Show>;
 }
-
-/**
- * The badge marking an answer that landed since the human last looked.
- *
- * @param props - Whether to show the badge.
- * @returns The badge, or nothing.
- */
 export function NewAnswerChip(props: { when: boolean }): JSX.Element {
   return (
     <Show when={props.when}>

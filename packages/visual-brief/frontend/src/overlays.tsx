@@ -1,22 +1,15 @@
 import { For, Show, type JSX } from "solid-js";
-
 import { KEY_HELP, type Action } from "./keys";
 import type { BriefState } from "./state";
-
-/** The actions the on-screen key bar can run. */
 const KEY_BAR: [string, Action, string][] = [
-  ["k", "previous-item", "Previous row"],
-  ["j", "next-item", "Next row"],
+  ["k", "previous-row", "Previous row"],
+  ["j", "next-row", "Next row"],
   ["K", "previous-lane", "Previous lane"],
   ["J", "next-lane", "Next lane"],
-  // The word every level of the page answers to: wherever the cursor is, this
-  // opens a conversation there, exactly as that row's own button does.
   ["c", "compose", "Chat here"],
   ["f", "hints", "Jump to a row"],
   ["E", "expand-all", "Expand all"],
   ["C", "collapse-all", "Collapse all"],
-  // Named for what the key DOES, not for the state it hunts: "Awaiting"
-  // described the rows, leaving n unexplained.
   ["n", "next-awaiting", "Next open chat"],
   ["m", "chats", "My chats"],
   ["/", "search", "Search"],
@@ -24,13 +17,6 @@ const KEY_BAR: [string, Action, string][] = [
   ["G", "bottom", "Bottom"],
   ["?", "help", "Keys"],
 ];
-
-/**
- * The same actions as the keyboard, for a hand on a mouse.
- *
- * @param props - The page state.
- * @returns The rendered bar.
- */
 export function KeyBar(props: { state: BriefState }): JSX.Element {
   return (
     <nav class="keybar" aria-label="Keyboard and page controls">
@@ -50,13 +36,6 @@ export function KeyBar(props: { state: BriefState }): JSX.Element {
     </nav>
   );
 }
-
-/**
- * The search field and its live match count.
- *
- * @param props - The page state.
- * @returns The rendered search bar when it is open.
- */
 export function SearchOverlay(props: { state: BriefState }): JSX.Element {
   const nav = props.state.nav;
   return (
@@ -84,13 +63,6 @@ export function SearchOverlay(props: { state: BriefState }): JSX.Element {
     </Show>
   );
 }
-
-/**
- * The key list, shown on demand.
- *
- * @param props - The page state.
- * @returns The rendered overlay when it is open.
- */
 export function HelpOverlay(props: { state: BriefState }): JSX.Element {
   return (
     <Show when={props.state.nav.overlay() === "help"}>

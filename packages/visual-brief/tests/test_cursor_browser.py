@@ -16,7 +16,6 @@ from typing import Any, Iterator
 import pytest
 
 from browser_support import (
-    AWAITING_THREAD,
     FIRST_ITEM,
     SECOND_ITEM,
     Browser,
@@ -24,14 +23,6 @@ from browser_support import (
 )
 
 _NUMBERS = re.compile(r"[-+]?\d*\.?\d+")
-_PAINTED_CONTENT = [
-    (FIRST_ITEM, "item"),
-    (SECOND_ITEM, "item"),
-    (f"{SECOND_ITEM}#~evidence", "evidence"),
-    ("current-update/why-it-matters/repair-loop-routing", "item"),
-    (AWAITING_THREAD, "thread"),
-    ("current-update/what-i-verified#q-parser-parity", "thread"),
-]
 
 
 @pytest.fixture
@@ -151,10 +142,30 @@ def walk_content(
     return landed
 
 
+def painted_rows(browser: Browser) -> list[tuple[str, str]]:
+    """Return every currently painted row in browser order.
+
+    Args:
+        browser: The open browser.
+
+    Returns:
+        Each painted row identifier and kind, from top to bottom.
+    """
+    rows = browser.evaluate(
+        """
+        [...document.querySelectorAll("[data-row-id]")].map(
+          (row) => [row.dataset.rowId, row.dataset.rowKind],
+        )
+        """
+    )
+    return [(str(row_id), str(kind)) for row_id, kind in rows]
+
+
 def test_the_cursor_row_is_painted_unlike_every_other_item(
     browser: Browser,
 ) -> None:
     """Measure the contrast step a human is meant to see, in numbers."""
+    browser.click_row(FIRST_ITEM)
     browser.press("j")
     browser.run("wait", "200")
 
@@ -223,6 +234,8 @@ def test_the_cursor_stays_in_comfortable_reading_position(
 
 def test_the_mouse_and_the_keyboard_share_one_cursor(browser: Browser) -> None:
     """Click a row and then keep moving from it with the keyboard."""
+    rows = [row_id for row_id, _ in painted_rows(browser)]
+    previous = rows[rows.index(SECOND_ITEM) - 1]
     browser.click_row(SECOND_ITEM)
     browser.run("wait", "200")
     clicked = browser.cursor_row()
@@ -231,25 +244,32 @@ def test_the_mouse_and_the_keyboard_share_one_cursor(browser: Browser) -> None:
     browser.run("wait", "200")
 
     assert clicked == SECOND_ITEM
-    assert browser.cursor_row() == FIRST_ITEM
+    assert browser.cursor_row() == previous
 
 
-def test_plain_movement_walks_painted_evidence_and_conversations(
+def test_plain_movement_walks_every_painted_row_in_both_directions(
     browser: Browser,
 ) -> None:
-    """Walk exact painted order forward and backward with letters and arrows."""
+    """Walk headers, content, evidence, and chats without boundary dead ends."""
     browser.press("E")
     browser.run("wait", "300")
-    assert (browser.cursor_row(), "item") == _PAINTED_CONTENT[0]
+    painted = painted_rows(browser)
+    assert {kind for _, kind in painted} >= {
+        "update",
+        "lane",
+        "item",
+        "thread",
+        "evidence",
+    }
 
-    steps = len(_PAINTED_CONTENT) - 1
-    assert walk_content(browser, "j", steps) == _PAINTED_CONTENT[1:]
-    assert walk_content(browser, "k", steps) == list(
-        reversed(_PAINTED_CONTENT[:-1])
-    )
-    assert walk_content(browser, "ArrowDown", steps) == _PAINTED_CONTENT[1:]
+    browser.press("g")
+    assert (browser.cursor_row(), painted[0][1]) == painted[0]
+    steps = len(painted) - 1
+    assert walk_content(browser, "j", steps) == painted[1:]
+    assert walk_content(browser, "k", steps) == list(reversed(painted[:-1]))
+    assert walk_content(browser, "ArrowDown", steps) == painted[1:]
     assert walk_content(browser, "ArrowUp", steps) == list(
-        reversed(_PAINTED_CONTENT[:-1])
+        reversed(painted[:-1])
     )
 
 
@@ -257,7 +277,7 @@ def test_the_cursor_stays_on_its_row_when_the_agent_publishes(
     browser: Browser,
 ) -> None:
     """Keep the human's place when the agent publishes new content."""
-    browser.press("j")
+    browser.click_row(FIRST_ITEM)
     browser.press("J")
     browser.run("wait", "200")
     before = browser.cursor_row()
@@ -271,31 +291,51 @@ def test_the_cursor_stays_on_its_row_when_the_agent_publishes(
     assert browser.cursor_row() == before
 
 
-def test_search_filters_the_page_and_the_cursor_with_it(
+def test_search_filters_without_writing_the_cursor_or_query(
     browser: Browser,
 ) -> None:
-    """Show only matching items, and move only between what is shown."""
+    """Hide a selected row temporarily and restore the exact human state."""
+    browser.click_row(SECOND_ITEM)
+    browser.run("wait", "200")
+    before = browser.cursor_row()
+
     browser.press("/")
     browser.run("wait", "200")
     browser.run("type", "#brief-search", "Cedar CLI 4.11.2")
     browser.run("wait", "300")
 
-    shown = browser.evaluate(
+    filtered = browser.evaluate(
         """
-        [...document.querySelectorAll('[data-row-kind="item"]')].map(
-          (row) => row.dataset.rowId,
-        )
+        (() => ({
+          items: [...document.querySelectorAll('[data-row-kind="item"]')].map(
+            (row) => row.dataset.rowId,
+          ),
+          cursor: document.querySelector('[data-cursor="true"]')
+            ?.dataset.rowId ?? null,
+          query: document.querySelector("#brief-search")?.value ?? null,
+        }))()
         """
     )
-    assert shown == [FIRST_ITEM]
+    assert FIRST_ITEM in filtered["items"]
+    assert SECOND_ITEM not in filtered["items"]
+    assert filtered["cursor"] is None
+    assert filtered["query"] == "Cedar CLI 4.11.2"
 
     browser.press("Escape")
     browser.run("wait", "300")
-    assert browser.evaluate(
+    restored = browser.evaluate(
         """
-        document.querySelectorAll('[data-row-kind="item"]').length
+        (() => ({
+          items: document.querySelectorAll('[data-row-kind="item"]').length,
+          cursor: document.querySelector('[data-cursor="true"]')
+            ?.dataset.rowId ?? null,
+          query: document.querySelector("#brief-search")?.value ?? null,
+        }))()
         """
-    ) > 1
+    )
+    assert restored["items"] > 1
+    assert restored["cursor"] == before
+    assert restored["query"] is None
 
 
 def test_the_map_cannot_send_the_cursor_off_the_filtered_page(
@@ -308,16 +348,33 @@ def test_the_map_cannot_send_the_cursor_off_the_filtered_page(
     that is on the page: here the search gives way and the lane is marked.
     """
     lane = "review-round-four/round-four-next"
+    browser.click_row(SECOND_ITEM)
     browser.press("/")
     browser.run("wait", "200")
     browser.run("type", "#brief-search", "Cedar CLI 4.11.2")
     browser.run("wait", "300")
-    assert browser.cursor_row() == FIRST_ITEM
+    assert browser.evaluate(
+        "document.querySelector('[data-cursor=\"true\"]')"
+    ) is None
 
+    browser.run("scrollintoview", f'[data-map-lane="{lane}"]')
     browser.run("click", f'[data-map-lane="{lane}"]')
     browser.run("wait", "300")
 
-    assert browser.cursor_row() == lane
+    selected = browser.evaluate(
+        f"""
+        (() => ({{
+          cursor: document.querySelector('[data-cursor="true"]')
+            ?.dataset.rowId ?? null,
+          lane: document.querySelector('[data-row-id="{lane}"]') !== null,
+          update: document.querySelector(
+            '[data-row-id="review-round-four"]',
+          )?.dataset.open ?? null,
+          query: document.querySelector("#brief-search")?.value ?? null,
+        }}))()
+        """
+    )
+    assert selected["cursor"] == lane, selected
     assert browser.evaluate(
         f"""
         [

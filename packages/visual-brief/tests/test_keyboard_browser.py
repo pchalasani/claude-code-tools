@@ -15,7 +15,6 @@ import pytest
 from browser_support import (
     AWAITING_THREAD,
     FIRST_ITEM,
-    SECOND_ITEM,
     Browser,
     browser_session,
 )
@@ -67,20 +66,6 @@ _ARROW_SPY = """
     })()
     """
 
-_CURSOR_AND_ROWS = f"""
-    (() => {{
-      const open = (id) => document.querySelector(
-        '[data-row-id="' + id + '"]',
-      ).dataset.open;
-      const marked = [...document.querySelectorAll('[data-cursor="true"]')];
-      return {{
-        cursor: marked.map((row) => row.dataset.rowId),
-        first: open("{FIRST_ITEM}"),
-        second: open("{SECOND_ITEM}"),
-      }};
-    }})()
-    """
-
 _CURSOR_IS_OPEN = """
     document.querySelector('[data-cursor="true"]').dataset.open
     """
@@ -99,8 +84,30 @@ _CHAT_BOX = """
     """
 
 
+def _painted_row_ids(browser: Browser) -> list[str]:
+    """Return the identifiers of all rows in their current painted order."""
+    rows = browser.evaluate(
+        """
+        [...document.querySelectorAll("[data-row-id]")].map(
+          (row) => row.dataset.rowId,
+        )
+        """
+    )
+    return [str(row_id) for row_id in rows]
+
+
+def _row_open(browser: Browser, row_id: str) -> str:
+    """Return one painted row's open state."""
+    return str(
+        browser.evaluate(
+            f'document.querySelector(\'[data-row-id="{row_id}"]\').dataset.open'
+        )
+    )
+
+
 def test_the_shifted_keys_are_alive(browser: Browser) -> None:
     """Drive J, K, G and ? for real; all four were silently dead before."""
+    browser.click_row(FIRST_ITEM)
     browser.press("J")
     browser.run("wait", "150")
     lane = browser.cursor_row()
@@ -250,19 +257,25 @@ def test_enter_acts_at_the_cursor_not_an_invisible_focused_button(
     browser: Browser,
 ) -> None:
     """Do not press the masthead control after the cursor has moved away."""
-    browser.run("focus", ".meta-awaiting")
+    browser.click_row(FIRST_ITEM)
+    rows = _painted_row_ids(browser)
+    adjacent = rows[rows.index(FIRST_ITEM) + 1]
+    browser.run(
+        "focus",
+        f'[data-row-id="{FIRST_ITEM}"] > .row-head > .row-toggle',
+    )
     browser.press("j")
     browser.run("wait", "200")
-    assert browser.cursor_row() == SECOND_ITEM
-    assert browser.evaluate(_CURSOR_IS_OPEN) == "false"
+    assert browser.cursor_row() == adjacent
+    before = _row_open(browser, adjacent)
     browser.evaluate(_ENTER_SPY)
 
     browser.press("Enter")
     browser.run("wait", "250")
 
     assert browser.evaluate("window.__enter") == [True]
-    assert browser.cursor_row() == SECOND_ITEM
-    assert browser.evaluate(_CURSOR_IS_OPEN) == "true"
+    assert browser.cursor_row() == adjacent
+    assert _row_open(browser, adjacent) != before
 
 
 def test_space_folds_the_cursor_row_after_the_mouse_moved_focus(
@@ -276,22 +289,24 @@ def test_space_folds_the_cursor_row_after_the_mouse_moved_focus(
     """
     browser.click_row(FIRST_ITEM)
     browser.run("wait", "200")
+    rows = _painted_row_ids(browser)
+    adjacent = rows[rows.index(FIRST_ITEM) + 1]
     assert browser.cursor_row() == FIRST_ITEM
     focused = browser.evaluate("document.activeElement.className")
+    first_open = _row_open(browser, FIRST_ITEM)
+    adjacent_open = _row_open(browser, adjacent)
 
     browser.press("j")
     browser.run("wait", "200")
-    assert browser.cursor_row() == SECOND_ITEM
+    assert browser.cursor_row() == adjacent
 
     browser.press(" ")
     browser.run("wait", "300")
 
     assert focused == "row-toggle"
-    assert browser.evaluate(_CURSOR_AND_ROWS) == {
-        "cursor": [SECOND_ITEM],
-        "first": "true",
-        "second": "true",
-    }
+    assert browser.cursor_row() == adjacent
+    assert _row_open(browser, FIRST_ITEM) == first_open
+    assert _row_open(browser, adjacent) != adjacent_open
 
 
 def test_the_arrow_keys_walk_the_page_with_the_pointer_resting_on_it(
@@ -306,6 +321,10 @@ def test_the_arrow_keys_walk_the_page_with_the_pointer_resting_on_it(
     pointer at rest and checks both: the page consumed every press, and the
     cursor walked and stayed walked.
     """
+    rows = _painted_row_ids(browser)
+    index = rows.index(FIRST_ITEM)
+    adjacent = rows[index + 1]
+    following = rows[index + 2]
     browser.run("scrollintoview", f'[data-row-id="{FIRST_ITEM}"]')
     browser.run("hover", f'[data-row-id="{FIRST_ITEM}"] > .row-head .row-toggle')
     browser.run("wait", "250")
@@ -326,9 +345,9 @@ def test_the_arrow_keys_walk_the_page_with_the_pointer_resting_on_it(
 
     claimed = browser.evaluate("window.__arrows")
     assert claimed == [True, True, True], claimed
-    assert down == SECOND_ITEM
-    assert further not in {FIRST_ITEM, SECOND_ITEM}
-    assert back == SECOND_ITEM
+    assert down == adjacent
+    assert further == following
+    assert back == adjacent
 
 
 def test_the_chat_box_opens_on_c_and_still_on_the_old_a(
@@ -338,6 +357,7 @@ def test_the_chat_box_opens_on_c_and_still_on_the_old_a(
 
     ``a`` is kept as an undocumented alias because fingers remember it.
     """
+    browser.click_row(FIRST_ITEM)
     browser.press("c")
     browser.run("wait", "300")
     on_c = browser.evaluate(_CHAT_BOX)
@@ -363,6 +383,7 @@ def test_keys_are_inert_while_a_question_is_being_typed(
     browser: Browser,
 ) -> None:
     """Let the human write the letter j without losing their place."""
+    browser.click_row(FIRST_ITEM)
     browser.press("a")
     browser.run("wait", "200")
     browser.run("type", ".composer textarea", "j and k and J")
@@ -380,6 +401,8 @@ def test_keys_are_inert_while_a_question_is_being_typed(
     browser.run("wait", "150")
     assert browser.evaluate("document.querySelector('.composer') !== null") is False
 
+    rows = _painted_row_ids(browser)
+    adjacent = rows[rows.index(FIRST_ITEM) + 1]
     browser.press("j")
     browser.run("wait", "150")
-    assert browser.cursor_row() == SECOND_ITEM
+    assert browser.cursor_row() == adjacent

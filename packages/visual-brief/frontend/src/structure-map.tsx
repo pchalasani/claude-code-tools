@@ -1,25 +1,8 @@
 import { For, type JSX } from "solid-js";
-
 import { ancestorIds, laneRowId, orderedUpdates } from "./outline";
 import { explicitSelectionTookOver } from "./pointer";
 import type { BriefState } from "./state";
-
-/** How wide a lane's tick can grow, in pixels. */
 const MAX_TICK = 56;
-
-/**
- * The document's own shape, standing in for a scrollbar.
- *
- * Each lane is one tick, sized by how much it holds; the tick holding the
- * cursor is filled. It answers "where am I" without reading a word, and
- * clicking a tick moves the same cursor the keyboard moves. The map shows
- * the whole document, search or no search, so a tick a search is hiding is
- * still clickable: ``select`` drops the search rather than sending the cursor
- * somewhere the page is not rendering.
- *
- * @param props - The page state.
- * @returns The rendered map.
- */
 export function StructureMap(props: { state: BriefState }): JSX.Element {
   const currentLane = (): string | null => {
     const id = props.state.nav.cursorId();
@@ -42,7 +25,7 @@ export function StructureMap(props: { state: BriefState }): JSX.Element {
             <button
               type="button"
               class="map-update-head"
-              onClick={() => props.state.nav.select(update.id)}
+              onClick={() => props.state.nav.select(update.id, { dropFilter: true })}
             >
               {update.timestamp}
             </button>
@@ -51,9 +34,6 @@ export function StructureMap(props: { state: BriefState }): JSX.Element {
                 {(lane) => {
                   const id = laneRowId(update.id, lane);
                   const row = () => props.state.nav.row(id);
-                  // Read rather than measured once: a lane that gains items
-                  // while the page is open grows its tick, because the map is
-                  // a picture of the document as it stands.
                   const width = (): number =>
                     Math.min(MAX_TICK, 10 + (lane.items ?? []).length * 8);
                   return (
@@ -68,7 +48,8 @@ export function StructureMap(props: { state: BriefState }): JSX.Element {
                         }
                         onClick={() => {
                           explicitSelectionTookOver();
-                          props.state.nav.select(id);
+                          props.state.nav.setOpen(update.id, true);
+                          props.state.nav.select(id, { dropFilter: true });
                         }}
                       >
                         <span

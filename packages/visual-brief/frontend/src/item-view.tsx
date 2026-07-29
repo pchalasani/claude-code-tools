@@ -1,5 +1,4 @@
 import { For, Show, type JSX } from "solid-js";
-
 import {
   ComposeBox,
   ComposeButton,
@@ -20,13 +19,6 @@ import { orderedThreads, threadRowId, type Row } from "./outline";
 import { RowShell, VisibleRow } from "./row-shell";
 import type { BriefState } from "./state";
 import { ThreadView } from "./thread-view";
-
-/**
- * One item: a glance line that opens into the reasoning under it.
- *
- * @param props - The item, its row and the page state.
- * @returns The rendered item.
- */
 export function ItemView(props: {
   state: BriefState;
   row: Row;
@@ -89,13 +81,6 @@ export function ItemView(props: {
     </RowShell>
   );
 }
-
-/**
- * The chip carrying how far an item has been checked.
- *
- * @param props - The item's trust level.
- * @returns The chip.
- */
 export function TrustChip(props: { trust: Item["trust"] }): JSX.Element {
   return (
     <span class={`chip chip-trust trust-${props.trust}`}>
@@ -106,13 +91,6 @@ export function TrustChip(props: { trust: Item["trust"] }): JSX.Element {
     </span>
   );
 }
-
-/**
- * One comparison table.
- *
- * @param props - The table.
- * @returns The rendered table inside its own scroll box.
- */
 function TableView(props: { table: Table }): JSX.Element {
   return (
     <div class="table-wrap">

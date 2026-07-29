@@ -15,6 +15,7 @@ import pytest
 from browser_support import SECOND_ITEM, Browser, browser_session, landing_at
 
 ITEM = "current-update/what-changed/differential-reader-check"
+ANSWERED_THREAD = "current-update/what-i-verified#q-parser-parity"
 REFUSED = "Could not send. Is the local server running?"
 
 # The send chord carries a modifier, and the installed agent-browser reports
@@ -76,7 +77,10 @@ def test_double_click_sends_one_question_while_request_is_in_flight(
 
         assert browser.server.post_count == 1
         assert browser.evaluate(
-            "document.querySelector('.composer .submit').disabled"
+            """
+            document.querySelector(".composer") === null
+              && document.querySelectorAll('[data-pending="true"]').length === 1
+            """
         )
     finally:
         browser.server.post_gate.set()
@@ -193,6 +197,36 @@ def test_a_question_the_daemon_refuses_is_not_lost(browser: Browser) -> None:
         """
     ) == ["Does this survive a refusal?", REFUSED, 0]
 
+    browser.run("reload")
+    browser.compose_at(ITEM)
+    assert browser.evaluate(
+        "document.querySelector('.composer textarea').value"
+    ) == "Does this survive a refusal?"
+
+
+def test_repeated_follow_up_stays_visible_through_reload(
+    browser: Browser,
+) -> None:
+    """Keep repeated words pending under a seen answered conversation."""
+    repeated = "Does twelve clean cases prove full parser parity?"
+    browser.compose_at(ANSWERED_THREAD)
+    browser.send(repeated)
+    landed = browser.read_until(
+        landing_at(ANSWERED_THREAD),
+        lambda seen: seen["note"] is not None,
+    )
+
+    browser.run("reload")
+    restored = browser.read_until(
+        landing_at(ANSWERED_THREAD),
+        lambda seen: seen["note"] is not None,
+    )
+
+    assert repeated in (landed["note"] or ""), landed
+    assert restored["open"] == "true", restored
+    assert restored["notes"] == 1, restored
+    assert repeated in (restored["note"] or ""), restored
+
 
 def test_each_draft_survives_navigation_publish_collapse_and_reload(
     browser: Browser,
@@ -221,7 +255,7 @@ def test_each_draft_survives_navigation_publish_collapse_and_reload(
     assert browser.evaluate(
         "document.querySelector('.composer') === null"
     )
-    browser.click_row("current-update/what-changed")
+    browser.press("E")
     browser.compose_at(ITEM)
     assert browser.evaluate(
         "document.querySelector('.composer textarea').value"

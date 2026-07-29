@@ -27,8 +27,8 @@ function element(html: string): Element {
 
 describe("every binding", () => {
   const expected: [string, Action][] = [
-    ["j", "next-item"],
-    ["k", "previous-item"],
+    ["j", "next-row"],
+    ["k", "previous-row"],
     ["J", "next-lane"],
     ["K", "previous-lane"],
     [" ", "toggle"],
@@ -67,8 +67,8 @@ describe("every binding", () => {
   it("accepts arrow keys as an alias for j and k", () => {
     // A browser extension such as Vimium binds j/k globally and wins, so there
     // has to be a route to the cursor that no extension is likely to claim.
-    expect(resolveAction({ key: "ArrowDown" })).toBe("next-item");
-    expect(resolveAction({ key: "ArrowUp" })).toBe("previous-item");
+    expect(resolveAction({ key: "ArrowDown" })).toBe("next-row");
+    expect(resolveAction({ key: "ArrowUp" })).toBe("previous-row");
   });
 
   it("ignores browser and system shortcuts", () => {
@@ -134,7 +134,7 @@ describe("every binding", () => {
     for (const html of controls) {
       const control = element(html);
       expect(resolveAction({ key: " ", target: control })).toBe("toggle");
-      expect(resolveAction({ key: "j", target: control })).toBe("next-item");
+      expect(resolveAction({ key: "j", target: control })).toBe("next-row");
     }
   });
 
@@ -177,7 +177,7 @@ describe("while the human is typing", () => {
     const target = row.querySelector("p");
 
     expect(isTypingTarget(target)).toBe(false);
-    expect(resolveAction({ key: "j", target })).toBe("next-item");
+    expect(resolveAction({ key: "j", target })).toBe("next-row");
   });
 });
 
@@ -218,9 +218,9 @@ describe("shift with an arrow", () => {
   });
 
   it("leaves the unshifted arrows moving by item", () => {
-    expect(resolveAction({ key: "ArrowDown" })).toBe("next-item");
+    expect(resolveAction({ key: "ArrowDown" })).toBe("next-row");
     expect(resolveAction({ key: "ArrowUp", shiftKey: false })).toBe(
-      "previous-item",
+      "previous-row",
     );
   });
 

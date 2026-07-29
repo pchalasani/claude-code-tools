@@ -204,14 +204,24 @@ describe("finding what a sent message became", () => {
 });
 
 describe("the sign a page load carries over", () => {
-  it("retires a submission the page is now showing, and lands on it", () => {
+  it("updates the same pending turn when the queue stamps it", () => {
+    const pending = pendingFor(() => briefWith([]));
+    const token = pending.begin(sent("Why this way?", ""));
+    const note = pending.at(ITEM)[0];
+
+    pending.stamp(token, SENT_AT);
+
+    expect(pending.at(ITEM)[0]).toBe(note);
+    expect(note?.at).toBe(SENT_AT);
+  });
+
+  it("retires a submission the page is now showing", () => {
     saveSentRecords([sent("Why this way?")]);
     const brief = briefWith([["q-pending-1", [asked("Why this way?")]]]);
 
     const pending = pendingFor(() => brief);
 
     expect(pending.at(ITEM)).toEqual([]);
-    expect(pending.landing()).toBe(`${ITEM}#q-pending-1`);
   });
 
   it("keeps the sign up for a submission that has not appeared", () => {
@@ -222,7 +232,6 @@ describe("the sign a page load carries over", () => {
     expect(pending.at(ITEM)).toEqual([
       { rowId: ITEM, text: "Why this way?", at: SENT_AT, stalled: false },
     ]);
-    expect(pending.landing()).toBeNull();
   });
 
   it("has nothing to say when there is no document to match against", () => {
@@ -231,7 +240,6 @@ describe("the sign a page load carries over", () => {
     const pending = pendingFor();
 
     expect(pending.at(ITEM)).toHaveLength(1);
-    expect(pending.landing()).toBeNull();
   });
 
   it("writes back exactly what it is still waiting on", () => {

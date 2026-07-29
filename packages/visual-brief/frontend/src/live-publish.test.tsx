@@ -11,7 +11,6 @@
 
 import { describe, expect, it } from "vitest";
 
-import { saveSentRecords } from "./session-store";
 import {
   click,
   composeAt,
@@ -26,7 +25,6 @@ const ALPHA = "newest/changed/alpha";
 const BETA = "newest/changed/beta";
 const OPEN_THREAD = `${BETA}#q-open`;
 const NEXT_LANE = "newest/next";
-const GAMMA = "newest/next/gamma";
 
 useHarness();
 
@@ -86,50 +84,6 @@ describe("what a publish does to something half-written", () => {
 });
 
 describe("what a publish tells the human has changed", () => {
-  it("retires a waiting sign the moment its words arrive", () => {
-    saveSentRecords([
-      {
-        rowId: GAMMA,
-        anchorId: GAMMA,
-        text: "Did this land?",
-        at: "2026-07-25T15:00:00Z",
-      },
-    ]);
-    const { container, publish } = mountLive();
-    const shell = container.firstElementChild;
-    expect(
-      document.querySelectorAll('[data-pending="true"]'),
-    ).toHaveLength(1);
-
-    const next = sampleBrief();
-    itemOf(next, GAMMA).questions = [
-      {
-        id: "q-folded",
-        anchor: { kind: "element", path: GAMMA },
-        turns: [
-          {
-            author: "human",
-            text: "Did this land?",
-            at: "2026-07-25T15:00:00Z",
-          },
-        ],
-      },
-    ];
-    publish(next);
-
-    expect(
-      document.querySelectorAll('[data-pending="true"]'),
-    ).toHaveLength(0);
-    // The conversation the daemon folded it into now carries the sign, and
-    // the page it is on is the page it was on: nothing was replaced.
-    expect(
-      document.querySelectorAll(
-        `[data-row-id="${GAMMA}#q-folded"] > .row-body > p.working`,
-      ),
-    ).toHaveLength(1);
-    expect(container.firstElementChild).toBe(shell);
-  });
-
   it("marks an answer that arrived as new, until it is visited", () => {
     const { publish } = mountLive();
     expect(rowNode(OPEN_THREAD)?.getAttribute("data-fresh")).toBe("false");

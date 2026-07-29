@@ -1,5 +1,4 @@
 import { For, type JSX } from "solid-js";
-
 import { humanAge } from "./age";
 import {
   ComposeBox,
@@ -20,13 +19,6 @@ import { Markdown } from "./markdown-view";
 import { RowShell, VisibleRow } from "./row-shell";
 import type { BriefState } from "./state";
 import { ThreadView } from "./thread-view";
-
-/**
- * One published update, holding its lanes.
- *
- * @param props - The update, its row and the page state.
- * @returns The rendered update.
- */
 export function UpdateView(props: {
   state: BriefState;
   row: Row;
@@ -67,13 +59,6 @@ export function UpdateView(props: {
     </RowShell>
   );
 }
-
-/**
- * One lane of an update, holding its items and its own conversations.
- *
- * @param props - The lane, its row and the page state.
- * @returns The rendered lane.
- */
 export function LaneView(props: {
   state: BriefState;
   row: Row;
@@ -101,14 +86,6 @@ export function LaneView(props: {
         />
       }
     >
-      {/*
-        A conversation about the lane sits with the lane, directly under its
-        head and above its items. Down at the bottom of a long lane it was
-        nowhere near the thing it was about, and the chat box opened there
-        too — the human clicked a control on the header and had to go looking
-        for the box. The outline lists these rows in this same order, because
-        the two are one list.
-      */}
       <For each={orderedThreads(props.lane.questions)}>
         {(thread) => (
           <VisibleRow

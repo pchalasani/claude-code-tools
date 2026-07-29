@@ -301,6 +301,17 @@ def test_the_waiting_rail_stands_beside_the_working_sign(
     browser.compose_at(ITEM)
     browser.send(question)
     browser.read_until(landing_at(ITEM), lambda seen: seen["note"] is not None)
+    pending_rails = browser.evaluate(
+        """
+        Object.fromEntries(
+          [...document.querySelectorAll("[data-waiting]")]
+            .map((row) => [row.dataset.rowId, row.dataset.waiting]),
+        )
+        """
+    )
+    assert pending_rails[ITEM] == "direct", pending_rails
+    assert pending_rails["current-update/what-changed"] == "contained"
+    assert pending_rails["current-update"] == "contained"
 
     _fold_question_into_content(
         browser, thread_id, question, browser.server.stamps[0]
@@ -376,6 +387,7 @@ def test_newest_conversation_is_painted_first(browser: Browser) -> None:
     browser.data["title"] = "Two conversations in append order"
     browser.publish()
     browser.wait_for_title("Two conversations in append order")
+    browser.click_row(ITEM)
 
     painted = browser.evaluate(
         f"""

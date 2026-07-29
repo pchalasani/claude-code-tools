@@ -7,7 +7,6 @@ import {
   onMount,
   type JSX,
 } from "solid-js";
-
 import {
   TRUST_LABELS,
   TRUST_ORDER,
@@ -19,38 +18,23 @@ import { orderedUpdates } from "./outline";
 import { HelpOverlay, KeyBar, SearchOverlay } from "./overlays";
 import { onPollCycle } from "./reload";
 import { VisibleRow } from "./row-shell";
+import { Markdown } from "./markdown-view";
 import { createBriefState, type BriefState } from "./state";
 import { StructureMap } from "./structure-map";
 import { UpdateView } from "./update-view";
-
-/**
- * The briefing surface.
- *
- * @param props - The delivered document, which a publish may replace under
- *     the running page.
- * @returns The rendered page.
- */
 export function App(props: { brief: BriefDocument }): JSX.Element {
   const state = createBriefState(() => props.brief);
   const [now, setNow] = createSignal(Date.now());
   const onKey = (event: KeyboardEvent): void => state.handleKey(event);
   let stopWatching: (() => void) | null = null;
   let ageTimer: number | null = null;
-  // The tab's own name for this run follows the document rather than the page
-  // it was served in: a patched page whose title still said what it said an
-  // hour ago would be lying in the one place the human cannot expand.
   createEffect(() => {
     document.title = props.brief.title;
   });
   onMount(() => {
     document.addEventListener("keydown", onKey);
-    // A message that never appears has to stop claiming progress eventually,
-    // and "eventually" is counted in polls rather than in seconds: the page
-    // is only ever wrong about this when the daemon has gone quiet.
     stopWatching = onPollCycle(() => state.pending.tick());
     ageTimer = window.setInterval(() => setNow(Date.now()), 30_000);
-    // A load that followed the human's own message opens on that message.
-    state.nav.revealAnchor();
   });
   onCleanup(() => {
     document.removeEventListener("keydown", onKey);
@@ -85,22 +69,17 @@ export function App(props: { brief: BriefDocument }): JSX.Element {
     </div>
   );
 }
-
-/**
- * The page's own heading: what this is, how big it is, what is outstanding.
- *
- * @param props - The page state.
- * @returns The rendered masthead.
- */
 function Masthead(props: { state: BriefState }): JSX.Element {
   const shape = createMemo(() => describeShape(props.state.brief));
   const awaiting = () => props.state.nav.awaitingCount();
-  const chats = () => props.state.nav.chatCount();
+  const chats = () => props.state.nav.outstandingCount();
   return (
     <header class="masthead">
       <p class="eyebrow">Session briefing</p>
       <h1 class="brief-title">{props.state.brief.title}</h1>
-      <p class="brief-summary">{props.state.brief.summary}</p>
+      <div class="brief-summary">
+        <Markdown text={props.state.brief.summary} />
+      </div>
       <div class="meta">
         <span class="meta-count" data-count="updates">
           <b>{shape().updates}</b> updates
@@ -119,11 +98,6 @@ function Masthead(props: { state: BriefState }): JSX.Element {
         >
           <b>{awaiting()}</b> unanswered
         </button>
-        {/*
-          The human's own conversations, answered or not. Nothing else on the
-          page collects them: folded away they are invisible, and the awaiting
-          count deliberately skips the ones already answered.
-        */}
         <button
           type="button"
           class="meta-count meta-chats"
@@ -131,7 +105,7 @@ function Masthead(props: { state: BriefState }): JSX.Element {
           aria-pressed={props.state.nav.chats()}
           onClick={() => props.state.run("chats")}
         >
-          <b>{chats()}</b> my chats
+          <b>{chats()}</b> chats
         </button>
       </div>
       <KeyBar state={props.state} />
@@ -148,16 +122,6 @@ function Masthead(props: { state: BriefState }): JSX.Element {
     </header>
   );
 }
-
-/**
- * Let a click anywhere in a row move the cursor to that row.
- *
- * The mouse and the keyboard drive one selection: whatever the human clicks,
- * the nearest row containing it becomes the cursor.
- *
- * @param state - The page state.
- * @param event - The click.
- */
 function selectFromClick(state: BriefState, event: MouseEvent): void {
   const target = event.target;
   if (!(target instanceof Element)) {

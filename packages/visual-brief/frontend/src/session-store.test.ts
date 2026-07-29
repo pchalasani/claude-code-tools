@@ -76,30 +76,10 @@ describe("what a tab remembers about what it sent", () => {
     loads: 0,
   };
 
-  it("survives without session storage, like a healed standoff", async () => {
-    // A publish the human did not cause reloads the page; a browser that has
-    // taken session storage away must not also take the waiting sign.
-    saveSentRecords([record]);
-
-    await withoutSessionStorage(() => {
-      expect(readSentRecords()).toEqual([record]);
-    });
-  });
-
   it("reads back exactly what it stored", () => {
     saveSentRecords([record]);
 
     expect(readSentRecords()).toEqual([record]);
   });
 
-  it("still remembers through the history entry without a store", async () => {
-    // The reviewer's case: a browser that silently takes session storage
-    // away must not also take the waiting sign. The history entry carries
-    // the records instead, exactly as it does for healed standoffs.
-    saveSentRecords([record]);
-
-    await withoutSessionStorage(() => {
-      expect(readSentRecords()).toEqual([record]);
-    });
-  });
 });

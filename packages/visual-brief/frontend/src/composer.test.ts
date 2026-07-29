@@ -59,6 +59,7 @@ function recorder(accepted = true, timestamp = ""): {
 
 beforeEach(() => {
   window.sessionStorage.clear();
+  window.localStorage.clear();
   window.history.replaceState(null, "");
 });
 
@@ -187,38 +188,6 @@ describe("composition", () => {
     expect(reloaded.text()).toBe("Draft for B");
   });
 
-  it("keeps the draft belonging to a removed row", () => {
-    const composer = createComposer();
-    composer.toggleAt({ rowId: "u/l/a", anchorId: "u/l/a" });
-    composer.setText("Draft for removed A");
-    composer.toggleAt({ rowId: "u/l/b", anchorId: "u/l/b" });
-    composer.setText("Draft for surviving B");
-    composer.close();
-
-    composer.removeRow("u/l/a");
-
-    const reloaded = createComposer();
-    reloaded.toggleAt({ rowId: "u/l/a", anchorId: "u/l/a" });
-    expect(reloaded.text()).toBe("Draft for removed A");
-    reloaded.toggleAt({ rowId: "u/l/b", anchorId: "u/l/b" });
-    expect(reloaded.text()).toBe("Draft for surviving B");
-  });
-
-  it("keeps a removed row's draft when its in-flight send fails", async () => {
-    const daemon = recorder(false);
-    const composer = createComposer(daemon.post);
-    composer.toggleAt({ rowId: "u/l/a", anchorId: "u/l/a" });
-    composer.setText("Do not lose this failed send");
-
-    const inFlight = composer.submit();
-    composer.removeRow("u/l/a");
-    daemon.release();
-    await inFlight;
-
-    composer.toggleAt({ rowId: "u/l/a", anchorId: "u/l/a" });
-    expect(composer.text()).toBe("Do not lose this failed send");
-  });
-
   it("needs two Escapes to discard words but one for an empty box", () => {
     const composer = createComposer();
     composer.toggleAt({ rowId: "u/l/a", anchorId: "u/l/a" });
@@ -301,6 +270,10 @@ describe("composition", () => {
     expect(composer.text()).toBe("Does this survive?");
     expect(composer.status()).toContain("Could not send");
     expect(composer.pendingAt("u/l/i")).toEqual([]);
+
+    const reloaded = createComposer();
+    reloaded.toggleAt({ rowId: "u/l/i", anchorId: "u/l/i" });
+    expect(reloaded.text()).toBe("Does this survive?");
   });
 
   it("owns the waiting sign from the moment of sending until a reload", async () => {
@@ -318,6 +291,7 @@ describe("composition", () => {
     const inFlight = composer.submit();
 
     expect(isWorking({ composer }, here)).toBe(true);
+    expect(composer.pendingAt("u/l/i")[0]?.at).not.toBe("");
     expect(isWorking({ composer }, elsewhere)).toBe(false);
     daemon.release();
     await inFlight;

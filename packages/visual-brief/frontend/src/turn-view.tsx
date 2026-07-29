@@ -1,18 +1,6 @@
 import type { JSX } from "solid-js";
-
 import type { Turn } from "./document";
 import { Markdown } from "./markdown-view";
-
-/**
- * One human or agent turn, whether delivered or still awaiting its fold.
- *
- * A submitted human message uses this same rendering before and after it
- * appears in the document. The pending marker is data for reconciliation and
- * diagnostics, not a second visual treatment of the human's words.
- *
- * @param props - The turn and optional pending-state readings.
- * @returns The rendered turn.
- */
 export function TurnView(props: {
   turn: Turn;
   pending?: boolean;
