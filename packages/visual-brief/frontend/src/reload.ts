@@ -12,9 +12,8 @@
  *
  * A reload is still the answer to two situations, and only these two:
  *
- * - the served page carries a DIFFERENT front-end bundle. Only a reload loads
- *   code, and a document patched into a tab running last week's code leaves
- *   that tab running last week's code forever.
+ * - the served page carries a DIFFERENT front-end bundle or physical run.
+ *   Only a reload loads code and resets state owned by the loaded run.
  * - the page cannot be patched at all — no document endpoint, nothing
  *   readable, or an application that refused what it was given.
  *
@@ -52,6 +51,7 @@ import {
   type DocumentPayload,
 } from "./document-feed";
 import { pageAssets, pageVersion, pollInterval } from "./page-meta";
+import { runInstanceFromPage } from "./human-state";
 import { readHealedStandoff, rememberHealedStandoff } from "./session-store";
 
 /** Slowest the watch backs off to while the daemon is unreachable. */
@@ -71,6 +71,8 @@ export interface VersionWatch {
   current: string;
   /** Identity of the front-end bundle this page is running. */
   assets: string;
+  /** Identity of the physical run this page is showing. */
+  instance: string;
   /**
    * Read what the server would serve right now.
    *
@@ -104,6 +106,8 @@ export interface WatchSources {
   current: string;
   /** Identity of the front-end bundle the loaded page carries. */
   assets: string;
+  /** Identity of the physical run the loaded page carries. */
+  instance: string;
   /** How to ask the daemon what it would serve. */
   read: () => Promise<string | null>;
   /** How to fetch the document the daemon is serving. */
@@ -202,7 +206,8 @@ async function patchInPlace(watch: VersionWatch): Promise<boolean> {
   } catch {
     return false;
   }
-  if (payload === null || payload.assets !== watch.assets) {
+  if (payload === null || payload.assets !== watch.assets
+    || payload.instance !== watch.instance) {
     // Either the daemon cannot be understood, or what it is serving is built
     // from different code. Code arrives only by loading a page.
     return false;
@@ -301,6 +306,7 @@ export function healingWatch(sources: WatchSources): VersionWatch {
   const watch: VersionWatch = {
     current: sources.current,
     assets: sources.assets,
+    instance: sources.instance,
     read: sources.read,
     fetchPayload: sources.fetchPayload,
     apply: sources.apply,
@@ -361,6 +367,7 @@ export function startVersionWatch(
   const watch = healingWatch({
     current: pageVersion(root),
     assets: pageAssets(root),
+    instance: runInstanceFromPage(root),
     read: readServedVersion,
     fetchPayload: readServedDocument,
     apply,

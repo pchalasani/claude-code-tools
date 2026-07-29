@@ -36,10 +36,7 @@ export interface Composer {
   sendSignal: (rowId: string, anchorId: string, signal: string) => Promise<void>;
   signalStatus: (rowId: string) => string;
 }
-export async function postJson(
-  path: string,
-  payload: unknown,
-): Promise<PostReply> {
+export async function postJson(path: string, payload: unknown): Promise<PostReply> {
   const response = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -49,14 +46,14 @@ export async function postJson(
 }
 async function queuedTimestamp(response: Response): Promise<string> {
   try {
-    const body: unknown = JSON.parse(await response.text());
-    if (body !== null && typeof body === "object") {
-      const stamped = (body as Record<string, unknown>).timestamp;
-      return typeof stamped === "string" ? stamped : "";
-    }
+    const body: unknown = await response.json();
+    const stamped = body !== null && typeof body === "object"
+      ? (body as Record<string, unknown>).timestamp
+      : null;
+    return typeof stamped === "string" ? stamped : "";
   } catch {
+    return "";
   }
-  return "";
 }
 export function createComposer(
   post: Post = postJson,
@@ -139,7 +136,8 @@ export function createComposer(
       rowId: current.rowId,
       anchorId: current.anchorId,
       text: written,
-      at: new Date().toISOString(),
+      at: "",
+      displayAt: new Date().toISOString(),
     });
     setSendingRow(current.rowId);
     clearActive();

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import shutil
 import socket
 import threading
 from contextlib import contextmanager
@@ -131,6 +132,25 @@ def test_new_succeeds_when_git_is_unavailable(
         "meta.json",
         "questions.jsonl",
     }
+
+
+def test_recreated_explicit_run_gets_a_new_instance_id(tmp_path: Path) -> None:
+    """Give rapid reuse of one run id a collision-resistant identity."""
+    runs_root = tmp_path / "runs"
+    assert new_command(runs_root, "First", "same-run") == 0
+    first = json.loads(
+        (runs_root / "same-run" / "meta.json").read_text(encoding="utf-8")
+    )["instance_id"]
+
+    shutil.rmtree(runs_root / "same-run")
+    assert new_command(runs_root, "Second", "same-run") == 0
+    second = json.loads(
+        (runs_root / "same-run" / "meta.json").read_text(encoding="utf-8")
+    )["instance_id"]
+
+    assert len(first) == 32
+    assert len(second) == 32
+    assert first != second
 
 
 def test_new_prints_live_urls_for_selected_daemon_port(

@@ -299,6 +299,21 @@ describe("composition", () => {
     expect(isWorking({ composer }, here)).toBe(true);
   });
 
+  it("uses provisional time only for display when no queue stamp returns", async () => {
+    const daemon = recorder();
+    const composer = createComposer(daemon.post);
+    composer.toggleAt({ rowId: "u/l/i", anchorId: "u/l/i" });
+    composer.setText("Match these words without a stamp");
+
+    const inFlight = composer.submit();
+    const provisional = composer.pendingAt("u/l/i")[0]?.at;
+    daemon.release();
+    await inFlight;
+
+    expect(provisional).not.toBe("");
+    expect(composer.pendingAt("u/l/i")[0]?.at).toBe(provisional);
+  });
+
   it("reports one-click feedback against the anchor it belongs to", async () => {
     const daemon = recorder();
     daemon.release();

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Iterator
 
 import pytest
@@ -108,6 +109,59 @@ def _pending_presentation(row_id: str) -> str:
       }};
     }})()
     """
+
+
+def _record_submit_frames(question: str, answer: str, folded: str) -> str:
+    """Return a script recording each painted submit-lifecycle frame."""
+    return f"""
+    (() => {{
+      const question = {json.dumps(question)};
+      const answer = {json.dumps(answer)};
+      const rowIds = [{json.dumps(ITEM)}, {json.dumps(folded)}];
+      const frames = [];
+      let started = false;
+      const readFrame = () => {{
+        const humanTurns = [...document.querySelectorAll(".turn-human")]
+          .filter(
+            (turn) => turn.querySelector(".turn-text")?.textContent === question,
+          );
+        const humanRows = humanTurns.map(
+          (turn) => turn.closest("[data-row-id]")?.dataset.rowId ?? null,
+        );
+        const working = [...document.querySelectorAll("[data-row-id]")]
+          .filter((row) => rowIds.includes(row.dataset.rowId ?? ""))
+          .reduce(
+            (count, row) => count + row.querySelectorAll(
+              ":scope > .row-body > p.working",
+            ).length,
+            0,
+          );
+        const answers = [...document.querySelectorAll(
+          ".turn-agent .turn-text",
+        )].filter((turn) => turn.textContent === answer).length;
+        if (started || humanTurns.length > 0 || working > 0) {{
+          started = true;
+          frames.push({{
+            human: humanTurns.length,
+            humanRows,
+            working,
+            answers,
+          }});
+        }}
+        if (answers === 0) {{
+          requestAnimationFrame(readFrame);
+        }}
+      }};
+      window["__briefSubmitFrames"] = frames;
+      requestAnimationFrame(readFrame);
+      return true;
+    }})()
+    """
+
+
+def _submit_frames() -> str:
+    """Return a script reading the submit-lifecycle frame recording."""
+    return 'window["__briefSubmitFrames"] ?? []'
 
 
 def test_my_chats_keeps_search_and_counts_only_outstanding_chats(
@@ -260,6 +314,7 @@ def test_submit_keeps_one_human_turn_until_the_answer_replaces_working(
     thread_id = "q-steady-submit"
     folded = f"{ITEM}#{thread_id}"
     browser.compose_at(ITEM)
+    browser.evaluate(_record_submit_frames(question, answer, folded))
     browser.send(question)
     browser.read_until(landing_at(ITEM), lambda seen: seen["note"] is not None)
     pending = browser.evaluate(_pending_presentation(ITEM))
@@ -314,6 +369,10 @@ def test_submit_keeps_one_human_turn_until_the_answer_replaces_working(
         """,
         lambda seen: seen["answer"] == answer,
     )
+    frames = browser.read_until(
+        _submit_frames(),
+        lambda seen: bool(seen) and seen[-1]["answers"] == 1,
+    )
 
     steady = {
         "className": "turn turn-human",
@@ -325,3 +384,17 @@ def test_submit_keeps_one_human_turn_until_the_answer_replaces_working(
     assert pending == steady
     assert folded_in == steady
     assert answered == {"answer": answer, "working": 0}
+    assert frames
+    assert all(
+        frame["human"] == 1
+        and frame["working"] == 1
+        and frame["answers"] == 0
+        for frame in frames[:-1]
+    ), frames
+    assert frames[-1] == {
+        "human": 1,
+        "humanRows": [folded],
+        "working": 0,
+        "answers": 1,
+    }
+    assert {frame["humanRows"][0] for frame in frames} == {ITEM, folded}

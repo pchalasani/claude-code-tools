@@ -68,6 +68,21 @@ _CHATS_STATE = """
     })()
     """
 
+_HUMAN_STATE_STORAGE = """
+    (() => {
+      const parts = ["chosen", "cursor", "drafts", "seen"];
+      const keys = Object.keys(sessionStorage);
+      return Object.fromEntries(parts.map((part) => {
+        const key = keys.find(
+          (candidate) =>
+            candidate.startsWith("visual-brief-v2:")
+            && candidate.endsWith(":" + part),
+        );
+        return [part, key === undefined ? null : sessionStorage.getItem(key)];
+      }));
+    })()
+    """
+
 _HINT_STATE = """
     (() => {
       const rows = [...document.querySelectorAll("[data-row-id]")];
@@ -202,6 +217,11 @@ def test_the_chats_view_finds_conversations_folding_took_away(
     draft = "Keep these words through both pure filters."
     browser.press("E")
     browser.run("wait", "300")
+    browser.click_row(OTHER_AWAITING)
+    assert browser.evaluate(
+        f'document.querySelector(\'[data-row-id="{OTHER_AWAITING}"]\')'
+        '?.dataset.open'
+    ) == "false"
     browser.click_row(AWAITING_THREAD)
     browser.compose_at(AWAITING_THREAD)
     browser.run("fill", ".composer textarea", draft)
@@ -209,28 +229,35 @@ def test_the_chats_view_finds_conversations_folding_took_away(
         "document.querySelector('.composer textarea')?.blur(); true"
     )
 
-    browser.press("C")
-    browser.run("wait", "300")
-    assert browser.evaluate(_FOLD_STATE)["threads"] == 0
+    storage_before_filters = browser.evaluate(_HUMAN_STATE_STORAGE)
 
     browser.press("/")
     browser.run("fill", "#brief-search", "Cedar CLI 4.11.2")
     browser.evaluate("document.querySelector('#brief-search')?.blur(); true")
     before = browser.evaluate(_CHATS_STATE)
+    storage_in_search = browser.evaluate(_HUMAN_STATE_STORAGE)
 
     browser.press("m")
     browser.run("wait", "300")
     inside = browser.evaluate(_CHATS_STATE)
+    storage_in_chats = browser.evaluate(_HUMAN_STATE_STORAGE)
 
     browser.press("Escape")
     browser.run("wait", "300")
     outside = browser.evaluate(_CHATS_STATE)
+    storage_back_in_search = browser.evaluate(_HUMAN_STATE_STORAGE)
 
     browser.press("Escape")
+    browser.run("wait", "300")
+    storage_after_filters = browser.evaluate(_HUMAN_STATE_STORAGE)
     browser.press("E")
     browser.run("wait", "300")
     restored = browser.evaluate(_CHATS_STATE)
 
+    assert storage_in_search == storage_before_filters
+    assert storage_in_chats == storage_before_filters
+    assert storage_back_in_search == storage_before_filters
+    assert storage_after_filters == storage_before_filters
     assert before["cursor"] is None, before
     assert before["query"] == "Cedar CLI 4.11.2", before
     assert before["composer"] is None, before

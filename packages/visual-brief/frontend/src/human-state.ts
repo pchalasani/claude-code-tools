@@ -4,6 +4,7 @@ export type ChosenMap = Record<string, boolean>;
 export type DraftMap = Record<string, string>;
 export type SeenMap = Record<string, string>;
 export type HumanStoragePart = "chosen" | "cursor" | "drafts" | "seen";
+type MaybeDoc = Document | undefined;
 // `<run>.localhost` and `/r/<run>` are different origins. Browser storage
 // cannot share these keys between the two serving modes.
 export const HUMAN_STORAGE_PREFIX = "visual-brief-v2";
@@ -34,14 +35,14 @@ export function runIdFromLocation(): string {
     : "";
 }
 export function humanStorageKey(
-  part: HumanStoragePart,
+  part: HumanStoragePart | "sent" | "healed",
   runId: string = runIdFromLocation(),
 ): string {
-  return `${HUMAN_STORAGE_PREFIX}:${runId}:${part}`;
+  const instance = runInstanceFromPage();
+  const namespace = [HUMAN_STORAGE_PREFIX, runId, instance].filter(Boolean);
+  return `${namespace.join(":")}:${part}`;
 }
-export function createHumanState(
-  runId: string = runIdFromLocation(),
-): HumanState {
+export function createHumanState(runId = runIdFromLocation()): HumanState {
   const chosenKey = humanStorageKey("chosen", runId);
   const cursorKey = humanStorageKey("cursor", runId);
   const draftsKey = humanStorageKey("drafts", runId);
@@ -104,6 +105,10 @@ export function createHumanState(
       write(sessionStore(), seenKey, JSON.stringify({ ...seen }));
     },
   };
+}
+export function runInstanceFromPage(root: MaybeDoc = globalThis.document): string {
+  const selector = 'meta[name="visual-brief-run-instance"]';
+  return root?.querySelector<HTMLMetaElement>(selector)?.content ?? "";
 }
 function readRecord<T extends string | boolean>(
   primary: Storage | null,

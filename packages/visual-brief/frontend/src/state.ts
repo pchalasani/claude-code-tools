@@ -1,4 +1,4 @@
-import type { Accessor } from "solid-js";
+import { createEffect, type Accessor } from "solid-js";
 import {
   createComposer,
   postJson,
@@ -34,34 +34,35 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
   const pending = createPending(brief);
   const nav = createNavigation(brief, human);
   const composer = createComposer(postJson, () => undefined, pending, human);
+  createEffect(() => {
+    const id = composer.target()?.rowId;
+    const absent = id !== undefined && nav.row(id) === undefined;
+    const folded = id !== undefined && !nav.chats() && nav.query() === ""
+      && !nav.painted().some((row) => row.id === id);
+    if (absent || folded) composer.close();
+  });
   const hints = createHints({
     rows: nav.painted,
     select: (id) => nav.select(id),
   });
   const composeAt = (row: Row): void => {
-    const target: ComposeTarget =
-      row.kind === "thread" && row.parentThreadId !== undefined
-        ? {
-          rowId: row.id,
-          anchorId: row.anchorId,
-          parentId: row.parentThreadId,
-        }
-        : { rowId: row.id, anchorId: row.anchorId };
+    const target: ComposeTarget = {
+      rowId: row.id,
+      anchorId: row.anchorId,
+      ...(row.kind === "thread" && row.parentThreadId !== undefined
+        ? { parentId: row.parentThreadId } : {}),
+    };
     const alreadyOpen = composer.isOpenAt(row.id);
     const alreadyUnfolded = nav.isOpen(row.id);
     for (const id of [...ancestorIds(row.id)].reverse()) {
-      if (!nav.isOpen(id)) {
-        nav.setOpen(id, true);
-      }
+      if (!nav.isOpen(id)) nav.setOpen(id, true);
     }
     nav.setOpen(row.id, true);
     if (!alreadyOpen || alreadyUnfolded) {
       composer.toggleAt(target);
     }
     nav.select(row.id, { scroll: false });
-    if (composer.isOpenAt(row.id)) {
-      focusLater(".composer textarea");
-    }
+    if (composer.isOpenAt(row.id)) focusLater(".composer textarea");
   };
   const composeAtCursor = (): void => {
     const selected = human.cursor();
@@ -69,9 +70,7 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
     const row = targeted?.rowId === selected && selected !== null
       ? nav.row(selected) ?? null
       : composeRow(nav.visible(), nav.currentId());
-    if (row !== null) {
-      composeAt(row);
-    }
+    if (row !== null) composeAt(row);
   };
   const closeOne = (): void => {
     if (nav.overlay() === "help") {

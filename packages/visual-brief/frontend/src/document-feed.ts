@@ -32,6 +32,8 @@ export interface DocumentPayload {
   generation: string;
   /** Identity of the front-end bundle that page carries. */
   assets: string;
+  /** Identity of the physical run that page carries. */
+  instance: string;
   /** The brief itself, exactly as that page embeds it. */
   document: BriefDocument;
 }
@@ -51,7 +53,7 @@ export function isGeneration(value: string): boolean {
  *
  * Nothing here re-validates the brief: Python owns validation, and by the time
  * a document is embedded in a page it has been through it. What is checked is
- * only that this is the answer to the question that was asked — the three
+ * only that this is the answer to the question that was asked — the four
  * fields, in the shapes the page acts on. Anything else is a daemon speaking a
  * language this page does not, which is a reason to reload rather than to
  * patch.
@@ -64,16 +66,10 @@ export function readDocumentPayload(value: unknown): DocumentPayload | null {
     return null;
   }
   const answer = value as Record<string, unknown>;
-  const { generation, assets, document } = answer;
-  if (typeof generation !== "string" || !isGeneration(generation)) {
-    return null;
-  }
-  if (typeof assets !== "string") {
-    return null;
-  }
-  if (document === null || typeof document !== "object") {
-    return null;
-  }
+  const { generation, assets, instance, document } = answer;
+  if (typeof generation !== "string" || !isGeneration(generation)) return null;
+  if (typeof assets !== "string" || typeof instance !== "string") return null;
+  if (document === null || typeof document !== "object") return null;
   const brief = document as Record<string, unknown>;
   if (
     typeof brief.title !== "string"
@@ -82,11 +78,7 @@ export function readDocumentPayload(value: unknown): DocumentPayload | null {
   ) {
     return null;
   }
-  return {
-    generation,
-    assets,
-    document: document as BriefDocument,
-  };
+  return { generation, assets, instance, document: document as BriefDocument };
 }
 
 /**

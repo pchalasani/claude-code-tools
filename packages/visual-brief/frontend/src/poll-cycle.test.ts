@@ -7,6 +7,7 @@ import { forgetStores, withoutSessionStorage } from "../test/storage";
 const HERE = "a".repeat(64);
 const THERE = "c".repeat(64);
 const BUNDLE = "b".repeat(64);
+const INSTANCE = "d".repeat(64);
 
 beforeEach(() => {
   forgetStores();
@@ -22,6 +23,7 @@ function payload(overrides: Record<string, unknown> = {}): unknown {
   return {
     generation: THERE,
     assets: BUNDLE,
+    instance: INSTANCE,
     document: { title: "A brief", summary: "A summary.", updates: [] },
     ...overrides,
   };
@@ -54,6 +56,7 @@ function watching(
   options: {
     current?: string;
     assets?: string;
+    instance?: string;
     fetchPayload?: () => Promise<unknown>;
     apply?: (document: BriefDocument) => void;
   } = {},
@@ -64,6 +67,7 @@ function watching(
   const watch = healingWatch({
     current: options.current ?? HERE,
     assets: options.assets ?? BUNDLE,
+    instance: options.instance ?? INSTANCE,
     read: served,
     fetchPayload: options.fetchPayload ?? (async () => payload()),
     apply:
@@ -128,6 +132,16 @@ describe("when a publish cannot be patched in", () => {
     // week's bundle leaves that page running last week's bundle for good.
     const driver = watching(async () => THERE, {
       fetchPayload: async () => payload({ assets: "f".repeat(64) }),
+    });
+
+    expect(await pollOnce(driver.watch)).toBe("reload");
+    expect(driver.applied()).toEqual([]);
+    expect(driver.reloads()).toBe(1);
+  });
+
+  it("reloads for a different physical run, and shows nothing", async () => {
+    const driver = watching(async () => THERE, {
+      fetchPayload: async () => payload({ instance: "e".repeat(64) }),
     });
 
     expect(await pollOnce(driver.watch)).toBe("reload");

@@ -343,6 +343,36 @@ def test_a_publish_preserves_the_readers_fold_map(browser: Browser) -> None:
     assert after == before
 
 
+def test_a_live_patch_preserves_unchanged_row_node_identity(
+    browser: Browser,
+) -> None:
+    """Keep an unchanged row's exact DOM node through an unrelated patch."""
+    stored = browser.evaluate(
+        f"""
+        (() => {{
+          window.__unchangedRow = document.querySelector(
+            '[data-row-id="{ITEM}"]',
+          );
+          return window.__unchangedRow !== null;
+        }})()
+        """
+    )
+
+    browser.data["title"] = "Published without changing the stored row"
+    browser.publish()
+    browser.wait_for_title("Published without changing the stored row")
+    same_node = browser.evaluate(
+        f"""
+        (() => window.__unchangedRow?.isSameNode(
+          document.querySelector('[data-row-id="{ITEM}"]'),
+        ) ?? false)()
+        """
+    )
+
+    assert stored is True
+    assert same_node is True
+
+
 def test_waiting_paints_one_direct_rail_and_quiet_container_rails(
     browser: Browser,
 ) -> None:

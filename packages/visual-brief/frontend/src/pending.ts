@@ -40,10 +40,7 @@ export function conversations(brief: BriefDocument): Located[] {
       for (const item of lane.items ?? []) {
         const itemPath = itemRowId(lanePath, item);
         for (const thread of item.questions ?? []) {
-          found.push({
-            id: threadRowId(itemPath, thread),
-            turns: thread.turns,
-          });
+          found.push({ id: threadRowId(itemPath, thread), turns: thread.turns });
         }
       }
     }
@@ -60,17 +57,16 @@ export function locateSubmissions(
   const found = conversations(brief);
   const claimed = new Set<string>();
   return records.map((record) => {
-    if (record.failed === true) {
-      return null;
-    }
+    if (record.failed === true) return null;
+    let earlier = record.at === "" ? record.after ?? 0 : 0;
     for (const thread of found) {
-      const position = thread.turns.findIndex(
-        (turn, index) =>
-          !claimed.has(turnKey(thread.id, index))
-          && turn.author === "human"
-          && turn.text === record.text
-          && (record.at === "" || turn.at === record.at),
-      );
+      if (!thread.id.startsWith(`${record.anchorId}#`)) continue;
+      const position = thread.turns.findIndex((turn, index) => {
+        if (turn.author !== "human" || turn.text !== record.text) return false;
+        if (record.at !== "" && turn.at !== record.at) return false;
+        if (earlier-- > 0) return false;
+        return !claimed.has(turnKey(thread.id, index));
+      });
       if (position !== -1) {
         claimed.add(turnKey(thread.id, position));
         return thread.id;
@@ -111,7 +107,7 @@ export function createPending(
     const view: PendingNote = {
       rowId: one.record.rowId,
       text: one.record.text,
-      get at(): string { held(); return one.record.at; },
+      get at(): string { held(); return one.record.displayAt ?? one.record.at; },
       get stalled(): boolean {
         return polls() - one.since >= STALL_POLLS;
       },
@@ -120,12 +116,20 @@ export function createPending(
     return view;
   };
   const begin = (sent: SentRecord): string => {
-    sequence += 1;
-    const token = `sent-${sequence}`;
-    setHeld((current) => [
-      ...current,
-      { token, record: { ...sent }, since: polls() },
-    ]);
+    const token = `sent-${sequence += 1}`;
+    const document = brief();
+    const turns = document === null ? [] : conversations(document)
+      .filter((thread) => thread.id.startsWith(`${sent.anchorId}#`))
+      .flatMap((thread) => thread.turns);
+    const after = turns.filter(
+      (turn) => turn.author === "human" && turn.text === sent.text,
+    ).length + live().filter(
+      (one) => one.record.anchorId === sent.anchorId
+        && one.record.text === sent.text,
+    ).length;
+    setHeld((current) => [...current, {
+      token, record: { ...sent, after }, since: polls(),
+    }]);
     return token;
   };
   return {
@@ -136,16 +140,15 @@ export function createPending(
     within: (rowId) =>
       live().some((one) => one.record.failed !== true
         && ancestorIds(one.record.rowId).includes(rowId)),
-    add: (sent) => {
-      begin(sent);
-    },
+    add: (sent) => { begin(sent); },
     begin,
     stamp: (token, at) => {
       const waiting = held().find((one) => one.token === token);
       if (waiting === undefined) {
         return;
       }
-      waiting.record.at = at === "" ? waiting.record.at : at;
+      waiting.record.at = at;
+      if (at !== "") waiting.record.displayAt = at;
       setHeld((current) => [...current]);
     },
     fail: (token) => {

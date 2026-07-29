@@ -3,15 +3,16 @@
 Everything an open page is told about itself is read out of one page. The page
 is not ``index.html`` on disk — valid pending follow-ups are merged and the
 document is re-rendered — so a second source of truth written at publish time
-would omit those follow-ups and drift from the page under every race. One
-read, three answers taken from it: the generation, the bundle stamp and the
-embedded document cannot then disagree with what ``/`` is serving.
+would omit those follow-ups and drift from the page under every race. One read
+gives the generation, bundle, physical run identity and document, so they
+cannot disagree with what ``/`` is serving.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,10 @@ _DOCUMENT = re.compile(
     br"(.*?)</script>",
     re.DOTALL,
 )
+_HEAD_END = b"</head>"
+_RUN_INSTANCE = re.compile(
+    br'<meta name="visual-brief-run-instance" content="([0-9a-f]{64})">'
+)
 
 
 def read_served_page(run_dir: Path) -> bytes | None:
@@ -43,11 +48,13 @@ def read_served_page(run_dir: Path) -> bytes | None:
         return None
     pending = merge_pending_followups(run_dir)
     if pending is None:
-        return saved
-    try:
-        return render_content(pending).encode("utf-8")
-    except ValueError:
-        return saved
+        page = saved
+    else:
+        try:
+            page = render_content(pending).encode("utf-8")
+        except ValueError:
+            page = saved
+    return _with_run_instance(page, run_dir)
 
 
 def page_generation(page: bytes) -> bytes:
@@ -98,8 +105,8 @@ def page_payload(page: bytes) -> dict[str, Any] | None:
         page: A rendered page.
 
     Returns:
-        Its generation, bundle stamp and embedded document, or ``None`` when
-        the page carries no readable document.
+        Its generation, bundle stamp, physical run identity and document, or
+        ``None`` when the page carries no readable document.
     """
     document = page_document(page)
     if document is None:
@@ -107,8 +114,15 @@ def page_payload(page: bytes) -> dict[str, Any] | None:
     return {
         "generation": page_generation(page).decode("ascii"),
         "assets": page_assets(page).decode("ascii"),
+        "instance": page_instance(page),
         "document": document,
     }
+
+
+def page_instance(page: bytes) -> str:
+    """Return the physical run identity carried by a served page."""
+    match = _RUN_INSTANCE.search(page)
+    return match.group(1).decode("ascii") if match is not None else ""
 
 
 def read_served_generation(run_dir: Path) -> bytes | None:
@@ -145,3 +159,52 @@ def _contained_child(run_dir: Path, name: str) -> Path | None:
     if child == root or not child.is_relative_to(root):
         return None
     return child
+
+
+def _with_run_instance(page: bytes, run_dir: Path) -> bytes:
+    """Namespace a served page with its runs root and creation identity."""
+    if _RUN_INSTANCE.search(page) is not None:
+        return page
+    instance = _run_instance(run_dir)
+    head = page.find(_HEAD_END)
+    if instance is None or head < 0:
+        return page
+    tag = (
+        b'<meta name="visual-brief-run-instance" content="'
+        + instance.encode("ascii")
+        + b'">'
+    )
+    injected = page[:head] + tag + page[head:]
+    generation = _GENERATION.search(injected)
+    if generation is None:
+        return injected
+    template = (
+        injected[: generation.start(1)]
+        + (b"0" * 64)
+        + injected[generation.end(1) :]
+    )
+    digest = hashlib.sha256(template).hexdigest().encode("ascii")
+    return (
+        template[: generation.start(1)]
+        + digest
+        + template[generation.end(1) :]
+    )
+
+
+def _run_instance(run_dir: Path) -> str | None:
+    """Hash the normalized runs root together with the run creation identity."""
+    meta_path = _contained_child(run_dir, "meta.json")
+    if meta_path is None:
+        return None
+    try:
+        metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+        root = run_dir.resolve().parent
+    except (OSError, RuntimeError, json.JSONDecodeError):
+        return None
+    if not isinstance(metadata, dict):
+        return None
+    identity = metadata.get("instance_id", metadata.get("created_at"))
+    if not isinstance(identity, str) or not identity:
+        return None
+    material = os.fsencode(root) + b"\0" + identity.encode("utf-8")
+    return hashlib.sha256(material).hexdigest()

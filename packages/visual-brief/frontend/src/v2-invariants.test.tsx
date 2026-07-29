@@ -130,6 +130,22 @@ describe("pure views", () => {
       document.querySelector<HTMLTextAreaElement>(".composer textarea")?.value,
     ).toBe("Keep this hidden draft");
   });
+
+  it("closes a composer hidden by folding and preserves its draft", () => {
+    mount();
+    composeAt(ALPHA);
+    typeInto(".composer textarea", "Keep this folded draft");
+
+    document.querySelector<HTMLButtonElement>(
+      `[data-row-id="${ALPHA}"] > .row-head .row-toggle`,
+    )?.click();
+
+    expect(document.querySelector(".composer")).toBeNull();
+    composeAt(ALPHA);
+    expect(
+      document.querySelector<HTMLTextAreaElement>(".composer textarea")?.value,
+    ).toBe("Keep this folded draft");
+  });
 });
 
 describe("keyboard ownership", () => {

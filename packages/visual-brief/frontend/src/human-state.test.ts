@@ -9,6 +9,7 @@ const RUN = "run-42";
 
 beforeEach(() => {
   window.sessionStorage.clear();
+  document.head.innerHTML = "";
   Object.defineProperty(window, "localStorage", {
     configurable: true,
     value: memoryStorage(),
@@ -48,6 +49,30 @@ describe("v2 human state", () => {
     expect(humanStorageKey("seen", RUN)).toBe(
       "visual-brief-v2:run-42:seen",
     );
+  });
+
+  it("includes the served run instance in persistent keys", () => {
+    document.head.innerHTML = (
+      '<meta name="visual-brief-run-instance" content="root-and-creation">'
+    );
+
+    expect(humanStorageKey("drafts", RUN)).toBe(
+      "visual-brief-v2:run-42:root-and-creation:drafts",
+    );
+  });
+
+  it("does not restore drafts from another run instance", () => {
+    document.head.innerHTML = (
+      '<meta name="visual-brief-run-instance" content="first-instance">'
+    );
+    const first = createHumanState(RUN);
+    first.writeDraft("u/l", "Belongs only to the first run");
+    document.head.innerHTML = (
+      '<meta name="visual-brief-run-instance" content="second-instance">'
+    );
+
+    expect(createHumanState(RUN).drafts["u/l"])
+      .toBeUndefined();
   });
 
   it("starts empty and changes only through its human-action methods", () => {

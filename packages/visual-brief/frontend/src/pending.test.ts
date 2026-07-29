@@ -194,6 +194,26 @@ describe("finding what a sent message became", () => {
     expect(locateSubmissions(brief, [sent("Why this way?")])).toEqual([null]);
   });
 
+  it("matches only conversations at the submission anchor", () => {
+    const brief = briefWith([["q-right", [asked("Same words")]]]);
+    const lane = brief.updates[0]?.lanes[0];
+    lane?.items.push({
+      id: "other",
+      glance: "Another item",
+      explanation: "The same question can be asked here.",
+      trust: "verified-by-me",
+      questions: [{
+        id: "q-wrong",
+        anchor: { kind: "element", path: "u/l/other" },
+        turns: [asked("Same words")],
+      }],
+    });
+    lane?.items.reverse();
+    expect(locateSubmissions(brief, [sent("Same words")])).toEqual([
+      `${ITEM}#q-right`,
+    ]);
+  });
+
   it("refuses a match whose timestamp is somebody else's", () => {
     const brief = briefWith([
       ["q-other", [asked("Why this way?", "2026-07-27T08:00:00.000Z")]],
@@ -213,6 +233,23 @@ describe("the sign a page load carries over", () => {
 
     expect(pending.at(ITEM)[0]).toBe(note);
     expect(note?.at).toBe(SENT_AT);
+  });
+
+  it("keeps display time separate when the daemon reports no timestamp", () => {
+    const shownAt = "2026-07-27T08:59:59.000Z";
+    const pending = pendingFor(() => briefWith([]));
+    const token = pending.begin(
+      { ...sent("Why this way?", ""), displayAt: shownAt },
+    );
+    pending.stamp(token, "");
+    expect(pending.at(ITEM)[0]?.at).toBe(shownAt);
+    expect(readSentRecords()[0]).toMatchObject({ at: "", displayAt: shownAt });
+    expect(
+      locateSubmissions(
+        briefWith([["q-published", [asked("Why this way?", SENT_AT)]]]),
+        readSentRecords(),
+      ),
+    ).toEqual([`${ITEM}#q-published`]);
   });
 
   it("retires a submission the page is now showing", () => {
@@ -303,6 +340,37 @@ describe("a submission that keeps not appearing", () => {
 });
 
 describe("a submission that arrives without a page load", () => {
+  it("does not mistake an older identical turn for the new submission", () => {
+    const old = ["q-old", [asked("Same words")]] as [string, Turn[]];
+    const [brief, publish] = createSignal<BriefDocument>(briefWith([old]));
+    const pending = pendingFor(brief);
+    const token = pending.begin(
+      { ...sent("Same words", ""), displayAt: SENT_AT },
+    );
+    pending.stamp(token, "");
+    expect(pending.at(ITEM)).toHaveLength(1);
+    publish(briefWith([
+      old,
+      ["q-new", [asked("Same words", "2026-07-27T09:05:00.000Z")]],
+    ]));
+    expect(pending.at(ITEM)).toHaveLength(0);
+  });
+
+  it("keeps the later of two identical unstamped submissions after reload", () => {
+    const [brief, publish] = createSignal<BriefDocument>(briefWith([]));
+    const pending = pendingFor(brief);
+    const record = { ...sent("Same words", ""), displayAt: SENT_AT };
+    const first = pending.begin(record);
+    pending.stamp(first, "");
+    const second = pending.begin(record);
+    pending.stamp(second, "");
+    publish(briefWith([["q-first", [asked("Same words")]]]));
+    expect(pending.at(ITEM)).toHaveLength(1);
+    expect(readSentRecords()[0]?.after).toBe(1);
+    const restored = pendingFor(brief);
+    expect(restored.at(ITEM)).toHaveLength(1);
+  });
+
   it("retires the moment its words appear in the document", () => {
     saveSentRecords([sent("Why this way?")]);
     const [brief, publish] = createSignal<BriefDocument>(briefWith([]));

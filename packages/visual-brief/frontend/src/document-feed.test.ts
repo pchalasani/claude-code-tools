@@ -44,6 +44,7 @@ function payload(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
     generation: "a".repeat(64),
     assets: "b".repeat(64),
+    instance: "c".repeat(64),
     document: { title: "A brief", summary: "A summary.", updates: [] },
     ...overrides,
   });
@@ -131,6 +132,7 @@ describe("what a document payload has to look like", () => {
 
     expect(read).not.toBeNull();
     expect(read?.assets).toBe("b".repeat(64));
+    expect(read?.instance).toBe("c".repeat(64));
     expect(read?.document.title).toBe("A brief");
   });
 
@@ -155,6 +157,13 @@ describe("what a document payload has to look like", () => {
     // page cannot act on.
     const anonymous = JSON.parse(payload()) as Record<string, unknown>;
     delete anonymous.assets;
+
+    expect(readDocumentPayload(anonymous)).toBeNull();
+  });
+
+  it("refuses a payload that says nothing about the physical run", () => {
+    const anonymous = JSON.parse(payload()) as Record<string, unknown>;
+    delete anonymous.instance;
 
     expect(readDocumentPayload(anonymous)).toBeNull();
   });

@@ -1,20 +1,18 @@
-import { HUMAN_STORAGE_PREFIX, runIdFromLocation } from "./human-state";
+import { humanStorageKey } from "./human-state";
 export interface SentRecord {
   rowId: string;
   anchorId: string;
   text: string;
   at: string;
+  displayAt?: string;
+  after?: number;
   failed?: boolean;
 }
 const HISTORY_NAMESPACE = "visual-brief-v2";
-function key(part: "sent" | "healed"): string {
-  return `${HUMAN_STORAGE_PREFIX}:${runIdFromLocation()}:${part}`;
-}
-export function sentStorageKey(): string { return key("sent"); }
-export function healedStorageKey(): string { return key("healed"); }
+export function sentStorageKey(): string { return humanStorageKey("sent"); }
+export function healedStorageKey(): string { return humanStorageKey("healed"); }
 export function readSentRecords(): SentRecord[] {
-  const storageKey = sentStorageKey();
-  const raw = readSession(storageKey);
+  const raw = readSession(sentStorageKey());
   if (raw === null || raw === "") {
     return [];
   }
@@ -26,9 +24,7 @@ export function readSentRecords(): SentRecord[] {
   }
 }
 export function saveSentRecords(records: SentRecord[]): void {
-  const storageKey = sentStorageKey();
-  const value = JSON.stringify(records);
-  writeSession(storageKey, value);
+  writeSession(sentStorageKey(), JSON.stringify(records));
 }
 export function readHealedStandoff(): string | null {
   const storageKey = healedStorageKey();
@@ -49,6 +45,10 @@ function isSentRecord(value: unknown): value is SentRecord {
     && typeof record.anchorId === "string"
     && typeof record.text === "string"
     && typeof record.at === "string"
+    && (record.displayAt === undefined || typeof record.displayAt === "string")
+    && (record.after === undefined || (
+      Number.isSafeInteger(record.after) && Number(record.after) >= 0
+    ))
     && (record.failed === undefined || typeof record.failed === "boolean")
   );
 }

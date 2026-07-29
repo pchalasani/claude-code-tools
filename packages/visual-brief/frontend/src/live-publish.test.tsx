@@ -57,6 +57,8 @@ describe("what a publish does to something half-written", () => {
     publish(next);
 
     expect(document.querySelector(".composer")).toBeNull();
+    publish(sampleBrief());
+    expect(document.querySelector(".composer")).toBeNull();
   });
 
   it("restores a removed row's draft if its id returns", () => {

@@ -10,6 +10,7 @@ import { forgetStores, withoutSessionStorage } from "../test/storage";
 
 beforeEach(() => {
   forgetStores();
+  document.head.innerHTML = "";
 });
 
 describe("what a tab remembers about reloading itself", () => {
@@ -82,4 +83,15 @@ describe("what a tab remembers about what it sent", () => {
     expect(readSentRecords()).toEqual([record]);
   });
 
+  it("does not restore submissions from another run instance", () => {
+    document.head.innerHTML = (
+      '<meta name="visual-brief-run-instance" content="first-instance">'
+    );
+    saveSentRecords([record]);
+    document.head.innerHTML = (
+      '<meta name="visual-brief-run-instance" content="second-instance">'
+    );
+
+    expect(readSentRecords()).toEqual([]);
+  });
 });

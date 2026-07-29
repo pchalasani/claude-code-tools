@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import http.client
 import json
+import re
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -91,6 +92,34 @@ def _request(
     status = response.status
     connection.close()
     return status, response_body
+
+
+def test_served_run_instance_changes_with_root_and_creation(
+    tmp_path: Path,
+) -> None:
+    """Keep persistent browser state tied to one physical run instance."""
+    first = _make_run(tmp_path / "first")
+    second = _make_run(tmp_path / "second")
+    pattern = re.compile(
+        br'<meta name="visual-brief-run-instance" content="([0-9a-f]{64})">'
+    )
+
+    first_page = read_served_page(first)
+    second_page = read_served_page(second)
+    assert first_page is not None and second_page is not None
+    first_identity = pattern.search(first_page)
+    second_identity = pattern.search(second_page)
+    assert first_identity is not None and second_identity is not None
+    assert first_identity.group(1) != second_identity.group(1)
+
+    metadata = json.loads((first / "meta.json").read_text(encoding="utf-8"))
+    metadata["created_at"] = "2026-07-25T19:00:01Z"
+    (first / "meta.json").write_text(json.dumps(metadata), encoding="utf-8")
+    recreated = read_served_page(first)
+    assert recreated is not None
+    recreated_identity = pattern.search(recreated)
+    assert recreated_identity is not None
+    assert recreated_identity.group(1) != first_identity.group(1)
 
 
 @pytest.mark.parametrize(

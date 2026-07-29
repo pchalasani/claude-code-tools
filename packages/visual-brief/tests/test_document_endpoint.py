@@ -3,10 +3,10 @@
 An open page no longer replaces itself when the agent publishes: it fetches
 the new document as data and patches it in. That only holds together if what
 this endpoint answers and what ``/`` serves are the same thing, always — one
-read of one page, with the generation, the bundle stamp and the document taken
-out of it. These pin that, including the case a second source of truth would
-get wrong: a queued follow-up the daemon merges in memory and never writes to
-disk.
+read of one page, with the generation, bundle, physical run identity and
+document taken out of it. These pin that, including the case a second source
+of truth would get wrong: a queued follow-up the daemon merges in memory and
+never writes to disk.
 """
 
 from __future__ import annotations
@@ -56,6 +56,10 @@ def _make_run(root: Path) -> Path:
     (run / "content.json").write_text(json.dumps(content), encoding="utf-8")
     (run / "index.html").write_text(render_content(content), encoding="utf-8")
     (run / "questions.jsonl").write_bytes(b"")
+    (run / "meta.json").write_text(
+        json.dumps({"instance_id": "a" * 32}),
+        encoding="utf-8",
+    )
     return run
 
 
@@ -143,6 +147,11 @@ def test_the_document_and_the_page_are_one_read_of_one_page(
     answer = json.loads(payload)
     assert answer["generation"] == generation.decode("ascii")
     assert answer["document"] == embedded_document(page)
+    instance_meta = (
+        f'<meta name="visual-brief-run-instance" '
+        f'content="{answer["instance"]}">'
+    ).encode()
+    assert instance_meta in page
 
 
 def test_the_document_carries_the_bundle_the_page_is_running(

@@ -92,6 +92,7 @@ def _initialize_run(runs_root: Path, run_id: str, label: str) -> None:
         "cwd": str(cwd),
         "repo": _git_value(cwd, ["config", "--get", "remote.origin.url"]),
         "branch": _git_value(cwd, ["branch", "--show-current"]),
+        "instance_id": secrets.token_hex(16),
         "created_at": timestamp,
         "updated_at": timestamp,
     }
