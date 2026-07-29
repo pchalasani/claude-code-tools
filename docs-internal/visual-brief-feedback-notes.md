@@ -241,3 +241,14 @@ connection above, or through the package's own CDP harness in
     recognisable stub (the full text lives in the thread body anyway) so the
     row stays one tidy line. Ties into note 25's larger question of how thread
     rows are presented; small enough to fix before the overhaul if convenient.
+
+29. **`m` must reveal, not filter.** Requirement correction from the human,
+    superseding the my-chats *view*: pressing `m` should simply expand and
+    reveal every conversation of theirs in place — the rest of the page stays
+    exactly as it is; nothing disappears. No filter mode, no toggle state; a
+    second press need do nothing (or collapse only what it opened). Under the
+    v2 invariants this is a bulk human fold-action like E/C, writing `chosen`,
+    which also deletes the last filter-view machinery. The active-search
+    interaction stops existing because the mode stops existing. (The human has
+    never used search; the search-preservation clauses only ever mattered
+    because `m` was a filter.)
