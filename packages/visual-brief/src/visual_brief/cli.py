@@ -34,6 +34,7 @@ from visual_brief.writes import (
     report_lint,
     resolve_run,
 )
+from visual_brief.writes.runfiles import write_transaction
 
 DEFAULT_RUNS_ROOT = Path("~/.claude/visual-brief/runs/")
 
@@ -232,8 +233,9 @@ def render_command(runs_root: Path, run_id: str) -> int:
         CliError: If the run is unknown, unreadable, or invalid.
     """
     _, run_dir = resolve_run(runs_root, run_id)
-    data = read_content(run_dir)
-    index_path = publish_render(run_dir, data)
+    with write_transaction(run_dir):
+        data = read_content(run_dir)
+        index_path = publish_render(run_dir, data)
     print(index_path)
     report_lint(run_dir, data)
     return 0

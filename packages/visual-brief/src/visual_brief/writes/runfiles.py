@@ -9,13 +9,15 @@ directory. A crash therefore leaves the previous valid pair in place.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import stat
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from visual_brief.render import render_content
 from visual_brief.server.registry import (
@@ -28,6 +30,32 @@ from visual_brief.writes.queue_view import question_lists
 
 class CliError(Exception):
     """A concise user-facing command error."""
+
+
+@contextmanager
+def write_transaction(run_dir: Path) -> Iterator[None]:
+    """Serialize one run's complete read-modify-write transaction.
+
+    Args:
+        run_dir: The run directory whose content will be changed.
+
+    Yields:
+        Control while this process holds the run's exclusive write lock.
+
+    Raises:
+        CliError: If the per-run lock cannot be opened or acquired.
+    """
+    lock_path = run_output_file(run_dir, ".write.lock")
+    try:
+        lock_file = lock_path.open("a", encoding="utf-8")
+    except OSError as error:
+        raise CliError(f"cannot open run write lock: {error}") from error
+    with lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        except OSError as error:
+            raise CliError(f"cannot acquire run write lock: {error}") from error
+        yield
 
 
 def resolve_run(runs_root: Path, run_id: str | None) -> tuple[str, Path]:

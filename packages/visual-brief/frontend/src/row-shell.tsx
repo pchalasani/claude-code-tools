@@ -21,6 +21,8 @@ export function RowShell(props: {
   row: Row;
   /** Content of the clickable head line. */
   head: JSX.Element;
+  /** Keep rich head content beside, rather than inside, its disclosure. */
+  separateHead?: boolean;
   /** Controls shown at the right of the head line. */
   actions?: JSX.Element;
   /** Content revealed when the row is expanded. */
@@ -29,6 +31,7 @@ export function RowShell(props: {
   const isCursor = () => props.state.nav.isCursor(props.row.id);
   const isOpen = () => props.state.nav.isOpen(props.row.id);
   const bodyId = () => `body:${props.row.id}`;
+  const waitingId = () => `waiting:${props.row.id}`;
   const hint = () => props.state.hints.labelFor(props.row.id);
   const ordinal = () => props.state.nav.ordinal(props.row.id);
   const waiting = (): "direct" | "contained" | undefined => {
@@ -39,6 +42,14 @@ export function RowShell(props: {
       return "direct";
     }
     return props.row.awaiting ? "contained" : undefined;
+  };
+  const waitingDescription = (): string | undefined => {
+    if (waiting() === "direct") {
+      return "Waiting for an agent answer.";
+    }
+    return waiting() === "contained"
+      ? "Contains a conversation waiting for an agent answer."
+      : undefined;
   };
   return (
     <article
@@ -87,13 +98,27 @@ export function RowShell(props: {
           class="row-toggle"
           aria-expanded={isOpen()}
           aria-controls={bodyId()}
+          aria-label={
+            props.separateHead ? `Toggle ${props.row.label}` : undefined
+          }
+          aria-describedby={waiting() === undefined ? undefined : waitingId()}
           onClick={() => props.state.nav.toggle(props.row.id)}
         >
           <span class="row-fold" aria-hidden="true">
             {isOpen() ? "▾" : "▸"}
           </span>
-          {props.head}
+          <Show when={!props.separateHead}>{props.head}</Show>
         </button>
+        <Show when={props.separateHead}>
+          <div class="row-static-head">{props.head}</div>
+        </Show>
+        <Show when={waitingDescription()}>
+          {(description) => (
+            <span id={waitingId()} class="visually-hidden">
+              {description()}
+            </span>
+          )}
+        </Show>
         <Show when={ordinal() !== null}>
           {/*
             A number to say "item 12" by, and nothing more: it is not a key,

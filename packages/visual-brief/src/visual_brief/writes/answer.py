@@ -21,6 +21,7 @@ from visual_brief.writes.runfiles import (
     resolve_run,
     save_document,
     utc_timestamp,
+    write_transaction,
 )
 
 
@@ -49,17 +50,18 @@ def answer_command(
     answer = text.strip()
     if not answer:
         raise CliError("the answer text must not be empty")
-    document, legacy = read_for_write(run_dir)
-    view = document_view(document, legacy.undated)
-    thread = view.threads.get(thread_id)
-    if thread is None:
-        raise CliError(_unknown_thread(run_dir, thread_id))
-    at = utc_timestamp(milliseconds=True)
-    _require_clock_after(thread, at, thread_id)
-    thread["turns"].append({"author": "agent", "text": answer, "at": at})
-    settle_legacy_pairs(run_dir, document, legacy)
-    index_path = save_document(run_dir, document)
-    anchor = view.thread_anchors.get(thread_id, "")
+    with write_transaction(run_dir):
+        document, legacy = read_for_write(run_dir)
+        view = document_view(document, legacy.undated)
+        thread = view.threads.get(thread_id)
+        if thread is None:
+            raise CliError(_unknown_thread(run_dir, thread_id))
+        at = utc_timestamp(milliseconds=True)
+        _require_clock_after(thread, at, thread_id)
+        thread["turns"].append({"author": "agent", "text": answer, "at": at})
+        settle_legacy_pairs(run_dir, document, legacy)
+        index_path = save_document(run_dir, document)
+        anchor = view.thread_anchors.get(thread_id, "")
     print(f"answer: appended to {thread_id} at {anchor}; rendered {index_path}")
     report_lint(run_dir, document)
     return 0

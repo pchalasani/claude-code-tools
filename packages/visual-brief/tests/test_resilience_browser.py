@@ -153,6 +153,36 @@ def browser() -> Iterator[Browser]:
         yield driver
 
 
+def test_a_folded_older_update_names_the_waiting_work_accessibly(
+    browser: Browser,
+) -> None:
+    """The quiet contained rail has a non-colour description."""
+    described = browser.evaluate(
+        """
+        (() => {
+          const row = document.querySelector(
+            '[data-row-id="review-round-four"]',
+          );
+          const toggle = row.querySelector(":scope > .row-head .row-toggle");
+          const description = document.getElementById(
+            toggle.getAttribute("aria-describedby"),
+          );
+          return {
+            open: row.dataset.open,
+            waiting: row.dataset.waiting,
+            description: description?.textContent ?? null,
+          };
+        })()
+        """
+    )
+
+    assert described == {
+        "open": "false",
+        "waiting": "contained",
+        "description": "Contains a conversation waiting for an agent answer.",
+    }
+
+
 def test_the_waiting_sign_clears_when_those_words_appear_on_the_page(
     browser: Browser,
 ) -> None:

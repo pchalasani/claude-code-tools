@@ -15,13 +15,20 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Iterator
+from typing import Any, Iterator
 
 import pytest
 
-from browser_support import Browser, browser_session, landing_at
+from browser_support import (
+    AWAITING_THREAD,
+    Browser,
+    browser_session,
+    landing_at,
+)
+from cdp import DevToolsPage, page_socket_url
 
 ITEM = "current-update/what-changed/differential-reader-check"
+OLDER_UPDATE = "review-round-four"
 
 
 def _working_at(row_id: str) -> str:
@@ -131,6 +138,40 @@ def _fold_question_into_content(
             "turns": [{"author": "human", "text": text, "at": at}],
         }
     )
+
+
+def _accessible_toggle(browser: Browser, row_id: str) -> dict[str, Any]:
+    """Read one disclosure from Chrome's accessibility tree.
+
+    Args:
+        browser: The open real browser.
+        row_id: Identifier of the row whose disclosure to inspect.
+
+    Returns:
+        Chrome's accessible node for the row's disclosure button.
+    """
+    selector = f'[data-row-id="{row_id}"] > .row-head > .row-toggle'
+    page = DevToolsPage(
+        page_socket_url(browser.run("get", "cdp-url").strip(), browser.url)
+    )
+    try:
+        evaluated = page.call(
+            "Runtime.evaluate",
+            {"expression": f"document.querySelector({selector!r})"},
+        )
+        object_id = evaluated["result"].get("objectId")
+        assert isinstance(object_id, str), evaluated
+        described = page.call("DOM.describeNode", {"objectId": object_id})
+        backend_id = described["node"]["backendNodeId"]
+        tree = page.call(
+            "Accessibility.getPartialAXTree",
+            {"backendNodeId": backend_id, "fetchRelatives": False},
+        )
+        nodes = tree["nodes"]
+        assert len(nodes) == 1, tree
+        return dict(nodes[0])
+    finally:
+        page.close()
 
 
 @pytest.fixture
@@ -290,6 +331,33 @@ def test_the_waiting_rail_stands_beside_the_working_sign(
     assert rails[folded] == "direct", rails
     assert rails[ITEM] == "contained", rails
     assert rails["current-update/what-changed"] == "contained", rails
+
+
+def test_folded_older_update_exposes_contained_waiting_accessibly(
+    browser: Browser,
+) -> None:
+    """Name a hidden descendant's wait without repeating its direct alarm."""
+    older_open = browser.evaluate(
+        f'document.querySelector(\'[data-row-id="{OLDER_UPDATE}"]\')'
+        ".dataset.open"
+    )
+    if older_open == "true":
+        browser.click_row(OLDER_UPDATE)
+    assert browser.evaluate(
+        f'document.querySelector(\'[data-row-id="{OLDER_UPDATE}"]\')'
+        ".dataset.open"
+    ) == "false"
+
+    contained = _accessible_toggle(browser, OLDER_UPDATE)
+    direct = _accessible_toggle(browser, AWAITING_THREAD)
+
+    assert contained["role"]["value"] == "button", contained
+    assert contained["description"]["value"] == (
+        "Contains a conversation waiting for an agent answer."
+    ), contained
+    assert direct["description"]["value"] == (
+        "Waiting for an agent answer."
+    ), direct
 
 
 def test_newest_conversation_is_painted_first(browser: Browser) -> None:

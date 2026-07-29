@@ -111,7 +111,9 @@ def _plant(browser: Browser) -> None:
         if item["id"] == item_id
     )
     update["summary"] = f"A **current** summary. {IMAGE}"
-    item["glance"] = f"A **checked** glance. {IMAGE}"
+    item["glance"] = (
+        f"A **checked** glance. {SAFE_LINK} {HOSTILE_LINK} {IMAGE}"
+    )
     item["explanation"] = (
         f"A **checked** claim about `read_served_page`.\n\n"
         f"- one\n- two\n\n{IMAGE}\n\n{HOSTILE_LINK}\n\n{SAFE_LINK}"
@@ -207,6 +209,47 @@ def test_the_summary_and_glance_read_markdown_without_trusting_it(
     assert painted["glanceStrong"] == "checked", painted
     assert IMAGE in painted["summaryText"], painted
     assert IMAGE in painted["glanceText"], painted
+    assert HOSTILE_LINK in painted["glanceText"], painted
+
+
+def test_a_glance_link_activates_without_toggling_its_row(
+    browser: Browser,
+) -> None:
+    """Pointer and keyboard activation belong to the link, not its row."""
+    selector = f'[data-row-id="{ITEM}"] .glance a.md-link'
+    browser.evaluate(
+        f"""
+        (() => {{
+          window.__glanceClicks = 0;
+          document.querySelector({selector!r}).addEventListener(
+            "click",
+            (event) => {{
+              event.preventDefault();
+              window.__glanceClicks += 1;
+            }},
+          );
+          return true;
+        }})()
+        """
+    )
+    before = browser.evaluate(
+        f'document.querySelector(\'[data-row-id="{ITEM}"]\').dataset.open'
+    )
+
+    browser.run("click", selector)
+    assert browser.evaluate("window.__glanceClicks") == 1
+    assert browser.evaluate(
+        f'document.querySelector(\'[data-row-id="{ITEM}"]\').dataset.open'
+    ) == before
+
+    browser.run("focus", selector)
+    browser.press("Enter")
+    browser.run("wait", "200")
+
+    assert browser.evaluate("window.__glanceClicks") == 2
+    assert browser.evaluate(
+        f'document.querySelector(\'[data-row-id="{ITEM}"]\').dataset.open'
+    ) == before
 
 
 def test_an_ordered_turn_keeps_its_written_start(browser: Browser) -> None:

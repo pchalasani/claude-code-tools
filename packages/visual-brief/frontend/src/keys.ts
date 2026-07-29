@@ -185,11 +185,11 @@ export function isTypingTarget(target: EventTarget | null): boolean {
  * focus, so after one mouse click Space folded whichever row the mouse last
  * touched instead of the row the cursor is on.
  *
- * Enter belongs to the cursor unless it was delivered to an ordinary button.
- * A keyboard reader who tabs to a fold or a composer control still activates
- * that exact control natively. The masthead counters are the exception:
- * stale focus there cannot press an invisible button after the cursor moves.
- * Text fields keep Enter too, for paragraphs.
+ * Enter belongs to the cursor unless it was delivered to a native link or
+ * ordinary control. A keyboard reader who tabs to a link, fold or composer
+ * control still activates that exact control natively. The masthead counters
+ * are the exception: stale focus there cannot press an invisible button after
+ * the cursor moves. Text fields keep Enter too, for paragraphs.
  *
  * @param event - The key press.
  * @returns The action to run, or null when the page should not react.
@@ -214,7 +214,8 @@ export function resolveAction(event: KeyEventLike): Action | null {
     event.key === "Enter"
     && event.target instanceof Element
     && event.target.closest(
-      "button:not(.meta-awaiting):not(.meta-chats)",
+      "a[href], button:not(.meta-awaiting):not(.meta-chats), "
+        + "input, select, textarea, summary",
     ) !== null
   ) {
     return null;

@@ -36,6 +36,7 @@ export function ItemView(props: {
     <RowShell
       state={props.state}
       row={props.row}
+      separateHead
       head={
         <>
           <div class="glance">

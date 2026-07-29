@@ -66,6 +66,8 @@ export interface Composer {
   toggleAt: (target: ComposeTarget) => void;
   /** Close the composer while preserving its row's draft. */
   close: () => void;
+  /** Close the composer when its row has been removed from the document. */
+  removeRow: (rowId: string) => void;
   /** Handle Escape, requiring confirmation before discarding words. */
   escape: () => void;
   /** Explicitly discard the open row's draft and close it. */
@@ -80,6 +82,8 @@ export interface Composer {
   sendingAt: (rowId: string) => boolean;
   /** What to tell the human about the last attempt. */
   status: Accessor<string>;
+  /** Persistent warning when this tab cannot store the current drafts. */
+  draftWarning: Accessor<string>;
   /** Send what is written to its target. */
   submit: () => Promise<void>;
   /** Messages sent from this page that are still unanswered. */
@@ -148,6 +152,7 @@ export function createComposer(
   const [text, setText] = createSignal("");
   const [sending, setSending] = createSignal(false);
   const [status, setStatus] = createSignal("");
+  const [draftWarning, setDraftWarning] = createSignal("");
   const [signals, setSignals] = createSignal<Record<string, string>>({});
   const [inFlight, setInFlight] = createSignal<ReadonlySet<string>>(new Set());
   const [drafts, setDrafts] = createSignal<Drafts>(readDrafts());
@@ -176,7 +181,11 @@ export function createComposer(
 
   const replaceDrafts = (next: Drafts): void => {
     setDrafts(next);
-    saveDrafts(next);
+    setDraftWarning(
+      saveDrafts(next)
+        ? ""
+        : "Draft storage is unavailable. Reloading will lose this text.",
+    );
   };
 
   const writeText = (value: string): void => {
@@ -208,6 +217,12 @@ export function createComposer(
     }
     clearDraft(current.rowId);
     letGo(current.rowId, false);
+  };
+
+  const removeRow = (rowId: string): void => {
+    if (target()?.rowId === rowId) {
+      letGo(rowId, false);
+    }
   };
 
   const escape = (): void => {
@@ -286,6 +301,7 @@ export function createComposer(
       openAt(wanted);
     },
     close,
+    removeRow,
     escape,
     discard,
     text,
@@ -293,6 +309,7 @@ export function createComposer(
     sending,
     sendingAt: (rowId) => sending() && target()?.rowId === rowId,
     status,
+    draftWarning,
     submit,
     pendingAt: (rowId) => pending.at(rowId),
     sendSignal: async (rowId, anchorId, signal) => {

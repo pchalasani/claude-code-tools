@@ -47,7 +47,7 @@ export interface CarryOverDeps {
   /** Put the cursor on a row without scrolling to it. */
   place: (id: string) => void;
   /** Told about each row that has just left the page. */
-  onFold: (id: string) => void;
+  onRemove: (id: string) => void;
 }
 
 /**
@@ -74,7 +74,7 @@ export function carryAcrossPublishes(deps: CarryOverDeps): void {
         // A row that has gone takes with it anything rendered inside it: a
         // chat box written at it has nowhere left to be.
         for (const id of gone) {
-          deps.onFold(id);
+          deps.onRemove(id);
         }
         // The cursor holds its row. Only a row that is no longer in the
         // document moves it, and then only as far as the nearest surviving

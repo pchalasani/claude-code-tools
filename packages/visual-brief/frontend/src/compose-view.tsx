@@ -85,6 +85,13 @@ export function ComposeBox(props: {
             void composer.submit();
           }}
         />
+        <Show when={composer.draftWarning()}>
+          {(warning) => (
+            <p class="draft-warning" role="alert">
+              {warning()}
+            </p>
+          )}
+        </Show>
         <div class="composer-actions">
           <button class="submit" type="submit" disabled={composer.sending()}>
             {composer.sending() ? "Sending…" : "Send"}

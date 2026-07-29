@@ -7,7 +7,12 @@ from typing import Any
 
 from visual_brief.writes.legacy import read_for_write, settle_legacy_pairs
 from visual_brief.writes.lint import report_lint
-from visual_brief.writes.runfiles import CliError, resolve_run, save_document
+from visual_brief.writes.runfiles import (
+    CliError,
+    resolve_run,
+    save_document,
+    write_transaction,
+)
 
 
 def add_update_command(runs_root: Path, run_id: str | None, update: Any) -> int:
@@ -39,19 +44,20 @@ def add_update_command(runs_root: Path, run_id: str | None, update: Any) -> int:
     if not isinstance(stamp, str) or not stamp.strip():
         raise CliError("a dated update must carry a timestamp")
 
-    document, legacy = read_for_write(run_dir)
-    updates = _updates(document)
-    if any(
-        isinstance(existing, dict) and existing.get("id") == update_id
-        for existing in updates
-    ):
-        raise CliError(
-            f"update {update_id!r} already exists; updates are appended, "
-            "never rewritten"
-        )
-    updates.append(update)
-    settle_legacy_pairs(run_dir, document, legacy)
-    index_path = save_document(run_dir, document)
+    with write_transaction(run_dir):
+        document, legacy = read_for_write(run_dir)
+        updates = _updates(document)
+        if any(
+            isinstance(existing, dict) and existing.get("id") == update_id
+            for existing in updates
+        ):
+            raise CliError(
+                f"update {update_id!r} already exists; updates are appended, "
+                "never rewritten"
+            )
+        updates.append(update)
+        settle_legacy_pairs(run_dir, document, legacy)
+        index_path = save_document(run_dir, document)
     print(f"add-update: appended {update_id}; rendered {index_path}")
     report_lint(run_dir, document)
     return 0

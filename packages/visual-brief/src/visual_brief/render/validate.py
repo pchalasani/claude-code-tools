@@ -363,8 +363,8 @@ def validate_document(data: Any) -> dict[str, Any]:
     require_text(data.get("title"), "title")
     require_text(data.get("summary"), "summary")
     updates = data.get("updates")
-    if not isinstance(updates, list) or not updates:
-        raise ValueError("updates must be a non-empty list")
+    if not isinstance(updates, list):
+        raise ValueError("updates must be a list")
     _validate_unique_ids(updates, "updates")
     thread_ids: list[str] = []
     for index, update in enumerate(updates):

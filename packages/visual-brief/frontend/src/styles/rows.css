@@ -34,6 +34,21 @@
   text-align: left;
 }
 
+.row-item > .row-head > .row-toggle {
+  flex: 0 0 auto;
+  padding-right: 0;
+}
+
+.row-static-head {
+  align-items: baseline;
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0.3rem 0;
+}
+
 .row-fold {
   color: var(--ink-faint);
   flex: none;

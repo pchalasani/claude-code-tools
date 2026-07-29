@@ -5,13 +5,15 @@ from __future__ import annotations
 import copy
 import io
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from page_document import iter_threads
+from page_document import embedded_document, iter_threads
 from write_support import (
     ANCHOR,
     LANE_ANCHOR,
@@ -28,6 +30,22 @@ UPDATE = {
     "timestamp": "2026-07-27 09:00 EDT",
     "headline": "The first round landed",
     "summary": "Recorded as history.",
+    "lanes": [],
+}
+
+HISTORY = {
+    "id": "earlier-history",
+    "timestamp": "2026-07-26 17:00 EDT",
+    "headline": "The previous update",
+    "summary": "Saved behind the formerly pinned panel.",
+    "lanes": [],
+}
+
+CREATED = {
+    "id": "created",
+    "timestamp": "Created",
+    "headline": "The visual brief run is ready",
+    "summary": "The placeholder that preceded the first Now panel.",
     "lanes": [],
 }
 
@@ -61,7 +79,14 @@ def test_add_update_migrates_now_without_moving_eighteen_conversations(
         )
     assert fold_command(root, None) == 0
     before = read_content_file(run_dir)
-    original_now = copy.deepcopy(before["updates"][0])
+    before.pop("updates_order", None)
+    before["updates"].insert(0, copy.deepcopy(CREATED))
+    before["updates"].append(copy.deepcopy(HISTORY))
+    (run_dir / "content.json").write_text(
+        json.dumps(before, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    original_now = copy.deepcopy(before["updates"][1])
     locations = _thread_locations(before)
     assert len(locations) == 18
     assert {path for path, _ in locations.values()} == {
@@ -72,12 +97,34 @@ def test_add_update_migrates_now_without_moving_eighteen_conversations(
     assert add_update_command(root, None, copy.deepcopy(UPDATE)) == 0
 
     after = read_content_file(run_dir)
-    assert after["updates"][0] == original_now
-    assert after["updates"][0]["timestamp"] == "2026-07-27 12:00 EDT"
+    assert after["updates"][2] == original_now
+    assert after["updates"][2]["timestamp"] == "2026-07-27 12:00 EDT"
     assert _thread_locations(after) == locations
+    assert after["updates_order"] == "append"
     assert [update["id"] for update in after["updates"]] == [
+        "created",
+        "earlier-history",
         "now",
         "review-round-one",
+    ]
+    assert [
+        update["id"]
+        for update in embedded_document(
+            (run_dir / "index.html").read_text(encoding="utf-8")
+        )["updates"]
+    ] == ["created", "earlier-history", "now", "review-round-one"]
+
+    next_update = copy.deepcopy(UPDATE)
+    next_update["id"] = "review-round-two"
+    assert add_update_command(root, None, next_update) == 0
+    assert [
+        update["id"] for update in read_content_file(run_dir)["updates"]
+    ] == [
+        "created",
+        "earlier-history",
+        "now",
+        "review-round-one",
+        "review-round-two",
     ]
 
 
@@ -124,6 +171,83 @@ def test_add_update_appends_through_the_only_publish_verb(
     updates = read_content_file(run_dir)["updates"]
     assert updates[0] == before
     assert updates[1] == UPDATE
+    saved = read_content_file(run_dir)
+    assert saved["updates_order"] == "append"
+    delivered = embedded_document(
+        (run_dir / "index.html").read_text(encoding="utf-8")
+    )
+    assert [update["id"] for update in delivered["updates"]] == [
+        "now",
+        "review-round-one",
+    ]
+
+
+def test_add_update_accepts_an_empty_compatible_document(
+    tmp_path: Path,
+) -> None:
+    """An older empty timeline accepts its first immutable update."""
+    root = tmp_path / "runs"
+    document = {
+        "title": "Empty timeline",
+        "summary": "No update has been published yet.",
+        "updates": [],
+    }
+    run_dir = make_run(root, document=document)
+
+    assert add_update_command(root, None, copy.deepcopy(UPDATE)) == 0
+
+    saved = read_content_file(run_dir)
+    assert saved["updates_order"] == "append"
+    assert saved["updates"] == [UPDATE]
+
+
+def test_concurrent_add_updates_preserve_every_publish(
+    tmp_path: Path,
+) -> None:
+    """The per-run transaction lock prevents lost concurrent updates."""
+    root = tmp_path / "runs"
+    make_run(root)
+    environment = os.environ.copy()
+    environment["VISUAL_BRIEF_HOME"] = str(root)
+    processes: list[subprocess.Popen[str]] = []
+    expected_ids: list[str] = []
+    for number in range(12):
+        update = copy.deepcopy(UPDATE)
+        update_id = f"concurrent-{number}"
+        update["id"] = update_id
+        expected_ids.append(update_id)
+        update_path = tmp_path / f"{update_id}.json"
+        update_path.write_text(json.dumps(update), encoding="utf-8")
+        processes.append(
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "visual_brief.cli",
+                    "add-update",
+                    "--run",
+                    "write-run",
+                    "--file",
+                    str(update_path),
+                ],
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        )
+
+    results = [process.communicate(timeout=30) for process in processes]
+
+    assert [
+        (process.returncode, stdout, stderr)
+        for process, (stdout, stderr) in zip(processes, results, strict=True)
+        if process.returncode != 0
+    ] == []
+    saved_ids = {
+        update["id"] for update in read_content_file(root / "write-run")["updates"]
+    }
+    assert saved_ids == {"now", *expected_ids}
 
 
 def test_add_update_accepts_now_as_an_ordinary_id(tmp_path: Path) -> None:
@@ -136,6 +260,14 @@ def test_add_update_accepts_now_as_an_ordinary_id(tmp_path: Path) -> None:
     update["id"] = "now"
 
     assert add_update_command(root, None, update) == 0
+    assert add_update_command(root, None, copy.deepcopy(UPDATE)) == 0
+    saved = read_content_file(root / "write-run")
+    assert saved["updates_order"] == "append"
+    assert [entry["id"] for entry in saved["updates"]] == [
+        "created",
+        "now",
+        "review-round-one",
+    ]
 
 
 def test_add_update_refuses_a_duplicate_id(tmp_path: Path) -> None:

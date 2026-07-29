@@ -99,6 +99,12 @@
   font-size: var(--t-sm);
 }
 
+.draft-warning {
+  color: var(--trust-limitation);
+  font-size: var(--t-sm);
+  margin: 0;
+}
+
 .pending {
   background: var(--surface-2);
   color: var(--ink-quiet);

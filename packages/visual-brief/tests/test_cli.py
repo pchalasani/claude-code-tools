@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import fcntl
 import http.client
 import json
+import os
 import socket
+import subprocess
+import sys
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -231,6 +235,53 @@ def test_cli_render_keeps_legacy_content_bytes_unchanged(
     assert "Old answer." in index
 
 
+@pytest.mark.parametrize(
+    "updates",
+    [
+        [],
+        [
+            {
+                "id": "history",
+                "timestamp": "Then",
+                "headline": "Ordinary history",
+                "summary": "No former panel is required.",
+                "lanes": [],
+            }
+        ],
+        [
+            {
+                "id": "now",
+                "timestamp": "Then",
+                "headline": "A conversation-free former panel",
+                "summary": "It remains a complete update.",
+                "lanes": [],
+            }
+        ],
+    ],
+    ids=["empty", "without-now", "conversation-free-now"],
+)
+def test_render_preserves_compatible_update_lists(
+    tmp_path: Path,
+    updates: list[dict[str, object]],
+) -> None:
+    """Render every migration boundary without rewriting its source document."""
+    runs_root = tmp_path / "runs"
+    assert new_command(runs_root, "Compatibility", "compatible-run") == 0
+    content_path = runs_root / "compatible-run" / "content.json"
+    document = {
+        "title": "Compatibility",
+        "summary": "A migration boundary.",
+        "updates": updates,
+    }
+    source = (json.dumps(document, indent=2) + "\n").encode()
+    content_path.write_bytes(source)
+
+    assert render_command(runs_root, "compatible-run") == 0
+
+    assert content_path.read_bytes() == source
+    assert (runs_root / "compatible-run" / "index.html").is_file()
+
+
 def test_new_cleans_temporary_run_after_initialization_failure(
     tmp_path: Path,
 ) -> None:
@@ -317,3 +368,46 @@ def test_render_ignores_invalid_utf8_metadata_before_publishing(
 
     assert metadata.read_bytes() == b"\xff"
     assert index.read_text(encoding="utf-8").startswith("<!doctype html>")
+
+
+def test_render_waits_for_a_concurrent_content_write(tmp_path: Path) -> None:
+    """Render reads content only after the run's current writer finishes."""
+    runs_root = tmp_path / "runs"
+    assert new_command(runs_root, "Safe", "safe-run") == 0
+    run_dir = runs_root / "safe-run"
+    environment = os.environ.copy()
+    environment["VISUAL_BRIEF_HOME"] = str(runs_root)
+    lock_path = run_dir / ".write.lock"
+
+    with lock_path.open("a", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "visual_brief.cli",
+                "render",
+                "safe-run",
+            ],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        with pytest.raises(subprocess.TimeoutExpired):
+            process.communicate(timeout=1)
+        content_path = run_dir / "content.json"
+        concurrent = json.loads(content_path.read_text(encoding="utf-8"))
+        concurrent["title"] = "Rendered after the concurrent write"
+        content_path.write_text(
+            json.dumps(concurrent, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    stdout, stderr = process.communicate(timeout=30)
+
+    assert (process.returncode, stderr) == (0, "")
+    assert str(run_dir / "index.html") in stdout
+    assert "Rendered after the concurrent write" in (
+        run_dir / "index.html"
+    ).read_text(encoding="utf-8")

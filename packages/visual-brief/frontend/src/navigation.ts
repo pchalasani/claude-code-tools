@@ -133,12 +133,14 @@ export interface Navigation {
  * Build the navigable state for a document that can change under it.
  *
  * @param brief - The document the page is showing, read live.
- * @param onFold - Told each time a row leaves the page, by being folded or by
- *     going away, so anything rendered inside it can let go of it.
+ * @param onFold - Told each time a row is folded, so anything rendered inside
+ *     it can let go while preserving its state.
  * @param anchorId - Row this load should open on, overriding the remembered
  *     cursor: the conversation the human wrote in just before the reload.
  * @param waiting - Rows whose waiting sign has to be visible from the first
  *     paint, because it was already up before the reload.
+ * @param onRemove - Told when a row is removed from the live document, so its
+ *     row-owned state can be discarded.
  * @returns The live cursor, folding and search state.
  */
 export function createNavigation(
@@ -146,6 +148,7 @@ export function createNavigation(
   onFold: (id: string) => void = () => undefined,
   anchorId: string | null = null,
   waiting: string[] = [],
+  onRemove: (id: string) => void = () => undefined,
 ): Navigation {
   const index = createRowIndex(brief);
   const rows = index.rows;
@@ -217,7 +220,7 @@ export function createNavigation(
     setOpen: (update) => setOpen(update),
     cursorId: () => selected,
     place,
-    onFold,
+    onRemove,
   });
 
   const expand = (id: string, current: ReadonlySet<string>): Set<string> => {

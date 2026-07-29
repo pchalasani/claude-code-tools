@@ -187,6 +187,38 @@ describe("composition", () => {
     expect(reloaded.text()).toBe("Draft for B");
   });
 
+  it("keeps the draft belonging to a removed row", () => {
+    const composer = createComposer();
+    composer.toggleAt({ rowId: "u/l/a", anchorId: "u/l/a" });
+    composer.setText("Draft for removed A");
+    composer.toggleAt({ rowId: "u/l/b", anchorId: "u/l/b" });
+    composer.setText("Draft for surviving B");
+    composer.close();
+
+    composer.removeRow("u/l/a");
+
+    const reloaded = createComposer();
+    reloaded.toggleAt({ rowId: "u/l/a", anchorId: "u/l/a" });
+    expect(reloaded.text()).toBe("Draft for removed A");
+    reloaded.toggleAt({ rowId: "u/l/b", anchorId: "u/l/b" });
+    expect(reloaded.text()).toBe("Draft for surviving B");
+  });
+
+  it("keeps a removed row's draft when its in-flight send fails", async () => {
+    const daemon = recorder(false);
+    const composer = createComposer(daemon.post);
+    composer.toggleAt({ rowId: "u/l/a", anchorId: "u/l/a" });
+    composer.setText("Do not lose this failed send");
+
+    const inFlight = composer.submit();
+    composer.removeRow("u/l/a");
+    daemon.release();
+    await inFlight;
+
+    composer.toggleAt({ rowId: "u/l/a", anchorId: "u/l/a" });
+    expect(composer.text()).toBe("Do not lose this failed send");
+  });
+
   it("needs two Escapes to discard words but one for an empty box", () => {
     const composer = createComposer();
     composer.toggleAt({ rowId: "u/l/a", anchorId: "u/l/a" });

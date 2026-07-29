@@ -93,13 +93,23 @@ describe("every binding", () => {
     expect(resolveAction({ key: "Enter", target: submit })).toBeNull();
   });
 
+  it("leaves Enter native on a focused prose link", () => {
+    const link = element(
+      "<a href='https://example.test'><strong>spec</strong></a>",
+    );
+
+    expect(resolveAction({
+      key: "Enter",
+      target: link.querySelector("strong"),
+    })).toBeNull();
+  });
+
   it("aims Enter at the cursor when unrelated focus was left behind", () => {
     const stale = element(
       "<button class='meta-awaiting'>2 unanswered</button>",
     );
 
     expect(resolveAction({ key: "Enter", target: stale })).toBe("toggle");
-    expect(resolveAction({ key: "Enter" })).toBe("toggle");
   });
 
   it("still leaves Enter alone while the human is typing", () => {

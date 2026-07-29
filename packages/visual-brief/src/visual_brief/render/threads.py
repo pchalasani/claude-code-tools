@@ -6,6 +6,8 @@ import hashlib
 from typing import Any
 
 LEGACY_TIMESTAMP = "1970-01-01T00:00:00Z"
+UPDATES_ORDER_FIELD = "updates_order"
+APPEND_ORDER = "append"
 
 
 def normalize_document(
@@ -35,9 +37,10 @@ def normalize_document(
     updates = data.get("updates")
     if not isinstance(updates, list):
         return normalized
-    normalized_updates = list(updates)
+    normalized_updates = _migrate_pinned_now(data, updates)
+    normalized[UPDATES_ORDER_FIELD] = APPEND_ORDER
     normalized["updates"] = normalized_updates
-    for update_index, update in enumerate(updates):
+    for update_index, update in enumerate(normalized_updates):
         if not isinstance(update, dict):
             continue
         normalized_update = dict(update)
@@ -85,6 +88,37 @@ def normalize_document(
                     legacy_sources,
                 )
     return normalized
+
+
+def _migrate_pinned_now(
+    document: dict[str, Any],
+    updates: list[Any],
+) -> list[Any]:
+    """Move the former pinned panel into chronological append order.
+
+    The old writer kept its rewritten ``now`` update in place while later
+    history accumulated behind it. A run's initial ``created`` update may
+    precede that panel. Moving ``now`` behind the existing history records its
+    final timestamp in append chronology. The new writer persists
+    ``updates_order: append``, which explicitly distinguishes a migrated
+    document from an old pinned-panel document. A sole update remains in place;
+    the marker is persisted before a writer appends its successor.
+
+    Args:
+        document: The complete saved document.
+        updates: Updates in their saved order.
+
+    Returns:
+        A copied update list in append order.
+    """
+    copied = list(updates)
+    if document.get(UPDATES_ORDER_FIELD) == APPEND_ORDER:
+        return copied
+    for index, update in enumerate(copied[:-1]):
+        if isinstance(update, dict) and update.get("id") == "now":
+            copied.append(copied.pop(index))
+            break
+    return copied
 
 
 def thread_is_awaiting(thread: Any) -> bool:

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import fcntl
 import io
 import json
+import os
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -194,3 +197,48 @@ def test_answer_renders_the_page_it_wrote(tmp_path: Path) -> None:
 
     page = (run_dir / "index.html").read_text(encoding="utf-8")
     assert json.dumps("Rendered right away.")[1:-1] in page
+
+
+def test_answer_waits_for_a_concurrent_content_write(tmp_path: Path) -> None:
+    """An answer reads content only after the run's current writer finishes."""
+    root = tmp_path / "runs"
+    run_dir = make_run(root)
+    thread_id = _folded_thread_id(root, run_dir)
+    environment = os.environ.copy()
+    environment["VISUAL_BRIEF_HOME"] = str(root)
+    lock_path = run_dir / ".write.lock"
+
+    with lock_path.open("a", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "visual_brief.cli",
+                "answer",
+                thread_id,
+                "--run",
+                "write-run",
+                "--text",
+                "Written after the concurrent edit.",
+            ],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        with pytest.raises(subprocess.TimeoutExpired):
+            process.communicate(timeout=1)
+        concurrent = read_content_file(run_dir)
+        concurrent["summary"] = "A concurrent writer saved this."
+        write_content(run_dir, concurrent)
+
+    stdout, stderr = process.communicate(timeout=30)
+
+    assert (process.returncode, stderr) == (0, "")
+    assert "answer: appended" in stdout
+    saved = read_content_file(run_dir)
+    assert saved["summary"] == "A concurrent writer saved this."
+    assert _saved_thread(run_dir)["turns"][-1]["text"] == (
+        "Written after the concurrent edit."
+    )

@@ -235,6 +235,71 @@ def test_each_draft_survives_navigation_publish_collapse_and_reload(
     ) == second
 
 
+def test_removed_row_draft_survives_if_its_id_returns(
+    browser: Browser,
+) -> None:
+    """A publish closes the absent box without discarding human-owned words."""
+    removed = "Draft for the old version of this row"
+    surviving = "Draft for the row that remains"
+    browser.compose_at(ITEM)
+    browser.run("fill", ".composer textarea", removed)
+    browser.compose_at(SECOND_ITEM)
+    browser.run("fill", ".composer textarea", surviving)
+    browser.compose_at(ITEM)
+
+    lane = browser.data["updates"][1]["lanes"][0]
+    old_item = lane["items"].pop(0)
+    browser.data["title"] = "The drafted row was removed"
+    browser.publish()
+    browser.wait_for_title("The drafted row was removed")
+    assert browser.evaluate("document.querySelector('.composer') === null")
+
+    lane["items"].insert(0, old_item)
+    browser.data["title"] = "The row id returned"
+    browser.publish()
+    browser.wait_for_title("The row id returned")
+
+    browser.compose_at(ITEM)
+    assert browser.evaluate(
+        "document.querySelector('.composer textarea').value"
+    ) == removed
+    browser.compose_at(SECOND_ITEM)
+    assert browser.evaluate(
+        "document.querySelector('.composer textarea').value"
+    ) == surviving
+
+
+def test_storage_failure_keeps_a_warning_with_the_draft(
+    browser: Browser,
+) -> None:
+    """Never imply reload survival after the browser refuses draft storage."""
+    browser.evaluate(
+        """
+        (() => {
+          Storage.prototype.setItem = () => {
+            throw new DOMException("Storage disabled", "SecurityError");
+          };
+          return true;
+        })()
+        """
+    )
+    browser.compose_at(ITEM)
+    browser.run("fill", ".composer textarea", "Words only held in memory")
+    warning = browser.evaluate(
+        "document.querySelector('.draft-warning')?.textContent ?? null"
+    )
+
+    browser.compose_at(SECOND_ITEM)
+    persisted = browser.evaluate(
+        "document.querySelector('.draft-warning')?.textContent ?? null"
+    )
+
+    assert warning == (
+        "Draft storage is unavailable. Reloading will lose this text."
+    )
+    assert persisted == warning
+
+
 def test_discard_needs_two_escapes_or_the_explicit_control(
     browser: Browser,
 ) -> None:

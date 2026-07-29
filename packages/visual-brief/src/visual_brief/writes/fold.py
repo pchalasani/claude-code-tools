@@ -33,6 +33,7 @@ from visual_brief.writes.runfiles import (
     read_content,
     resolve_run,
     save_document,
+    write_transaction,
 )
 
 
@@ -61,21 +62,26 @@ def fold_command(runs_root: Path, run_id: str | None) -> int:
             would not validate.
     """
     _, run_dir = resolve_run(runs_root, run_id)
-    saved = read_content(run_dir)
-    before, before_legacy = normalize_for_write(saved)
-    merged_legacy = LegacyPairs()
-    merged = merge_pending_followups(
-        run_dir, merged_legacy.undated, merged_legacy.sources
-    )
-    document = before if merged is None else merged
-    undated = before_legacy.undated if merged is None else merged_legacy.undated
-    folded = _describe_folded(before, document)
-    left = _describe_unfolded(run_dir, document, undated)
-    index_path = None
-    if merged is not None:
-        settle_legacy_pairs(run_dir, merged, merged_legacy)
-        index_path = save_document(run_dir, merged)
-        saved = merged
+    with write_transaction(run_dir):
+        saved = read_content(run_dir)
+        before, before_legacy = normalize_for_write(saved)
+        merged_legacy = LegacyPairs()
+        merged = merge_pending_followups(
+            run_dir, merged_legacy.undated, merged_legacy.sources
+        )
+        document = before if merged is None else merged
+        undated = (
+            before_legacy.undated
+            if merged is None
+            else merged_legacy.undated
+        )
+        folded = _describe_folded(before, document)
+        left = _describe_unfolded(run_dir, document, undated)
+        index_path = None
+        if merged is not None:
+            settle_legacy_pairs(run_dir, merged, merged_legacy)
+            index_path = save_document(run_dir, merged)
+            saved = merged
 
     for entry in folded:
         opening = (

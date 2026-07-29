@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import copy
 import errno
+import fcntl
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -282,6 +285,46 @@ def test_fold_loses_nothing_when_a_question_arrives_mid_write(
         for turn in thread["turns"]
     ]
     assert sorted(saved) == sorted([ASKED, "Asked while the fold was writing"])
+
+
+def test_fold_waits_for_a_concurrent_content_write(tmp_path: Path) -> None:
+    """A fold merges the queue after the run's current writer finishes."""
+    root = tmp_path / "runs"
+    run_dir = make_run(root)
+    queue_line(run_dir, ASKED)
+    environment = os.environ.copy()
+    environment["VISUAL_BRIEF_HOME"] = str(root)
+    lock_path = run_dir / ".write.lock"
+
+    with lock_path.open("a", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "visual_brief.cli",
+                "fold",
+                "--run",
+                "write-run",
+            ],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        with pytest.raises(subprocess.TimeoutExpired):
+            process.communicate(timeout=1)
+        concurrent = read_content_file(run_dir)
+        concurrent["summary"] = "A concurrent writer saved this."
+        write_content(run_dir, concurrent)
+
+    stdout, stderr = process.communicate(timeout=30)
+
+    assert (process.returncode, stderr) == (0, "")
+    assert "fold: folded 1" in stdout
+    saved = read_content_file(run_dir)
+    assert saved["summary"] == "A concurrent writer saved this."
+    assert _only_thread(run_dir)["turns"][0]["text"] == ASKED
 
 
 def test_an_interrupted_write_leaves_the_previous_file(

@@ -66,6 +66,7 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
     abandonComposer,
     landing,
     landing === null ? pending.waiting() : [...pending.waiting(), landing],
+    removeComposer,
   );
   const hints = createHints({
     rows: () => nav.painted(),
@@ -125,6 +126,18 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
     if (written === rowId || ancestorIds(written).includes(rowId)) {
       composer.close();
     }
+  }
+
+  /**
+   * Close a composer whose row no longer exists in the document.
+   *
+   * The row cannot keep painting its chat box, but the draft remains the
+   * human's until they send or explicitly discard it.
+   *
+   * @param rowId - Row removed by a newly delivered document.
+   */
+  function removeComposer(rowId: string): void {
+    composer.removeRow(rowId);
   }
 
   const composeAt = (row: Row): void => {

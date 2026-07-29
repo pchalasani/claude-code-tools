@@ -48,14 +48,16 @@ export function readDrafts(): Drafts {
  * Save every draft for this run.
  *
  * @param drafts - Complete row-to-text map.
+ * @returns Whether the complete draft map reached session storage.
  */
-export function saveDrafts(drafts: Drafts): void {
+export function saveDrafts(drafts: Drafts): boolean {
   try {
     window.sessionStorage.setItem(
       draftsStorageKey(),
       JSON.stringify(drafts),
     );
+    return true;
   } catch {
-    // A disabled store costs reload survival, not the composer in this load.
+    return false;
   }
 }

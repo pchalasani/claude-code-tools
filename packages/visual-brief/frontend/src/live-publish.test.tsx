@@ -60,6 +60,29 @@ describe("what a publish does to something half-written", () => {
 
     expect(document.querySelector(".composer")).toBeNull();
   });
+
+  it("restores a removed row's draft if its id returns", () => {
+    const { publish } = mountLive();
+    composeAt(BETA);
+    typeInto(".composer textarea", "Words tied to the old beta row");
+    composeAt(ALPHA);
+    typeInto(".composer textarea", "Words tied to surviving alpha");
+
+    const withoutBeta = sampleBrief();
+    const lane = laneOf(withoutBeta, "newest", "changed");
+    lane.items = lane.items.filter((item) => item.id !== "beta");
+    publish(withoutBeta);
+    publish(sampleBrief());
+
+    composeAt(BETA);
+    expect(
+      document.querySelector<HTMLTextAreaElement>(".composer textarea")?.value,
+    ).toBe("Words tied to the old beta row");
+    composeAt(ALPHA);
+    expect(
+      document.querySelector<HTMLTextAreaElement>(".composer textarea")?.value,
+    ).toBe("Words tied to surviving alpha");
+  });
 });
 
 describe("what a publish tells the human has changed", () => {
