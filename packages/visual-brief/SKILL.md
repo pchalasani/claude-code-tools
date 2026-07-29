@@ -41,27 +41,16 @@ choice, and it has already been made in real use.
 Length costs you nothing here. A page can be long without being tiring, because
 what is collapsed is invisible until wanted. That is the whole reason to use one.
 
-## The Now panel
+## Updates are a timeline
 
-The page distinguishes current state from history, and you maintain that
-distinction:
+Publish one dated update for each report and then leave it alone. New updates
+land at the top; the newest opens and earlier updates stay folded. The visible
+age beside every timestamp tells the human what just arrived.
 
-- **One update carries the reserved id `now`.** It is the Now panel: pinned
-  above everything, visually distinct, its lanes open by default. **Rewrite it
-  in place on every publish** — same id, fresh content, fresh `timestamp`
-  (shown as "as of ..."). Never append a second one, and never leave stale
-  claims in it: it must be true at the moment it is rendered.
-- **Every other update is history.** Append them, dated, and never edit them
-  after the fact. The page shows them collapsed under "Earlier updates".
-
-The Now panel answers the only questions the human actually has:
-
-1. **What works now** — the features they asked for, and whether each one is
-   usable yet.
-2. **What is coming next.**
-3. **What needs a decision from them.**
-
-Nothing else competes with it.
+There is no pinned state panel and no reserved id. Do not rewrite an old update
+to keep a portrait of the project current. Say what changed, what works, what
+comes next, and what needs a decision in the update you are already writing.
+That produces a faithful session log without asking you to curate old claims.
 
 **Your process is not news.** Test counts, review rounds, repair iterations,
 lint results, how many findings a reviewer returned, how many commits it took —
@@ -101,8 +90,9 @@ Monitor(
 `persistent: true` and `tail -n 0`. Arm it **before** giving out the URL, and
 re-arm it after any session boundary — idempotently: if you may have armed a
 watcher before, stop it first (TaskStop on its id, or find it by this
-description) so the queue never has two watchers double-reporting — monitors die with their session, and
-resuming does not revive them. If you cannot start it, say so in your one line.
+description) so the queue never has two watchers double-reporting. Monitors
+die with their session, and resuming does not revive them. If you cannot start
+it, say so in your one line.
 
 ## Building the page
 
@@ -118,19 +108,14 @@ whole document before anything touches disk, writes atomically, re-renders
 exactly one run exists.
 
 ```bash
-visual-brief publish-now --file now.json      # rewrite the Now panel
 visual-brief add-update --file update.json    # append one dated update
 ```
 
-`now.json` is one update object: `headline`, `summary`, and `lanes`. Each lane
-has `id`, `name`, `items`; each item has a stable `id`, `glance`,
-`explanation`, `trust`, plus optional `forensics`, `tables` and `questions`.
-`publish-now` supplies the reserved `now` id and the timestamp, and it carries
-existing conversations across for you wherever their anchor still exists —
-anything it cannot carry it prints in full to stderr rather than dropping.
-
-`add-update` takes the same object plus its own `id` and `timestamp`. History
-is appended, never rewritten, so a duplicate id is refused.
+`update.json` is one update object with `id`, `timestamp`, `headline`,
+`summary`, and `lanes`. Each lane has `id`, `name`, and `items`; each item has a
+stable `id`, `glance`, `explanation`, and `trust`, plus optional `forensics`,
+`tables`, and `questions`. Updates are appended, never rewritten, so a
+duplicate id is refused.
 
 `trust` is one of `verified-by-me`, `reported-by-agent`, `unverified`,
 `known-limitation`. Use it honestly — it is how the human tells your evidence
@@ -142,15 +127,11 @@ identified by its title unless you give it an `id`. Two notes side by side
 whose titles read as the same name are refused: only you can say which is
 which, so give each of them its own `id`.
 
-Prose is read as markdown: `explanation`, the body of a forensic note, and the
-text of a turn. Emphasis, strong emphasis, inline code, fenced blocks, lists
-and headings work; a link works only if its scheme is `https`, `http` or
-`mailto`. Anything else stays the characters you wrote, and no markup you write
-is ever markup on the page.
-
-`glance` is the exception and stays plain text: it is the row's name, and the
-same string is read aloud by the chat control and matched by the search, so
-asterisks in it would be asterisks.
+Prose is read as markdown: an update's `summary`, an item's `glance` and
+`explanation`, the body of a forensic note, and the text of a turn. Emphasis,
+strong emphasis, inline code, fenced blocks, lists, and headings work; a link
+works only if its scheme is `https`, `http`, or `mailto`. Anything else stays
+the characters you wrote, and no markup you write is ever markup on the page.
 
 Both verbs take `--file F` or a bare `-` for standard input. `visual-brief
 render <run-id>` still exists for a file that was edited by hand.
@@ -176,7 +157,11 @@ nothing needs shell quoting.
 A question whose anchor no longer exists, or a reply naming a thread that is
 not on the page, is reported and left in the queue. Neither is guessed at.
 
-**Every human turn gets an agent turn — even a pure confirmation.** The page cannot tell "read, nothing more needed" from "ignored": a thread whose newest turn is the human's shows *agent is working* forever. When the human's message closes the loop, reply with one acknowledging line via `answer`; folding their words in is not answering them.
+**Every human turn gets an agent turn — even a pure confirmation.** The page
+cannot tell "read, nothing more needed" from "ignored": a thread whose newest
+turn is the human's shows *agent is working* forever. When the human's message
+closes the loop, reply with one acknowledging line via `answer`; folding their
+words in is not answering them.
 
 **The answer must live on the page, complete.** Never answer with a pointer to
 the clipboard, the terminal, a file, or anywhere else. If the human asked for
@@ -198,8 +183,7 @@ rules you inherit the moment you edit `content.json` yourself:
   shows as answered *and* as still awaiting.
 - **Every `at` is a real ISO instant with a timezone**, and turns stay
   chronological, oldest first.
-- **One update carries `now`** and is rewritten in place; every other update is
-  appended and never edited afterwards.
+- **Every update is appended and never edited afterwards.** No id is reserved.
 - **Ids are unique within their collection**, with no whitespace, `/` or `#`.
 
 ## What the checks tell you

@@ -78,11 +78,11 @@ describe("where a lane's own conversations sit", () => {
     expect(painted.indexOf(FIRST)).toBeLessThan(painted.indexOf(ALPHA));
   });
 
-  it("keeps them in the order they were written", () => {
+  it("paints the newest lane conversation first", () => {
     mount(chattedLane());
 
     const painted = paintedRows();
-    expect(painted.indexOf(FIRST)).toBeLessThan(painted.indexOf(SECOND));
+    expect(painted.indexOf(SECOND)).toBeLessThan(painted.indexOf(FIRST));
   });
 
   it("leaves the items in the order the document put them", () => {
@@ -90,6 +90,40 @@ describe("where a lane's own conversations sit", () => {
 
     const painted = paintedRows();
     expect(painted.indexOf(ALPHA)).toBeLessThan(painted.indexOf(BETA));
+  });
+
+  it("paints the newest item conversation first", () => {
+    const brief = sampleBrief();
+    const alpha = brief.updates
+      .find((update) => update.id === "newest")
+      ?.lanes.find((lane) => lane.id === "changed")
+      ?.items.find((item) => item.id === "alpha");
+    if (alpha === undefined) {
+      throw new Error("the sample document lost alpha");
+    }
+    alpha.questions?.push({
+      id: "q-newest",
+      anchor: { kind: "element", path: ALPHA },
+      turns: [
+        {
+          author: "human",
+          text: "This was asked most recently.",
+          at: "2026-07-25T16:00:00Z",
+        },
+      ],
+    });
+    mount(brief);
+    press("E");
+
+    const threads = [
+      ...document.querySelectorAll(
+        `[data-row-id="${ALPHA}"] > .row-body > .row-thread`,
+      ),
+    ].map((row) => row.getAttribute("data-row-id"));
+    expect(threads).toEqual([
+      `${ALPHA}#q-newest`,
+      `${ALPHA}#q-answered`,
+    ]);
   });
 
   it("paints exactly the list the cursor walks, in exactly that order", () => {

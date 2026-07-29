@@ -1,7 +1,7 @@
 import { render } from "solid-js/web";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { parseMarkdown } from "./markdown";
+import { parseMarkdown } from "./markdown-blocks";
 import { Markdown } from "./markdown-view";
 
 let dispose: (() => void) | null = null;
@@ -68,6 +68,17 @@ describe("reading markdown", () => {
     expect(
       [...painted.querySelectorAll("ol.md-list li")].map((li) => li.textContent),
     ).toEqual(["first", "second"]);
+  });
+
+  it("starts an ordered list at the number the author wrote", () => {
+    const painted = paint("7. And the point still has its number");
+    const list = painted.querySelector("ol.md-list");
+
+    expect(list).toBeInstanceOf(HTMLOListElement);
+    expect((list as HTMLOListElement).start).toBe(7);
+    expect(list?.querySelector("li")?.textContent).toBe(
+      "And the point still has its number",
+    );
   });
 
   it("reads headings, and never outranks the page's own", () => {

@@ -8,6 +8,7 @@ whose row identifiers are re-exported here so a suite has one import.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -157,6 +158,20 @@ class Browser:
         selector = f'[data-row-id="{row_id}"] > .row-head .chat-button'
         self.run("scrollintoview", selector)
         self.run("click", selector)
+        opened = self.evaluate(
+            f"""
+            document.querySelector(
+              '[data-row-id="{row_id}"] > .row-body > .composer',
+            ) !== null
+            """
+        )
+        if not opened:
+            # Chrome attached over CDP can occasionally acknowledge a pointer
+            # command without activating its target. HTMLElement.click() runs
+            # the browser's activation behavior and the same handler.
+            self.evaluate(
+                f"document.querySelector({json.dumps(selector)})?.click(); true"
+            )
 
     def send(self, text: str) -> None:
         """Write and submit one message in the open composer.
@@ -165,7 +180,37 @@ class Browser:
             text: What to write.
         """
         self.run("fill", ".composer textarea", text)
-        self.run("click", ".composer .submit")
+        self.submit()
+
+    def submit(self, times: int = 1) -> None:
+        """Activate the open composer's submit control.
+
+        Args:
+            times: Number of immediate activation attempts.
+        """
+        command = "dblclick" if times == 2 else "click"
+        self.run(command, ".composer .submit")
+        activated = self.evaluate(
+            """
+            (() => {
+              const box = document.querySelector(".composer");
+              const button = box?.querySelector(".submit");
+              const status = box?.querySelector(".status");
+              return box === null
+                || button?.disabled === true
+                || (status?.textContent ?? "") !== "";
+            })()
+            """
+        )
+        if activated:
+            return
+        # Keep attached-CDP runs meaningful when the driver drops pointer
+        # activation: HTMLElement.click() runs the browser's activation
+        # behavior and the same submit handler as a physical click.
+        for _ in range(times):
+            self.evaluate(
+                "document.querySelector('.composer .submit')?.click(); true"
+            )
 
     def cursor_row(self) -> str:
         """Return the row the page paints as the cursor.
@@ -278,19 +323,30 @@ def _start_browser(driver: Browser) -> None:
     failure = ""
     for attempt in range(1, STARTUP_ATTEMPTS + 1):
         try:
-            driver.run("open", driver.url)
+            if os.environ.get("AGENT_BROWSER_CDP"):
+                driver.run("tab", "new", driver.url)
+            else:
+                driver.run("open", driver.url)
             driver.run("wait", "300")
             return
         except (AssertionError, subprocess.TimeoutExpired) as error:
             failure = str(error)
             try:
-                driver.run("close")
+                _close_browser(driver)
             except (AssertionError, subprocess.TimeoutExpired):
                 pass
             time.sleep(0.5 * attempt)
     pytest.fail(
         f"the browser did not start after {STARTUP_ATTEMPTS} attempts: {failure}"
     )
+
+
+def _close_browser(driver: Browser) -> None:
+    """Close only the tab created inside an externally managed Chrome."""
+    if os.environ.get("AGENT_BROWSER_CDP"):
+        driver.run("tab", "close")
+    else:
+        driver.run("close")
 
 
 @contextmanager
@@ -311,6 +367,6 @@ def browser_session() -> Iterator[Browser]:
             yield driver
         finally:
             try:
-                driver.run("close")
+                _close_browser(driver)
             except (AssertionError, subprocess.TimeoutExpired):
                 pass

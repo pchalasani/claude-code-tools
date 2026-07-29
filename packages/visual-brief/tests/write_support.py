@@ -23,7 +23,7 @@ LANE_ANCHOR = "now/state"
 
 
 def base_document() -> dict[str, Any]:
-    """Return a small valid document carrying one Now panel."""
+    """Return a small valid document carrying the former ``now`` update."""
     return {
         "title": "Typed writes",
         "summary": "One run that the write verbs act on.",

@@ -5,8 +5,9 @@ import {
   countItems,
   edgeRow,
   filterRows,
+  moveByContent,
   moveByKind,
-  nextAwaiting,
+  nextOutstanding,
   restoreCursor,
 } from "./cursor";
 import { ancestorIds, outline, type Row } from "./outline";
@@ -22,26 +23,24 @@ const ITEMS = [
 ];
 
 /**
- * Walk the cursor with one key, collecting where it lands.
+ * Walk the painted content rows with one key.
  *
- * @param rows - Rows to move over.
+ * @param rows - Painted rows to move over.
  * @param start - Where the cursor starts.
- * @param kind - Kind of row to move between.
  * @param delta - Direction of travel.
  * @param steps - How many times to press.
  * @returns Each landing place in order.
  */
-function walk(
+function walkContent(
   rows: Row[],
   start: string | null,
-  kind: "item" | "lane",
   delta: number,
   steps: number,
 ): (string | null)[] {
   const seen: (string | null)[] = [];
   let at = start;
   for (let step = 0; step < steps; step += 1) {
-    at = moveByKind(rows, at, kind, delta);
+    at = moveByContent(rows, at, delta);
     seen.push(at);
   }
   return seen;
@@ -88,45 +87,53 @@ describe("the outline the cursor moves over", () => {
   });
 });
 
-describe("moving between items", () => {
-  it("steps forward through every item in document order", () => {
-    expect(walk(ROWS, ITEMS[0] ?? null, "item", 1, 3)).toEqual(ITEMS.slice(1));
+describe("moving through painted content", () => {
+  it("steps through items, conversations and evidence in painted order", () => {
+    expect(walkContent(ROWS, ITEMS[0] ?? null, 1, 6)).toEqual([
+      "newest/changed/alpha#q-answered",
+      "newest/changed/beta",
+      "newest/changed/beta#q-open",
+      "newest/next/gamma",
+      "older/history/one",
+      "older/history/one#~evidence",
+    ]);
   });
 
-  it("steps back through them again", () => {
-    expect(walk(ROWS, ITEMS[3] ?? null, "item", -1, 3)).toEqual(
-      [...ITEMS].reverse().slice(1),
-    );
+  it("steps back through painted content again", () => {
+    expect(
+      walkContent(ROWS, "older/history/one#~evidence", -1, 3),
+    ).toEqual([
+      "older/history/one",
+      "newest/next/gamma",
+      "newest/changed/beta#q-open",
+    ]);
   });
 
-  it("stays put at the last item instead of wrapping to the first", () => {
+  it("stays put at the last content row instead of wrapping", () => {
     // Wrapping threw the reader from the newest entry to the oldest one at the
     // very bottom of the page, which reads as losing your place.
-    expect(moveByKind(ROWS, "older/history/one", "item", 1)).toBe(
-      "older/history/one",
-    );
+    expect(
+      moveByContent(ROWS, "older/history/one#~evidence", 1),
+    ).toBe("older/history/one#~evidence");
   });
 
-  it("stays put at the first item instead of wrapping to the last", () => {
-    expect(moveByKind(ROWS, "newest/changed/alpha", "item", -1)).toBe(
+  it("stays put at the first content row instead of wrapping", () => {
+    expect(moveByContent(ROWS, "newest/changed/alpha", -1)).toBe(
       "newest/changed/alpha",
     );
   });
 
-  it("starts at the first item when the cursor is nowhere", () => {
-    expect(moveByKind(ROWS, null, "item", 1)).toBe(ITEMS[0]);
+  it("starts at the first content row when the cursor is nowhere", () => {
+    expect(moveByContent(ROWS, null, 1)).toBe(ITEMS[0]);
   });
 
-  it("leaves a thread for the next item after it, not the one it hangs on", () => {
-    expect(
-      moveByKind(ROWS, "newest/changed/alpha#q-answered", "item", 1),
-    ).toBe("newest/changed/beta");
-  });
-
-  it("leaves a thread for the item it hangs on when moving back", () => {
-    expect(
-      moveByKind(ROWS, "newest/changed/alpha#q-answered", "item", -1),
-    ).toBe("newest/changed/alpha");
+  it("never stops on content a fold took off the painted page", () => {
+    const painted = ROWS.filter(
+      (row) => row.id !== "newest/changed/alpha#q-answered",
+    );
+    expect(moveByContent(painted, "newest/changed/alpha", 1)).toBe(
+      "newest/changed/beta",
+    );
   });
 });
 
@@ -164,17 +171,25 @@ describe("jumping", () => {
     expect(edgeRow(ROWS, "bottom")).toBe("older/history/one#~evidence");
   });
 
-  it("walks every unanswered question and then returns to the first", () => {
-    const first = nextAwaiting(ROWS, null);
+  it("walks awaiting and newly answered chats, then wraps", () => {
+    const fresh = new Set(["newest/changed/alpha#q-answered"]);
+    const first = nextOutstanding(ROWS, null, fresh);
 
-    expect(first).toBe("newest/changed/beta#q-open");
-    expect(nextAwaiting(ROWS, first)).toBe("newest/changed/beta#q-open");
+    expect(first).toBe("newest/changed/alpha#q-answered");
+    expect(nextOutstanding(ROWS, first, fresh)).toBe(
+      "newest/changed/beta#q-open",
+    );
+    expect(
+      nextOutstanding(ROWS, "newest/changed/beta#q-open", fresh),
+    ).toBe(first);
   });
 
-  it("stays put when nothing awaits an answer", () => {
+  it("stays put when no chat is outstanding", () => {
     const answered = ROWS.filter((row) => !row.awaiting);
 
-    expect(nextAwaiting(answered, "newest/changed/alpha")).toBe(
+    expect(
+      nextOutstanding(answered, "newest/changed/alpha", new Set()),
+    ).toBe(
       "newest/changed/alpha",
     );
   });

@@ -12,7 +12,7 @@ from typing import Iterator
 
 import pytest
 
-from browser_support import Browser, browser_session, landing_at
+from browser_support import SECOND_ITEM, Browser, browser_session, landing_at
 
 ITEM = "current-update/what-changed/differential-reader-check"
 REFUSED = "Could not send. Is the local server running?"
@@ -68,7 +68,7 @@ def test_double_click_sends_one_question_while_request_is_in_flight(
     try:
         browser.compose_at(ITEM)
         browser.run("fill", ".composer textarea", "Send this only once")
-        browser.run("dblclick", ".composer .submit")
+        browser.submit(times=2)
         deadline = time.monotonic() + 2
         while browser.server.post_count < 1 and time.monotonic() < deadline:
             time.sleep(0.01)
@@ -106,7 +106,7 @@ def test_escape_during_a_send_still_shows_the_question_landing(
     try:
         browser.compose_at(ITEM)
         browser.run("fill", ".composer textarea", "Does this still confirm?")
-        browser.run("click", ".composer .submit")
+        browser.submit()
         deadline = time.monotonic() + 2
         while browser.server.post_count < 1 and time.monotonic() < deadline:
             time.sleep(0.01)
@@ -180,7 +180,7 @@ def test_a_question_the_daemon_refuses_is_not_lost(browser: Browser) -> None:
     browser.server.refuse = True
     browser.compose_at(ITEM)
     browser.run("fill", ".composer textarea", "Does this survive a refusal?")
-    browser.run("click", ".composer .submit")
+    browser.submit()
     browser.run("wait", "600")
 
     assert browser.evaluate(
@@ -192,3 +192,83 @@ def test_a_question_the_daemon_refuses_is_not_lost(browser: Browser) -> None:
         ]
         """
     ) == ["Does this survive a refusal?", REFUSED, 0]
+
+
+def test_each_draft_survives_navigation_publish_collapse_and_reload(
+    browser: Browser,
+) -> None:
+    """Keep both rows' words through every ordinary reader action."""
+    first = "First row draft"
+    second = "Second row draft"
+    browser.compose_at(ITEM)
+    browser.run("fill", ".composer textarea", first)
+    browser.compose_at(SECOND_ITEM)
+    browser.run("fill", ".composer textarea", second)
+    browser.compose_at(ITEM)
+    assert browser.evaluate(
+        "document.querySelector('.composer textarea').value"
+    ) == first
+
+    browser.data["title"] = "Published around an unfinished message"
+    browser.publish()
+    browser.wait_for_title("Published around an unfinished message")
+    assert browser.evaluate(
+        "document.querySelector('.composer textarea').value"
+    ) == first
+
+    browser.click_row(ITEM)
+    browser.press("C")
+    assert browser.evaluate(
+        "document.querySelector('.composer') === null"
+    )
+    browser.click_row("current-update/what-changed")
+    browser.compose_at(ITEM)
+    assert browser.evaluate(
+        "document.querySelector('.composer textarea').value"
+    ) == first
+
+    browser.run("reload")
+    browser.wait_for_title("Published around an unfinished message")
+    browser.compose_at(SECOND_ITEM)
+    assert browser.evaluate(
+        "document.querySelector('.composer textarea').value"
+    ) == second
+
+
+def test_discard_needs_two_escapes_or_the_explicit_control(
+    browser: Browser,
+) -> None:
+    """Keep words after one Escape and erase them only after confirmation."""
+    browser.compose_at(ITEM)
+    browser.run("fill", ".composer textarea", "Human-owned words")
+
+    browser.press("Escape")
+    first = browser.evaluate(
+        """
+        [
+          document.querySelector(".composer") !== null,
+          document.querySelector(".composer textarea").value,
+          document.querySelector(".composer .status").textContent,
+        ]
+        """
+    )
+    assert first[0:2] == [True, "Human-owned words"], first
+    assert "again" in first[2], first
+
+    browser.press("Escape")
+    assert browser.evaluate("document.querySelector('.composer') === null")
+    browser.compose_at(ITEM)
+    assert browser.evaluate(
+        "document.querySelector('.composer textarea').value"
+    ) == ""
+
+    browser.run("fill", ".composer textarea", "Discard with the control")
+    browser.run("click", ".composer .quiet")
+    if browser.evaluate("document.querySelector('.composer') !== null"):
+        browser.evaluate(
+            "document.querySelector('.composer .quiet')?.click(); true"
+        )
+    browser.compose_at(ITEM)
+    assert browser.evaluate(
+        "document.querySelector('.composer textarea').value"
+    ) == ""

@@ -234,6 +234,7 @@ describe("chatting wherever the cursor is", () => {
     chatHere("update");
     press("J");
     chatHere("lane");
+    press(" ");
     press("j");
     chatHere("item");
     press("n");

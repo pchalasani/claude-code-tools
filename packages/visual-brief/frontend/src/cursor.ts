@@ -39,6 +39,51 @@ export function moveByKind(
   delta: number,
 ): string | null {
   const candidates = rows.filter((row) => row.kind === kind);
+  return moveAmong(rows, cursorId, candidates, delta);
+}
+
+/**
+ * Move through the content rows the reader can currently see.
+ *
+ * Updates and lanes are containers, with their own shifted-key movement.
+ * Ordinary movement walks the content inside them: items, conversations and
+ * evidence. Callers supply painted rows so a folded-away child is never an
+ * invisible stop.
+ *
+ * @param rows - Painted rows, in painted order.
+ * @param cursorId - Row the cursor is on, if any.
+ * @param delta - Positive to move forward, negative to move back.
+ * @returns The row id to select, or the current one when nothing can move.
+ */
+export function moveByContent(
+  rows: Row[],
+  cursorId: string | null,
+  delta: number,
+): string | null {
+  const candidates = rows.filter(
+    (row) =>
+      row.kind === "item"
+      || row.kind === "thread"
+      || row.kind === "evidence",
+  );
+  return moveAmong(rows, cursorId, candidates, delta);
+}
+
+/**
+ * Move among an ordered subset of rows, stopping at the ends.
+ *
+ * @param rows - All rows establishing painted order.
+ * @param cursorId - Row the cursor is on, if any.
+ * @param candidates - Rows this movement may land on.
+ * @param delta - Positive to move forward, negative to move back.
+ * @returns The row id to select, or the current one when nothing can move.
+ */
+function moveAmong(
+  rows: Row[],
+  cursorId: string | null,
+  candidates: Row[],
+  delta: number,
+): string | null {
   const last = candidates[candidates.length - 1];
   const first = candidates[0];
   if (first === undefined || last === undefined) {
@@ -80,26 +125,32 @@ export function edgeRow(rows: Row[], edge: Edge): string | null {
 }
 
 /**
- * Move to the next question thread waiting for an answer.
+ * Move to the next conversation that still needs the human's attention.
  *
  * The search starts after the cursor and wraps, so repeating the key walks
- * every open question exactly once before returning to the first.
+ * every open chat exactly once before returning to the first. A chat is open
+ * while it awaits an answer or while a newly arrived answer remains unseen.
  *
  * @param rows - Rows currently on the page, in document order.
  * @param cursorId - Row the cursor is on, if any.
- * @returns The row id to select, or the current one when nothing awaits.
+ * @param fresh - Conversations answered since the human last looked.
+ * @returns The row id to select, or the current one when nothing is open.
  */
-export function nextAwaiting(
+export function nextOutstanding(
   rows: Row[],
   cursorId: string | null,
+  fresh: ReadonlySet<string>,
 ): string | null {
-  const waiting = rows.filter((row) => row.kind === "thread" && row.awaiting);
-  const first = waiting[0];
+  const outstanding = rows.filter(
+    (row) =>
+      row.kind === "thread" && (row.awaiting || fresh.has(row.id)),
+  );
+  const first = outstanding[0];
   if (first === undefined) {
     return cursorId;
   }
   const here = indexOf(rows, cursorId);
-  const after = waiting.find((row) => indexOf(rows, row.id) > here);
+  const after = outstanding.find((row) => indexOf(rows, row.id) > here);
   return (after ?? first).id;
 }
 

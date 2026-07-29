@@ -371,6 +371,8 @@ def test_the_page_says_which_keys_do_the_new_things(browser: Browser) -> None:
     assert named["collapse-all"] == ("C", "Collapse all")
     assert named["chats"] == ("m", "My chats")
     assert named["hints"] == ("f", "Jump to a row")
+    assert named["next-item"] == ("j", "Next row")
+    assert named["next-awaiting"] == ("n", "Next open chat")
     # The key bar has to say that chatting is not an item-only affordance.
     assert named["compose"] == ("c", "Chat here")
     listed = {key: meaning for key, meaning in help_rows}
@@ -378,3 +380,4 @@ def test_the_page_says_which_keys_do_the_new_things(browser: Browser) -> None:
     assert listed["f"].startswith("Label every row")
     assert "conversation" in listed["c"]
     assert listed["m"] == "Show every conversation you have written in"
+    assert listed["n"] == "Jump to your next open chat"

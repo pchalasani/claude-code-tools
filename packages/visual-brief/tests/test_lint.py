@@ -20,7 +20,7 @@ from write_support import (
     write_content,
 )
 from visual_brief.cli import main, render_command
-from visual_brief.writes import fold_command, lint_document, publish_now_command
+from visual_brief.writes import add_update_command, fold_command, lint_document
 from visual_brief.writes.lint import lint_command, lint_run
 
 CRAMMED = (
@@ -226,10 +226,12 @@ def test_a_verb_runs_the_checks_on_what_it_just_wrote(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Publishing a crammed panel warns immediately, and still publishes."""
+    """Publishing a crammed update warns immediately, and still publishes."""
     root = tmp_path / "runs"
     make_run(root)
-    panel = {
+    update = {
+        "id": "crammed",
+        "timestamp": "2026-07-28 20:00 EDT",
         "headline": "Where things stand",
         "summary": "One lane.",
         "lanes": [
@@ -248,11 +250,11 @@ def test_a_verb_runs_the_checks_on_what_it_just_wrote(
         ],
     }
 
-    assert publish_now_command(root, None, panel) == 0
+    assert add_update_command(root, None, update) == 0
 
     captured = capsys.readouterr()
     assert "explanation holds an enumeration" in captured.err
-    assert "publish-now: carried 0 conversations" in captured.out
+    assert "add-update: appended crammed" in captured.out
 
 
 def test_the_lint_command_defaults_to_the_only_run(

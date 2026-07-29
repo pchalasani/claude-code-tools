@@ -14,8 +14,9 @@ import {
   countItems,
   edgeRow,
   filterRows,
+  moveByContent,
   moveByKind,
-  nextAwaiting,
+  nextOutstanding,
   restoreCursor,
   chatRows,
   type Edge,
@@ -71,8 +72,8 @@ export interface Navigation {
   move: (kind: RowKind, delta: number) => void;
   /** Send the cursor to one end of the document. */
   jump: (edge: Edge) => void;
-  /** Send the cursor to the next question awaiting an answer. */
-  toAwaiting: () => void;
+  /** Send the cursor to the next open conversation. */
+  toOpenChat: () => void;
   /**
    * Whether one conversation's answer arrived since the human last looked.
    *
@@ -279,11 +280,16 @@ export function createNavigation(
   };
 
   const step = (kind: RowKind, delta: number): void => {
-    // In the chats view the item key walks conversations: the view is a list
-    // of the human's chats, and the key that means "the next thing" has to
-    // mean the next thing on the page they are looking at.
-    const wanted = modes.chats() && kind === "item" ? "thread" : kind;
-    const next = moveByKind(visible(), selected, wanted, delta);
+    let next: string | null;
+    if (kind !== "item") {
+      next = moveByKind(visible(), selected, kind, delta);
+    } else if (modes.chats()) {
+      // The chats view is a list of conversations. Its item containers are
+      // only the route that paints that list, not extra stops inside it.
+      next = moveByKind(painted(), selected, "thread", delta);
+    } else {
+      next = moveByContent(painted(), selected, delta);
+    }
     if (next !== null) {
       select(next);
     }
@@ -321,8 +327,8 @@ export function createNavigation(
         select(next);
       }
     },
-    toAwaiting: () => {
-      const next = nextAwaiting(visible(), selected);
+    toOpenChat: () => {
+      const next = nextOutstanding(rows(), selected, fresh.ids());
       if (next !== null) {
         select(next);
         setOpen((current) => new Set(current).add(next));

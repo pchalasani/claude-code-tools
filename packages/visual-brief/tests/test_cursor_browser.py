@@ -15,7 +15,13 @@ from typing import Any, Iterator
 
 import pytest
 
-from browser_support import FIRST_ITEM, SECOND_ITEM, Browser, browser_session
+from browser_support import (
+    AWAITING_THREAD,
+    FIRST_ITEM,
+    SECOND_ITEM,
+    Browser,
+    browser_session,
+)
 
 _NUMBERS = re.compile(r"[-+]?\d*\.?\d+")
 
@@ -118,12 +124,12 @@ def test_the_cursor_row_is_painted_unlike_every_other_item(
     assert painted["marked"] == 1
     assert painted["kind"] == "item"
     assert painted["cursor"]["id"] == SECOND_ITEM
-    assert len(painted["others"]) >= 3
+    assert len(painted["others"]) >= 2
     rail = colour(painted["cursor"]["railColour"])
     assert rail[3] == 1.0, painted["cursor"]
     assert float(painted["cursor"]["railWidth"].removesuffix("px")) >= 3
     for other in painted["others"]:
-        assert colour(other["railColour"])[3] == 0.0, other
+        assert colour(other["railColour"]) != rail, other
         gap = distance(painted["cursor"]["background"], other["background"])
         assert gap >= 24, (gap, painted["cursor"], other)
 
@@ -187,6 +193,37 @@ def test_the_mouse_and_the_keyboard_share_one_cursor(browser: Browser) -> None:
 
     assert clicked == SECOND_ITEM
     assert browser.cursor_row() == FIRST_ITEM
+
+
+def test_plain_movement_walks_painted_evidence_and_conversations(
+    browser: Browser,
+) -> None:
+    """Visit every kind of painted content row in its visible order."""
+    browser.press("E")
+    browser.run("wait", "300")
+    assert browser.cursor_row() == FIRST_ITEM
+
+    landed: list[tuple[str, str]] = []
+    for _ in range(5):
+        browser.press("j")
+        browser.run("wait", "180")
+        landed.append(
+            (
+                browser.cursor_row(),
+                browser.evaluate(
+                    "document.querySelector('[data-cursor=\"true\"]')"
+                    ".dataset.rowKind"
+                ),
+            )
+        )
+
+    assert landed == [
+        (SECOND_ITEM, "item"),
+        (f"{SECOND_ITEM}#~evidence", "evidence"),
+        ("current-update/why-it-matters/repair-loop-routing", "item"),
+        (AWAITING_THREAD, "thread"),
+        ("current-update/what-i-verified#q-parser-parity", "thread"),
+    ]
 
 
 def test_the_cursor_stays_on_its_row_when_the_agent_publishes(

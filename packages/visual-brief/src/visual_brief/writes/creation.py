@@ -129,9 +129,7 @@ def _initial_content(label: str) -> dict[str, object]:
                 "id": "created",
                 "timestamp": "Created",
                 "headline": "The visual brief run is ready",
-                "summary": (
-                    "Publish the Now panel with visual-brief publish-now."
-                ),
+                "summary": "Append updates with visual-brief add-update.",
                 "lanes": [],
             }
         ],

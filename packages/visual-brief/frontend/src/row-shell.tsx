@@ -31,6 +31,15 @@ export function RowShell(props: {
   const bodyId = () => `body:${props.row.id}`;
   const hint = () => props.state.hints.labelFor(props.row.id);
   const ordinal = () => props.state.nav.ordinal(props.row.id);
+  const waiting = (): "direct" | "contained" | undefined => {
+    if (
+      (props.row.kind === "thread" && props.row.awaiting)
+      || props.state.composer.pendingAt(props.row.id).length > 0
+    ) {
+      return "direct";
+    }
+    return props.row.awaiting ? "contained" : undefined;
+  };
   return (
     <article
       class={`row row-${props.row.kind}`}
@@ -39,6 +48,7 @@ export function RowShell(props: {
       data-cursor={isCursor() ? "true" : "false"}
       data-open={isOpen() ? "true" : "false"}
       data-awaiting={props.row.awaiting ? "true" : "false"}
+      data-waiting={waiting()}
       data-fresh={props.state.nav.isFresh(props.row.id) ? "true" : "false"}
       onPointerOver={(event) => {
         // Hover IS selection: the row under the pointer becomes the cursor, so
@@ -144,25 +154,6 @@ export function VisibleRow(props: {
       ? props.state.nav.row(props.id)
       : undefined;
   return <Show when={resolved()}>{(row) => props.children(row())}</Show>;
-}
-
-/**
- * The badge marking anything still waiting for an answer.
- *
- * @param props - Whether to show the badge.
- * @returns The badge, or nothing.
- */
-export function AwaitingChip(props: { when: boolean }): JSX.Element {
-  return (
-    <Show when={props.when}>
-      <span class="chip chip-awaiting">
-        <span class="chip-mark" aria-hidden="true">
-          ●
-        </span>
-        Awaiting answer
-      </span>
-    </Show>
-  );
 }
 
 /**

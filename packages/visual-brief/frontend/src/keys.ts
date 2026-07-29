@@ -101,6 +101,7 @@ export const BINDINGS: Record<string, Action> = {
   ArrowDown: "next-item",
   ArrowUp: "previous-item",
   " ": "toggle",
+  Enter: "toggle",
   // Space folds one row; the shifted letters fold the page. E and C are free,
   // sit under the same fingers as the keys they extend, and read as what they
   // do the moment the key bar names them.
@@ -136,9 +137,9 @@ export const SHIFTED_BINDINGS: Record<string, Action> = {
 
 /** The bindings as the help overlay lists them. */
 export const KEY_HELP: [string, string][] = [
-  ["j / k  or  ↓ / ↑", "Next / previous item"],
+  ["j / k  or  ↓ / ↑", "Next / previous content row"],
   ["J / K  or  ⇧↓ / ⇧↑", "Next / previous lane"],
-  ["Space", "Open or close the selected row"],
+  ["Space / Enter", "Open or close the selected row"],
   ["E / C", "Expand everything / collapse back to lanes"],
   ["f", "Label every row, then type a label to jump there"],
   [
@@ -146,7 +147,7 @@ export const KEY_HELP: [string, string][] = [
     "Chat wherever the cursor is — update, lane, item or conversation",
   ],
   [SEND_CHORD_LABEL, "Send what you have written"],
-  ["n", "Jump to your next unanswered question"],
+  ["n", "Jump to your next open chat"],
   ["m", "Show every conversation you have written in"],
   ["/", "Search items"],
   ["g / G", "Top / bottom"],
@@ -184,10 +185,11 @@ export function isTypingTarget(target: EventTarget | null): boolean {
  * focus, so after one mouse click Space folded whichever row the mouse last
  * touched instead of the row the cursor is on.
  *
- * Enter is the exception, and it is not one the page gets to make. Every
- * control here is a ``<button>``, and Enter is what a button answers to: a
- * keyboard reader who tabs to an evidence fold presses Enter to open it. Space
- * is the page's, so Enter goes back to the browser untouched.
+ * Enter belongs to the cursor unless it was delivered to an ordinary button.
+ * A keyboard reader who tabs to a fold or a composer control still activates
+ * that exact control natively. The masthead counters are the exception:
+ * stale focus there cannot press an invisible button after the cursor moves.
+ * Text fields keep Enter too, for paragraphs.
  *
  * @param event - The key press.
  * @returns The action to run, or null when the page should not react.
@@ -207,6 +209,15 @@ export function resolveAction(event: KeyEventLike): Action | null {
   }
   if (isTypingTarget(event.target ?? null)) {
     return action === "close" ? "close" : null;
+  }
+  if (
+    event.key === "Enter"
+    && event.target instanceof Element
+    && event.target.closest(
+      "button:not(.meta-awaiting):not(.meta-chats)",
+    ) !== null
+  ) {
+    return null;
   }
   return action;
 }

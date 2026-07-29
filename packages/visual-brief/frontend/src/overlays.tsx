@@ -5,8 +5,8 @@ import type { BriefState } from "./state";
 
 /** The actions the on-screen key bar can run. */
 const KEY_BAR: [string, Action, string][] = [
-  ["k", "previous-item", "Previous item"],
-  ["j", "next-item", "Next item"],
+  ["k", "previous-item", "Previous row"],
+  ["j", "next-item", "Next row"],
   ["K", "previous-lane", "Previous lane"],
   ["J", "next-lane", "Next lane"],
   // The word every level of the page answers to: wherever the cursor is, this
@@ -17,7 +17,7 @@ const KEY_BAR: [string, Action, string][] = [
   ["C", "collapse-all", "Collapse all"],
   // Named for what the key DOES, not for the state it hunts: "Awaiting"
   // described the rows, leaving n unexplained.
-  ["n", "next-awaiting", "Next unanswered"],
+  ["n", "next-awaiting", "Next open chat"],
   ["m", "chats", "My chats"],
   ["/", "search", "Search"],
   ["g", "top", "Top"],

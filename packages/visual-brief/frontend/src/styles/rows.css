@@ -89,45 +89,6 @@
   margin-top: 1.5rem;
 }
 
-/* The Now panel: current state, not history. One panel on the page carries
-   this treatment, so the reader's eye lands on where things stand before any
-   dated update. */
-.row-update[data-row-id="now"] {
-  background: color-mix(in srgb, var(--select) 6%, var(--ground));
-  border: 1px solid color-mix(in srgb, var(--select) 35%, var(--rule));
-  border-radius: var(--radius);
-  margin-top: 1.1rem;
-}
-
-.row-update[data-row-id="now"] > .row-head {
-  background: color-mix(in srgb, var(--select) 10%, var(--ground-2));
-}
-
-.now-mark {
-  background: var(--select);
-  border-radius: var(--radius);
-  color: var(--ground);
-  flex: 0 0 auto;
-  font-family: var(--mono);
-  font-size: var(--t-xs);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  padding: 0.1rem 0.45rem;
-  text-transform: uppercase;
-}
-
-.earlier-heading {
-  border-top: 1px solid var(--rule-strong);
-  color: var(--ink-faint);
-  font-family: var(--mono);
-  font-size: var(--t-xs);
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  margin: 2.6rem 0 -0.6rem;
-  padding-top: 0.8rem;
-  text-transform: uppercase;
-}
-
 .row-update > .row-head {
   background: var(--ground-2);
 }
@@ -140,22 +101,37 @@
   line-height: 1.3;
 }
 
-.update-time {
+.update-when {
+  align-items: baseline;
   color: var(--ink-faint);
+  display: inline-flex;
   flex: 0 1 auto;
   font-family: var(--mono);
   font-size: var(--t-xs);
+  gap: 0.55rem;
   margin-left: auto;
   min-width: 0;
+  white-space: nowrap;
+}
+
+.update-time {
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.update-age {
+  color: var(--ink-quiet);
+  flex: 0 0 auto;
 }
 
 .update-summary {
   color: var(--ink-quiet);
   margin: 0.5rem 0 0.9rem;
   max-width: 62ch;
+}
+
+.update-summary > .md-paragraph:last-child {
+  margin-bottom: 0;
 }
 
 .row-lane {
@@ -190,6 +166,11 @@
   overflow-wrap: anywhere;
 }
 
+.glance > .md-paragraph {
+  display: inline;
+  margin: 0;
+}
+
 .explanation {
   margin: 0.4rem 0 0.75rem;
   max-width: 68ch;
@@ -211,10 +192,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.row-thread[data-awaiting="true"] > .row-head {
-  border-left-color: var(--rule-strong);
 }
 
 .row-thread[data-cursor="true"] > .row-head {

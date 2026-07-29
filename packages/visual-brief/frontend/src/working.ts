@@ -19,11 +19,11 @@
  * - the document says the conversation is still waiting, which survives every
  *   publish for as long as it is true.
  *
- * A submission that never appears anywhere still stops promising progress, as
- * it did before: that promise is about the message, and a page cannot keep it
- * once the words have failed to show up. What it can no longer do is take the
- * sign away from a conversation the DOCUMENT says is unanswered — those are
- * two different claims, and only the first of them has run out.
+ * A slow fold must not open a seam between the second and third sources. The
+ * pending note may add a diagnostic after several polls, but it remains a
+ * message the daemon accepted and the document has not resolved. Hiding the
+ * sign when that note became ``stalled`` was the flap: the sign disappeared
+ * at the third poll and returned when the conversation eventually arrived.
  */
 
 import type { Composer } from "./composer";
@@ -47,10 +47,10 @@ export function isWorking(state: WorkingSources, row: Row): boolean {
     return true;
   }
   // Only conversations carry the document's own sign. Every row above one
-  // inherits its awaiting state for the chip it wears, and painting the sign
-  // there too would say "the agent is working" four times for one question.
+  // inherits a quiet containing rail, and painting the sign there too would
+  // say "the agent is working" four times for one question.
   if (row.kind === "thread" && row.awaiting) {
     return true;
   }
-  return state.composer.pendingAt(row.id).some((note) => !note.stalled);
+  return state.composer.pendingAt(row.id).length > 0;
 }

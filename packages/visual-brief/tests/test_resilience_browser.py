@@ -4,8 +4,8 @@ A question sent seconds before the daemon republishes used to lose its place
 and its sign in the repaint that followed, because the publish threw the page
 away. It no longer does: the new document is patched into the page the human
 is reading. The sign is retired the moment those exact words appear on the
-page, it stops promising progress when they never do, and the reader is left
-exactly where they were throughout.
+page. A delayed fold adds a diagnostic without opening a gap in that sign, and
+the reader is left exactly where they were throughout.
 
 What a tab does when it cannot make sense of the daemon at all lives next
 door, in ``test_healing_browser``.
@@ -21,22 +21,25 @@ from browser_support import FIRST_ITEM, Browser, browser_session, landing_at
 
 ITEM = FIRST_ITEM
 
-_CHIP_MOTION = """
+_WAITING_RAILS = """
     (() => {
-      const arriving = {};
-      for (const chip of document.querySelectorAll(".chip-awaiting")) {
-        const head = chip.closest(".row-head");
-        const row = chip.closest("[data-row-id]");
-        if (head === null || row === null) {
-          continue;
+      const marked = {};
+      for (const row of document.querySelectorAll("[data-waiting]")) {
+        const head = row.querySelector(":scope > .row-head");
+        if (head !== null) {
+          marked[row.dataset.rowKind] = {
+            strength: row.dataset.waiting,
+            color: getComputedStyle(head).borderLeftColor,
+          };
         }
-        const style = getComputedStyle(chip);
-        arriving[row.dataset.rowKind] = {
-          name: style.animationName,
-          delay: style.animationDelay,
-        };
       }
-      return arriving;
+      return {
+        marked,
+        chips: document.querySelectorAll(".chip-awaiting").length,
+        labels: [...document.querySelectorAll(".row-head")].filter(
+          (head) => head.textContent.includes("Awaiting answer"),
+        ).length,
+      };
     })()
     """
 
@@ -185,10 +188,10 @@ def test_the_waiting_sign_clears_when_those_words_appear_on_the_page(
     assert after["cursor"] == ITEM, after
 
 
-def test_a_question_that_never_appears_stops_promising_progress(
+def test_a_delayed_question_keeps_the_sign_with_its_diagnostic(
     browser: Browser,
 ) -> None:
-    """Degrade to a plain statement rather than spinning forever."""
+    """Add the truthful diagnostic without flapping the working sign."""
     question = "Where did this one go?"
     browser.compose_at(ITEM)
     browser.send(question)
@@ -207,7 +210,7 @@ def test_a_question_that_never_appears_stops_promising_progress(
     # The sign came through the reload with the page rather than being lost.
     assert carried["note"] is not None and question in carried["note"]
     assert stalled["stalled"] == "true", stalled
-    assert stalled["working"] == 0, stalled
+    assert stalled["working"] == 1, stalled
     assert stalled["text"] == "submitted — refresh if this persists", stalled
 
 
@@ -248,26 +251,18 @@ def test_a_publish_does_not_move_the_page_under_the_reader(
     assert after == before, (before, after)
 
 
-def test_the_awaiting_chips_arrive_in_order_rather_than_all_at_once(
+def test_waiting_paints_one_direct_rail_and_quiet_container_rails(
     browser: Browser,
 ) -> None:
-    """Let the news spread from the conversation outwards, gently.
+    """Put the alarm on its conversation and containment on ancestors."""
+    waiting = browser.evaluate(_WAITING_RAILS)
+    marked = waiting["marked"]
 
-    After a send the page reloads and every level above the conversation
-    acquires an awaiting chip. Arriving in one frame reads as the whole page
-    changing; arriving in order reads as one thing happening, which is what
-    did happen.
-    """
-    arriving = browser.evaluate(_CHIP_MOTION)
-
-    with browser.reduced_motion():
-        still = browser.evaluate(_CHIP_MOTION)
-
-    assert {kind: mark["delay"] for kind, mark in arriving.items()} == {
-        "thread": "0s",
-        "item": "0.07s",
-        "lane": "0.14s",
-        "update": "0.21s",
-    }, arriving
-    assert {mark["name"] for mark in arriving.values()} == {"chip-arrive"}
-    assert {mark["name"] for mark in still.values()} == {"none"}, still
+    assert marked["thread"]["strength"] == "direct", waiting
+    assert marked["item"]["strength"] == "contained", waiting
+    assert marked["lane"]["strength"] == "contained", waiting
+    assert marked["update"]["strength"] == "contained", waiting
+    assert marked["thread"]["color"] != marked["item"]["color"], waiting
+    assert marked["item"]["color"] == marked["lane"]["color"], waiting
+    assert waiting["chips"] == 0, waiting
+    assert waiting["labels"] == 0, waiting

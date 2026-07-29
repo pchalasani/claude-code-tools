@@ -106,8 +106,7 @@ describe("an answer that arrived since the last look", () => {
     lastLook({ [ANSWERED]: conversationState(1, true) });
     mount();
 
-    press("j");
-    press("j");
+    press("J");
 
     expect(paintedCursor()).not.toBe(ANSWERED);
     expect(paintedFresh(ANSWERED)).toBe("true");

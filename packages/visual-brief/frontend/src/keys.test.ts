@@ -32,6 +32,7 @@ describe("every binding", () => {
     ["J", "next-lane"],
     ["K", "previous-lane"],
     [" ", "toggle"],
+    ["Enter", "toggle"],
     ["c", "compose"],
     ["n", "next-awaiting"],
     ["/", "search"],
@@ -76,16 +77,29 @@ describe("every binding", () => {
     expect(resolveAction({ key: "a", altKey: true })).toBeNull();
   });
 
-  it("leaves Enter to the browser, whatever holds focus", () => {
-    // Space is the page's, so the key that presses a focused control is Enter
-    // — which is what a <button> answers to natively. A keyboard reader who
-    // tabs to an evidence fold has to be able to open it.
+  it("leaves Enter native on a row disclosure", () => {
+    // A keyboard reader who tabs to an evidence fold opens that exact fold.
     const fold = element(
-      "<button class='fold-head' aria-expanded='false'>Evidence</button>",
+      "<button class='row-toggle' aria-expanded='false'>Evidence</button>",
     );
 
     expect(resolveAction({ key: "Enter", target: fold })).toBeNull();
-    expect(resolveAction({ key: "Enter" })).toBeNull();
+  });
+
+  it("leaves Enter native on an ordinary focused button", () => {
+    document.body.innerHTML =
+      "<button class='submit' type='submit'>Send</button>";
+    const submit = document.querySelector(".submit");
+    expect(resolveAction({ key: "Enter", target: submit })).toBeNull();
+  });
+
+  it("aims Enter at the cursor when unrelated focus was left behind", () => {
+    const stale = element(
+      "<button class='meta-awaiting'>2 unanswered</button>",
+    );
+
+    expect(resolveAction({ key: "Enter", target: stale })).toBe("toggle");
+    expect(resolveAction({ key: "Enter" })).toBe("toggle");
   });
 
   it("still leaves Enter alone while the human is typing", () => {

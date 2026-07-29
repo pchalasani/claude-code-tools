@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -220,3 +221,49 @@ def test_identical_pending_threads_keep_their_own_replies_when_prepended(
     }
     assert conversations[answers[0]] == [question, answers[0], replies[0]]
     assert conversations[answers[1]] == [question, answers[1], replies[1]]
+
+
+def test_an_appended_update_arrives_open_at_the_top_with_its_age(
+    browser: Browser,
+) -> None:
+    """Paint a live publish as a dated update rather than pinned state."""
+    arrived = datetime.now(timezone.utc) - timedelta(minutes=4)
+    timestamp = arrived.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    browser.data["updates"].append(
+        {
+            "id": "just-published",
+            "timestamp": timestamp,
+            "headline": "A live update",
+            "summary": "Appended while the reader stays on the page.",
+            "lanes": [],
+        }
+    )
+
+    browser.publish()
+    browser.wait_for_row("just-published")
+    state = browser.evaluate(
+        """
+        (() => {
+          const updates = [
+            ...document.querySelectorAll('[data-row-kind="update"]'),
+          ];
+          const latest = updates[0];
+          return {
+            order: updates.map((row) => row.dataset.rowId),
+            open: latest?.dataset.open ?? null,
+            timestamp:
+              latest?.querySelector(".update-time")?.textContent ?? null,
+            age: latest?.querySelector(".update-age")?.textContent ?? null,
+            divider: document.querySelector(".earlier-heading") !== null,
+            nowMark: document.querySelector(".now-mark") !== null,
+          };
+        })()
+        """
+    )
+
+    assert state["order"][0] == "just-published", state
+    assert state["open"] == "true", state
+    assert state["timestamp"] == timestamp, state
+    assert state["age"] in {"4 minutes ago", "5 minutes ago"}, state
+    assert state["divider"] is False, state
+    assert state["nowMark"] is False, state

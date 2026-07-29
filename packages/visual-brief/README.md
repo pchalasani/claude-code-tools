@@ -24,7 +24,6 @@ validates the whole document first, writes atomically, and re-renders the
 page:
 
 ```bash
-visual-brief publish-now --file now.json   # rewrite the pinned Now panel
 visual-brief add-update --file update.json # append one dated update
 visual-brief fold                          # queued questions into the page
 visual-brief answer <thread-id> --text "…" # reply to one conversation
@@ -49,14 +48,14 @@ comfortable reading position. Clicking a row moves the same cursor.
 
 | Key | What it does |
 | --- | --- |
-| `j` / `k` | Next / previous item |
+| `j` / `k` | Next / previous painted content row |
 | `J` / `K` | Next / previous lane |
 | `Space` | Expand or collapse the cursor row |
 | `E` / `C` | Expand everything / collapse back to lanes |
 | `f` | Label every row on the page, then type a label to jump there |
 | `c` | Chat wherever the cursor is: update, lane, item or conversation |
 | `⌘`/`Ctrl` + `Enter` | Send what you have written |
-| `n` | Next question awaiting an answer |
+| `n` | Next open chat: unanswered or a fresh unseen answer |
 | `m` | Show every conversation you have written in |
 | `/` | Search items |
 | `g` / `G` | Top / bottom |
@@ -67,15 +66,22 @@ Every granularity the mouse can chat at, the keyboard reaches: `J`/`K` onto a
 lane and `c` opens exactly the box that lane's own Chat button opens.
 
 `m` is how you find your own conversations again. Collapsing the page hides
-them, and `n` only visits the ones still waiting for an answer, so the chats
-view collects every thread you have written in — answered or not — and `j`/`k`
-walk them. Inside an expanded lane each item also carries a small muted number,
-so a conversation can refer to "item 12".
+them, while `n` visits anything that still needs your attention: an unanswered
+conversation or a fresh answer you have not seen. The chats view collects every
+thread you have written in — answered or not — and `j`/`k` walk them. Newer
+conversations appear first. Inside an expanded lane each item also carries a
+small muted number, so a conversation can refer to "item 12".
 
 Keys stay inert while you are typing, so a question can contain the letter `j`.
 Inside the chat box plain `Enter` starts a new line; sending is the chord.
-`Enter` outside a text box belongs to the browser, so a control you tabbed to
-still opens the way it does anywhere else.
+`Enter` outside a text box opens or closes the cursor row. A control reached
+with Tab keeps its ordinary keyboard behavior.
+
+Drafts belong to their rows and survive navigation, folding, publishing and a
+reload. Opening another chat does not replace the first draft. Sending clears
+only the message that was sent. An empty draft closes with `Escape`; a nonempty
+one requires a second `Escape`, or the explicit discard control, before it is
+erased.
 
 While a message is on its way and until its answer arrives, the page says
 `agent is working` where the answer will land. When an answer arrives, its
@@ -90,9 +96,8 @@ arrives under the ordinary rules, so nothing lands hidden.
 
 The waiting sign follows the message rather than the page. It is recognised by
 its own words and the instant the daemon queued them, so it is retired wherever
-the fold puts it. A message that never appears at all stops claiming progress
-and says `submitted — refresh if this persists` instead — and then stays,
-because a message you wrote that the page cannot account for is worth showing.
+the fold puts it. If a message takes several polls to appear, the page adds
+`submitted — refresh if this persists` without taking the working sign away.
 
 An open tab also looks after itself. It asks the local daemon for the current
 page generation on a timer, backs off while the daemon is unreachable, and

@@ -13,6 +13,15 @@ import {
 
 useHarness();
 
+function writeDraft(text: string): void {
+  const box = document.querySelector<HTMLTextAreaElement>(".composer textarea");
+  if (box === null) {
+    throw new Error("no chat box");
+  }
+  box.value = text;
+  box.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 describe("writing where the cursor is", () => {
   it("points the composer at the row the second key saw", () => {
     mount();
@@ -108,6 +117,76 @@ describe("writing where the cursor is", () => {
     press("c");
 
     expect(document.querySelector(".composer")).not.toBeNull();
+  });
+
+  it("restores each row's draft after opening another chat", () => {
+    mount();
+    press("c");
+    writeDraft("Alpha draft");
+    document
+      .querySelector<HTMLElement>(
+        '[data-row-id="newest/changed/beta"] .chat-button',
+      )
+      ?.click();
+    writeDraft("Beta draft");
+
+    document
+      .querySelector<HTMLElement>(
+        '[data-row-id="newest/changed/alpha"] .chat-button',
+      )
+      ?.click();
+    expect(
+      document.querySelector<HTMLTextAreaElement>(".composer textarea")?.value,
+    ).toBe("Alpha draft");
+
+    document
+      .querySelector<HTMLElement>(
+        '[data-row-id="newest/changed/beta"] .chat-button',
+      )
+      ?.click();
+    expect(
+      document.querySelector<HTMLTextAreaElement>(".composer textarea")?.value,
+    ).toBe("Beta draft");
+  });
+
+  it("keeps a draft through folding and collapsing the page", () => {
+    mount();
+    press("c");
+    writeDraft("Keep this through every fold");
+    click("newest/changed/alpha");
+    expect(document.querySelector(".composer")).toBeNull();
+
+    press("C");
+    click("newest/changed");
+    click("newest/changed/alpha");
+    document
+      .querySelector<HTMLElement>(
+        '[data-row-id="newest/changed/alpha"] .chat-button',
+      )
+      ?.click();
+
+    expect(
+      document.querySelector<HTMLTextAreaElement>(".composer textarea")?.value,
+    ).toBe("Keep this through every fold");
+  });
+
+  it("requires a second Escape before discarding a non-empty draft", () => {
+    mount();
+    press("c");
+    writeDraft("These words belong to the human");
+
+    press("Escape");
+    expect(document.querySelector(".composer")).not.toBeNull();
+    expect(document.querySelector(".composer .status")?.textContent).toContain(
+      "again",
+    );
+
+    press("Escape");
+    expect(document.querySelector(".composer")).toBeNull();
+    press("c");
+    expect(
+      document.querySelector<HTMLTextAreaElement>(".composer textarea")?.value,
+    ).toBe("");
   });
 
   it("says the agent is working under every unanswered conversation", () => {

@@ -9,7 +9,6 @@ question would return as a phantom duplicate. These tests hold that shut.
 
 from __future__ import annotations
 
-import copy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -30,7 +29,6 @@ from visual_brief.writes import (
     add_update_command,
     answer_command,
     fold_command,
-    publish_now_command,
 )
 from visual_brief.writes.lint import lint_command, lint_run
 
@@ -43,26 +41,6 @@ HISTORY = {
     "summary": "Recorded as history.",
     "lanes": [],
 }
-PANEL = {
-    "headline": "Where the work stands",
-    "summary": "Republished over the old one.",
-    "lanes": [
-        {
-            "id": "state",
-            "name": "What works",
-            "items": [
-                {
-                    "id": "tests",
-                    "glance": "The suite runs end to end.",
-                    "explanation": "Rewritten on this publish.",
-                    "trust": "verified-by-me",
-                }
-            ],
-        }
-    ],
-}
-
-
 def _legacy_run(root: Path) -> tuple[Path, str, dict[str, Any]]:
     """Build a run holding one undated pair and the queue line behind it.
 
@@ -106,20 +84,6 @@ def test_a_verb_leaves_an_untouched_legacy_pair_byte_for_byte(
     assert count_unanswered_questions(run_dir) == 0
 
 
-def test_republishing_carries_a_legacy_pair_across_as_a_pair(
-    tmp_path: Path,
-) -> None:
-    """The panel rewrite moves the old entry; it does not rewrite it."""
-    root = tmp_path / "runs"
-    run_dir, _, _ = _legacy_run(root)
-
-    assert publish_now_command(root, None, copy.deepcopy(PANEL)) == 0
-    assert publish_now_command(root, None, copy.deepcopy(PANEL)) == 0
-
-    assert threads_at(read_content_file(run_dir), ANCHOR) == [PAIR]
-    assert count_unanswered_questions(run_dir) == 0
-
-
 def test_answering_a_legacy_pair_dates_it_from_its_own_queue_line(
     tmp_path: Path,
 ) -> None:
@@ -159,7 +123,7 @@ def test_a_matched_legacy_pair_is_left_alone_by_the_checks(
 
     assert lint_command(root, None, strict=True) == 0
     assert fold_command(root, None) == 0
-    assert publish_now_command(root, None, copy.deepcopy(PANEL)) == 0
+    assert add_update_command(root, None, HISTORY) == 0
     assert lint_command(root, None, strict=True) == 0
 
     captured = capsys.readouterr()

@@ -78,6 +78,13 @@ def _read(row_id: str, inner: str = ":scope > .row-body") -> str:
         bullets: [...body.querySelectorAll("ul.md-list li")].map(
           (one) => one.textContent,
         ),
+        ordered: [...body.querySelectorAll("ol.md-list")].map((one) => ({{
+          start: one.start,
+          style: getComputedStyle(one).listStyleType,
+          items: [...one.querySelectorAll("li")].map(
+            (item) => item.textContent,
+          ),
+        }})),
         text: body.textContent,
       }};
     }})()
@@ -91,15 +98,20 @@ def _plant(browser: Browser) -> None:
         browser: The open browser, whose ``data`` is the served document.
     """
     update_id, lane_id, item_id = ITEM.split("/")
-    item: dict[str, Any] = next(
-        item
+    update: dict[str, Any] = next(
+        update
         for update in browser.data["updates"]
         if update["id"] == update_id
+    )
+    item: dict[str, Any] = next(
+        item
         for lane in update["lanes"]
         if lane["id"] == lane_id
         for item in lane["items"]
         if item["id"] == item_id
     )
+    update["summary"] = f"A **current** summary. {IMAGE}"
+    item["glance"] = f"A **checked** glance. {IMAGE}"
     item["explanation"] = (
         f"A **checked** claim about `read_served_page`.\n\n"
         f"- one\n- two\n\n{IMAGE}\n\n{HOSTILE_LINK}\n\n{SAFE_LINK}"
@@ -116,7 +128,10 @@ def _plant(browser: Browser) -> None:
                 },
                 {
                     "author": "agent",
-                    "text": f"Yes — **checked**:\n\n```\n{IMAGE}\n```",
+                    "text": (
+                        f"Yes — **checked**:\n\n```\n{IMAGE}\n```\n\n"
+                        f"7. And the point keeps its number"
+                    ),
                     "at": "2026-07-25T20:31:00Z",
                 },
             ],
@@ -163,6 +178,51 @@ def test_the_item_reads_its_explanation_as_prose(browser: Browser) -> None:
     # The characters the author wrote are all still there — as characters.
     assert IMAGE in painted["text"], painted
     assert HOSTILE_LINK in painted["text"], painted
+
+
+def test_the_summary_and_glance_read_markdown_without_trusting_it(
+    browser: Browser,
+) -> None:
+    """The two newly supported prose fields share the escape-first renderer."""
+    painted = browser.evaluate(
+        f"""
+        (() => {{
+          const summary = document.querySelector(
+            '[data-row-id="{ITEM.split("/")[0]}"] .update-summary',
+          );
+          const glance = document.querySelector(
+            '[data-row-id="{ITEM}"] .glance',
+          );
+          return {{
+            summaryStrong: summary?.querySelector("strong")?.textContent,
+            glanceStrong: glance?.querySelector("strong")?.textContent,
+            summaryText: summary?.textContent,
+            glanceText: glance?.textContent,
+          }};
+        }})()
+        """
+    )
+
+    assert painted["summaryStrong"] == "current", painted
+    assert painted["glanceStrong"] == "checked", painted
+    assert IMAGE in painted["summaryText"], painted
+    assert IMAGE in painted["glanceText"], painted
+
+
+def test_an_ordered_turn_keeps_its_written_start(browser: Browser) -> None:
+    """A leading ``7.`` paints a decimal list beginning with seven."""
+    painted = browser.read_until(
+        _read(THREAD),
+        lambda seen: seen is not None and len(seen["ordered"]) > 0,
+    )
+
+    assert painted["ordered"] == [
+        {
+            "start": 7,
+            "style": "decimal",
+            "items": ["And the point keeps its number"],
+        }
+    ], painted
 
 
 def test_a_link_on_the_allowlist_is_the_only_kind_that_becomes_one(

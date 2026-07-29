@@ -16,8 +16,8 @@ import {
 import { evidenceRowId } from "./evidence";
 import { EvidenceView } from "./evidence-view";
 import { Markdown } from "./markdown-view";
-import { threadRowId, type Row } from "./outline";
-import { AwaitingChip, RowShell, VisibleRow } from "./row-shell";
+import { orderedThreads, threadRowId, type Row } from "./outline";
+import { RowShell, VisibleRow } from "./row-shell";
 import type { BriefState } from "./state";
 import { ThreadView } from "./thread-view";
 
@@ -38,8 +38,9 @@ export function ItemView(props: {
       row={props.row}
       head={
         <>
-          <span class="glance">{props.item.glance}</span>
-          <AwaitingChip when={props.row.awaiting} />
+          <div class="glance">
+            <Markdown text={props.item.glance} />
+          </div>
           <TrustChip trust={props.item.trust} />
         </>
       }
@@ -51,12 +52,6 @@ export function ItemView(props: {
         />
       }
     >
-      {/*
-        The glance stays plain text: it is this row's name, and the same
-        string is the chat control's accessible label and part of what the
-        search reads. The explanation is prose, and prose is where agents
-        write markdown.
-      */}
       <div class="explanation">
         <Markdown text={props.item.explanation} />
       </div>
@@ -74,7 +69,7 @@ export function ItemView(props: {
           )}
         </VisibleRow>
       </Show>
-      <For each={props.item.questions ?? []}>
+      <For each={orderedThreads(props.item.questions)}>
         {(thread) => (
           <VisibleRow
             state={props.state}

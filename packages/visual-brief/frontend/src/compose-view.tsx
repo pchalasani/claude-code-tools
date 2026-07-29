@@ -92,8 +92,12 @@ export function ComposeBox(props: {
           <span class="chord-hint">
             <kbd>{SEND_CHORD_LABEL}</kbd>
           </span>
-          <button type="button" class="quiet" onClick={() => composer.close()}>
-            <kbd>Esc</kbd> Cancel
+          <button
+            type="button"
+            class="quiet"
+            onClick={() => composer.discard()}
+          >
+            Discard draft
           </button>
           <span class="status" aria-live="polite">
             {composer.status()}
@@ -153,10 +157,9 @@ export function WorkingSign(props: {
 /**
  * The sign a message that never arrived degrades to.
  *
- * A moving sign is a promise that something is happening. Once a page load
- * and several polls have gone by without the human's words appearing anywhere
- * on the page, that promise is no longer one this page can keep, so it says
- * the true and much smaller thing instead.
+ * Several polls without the human's words appearing adds a diagnostic beside
+ * the continuous working sign. It must not replace that sign: doing so opened
+ * the visible gap between the accepted submission and the eventual thread.
  *
  * @returns The still statement.
  */
@@ -173,7 +176,7 @@ export function SubmissionStalled(): JSX.Element {
  *
  * The notes say what was sent; whether the agent is working is said once, by
  * the sign, and never from here. A note that has waited too long adds the
- * smaller true statement beside itself rather than replacing anything.
+ * smaller diagnostic beside itself rather than replacing anything.
  *
  * @param props - The row and its state.
  * @returns The pending notes.
@@ -187,13 +190,8 @@ export function PendingNotes(props: {
       {(note) => (
         <>
           <p class="pending" data-stalled={note.stalled ? "true" : "false"}>
-            <span class="chip chip-awaiting">
-              <span class="chip-mark" aria-hidden="true">
-                ●
-              </span>
-              Sent
-            </span>
-            You asked: {note.text} — awaiting an answer
+            <span class="pending-label">Sent</span> You asked: {note.text} —
+            awaiting an answer
           </p>
           <Show when={note.stalled}>
             <SubmissionStalled />

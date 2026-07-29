@@ -1,10 +1,10 @@
 /*
  * The small marks the page paints onto rows: jump labels, citation numbers,
- * and the way news of an unanswered question arrives.
+ * and the quiet rails that locate an unanswered question.
  *
  * All three are quiet by construction. A label is only there while the human
- * is asking for one, a number is a number, and an arriving chip fades in from
- * where the human is looking outwards rather than repainting the page at once.
+ * is asking for one, a number is a number, and a rail marks the row without
+ * adding repeated words at every containing level.
  */
 
 /* ---------- jump labels ---------- */
@@ -61,54 +61,27 @@
   text-transform: uppercase;
 }
 
-.pending[data-stalled="true"] {
-  border-left-color: var(--rule);
-}
-
-/* ---------- the news arriving ---------- */
+/* ---------- waiting rails ---------- */
 
 /*
- * After a send the page reloads under the human, and every level above the
- * conversation they wrote in acquires an awaiting chip at once. Arriving in
- * one frame reads as the whole page changing; arriving from the conversation
- * outwards reads as one thing happening, which is what did happen.
+ * One unanswered conversation gets one strong rail on its own row. Its
+ * ancestors use the same mark quietly, so a folded container cannot hide the
+ * fact without repeating the alarm at every level.
  */
-@keyframes chip-arrive {
-  from {
-    opacity: 0;
-    transform: translateY(-2px);
-  }
-
-  to {
-    opacity: 1;
-    transform: none;
-  }
+.row[data-waiting="direct"] > .row-head {
+  border-left-color: var(--ink);
 }
 
-.chip-awaiting {
-  animation: chip-arrive 260ms cubic-bezier(0.2, 0, 0, 1) both;
+.row[data-waiting="contained"] > .row-head {
+  border-left-color: var(--rule-strong);
 }
 
-.row-thread > .row-head .chip-awaiting {
-  animation-delay: 0ms;
+.row[data-waiting][data-cursor="true"] > .row-head {
+  border-left-color: var(--select);
 }
 
-.row-item > .row-head .chip-awaiting {
-  animation-delay: 70ms;
-}
-
-.row-lane > .row-head .chip-awaiting {
-  animation-delay: 140ms;
-}
-
-.row-update > .row-head .chip-awaiting {
-  animation-delay: 210ms;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .chip-awaiting {
-    animation: none !important;
-  }
+.row[data-waiting][data-fresh="true"] > .row-head {
+  border-left-color: var(--select-edge);
 }
 
 /* ---------- the chats view ---------- */

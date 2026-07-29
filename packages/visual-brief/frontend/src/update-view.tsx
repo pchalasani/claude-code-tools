@@ -1,5 +1,6 @@
-import { For, Show, type JSX } from "solid-js";
+import { For, type JSX } from "solid-js";
 
+import { humanAge } from "./age";
 import {
   ComposeBox,
   ComposeButton,
@@ -8,23 +9,20 @@ import {
 } from "./compose-view";
 import type { Lane, Update } from "./document";
 import {
-  NOW_UPDATE_ID,
   itemRowId,
   laneRowId,
+  orderedThreads,
   threadRowId,
   type Row,
 } from "./outline";
 import { ItemView } from "./item-view";
-import { AwaitingChip, RowShell, VisibleRow } from "./row-shell";
+import { Markdown } from "./markdown-view";
+import { RowShell, VisibleRow } from "./row-shell";
 import type { BriefState } from "./state";
 import { ThreadView } from "./thread-view";
 
 /**
  * One published update, holding its lanes.
- *
- * The update carrying the reserved ``now`` id is not history: it is the Now
- * panel, pinned first by the outline and marked here so its head reads as
- * current state ("as of ...") rather than as a dated event.
  *
  * @param props - The update, its row and the page state.
  * @returns The rendered update.
@@ -33,28 +31,29 @@ export function UpdateView(props: {
   state: BriefState;
   row: Row;
   update: Update;
+  now: number;
 }): JSX.Element {
-  const isNow = () => props.update.id === NOW_UPDATE_ID;
   return (
     <RowShell
       state={props.state}
       row={props.row}
       head={
         <>
-          <Show when={isNow()}>
-            <span class="now-mark">Now</span>
-          </Show>
           <span class="update-title">{props.update.headline}</span>
-          <AwaitingChip when={props.row.awaiting} />
-          <time class="update-time">
-            {isNow()
-              ? `as of ${props.update.timestamp}`
-              : props.update.timestamp}
-          </time>
+          <span class="update-when">
+            <time class="update-time" dateTime={props.update.timestamp}>
+              {props.update.timestamp}
+            </time>
+            <span class="update-age">
+              {humanAge(props.update.timestamp, props.now)}
+            </span>
+          </span>
         </>
       }
     >
-      <p class="update-summary">{props.update.summary}</p>
+      <div class="update-summary">
+        <Markdown text={props.update.summary} />
+      </div>
       <For each={props.update.lanes ?? []}>
         {(lane) => (
           <VisibleRow
@@ -91,7 +90,6 @@ export function LaneView(props: {
       head={
         <>
           <span class="lane-name">{props.lane.name}</span>
-          <AwaitingChip when={props.row.awaiting} />
           <span class="row-count">{shown()}</span>
         </>
       }
@@ -111,7 +109,7 @@ export function LaneView(props: {
         for the box. The outline lists these rows in this same order, because
         the two are one list.
       */}
-      <For each={props.lane.questions ?? []}>
+      <For each={orderedThreads(props.lane.questions)}>
         {(thread) => (
           <VisibleRow
             state={props.state}

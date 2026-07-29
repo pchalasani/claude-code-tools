@@ -55,7 +55,8 @@ def _working_at(row_id: str) -> str:
           && motion.animationName !== "none"
           && motion.animationIterationCount === "infinite"
           && motion.animationDuration !== "0s",
-        awaiting: document.querySelectorAll(".chip-awaiting").length > 0,
+        awaiting:
+          document.querySelectorAll('[data-waiting="direct"]').length > 0,
       }};
     }})()
     """
@@ -147,7 +148,7 @@ def test_the_page_says_the_agent_is_working_until_the_answer_lands(
     try:
         browser.compose_at(ITEM)
         browser.run("fill", ".composer textarea", "Is anything happening?")
-        browser.run("click", ".composer .submit")
+        browser.submit()
         deadline = time.monotonic() + 2
         while browser.server.post_count < 1 and time.monotonic() < deadline:
             time.sleep(0.01)
@@ -184,7 +185,7 @@ def test_the_working_sign_stands_still_where_motion_is_unwelcome(
     try:
         browser.compose_at(ITEM)
         browser.run("fill", ".composer textarea", "Is anything happening?")
-        browser.run("click", ".composer .submit")
+        browser.submit()
         deadline = time.monotonic() + 2
         while browser.server.post_count < 1 and time.monotonic() < deadline:
             time.sleep(0.01)
@@ -251,18 +252,12 @@ def test_the_working_sign_outlives_a_publish_that_carries_no_answer(
     assert browser.evaluate(_working_at(ITEM))["count"] == 0
 
 
-def test_the_arriving_chips_stand_beside_the_sign_rather_than_replacing_it(
+def test_the_waiting_rail_stands_beside_the_working_sign(
     browser: Browser,
 ) -> None:
-    """Let both be true at once, because both are.
-
-    The reload a send causes brings the awaiting chips up all the way to the
-    top of the page. That is news about the question; the sign is news about
-    the agent, and it is the more informative of the two. The human reported
-    watching the second disappear as the first arrived.
-    """
-    question = "Do the chips push the sign off the page?"
-    thread_id = "q-chips-and-sign"
+    """Keep one direct mark while its containers quietly carry the fact."""
+    question = "Does the rail leave the sign in place?"
+    thread_id = "q-rail-and-sign"
     browser.compose_at(ITEM)
     browser.send(question)
     browser.read_until(landing_at(ITEM), lambda seen: seen["note"] is not None)
@@ -277,23 +272,50 @@ def test_the_arriving_chips_stand_beside_the_sign_rather_than_replacing_it(
     sign = browser.read_until(
         _working_at(folded), lambda seen: seen["count"] == 1
     )
-    chips = browser.evaluate(
-        f"""
-        (() => {{
+    rails = browser.evaluate(
+        """
+        (() => {
           const rows = [...document.querySelectorAll("[data-row-id]")];
-          return rows
-            .filter((row) =>
-              row.querySelector(":scope > .row-head .chip-awaiting") !== null,
-            )
-            .map((row) => row.dataset.rowId);
-        }})()
+          return Object.fromEntries(
+            rows
+              .filter((row) => row.dataset.waiting !== undefined)
+              .map((row) => [row.dataset.rowId, row.dataset.waiting]),
+          );
+        })()
         """
     )
 
     assert sign["count"] == 1, sign
     assert sign["text"] == "agent is working", sign
-    # Every level above the conversation now says it is waiting, and the
-    # conversation still says what is happening about it.
-    assert folded in chips, chips
-    assert ITEM in chips, chips
-    assert "current-update/what-changed" in chips, chips
+    assert rails[folded] == "direct", rails
+    assert rails[ITEM] == "contained", rails
+    assert rails["current-update/what-changed"] == "contained", rails
+
+
+def test_newest_conversation_is_painted_first(browser: Browser) -> None:
+    """Put the most recently appended conversation first in a real page."""
+    _fold_question_into_content(
+        browser,
+        "q-older",
+        "This question arrived first.",
+        "2026-07-25T15:00:00Z",
+    )
+    _fold_question_into_content(
+        browser,
+        "q-newer",
+        "This question arrived second.",
+        "2026-07-25T16:00:00Z",
+    )
+    browser.data["title"] = "Two conversations in append order"
+    browser.publish()
+    browser.wait_for_title("Two conversations in append order")
+
+    painted = browser.evaluate(
+        f"""
+        [...document.querySelectorAll(
+          '[data-row-id="{ITEM}"] > .row-body > .row-thread',
+        )].map((row) => row.dataset.rowId)
+        """
+    )
+
+    assert painted == [f"{ITEM}#q-newer", f"{ITEM}#q-older"]

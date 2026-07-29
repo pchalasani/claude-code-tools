@@ -1,7 +1,8 @@
 import { For, type JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
 
-import { parseMarkdown, type Block, type Inline } from "./markdown";
+import { parseMarkdown, type Block } from "./markdown-blocks";
+import type { Inline } from "./markdown";
 
 /**
  * Paint markdown as elements, never as markup.
@@ -33,9 +34,9 @@ function blockView(block: Block): JSX.Element {
     return <pre class="md-code-block">{block.text}</pre>;
   }
   if (block.kind === "heading") {
-    // Never an h1 or an h2: the page's own title and its "Earlier updates"
-    // divider own those, and a heading written inside one item must not
-    // outrank the structure it is sitting in.
+    // Never an h1 or an h2: the page's own title and update headlines own
+    // those levels, and a heading written inside one item must not outrank
+    // the structure it is sitting in.
     return (
       <Dynamic
         component={`h${Math.min(6, block.level + 3)}`}
@@ -48,7 +49,7 @@ function blockView(block: Block): JSX.Element {
   if (block.kind === "list") {
     const items = <For each={block.items}>{(item) => <li>{inlines(item)}</li>}</For>;
     return block.ordered ? (
-      <ol class="md-list">{items}</ol>
+      <ol class="md-list" start={block.start}>{items}</ol>
     ) : (
       <ul class="md-list">{items}</ul>
     );

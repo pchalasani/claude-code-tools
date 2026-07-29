@@ -160,7 +160,7 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
       return;
     }
     if (composer.target() !== null) {
-      composer.close();
+      composer.escape();
       return;
     }
     if (nav.chats()) {
@@ -203,7 +203,7 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
       "expand-all": () => nav.expandAll(),
       "collapse-all": () => nav.collapseAll(),
       compose: composeAtCursor,
-      "next-awaiting": () => nav.toAwaiting(),
+      "next-awaiting": () => nav.toOpenChat(),
       chats: () => nav.toggleChats(),
       // Labels never arm over a modal: they would paint behind the scrim
       // and their handler would swallow the dialog's Escape. The search

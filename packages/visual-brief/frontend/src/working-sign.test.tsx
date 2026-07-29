@@ -65,14 +65,12 @@ function signs(): string[] {
   );
 }
 
-/**
- * Read the rows wearing an awaiting chip.
- *
- * @returns The row id under each chip.
- */
-function chips(): string[] {
-  return [...document.querySelectorAll(".row-head .chip-awaiting")].map(
-    (chip) => chip.closest("[data-row-id]")?.getAttribute("data-row-id") ?? "",
+/** Read the waiting rail strength painted on every marked row. */
+function rails(): Record<string, string> {
+  return Object.fromEntries(
+    [...document.querySelectorAll<HTMLElement>("[data-waiting]")].map(
+      (row) => [row.dataset.rowId ?? "", row.dataset.waiting ?? ""],
+    ),
   );
 }
 
@@ -101,15 +99,15 @@ describe("the sign across a page load that followed a send", () => {
     expect(document.querySelectorAll("p.pending")).toHaveLength(0);
   });
 
-  it("stands beside the awaiting chips rather than being replaced by them", () => {
+  it("keeps one direct rail and quiet rails on its containers", () => {
     sentBeforeTheLoad();
 
     mount(foldedIn());
 
-    expect(chips()).toContain(FOLDED);
-    expect(chips()).toContain(ITEM);
-    expect(chips()).toContain("newest/next");
-    expect(chips()).toContain("newest");
+    expect(rails()[FOLDED]).toBe("direct");
+    expect(rails()[ITEM]).toBe("contained");
+    expect(rails()["newest/next"]).toBe("contained");
+    expect(rails().newest).toBe("contained");
     expect(signs()).toEqual([ALREADY_OPEN, FOLDED]);
   });
 
@@ -121,33 +119,25 @@ describe("the sign across a page load that followed a send", () => {
     expect(signs().filter((row) => row === FOLDED)).toHaveLength(1);
   });
 
-  it("survives a submission that gave up on ever being found", () => {
-    // A message that never appears stops promising progress — but that is a
-    // statement about the message. The conversation the document says is
-    // unanswered is a different claim, and it used to be silenced by the
-    // first one sitting on the same row.
-    saveSentRecords([
-      {
-        rowId: FOLDED,
-        anchorId: ITEM,
-        text: "A follow-up nobody ever saw",
-        at: STAMP,
-      },
-    ]);
-    mount(foldedIn());
-    for (let poll = 0; poll < 3; poll += 1) {
+  it("stays continuous when a pending submission reaches its diagnostic", () => {
+    // The third poll used to remove the sign while leaving the pending note in
+    // place. The sign returned only when a later publish made the message an
+    // awaiting conversation: the exact flap reported from the live page.
+    sentBeforeTheLoad();
+    mount();
+    for (let poll = 0; poll < STALL_POLLS; poll += 1) {
       announcePoll("same");
     }
 
     expect(
-      document.querySelector(`[data-row-id="${FOLDED}"] p.pending`)
+      document.querySelector(`[data-row-id="${ITEM}"] p.pending`)
         ?.getAttribute("data-stalled"),
     ).toBe("true");
     expect(
-      document.querySelector(`[data-row-id="${FOLDED}"] p.stalled`)
+      document.querySelector(`[data-row-id="${ITEM}"] p.stalled`)
         ?.textContent,
     ).toBe("submitted — refresh if this persists");
-    expect(signs()).toEqual([ALREADY_OPEN, FOLDED]);
+    expect(signs()).toEqual([ALREADY_OPEN, ITEM]);
   });
 
   it("keeps the words legible rather than painting them through anything", () => {

@@ -172,6 +172,58 @@ describe("composition", () => {
     ]);
   });
 
+  it("keeps one draft per row across navigation and a new page state", () => {
+    const composer = createComposer();
+    composer.toggleAt({ rowId: "u/l/a", anchorId: "u/l/a" });
+    composer.setText("Draft for A");
+    composer.toggleAt({ rowId: "u/l/b", anchorId: "u/l/b" });
+    composer.setText("Draft for B");
+    composer.close();
+
+    const reloaded = createComposer();
+    reloaded.toggleAt({ rowId: "u/l/a", anchorId: "u/l/a" });
+    expect(reloaded.text()).toBe("Draft for A");
+    reloaded.toggleAt({ rowId: "u/l/b", anchorId: "u/l/b" });
+    expect(reloaded.text()).toBe("Draft for B");
+  });
+
+  it("needs two Escapes to discard words but one for an empty box", () => {
+    const composer = createComposer();
+    composer.toggleAt({ rowId: "u/l/a", anchorId: "u/l/a" });
+    composer.escape();
+    expect(composer.target()).toBeNull();
+
+    composer.toggleAt({ rowId: "u/l/a", anchorId: "u/l/a" });
+    composer.setText("Do not lose this");
+    composer.escape();
+    expect(composer.target()?.rowId).toBe("u/l/a");
+    expect(composer.text()).toBe("Do not lose this");
+    expect(composer.status()).toContain("again");
+
+    composer.escape();
+    expect(composer.target()).toBeNull();
+    composer.toggleAt({ rowId: "u/l/a", anchorId: "u/l/a" });
+    expect(composer.text()).toBe("");
+  });
+
+  it("clears only the draft that was sent", async () => {
+    const daemon = recorder();
+    const composer = createComposer(daemon.post);
+    composer.toggleAt({ rowId: "u/l/a", anchorId: "u/l/a" });
+    composer.setText("Send A");
+    composer.toggleAt({ rowId: "u/l/b", anchorId: "u/l/b" });
+    composer.setText("Keep B");
+    composer.toggleAt({ rowId: "u/l/a", anchorId: "u/l/a" });
+    const submitted = composer.submit();
+    daemon.release();
+    await submitted;
+
+    composer.toggleAt({ rowId: "u/l/a", anchorId: "u/l/a" });
+    expect(composer.text()).toBe("");
+    composer.toggleAt({ rowId: "u/l/b", anchorId: "u/l/b" });
+    expect(composer.text()).toBe("Keep B");
+  });
+
   it("reports one signal however fast the same button is pressed", async () => {
     const daemon = recorder();
     const composer = createComposer(daemon.post);

@@ -9,7 +9,7 @@ import {
 import type { Thread } from "./document";
 import { Markdown } from "./markdown-view";
 import type { Row } from "./outline";
-import { AwaitingChip, NewAnswerChip, RowShell } from "./row-shell";
+import { NewAnswerChip, RowShell } from "./row-shell";
 import type { BriefState } from "./state";
 
 /**
@@ -30,7 +30,6 @@ export function ThreadView(props: {
       head={
         <>
           <span class="thread-title">{props.row.label}</span>
-          <AwaitingChip when={props.row.awaiting} />
           <NewAnswerChip when={props.state.nav.isFresh(props.row.id)} />
           <span class="row-count">
             {props.thread.turns.length}{" "}

@@ -101,15 +101,20 @@
 
 .pending {
   background: var(--surface-2);
-  border-left: var(--rail) solid var(--rule-strong);
   color: var(--ink-quiet);
   font-size: var(--t-sm);
   margin: 0.45rem 0;
   padding: 0.35rem 0.6rem;
 }
 
-.pending .chip {
+.pending-label {
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
   margin-right: 0.4rem;
+  text-transform: uppercase;
 }
 
 .chord-hint {

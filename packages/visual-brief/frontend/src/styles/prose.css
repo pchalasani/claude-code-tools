@@ -36,6 +36,10 @@
   padding-left: 1.2rem;
 }
 
+ol.md-list {
+  list-style-type: decimal;
+}
+
 .md-list li {
   margin: 0.1rem 0;
 }

@@ -9,6 +9,7 @@
 
 import { createSignal, type Accessor } from "solid-js";
 
+import { readDrafts, saveDrafts, type Drafts } from "./draft-store";
 import { createPending, type Pending, type PendingNote } from "./pending";
 
 /** Where a composed message is going. */
@@ -63,8 +64,12 @@ export interface Composer {
   isOpenAt: (rowId: string) => boolean;
   /** Open the composer at a target, or close it if already there. */
   toggleAt: (target: ComposeTarget) => void;
-  /** Close the composer, discarding what was typed. */
+  /** Close the composer while preserving its row's draft. */
   close: () => void;
+  /** Handle Escape, requiring confirmation before discarding words. */
+  escape: () => void;
+  /** Explicitly discard the open row's draft and close it. */
+  discard: () => void;
   /** The text being written. */
   text: Accessor<string>;
   /** Replace the text being written. */
@@ -145,31 +150,89 @@ export function createComposer(
   const [status, setStatus] = createSignal("");
   const [signals, setSignals] = createSignal<Record<string, string>>({});
   const [inFlight, setInFlight] = createSignal<ReadonlySet<string>>(new Set());
+  const [drafts, setDrafts] = createSignal<Drafts>(readDrafts());
+  const [discardArmed, setDiscardArmed] = createSignal<string | null>(null);
 
-  const clear = (): void => {
+  const clearActive = (): void => {
     setTarget(null);
     setText("");
     setStatus("");
+    setDiscardArmed(null);
   };
 
   const letGo = (rowId: string, sent: boolean): void => {
-    clear();
+    clearActive();
     release(rowId, sent);
   };
 
   const close = (): void => {
-    const abandoned = target();
-    if (abandoned === null) {
-      clear();
+    const current = target();
+    if (current === null) {
+      clearActive();
       return;
     }
-    letGo(abandoned.rowId, false);
+    letGo(current.rowId, false);
+  };
+
+  const replaceDrafts = (next: Drafts): void => {
+    setDrafts(next);
+    saveDrafts(next);
+  };
+
+  const writeText = (value: string): void => {
+    setText(value);
+    setDiscardArmed(null);
+    const current = target();
+    if (current === null) {
+      return;
+    }
+    const next = { ...drafts() };
+    if (value === "") {
+      delete next[current.rowId];
+    } else {
+      next[current.rowId] = value;
+    }
+    replaceDrafts(next);
+  };
+
+  const clearDraft = (rowId: string): void => {
+    const next = { ...drafts() };
+    delete next[rowId];
+    replaceDrafts(next);
+  };
+
+  const discard = (): void => {
+    const current = target();
+    if (current === null) {
+      return;
+    }
+    clearDraft(current.rowId);
+    letGo(current.rowId, false);
+  };
+
+  const escape = (): void => {
+    const current = target();
+    if (current === null) {
+      return;
+    }
+    if (text().trim() === "") {
+      clearDraft(current.rowId);
+      letGo(current.rowId, false);
+      return;
+    }
+    if (discardArmed() === current.rowId) {
+      discard();
+      return;
+    }
+    setDiscardArmed(current.rowId);
+    setStatus("Press Escape again to discard this draft.");
   };
 
   const openAt = (wanted: ComposeTarget): void => {
     setTarget(wanted);
-    setText("");
+    setText(drafts()[wanted.rowId] ?? "");
     setStatus("");
+    setDiscardArmed(null);
   };
 
   const submit = async (): Promise<void> => {
@@ -196,6 +259,7 @@ export function createComposer(
       if (!reply.ok) {
         throw new Error("not accepted");
       }
+      clearDraft(current.rowId);
       pending.add({
         rowId: current.rowId,
         anchorId: current.anchorId,
@@ -222,8 +286,10 @@ export function createComposer(
       openAt(wanted);
     },
     close,
+    escape,
+    discard,
     text,
-    setText,
+    setText: writeText,
     sending,
     sendingAt: (rowId) => sending() && target()?.rowId === rowId,
     status,

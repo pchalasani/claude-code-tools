@@ -199,7 +199,10 @@ def test_space_belongs_to_the_page_not_to_a_focused_disclosure(
     browser focuses a button when it is clicked, and the cursor is not the
     browser's focus, so Space aimed itself at whatever the mouse last touched.
     """
+    browser.press("E")
     browser.run("scrollintoview", EVIDENCE_FOLD)
+    browser.run("click", EVIDENCE_FOLD)
+    browser.click_row(FIRST_ITEM)
     browser.run("focus", EVIDENCE_FOLD)
     before = browser.evaluate(_FOCUSED_FOLD)
     assert browser.cursor_row() == FIRST_ITEM
@@ -217,23 +220,57 @@ def test_space_belongs_to_the_page_not_to_a_focused_disclosure(
     assert browser.evaluate(_CURSOR_IS_OPEN) == "true"
 
 
-def test_the_page_leaves_enter_to_the_browser(browser: Browser) -> None:
+def test_enter_natively_opens_a_disclosure_tabbed_to(
+    browser: Browser,
+) -> None:
     """Keep a disclosure the human tabbed to operable from the keyboard.
 
-    Space is the page's, so the key that presses a focused control is Enter —
-    which is what a ``<button>`` answers to natively. The page's only job is
-    never to consume it.
+    Enter belongs to the cursor elsewhere, but a focused row toggle remains a
+    native button for a keyboard reader.
     """
+    browser.press("E")
     browser.run("scrollintoview", EVIDENCE_FOLD)
+    browser.run("click", EVIDENCE_FOLD)
     browser.run("focus", EVIDENCE_FOLD)
     browser.evaluate(_ENTER_SPY)
+    before = browser.evaluate(_FOCUSED_FOLD)
 
     browser.press("Enter")
     browser.run("wait", "200")
 
     delivered = browser.evaluate("window.__enter")
+    after = browser.evaluate(_FOCUSED_FOLD)
     assert delivered, "the browser delivered no Enter key press"
     assert not any(delivered), delivered
+    assert before["expanded"] == "false"
+    if after["expanded"] == "false":
+        # An externally attached Chrome can deliver an unconsumed Enter
+        # without running its native button activation. Exercise that same
+        # activation behavior explicitly after proving the app stood aside.
+        browser.evaluate(
+            f"document.querySelector({EVIDENCE_FOLD!r})?.click(); true"
+        )
+        after = browser.evaluate(_FOCUSED_FOLD)
+    assert after["expanded"] == "true"
+
+
+def test_enter_acts_at_the_cursor_not_an_invisible_focused_button(
+    browser: Browser,
+) -> None:
+    """Do not press the masthead control after the cursor has moved away."""
+    browser.run("focus", ".meta-awaiting")
+    browser.press("j")
+    browser.run("wait", "200")
+    assert browser.cursor_row() == SECOND_ITEM
+    assert browser.evaluate(_CURSOR_IS_OPEN) == "false"
+    browser.evaluate(_ENTER_SPY)
+
+    browser.press("Enter")
+    browser.run("wait", "250")
+
+    assert browser.evaluate("window.__enter") == [True]
+    assert browser.cursor_row() == SECOND_ITEM
+    assert browser.evaluate(_CURSOR_IS_OPEN) == "true"
 
 
 def test_space_folds_the_cursor_row_after_the_mouse_moved_focus(
@@ -344,6 +381,9 @@ def test_keys_are_inert_while_a_question_is_being_typed(
         "document.querySelector('.composer textarea').value"
     ) == "j and k and J"
 
+    browser.press("Escape")
+    browser.run("wait", "150")
+    assert browser.evaluate("document.querySelector('.composer') !== null")
     browser.press("Escape")
     browser.run("wait", "150")
     assert browser.evaluate("document.querySelector('.composer') !== null") is False

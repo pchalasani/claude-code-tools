@@ -22,14 +22,16 @@ useHarness();
  */
 function hostile(): BriefDocument {
   const brief = sampleBrief();
-  const item = brief.updates
-    .find((update) => update.id === "newest")
+  const update = brief.updates.find((one) => one.id === "newest");
+  const item = update
     ?.lanes.find((lane) => lane.id === "changed")
     ?.items.find((one) => one.id === "alpha");
   const thread = item?.questions?.[0];
-  if (item === undefined || thread === undefined) {
+  if (update === undefined || item === undefined || thread === undefined) {
     throw new Error("the sample document lost what this test writes into");
   }
+  update.summary = `A **current** summary. ${IMAGE}`;
+  item.glance = `A **checked** glance. ${IMAGE}`;
   item.explanation = `A **checked** claim.\n\n${IMAGE}\n\n${HOSTILE_LINK}`;
   thread.turns = [
     {
@@ -47,6 +49,19 @@ function hostile(): BriefDocument {
 }
 
 describe("markdown in what the agent and the human wrote", () => {
+  it("reads an update summary and item glance as prose", () => {
+    mount(hostile());
+
+    expect(
+      document.querySelector('[data-row-id="newest"] .update-summary strong')
+        ?.textContent,
+    ).toBe("current");
+    expect(
+      document.querySelector(`[data-row-id="${ITEM}"] .glance strong`)
+        ?.textContent,
+    ).toBe("checked");
+  });
+
   it("reads an item's explanation as prose", () => {
     mount(hostile());
     press("E");

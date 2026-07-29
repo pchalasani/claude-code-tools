@@ -306,8 +306,3 @@ def utc_timestamp(milliseconds: bool = False) -> str:
         .isoformat(timespec=precision)
         .replace("+00:00", "Z")
     )
-
-
-def local_timestamp() -> str:
-    """Return a human-facing local wall-clock stamp for the Now panel."""
-    return datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z").strip()

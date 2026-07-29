@@ -1,6 +1,6 @@
 """Read a verb's payload from an option, a file, or standard input.
 
-Long answers and whole Now panels do not belong in shell arguments, so every
+Long answers and whole updates do not belong in shell arguments, so every
 verb that takes content also takes ``--file F`` or a bare ``-``. Reading them
 is wiring, and it lives here so the command modules stay about the write.
 """

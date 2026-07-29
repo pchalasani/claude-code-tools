@@ -27,7 +27,6 @@ from visual_brief.writes import (
     fold_command,
     lint_command,
     new_command,
-    publish_now_command,
     publish_render,
     read_content,
     read_json_payload,
@@ -93,17 +92,9 @@ def build_parser() -> argparse.ArgumentParser:
     answer_source.add_argument("--file", help="read the answer from a file")
     _add_stdin_argument(answer_parser)
 
-    publish_parser = subparsers.add_parser(
-        "publish-now",
-        help="rewrite the Now panel",
-    )
-    _add_run_option(publish_parser)
-    publish_parser.add_argument("--file", help="read the panel from a file")
-    _add_stdin_argument(publish_parser)
-
     update_parser = subparsers.add_parser(
         "add-update",
-        help="append one dated history update",
+        help="append one dated update",
     )
     _add_run_option(update_parser)
     update_parser.add_argument("--file", help="read the update from a file")
@@ -174,12 +165,6 @@ def _dispatch(args: argparse.Namespace) -> int:
             args.run,
             args.thread_id,
             read_text_payload(args.text, args.file, args.stdin == "-"),
-        )
-    if args.command == "publish-now":
-        return publish_now_command(
-            runs_root,
-            args.run,
-            read_json_payload(args.file, args.stdin == "-"),
         )
     if args.command == "add-update":
         return add_update_command(

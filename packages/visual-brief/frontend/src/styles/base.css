@@ -252,13 +252,6 @@ button.meta-count:hover {
   color: var(--trust-limitation);
 }
 
-.chip-awaiting {
-  background: var(--ink);
-  border-color: var(--ink);
-  color: var(--ground);
-  font-weight: 600;
-}
-
 /* The one thing on the page that arrived while the human was not looking. It
    borrows the cursor's violet, which appears nowhere else, because it is the
    other thing worth walking to. */
@@ -367,9 +360,8 @@ button.meta-count:hover {
   color: var(--ink-quiet);
 }
 
-.map-lane[data-awaiting="true"] .map-label::after {
-  color: var(--ink);
-  content: " ●";
+.map-lane[data-awaiting="true"] {
+  border-left-color: var(--rule-strong);
 }
 
 .map-lane[data-current="true"] {

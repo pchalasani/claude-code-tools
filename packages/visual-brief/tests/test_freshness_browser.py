@@ -136,3 +136,23 @@ def test_the_new_mark_survives_another_publish_and_clears_on_a_visit(
     assert still_marked["open"] == "true"
     assert visited["fresh"] == "false"
     assert visited["chip"] == ""
+
+
+def test_next_open_chat_reaches_a_freshly_answered_conversation(
+    browser: Browser,
+) -> None:
+    """Let n reach an answer even though it is no longer awaiting."""
+    browser.press("g")
+    browser.run("wait", "250")
+    _answer(browser, "Malformed and unsupported now differ.", "2026-07-25T21:00:00Z")
+    browser.data["title"] = "The answer landed"
+    browser.publish()
+    browser.wait_for_title("The answer landed")
+    browser.run("wait", "400")
+    assert browser.evaluate(_ROW_STATE)["fresh"] == "true"
+
+    browser.press("n")
+    browser.run("wait", "300")
+
+    assert browser.cursor_row() == AWAITING_THREAD
+    assert browser.evaluate(_ROW_STATE)["fresh"] == "false"

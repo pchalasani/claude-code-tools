@@ -1,8 +1,8 @@
 import {
   For,
-  Show,
   createEffect,
   createMemo,
+  createSignal,
   onCleanup,
   onMount,
   type JSX,
@@ -15,7 +15,7 @@ import {
   type BriefDocument,
 } from "./document";
 import { TrustChip } from "./item-view";
-import { NOW_UPDATE_ID, orderedUpdates } from "./outline";
+import { orderedUpdates } from "./outline";
 import { HelpOverlay, KeyBar, SearchOverlay } from "./overlays";
 import { onPollCycle } from "./reload";
 import { VisibleRow } from "./row-shell";
@@ -32,8 +32,10 @@ import { UpdateView } from "./update-view";
  */
 export function App(props: { brief: BriefDocument }): JSX.Element {
   const state = createBriefState(() => props.brief);
+  const [now, setNow] = createSignal(Date.now());
   const onKey = (event: KeyboardEvent): void => state.handleKey(event);
   let stopWatching: (() => void) | null = null;
+  let ageTimer: number | null = null;
   // The tab's own name for this run follows the document rather than the page
   // it was served in: a patched page whose title still said what it said an
   // hour ago would be lying in the one place the human cannot expand.
@@ -46,39 +48,35 @@ export function App(props: { brief: BriefDocument }): JSX.Element {
     // and "eventually" is counted in polls rather than in seconds: the page
     // is only ever wrong about this when the daemon has gone quiet.
     stopWatching = onPollCycle(() => state.pending.tick());
+    ageTimer = window.setInterval(() => setNow(Date.now()), 30_000);
     // A load that followed the human's own message opens on that message.
     state.nav.revealAnchor();
   });
   onCleanup(() => {
     document.removeEventListener("keydown", onKey);
     stopWatching?.();
+    if (ageTimer !== null) {
+      window.clearInterval(ageTimer);
+    }
   });
   const ordered = createMemo(() => orderedUpdates(props.brief));
-  // The divider only earns its place when a Now panel leads AND at least one
-  // dated update survives the search filter; otherwise it would label
-  // nothing.
-  const earlierVisible = (): boolean =>
-    ordered()[0]?.id === NOW_UPDATE_ID &&
-    ordered()
-      .slice(1)
-      .some((update) => state.nav.isVisible(update.id));
   return (
     <div class="shell" data-mounted="true">
       <StructureMap state={state} />
       <main class="stream" onClick={(event) => selectFromClick(state, event)}>
         <Masthead state={state} />
         <For each={ordered()}>
-          {(update, index) => (
-            <>
-              <Show when={index() === 1 && earlierVisible()}>
-                <h2 class="earlier-heading">Earlier updates</h2>
-              </Show>
-              <VisibleRow state={state} id={update.id}>
-                {(row) => (
-                  <UpdateView state={state} row={row} update={update} />
-                )}
-              </VisibleRow>
-            </>
+          {(update) => (
+            <VisibleRow state={state} id={update.id}>
+              {(row) => (
+                <UpdateView
+                  state={state}
+                  row={row}
+                  update={update}
+                  now={now()}
+                />
+              )}
+            </VisibleRow>
           )}
         </For>
       </main>
