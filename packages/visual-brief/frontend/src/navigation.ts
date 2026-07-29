@@ -300,7 +300,8 @@ export function createNavigation(
 
   const search = (value: string): void => {
     setQueryValue(value);
-    const surviving = visible();
+    if (modes.chats()) return;
+    const surviving = filterRows(rows(), value);
     if (selected !== null && surviving.some((row) => row.id === selected)) {
       return;
     }
@@ -309,6 +310,12 @@ export function createNavigation(
     if (landing !== undefined) {
       select(landing.id);
     }
+  };
+
+  const toggleChats = (): void => {
+    const leaving = modes.chats();
+    modes.toggleChats();
+    if (leaving) search(query());
   };
 
   return {
@@ -372,7 +379,7 @@ export function createNavigation(
     expandAll: modes.expandAll,
     collapseAll: modes.collapseAll,
     chats: modes.chats,
-    toggleChats: modes.toggleChats,
+    toggleChats,
     chatCount: index.chatCount,
     ordinal: (id) => ordinals().get(id) ?? null,
     query,

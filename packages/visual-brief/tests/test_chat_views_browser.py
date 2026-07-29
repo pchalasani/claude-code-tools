@@ -175,7 +175,63 @@ def test_my_chats_ignores_a_search_left_active_through_a_live_answer(
         "badge": "20",
         "threads": 20,
         "updates": 2,
-        "query": None,
+        "query": SEARCH_MARKER,
+    }
+
+
+def test_a_conversation_patched_after_my_chats_open_is_painted(
+    browser: Browser,
+) -> None:
+    """Paint a newly collected conversation without reopening the view."""
+    browser.press("m")
+    before = len(_threads(browser.data))
+    update_id, lane_id, item = next(
+        (update, lane, item)
+        for update, lane, item in _items(browser.data)
+        if not item.get("questions")
+    )
+    anchor = f"{update_id}/{lane_id}/{item['id']}"
+    thread_row = f"{anchor}#q-patched-chat"
+    item.setdefault("questions", []).append(
+        {
+            "id": "q-patched-chat",
+            "anchor": {"kind": "element", "path": anchor},
+            "turns": [
+                {
+                    "author": "human",
+                    "text": "Did this conversation reach the open view?",
+                    "at": "2026-07-29T15:00:00Z",
+                },
+                {
+                    "author": "agent",
+                    "text": "Yes. It arrived without reopening My chats.",
+                    "at": "2026-07-29T15:01:00Z",
+                },
+            ],
+        }
+    )
+    browser.data["title"] = "A new conversation reached My chats"
+    browser.publish()
+    browser.wait_for_title("A new conversation reached My chats")
+
+    painted = browser.read_until(
+        f"""
+        (() => ({{
+          badge: document.querySelector(".meta-chats")?.dataset.chatsCount,
+          pressed: document.querySelector(".meta-chats")
+            ?.getAttribute("aria-pressed"),
+          thread: document.querySelector(
+            '[data-row-id="{thread_row}"]',
+          ) !== null,
+        }}))()
+        """,
+        lambda seen: seen["thread"] is True,
+    )
+
+    assert painted == {
+        "badge": str(before + 1),
+        "pressed": "true",
+        "thread": True,
     }
 
 

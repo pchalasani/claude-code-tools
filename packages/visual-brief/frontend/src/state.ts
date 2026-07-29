@@ -217,13 +217,7 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
       "collapse-all": () => nav.collapseAll(),
       compose: composeAtCursor,
       "next-awaiting": () => nav.toOpenChat(),
-      chats: () => {
-        if (!nav.chats()) {
-          nav.setQuery("");
-          nav.closeOverlay();
-        }
-        nav.toggleChats();
-      },
+      chats: () => nav.toggleChats(),
       // Labels never arm over a modal: they would paint behind the scrim
       // and their handler would swallow the dialog's Escape. The search
       // panel is not modal, and jumping between its matches is fine.

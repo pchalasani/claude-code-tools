@@ -11,7 +11,12 @@
  * eye is following.
  */
 
-import { createSignal, type Accessor } from "solid-js";
+import {
+  createComputed,
+  createSignal,
+  on,
+  type Accessor,
+} from "solid-js";
 
 import { chatRows } from "./cursor";
 import { collapseToLaneIds, expandAllIds, nearestPainted } from "./folding";
@@ -63,6 +68,37 @@ export interface ViewModeDeps {
  */
 export function createViewModes(deps: ViewModeDeps): ViewModes {
   const [chats, setChats] = createSignal(false);
+  let collected = new Set(
+    chatRows(deps.rows())
+      .filter((row) => row.kind === "thread")
+      .map((row) => row.id),
+  );
+
+  // A live publish can make a conversation part of My chats after the view
+  // has already opened. Open only that conversation's route. Reopening every
+  // route on every publish would undo folds the human chose in this view.
+  createComputed(
+    on(
+      deps.rows,
+      (rows) => {
+        const threads = chatRows(rows).filter((row) => row.kind === "thread");
+        const current = new Set(threads.map((row) => row.id));
+        const arrived = threads.filter((row) => !collected.has(row.id));
+        collected = current;
+        if (!chats() || arrived.length === 0) {
+          return;
+        }
+        const opened = new Set(deps.open());
+        for (const row of arrived) {
+          for (const ancestor of ancestorIds(row.id)) {
+            opened.add(ancestor);
+          }
+        }
+        deps.setOpen(opened);
+      },
+      { defer: true },
+    ),
+  );
 
   /**
    * Apply one wholesale change to what is open, taking the cursor with it.
