@@ -178,3 +178,10 @@ connection above, or through the package's own CDP harness in
     so session storage is separate too. The cursor and the seen-answer marks
     have always had this limitation, and the store's own docstring claims
     otherwise. Either canonicalize onto one origin or stop claiming it.
+
+20. **The plain walk stops at a lane boundary.** `j` and ArrowDown now step
+    onto conversations and evidence, but lane and update headers were left to
+    the shifted keys, so the walk ends at the last row inside a lane instead of
+    carrying on into the next one. Same going up. The human's model is one
+    continuous walk down everything painted, headers included, with the shifted
+    keys as a fast skip between lanes rather than the only way to reach them.
