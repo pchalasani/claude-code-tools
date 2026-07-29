@@ -209,3 +209,11 @@ connection above, or through the package's own CDP harness in
     updates. The one mechanism that would produce their reading is a search
     still being active, since entering the view only considers rows the search
     leaves on the page — awaiting confirmation from them before chasing it.
+
+## v2 field notes (2026-07-29)
+
+25. **Chat-thread text is needlessly tiny.** The thread row gets its own
+    presentation with a deliberately small font; the human wants normal-size
+    text, differentiated by colour or some other cue instead. Decision
+    postponed to the design overhaul, along with the larger question of how
+    chat threads relate to lanes/items visually.
