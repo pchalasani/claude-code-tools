@@ -227,3 +227,10 @@ connection above, or through the package's own CDP harness in
     solid-colour text, never the text painted BY the gradient). Also note the
     per-frame fingerprint test asserts constant computed colour/background on
     the sign; restyling it means updating that test with it.
+
+27. **A folded container should show it holds chats.** After collapse-all
+    there is no visible cue which lanes or items have conversations inside, so
+    the human cannot find where they have chatted without reopening
+    everything. Whatever level is showing should mark containers with chats
+    beneath — a variant of the containment rail, a count, or colour. Design
+    decision deferred to the overhaul.
