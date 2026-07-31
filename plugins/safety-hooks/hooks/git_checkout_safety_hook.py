@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import os
-import re
+import shlex
 import subprocess
 import sys
 
@@ -12,6 +12,97 @@ if PLUGIN_ROOT:
         sys.path.insert(0, hooks_dir)
 
 from command_utils import extract_subcommands
+
+# git's own global options that consume the NEXT token as their value. They sit
+# between "git" and the subcommand, so the subcommand is not always argv[1].
+_GIT_GLOBAL_VALUE_OPTS = {
+    "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
+    "--super-prefix", "--config-env",
+}
+
+# Options that point git at a repository this module cannot compute. Honouring
+# them properly also means handling GIT_DIR / GIT_WORK_TREE and their
+# composition with -C; rather than guess, mark the target unknown and let the
+# caller decline to probe anything.
+_OPAQUE_TARGET_OPTS = ("--work-tree", "--git-dir")
+
+# Pathspecs that mean "everything", as opposed to a named file.
+_UNBOUNDED_PATHSPECS = {".", "./", "*", ":/"}
+
+_DANGER_TEMPLATE = (
+    "⚠️  DANGEROUS COMMAND DETECTED!\n\n{message}\n\n"
+    "This command will destroy uncommitted work without warning.\n\n"
+    "Safer alternatives:\n"
+    "- Use 'git stash' to save changes temporarily\n"
+    "- Use 'git diff' to see what would be lost\n"
+    "- Use 'git restore' for clearer syntax"
+)
+
+
+def _danger(message):
+    return _DANGER_TEMPLATE.format(message=message)
+
+
+def _tokenize(command):
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return command.split()
+
+
+def parse_git_checkout(command):
+    """
+    Split ``git [global-opts] checkout <args...>`` into (args, repo_dir).
+
+    Returns ``(None, None)`` when the command is not a git checkout at all.
+
+    Returns ``(args, None)`` when it IS a git checkout but the repository it
+    would act on cannot be determined -- an unexpanded ``-C`` value such as
+    ``-C "$REPO"``, or ``--git-dir`` / ``--work-tree``. Checks that read only
+    the command still apply; nothing may probe a directory on that basis,
+    least of all the caller's own, which is a different repository.
+    """
+    tokens = _tokenize(command)
+    if not tokens or os.path.basename(tokens[0]) != "git":
+        return None, None
+
+    chdir = os.getcwd()
+    opaque = False
+    i = 1
+    while i < len(tokens):
+        token = tokens[i]
+        if token.split("=", 1)[0] in _OPAQUE_TARGET_OPTS:
+            opaque = True
+        if token in _GIT_GLOBAL_VALUE_OPTS:
+            # git applies repeated -C cumulatively, each relative to the last.
+            if token == "-C" and i + 1 < len(tokens):
+                value = tokens[i + 1]
+                chdir = value if os.path.isabs(value) else os.path.join(chdir, value)
+            i += 2
+            continue
+        if token.startswith("-"):
+            i += 1
+            continue
+        break
+
+    if i >= len(tokens) or tokens[i] != "checkout":
+        return None, None
+
+    args = tokens[i + 1:]
+    if opaque or not os.path.isdir(chdir):
+        return args, None
+    return args, chdir
+
+
+def _option_flags(tokens):
+    """Real option tokens, with short clusters split (-fb -> {-f, -b})."""
+    flags = set()
+    for token in tokens:
+        if token.startswith("--"):
+            flags.add(token.split("=", 1)[0])
+        elif token.startswith("-") and len(token) > 1:
+            flags.update("-" + char for char in token[1:])
+    return flags
 
 
 def check_git_checkout_command(command):
@@ -36,30 +127,61 @@ def _check_single_git_checkout_command(command):
     Check a single (non-compound) git checkout command.
     Returns tuple: (should_block: bool, reason: str or None)
     """
-    # Check if it's a git checkout command
-    if not command.strip().startswith("git checkout"):
+    # Check if it's a git checkout command. This also recognises the
+    # `git -C <dir> checkout ...` form, which a "starts with git checkout"
+    # test misses entirely.
+    args, repo_dir = parse_git_checkout(command)
+    if args is None:
         return False, None
 
-    # Safe patterns that we should allow without checking
-    if "-b" in command or "--help" in command or "-h" in command:
+    # Everything before a `--` separator is options and refs; everything after
+    # is pathspecs, even if it looks like an option.
+    if "--" in args:
+        separator = args.index("--")
+        head, pathspecs = args[:separator], args[separator + 1:]
+    else:
+        separator = None
+        head, pathspecs = args, []
+
+    flags = _option_flags(head)
+
+    if "-h" in flags or "--help" in flags:
         return False, None
 
-    # ALWAYS block these dangerous patterns
-    dangerous_patterns = [
-        (r'\bgit\s+checkout\s+(-f|--force)\b',
-         "'git checkout -f' FORCES checkout and DISCARDS all uncommitted changes!"),
-        (r'\bgit\s+checkout\s+\.',
-         "'git checkout .' will DISCARD ALL changes in current directory!"),
-        (r'\bgit\s+checkout\s+.*\s+--\s+\.',
-         "This will DISCARD ALL changes in current directory!"),
-        (r'\bgit\s+checkout\s+.*\s+--\s+',
-         "This will overwrite your local file with version from another branch/commit!"),
-    ]
+    # ALWAYS block these dangerous patterns.
+    #
+    # -f is checked BEFORE the -b allowance below. Testing for "-b" first --
+    # and as a substring of the whole command -- is what let `git checkout -f
+    # -b <name>` and `git checkout . -b <name>` through, and disarmed the guard
+    # for any command merely containing "-b", e.g. `git checkout --
+    # src/my-button.ts`.
+    if "-f" in flags or "--force" in flags:
+        return True, _danger(
+            "'git checkout -f' FORCES checkout and DISCARDS all uncommitted changes!")
 
-    for pattern, message in dangerous_patterns:
-        if re.search(pattern, command):
-            reason = f"⚠️  DANGEROUS COMMAND DETECTED!\n\n{message}\n\nThis command will destroy uncommitted work without warning.\n\nSafer alternatives:\n- Use 'git stash' to save changes temporarily\n- Use 'git diff' to see what would be lost\n- Use 'git restore' for clearer syntax"
-            return True, reason
+    if separator is not None:
+        if any(p in _UNBOUNDED_PATHSPECS for p in pathspecs):
+            return True, _danger(
+                "This will DISCARD ALL changes in current directory!")
+        return True, _danger(
+            "This will overwrite your local file with version from another branch/commit!")
+
+    positionals = [a for a in args if not a.startswith("-")]
+    if any(p in _UNBOUNDED_PATHSPECS for p in positionals):
+        return True, _danger(
+            "'git checkout .' will DISCARD ALL changes in current directory!")
+
+    # Creating a branch carries uncommitted work across rather than discarding
+    # it, so it stays exempt from the uncommitted-changes prompt below.
+    if "-b" in flags:
+        return False, None
+
+    # Everything above reads only the COMMAND. Everything below reads a
+    # REPOSITORY, and repo_dir is None when we could not work out which one.
+    # Probing the caller's own repo instead would report a verdict, and a list
+    # of at-risk files, belonging to a repository the command never touches.
+    if repo_dir is None:
+        return False, None
 
     try:
         # First, check if there are any uncommitted changes
@@ -67,7 +189,7 @@ def _check_single_git_checkout_command(command):
             ["git", "status", "--porcelain"],
             capture_output=True,
             text=True,
-            cwd=os.getcwd()
+            cwd=repo_dir
         )
 
         has_changes = bool(status_result.stdout.strip())
@@ -79,14 +201,14 @@ def _check_single_git_checkout_command(command):
                 ["git", "diff", "--name-only", "HEAD"],
                 capture_output=True,
                 text=True,
-                cwd=os.getcwd()
+                cwd=repo_dir
             )
 
             unstaged_result = subprocess.run(
                 ["git", "diff", "--name-only"],
                 capture_output=True,
                 text=True,
-                cwd=os.getcwd()
+                cwd=repo_dir
             )
 
             # Count changes
