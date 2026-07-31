@@ -31,12 +31,9 @@ aichat port <session>
 - a **session file path** (inside or outside the agent homes)
 
 Lookup is global across **all projects** in both the Claude and Codex
-homes. The query must resolve to exactly one session; if several
-match (in one agent or across both), the command errors with the
-candidate list — one line per candidate showing the agent, session
-id, name (when known), and modification time. The listing shows at
-most 25 candidates and ends with a `... and N more` tail when the
-match set is larger.
+homes. When several sessions match, the command shows an interactive
+chooser instead of guessing. See [Ambiguous matches](#ambiguous-matches)
+below.
 
 The source agent is auto-detected from the resolved session (or file
 path content), and the session is ported to the *other* agent. The command
@@ -60,7 +57,18 @@ writes the destination session:
 
 To resume:
   cd /Users/you/myproject && claude --resume e8f54e2c-...
+
+Copy the new session ID to your clipboard? (Y/n): y
+✓ Session ID copied to clipboard.
+Now you can run:
+  claude --resume <paste session ID>
 ```
+
+The clipboard prompt defaults to **Yes**, but it never changes the clipboard
+until the user answers the prompt. It copies only the new session ID and
+supports the native clipboard tools on macOS, Linux, and Windows. The prompt is
+skipped when output or input is not connected to an interactive terminal, so
+scripts do not stop waiting for an answer.
 
 Options:
 

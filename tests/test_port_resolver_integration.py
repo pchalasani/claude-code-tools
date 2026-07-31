@@ -44,6 +44,11 @@ from tests.resolve_session_helpers import (
 )
 
 
+def _reports_stdin_tty(stream: object) -> bool:
+    """Make only Click's isolated stdin behave like a terminal in tests."""
+    return getattr(stream, "name", None) == "<stdin>"
+
+
 @pytest.fixture
 def project_dir(tmp_path: Path) -> Path:
     """Create the fake project directory ported sessions refer to."""
@@ -386,6 +391,7 @@ class TestRejections:
         claude_home: Path,
         codex_home: Path,
         project_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """An exact name and an incidental title match stay user-chosen."""
         query = "sasy-blog-21jul2026"
@@ -415,6 +421,10 @@ class TestRejections:
         # "1" exercises the intended source from the reported case.
         os.utime(rollout, (1_720_000_000, 1_720_000_000))
         os.utime(claude_session, (1_720_000_001, 1_720_000_001))
+        monkeypatch.setattr(
+            "click.testing._NamedTextIOWrapper.isatty",
+            _reports_stdin_tty,
+        )
 
         result = runner.invoke(
             main,
@@ -442,6 +452,48 @@ class TestRejections:
         )
         assert "Port complete" in result.output
         assert len(list((codex_home / "sessions").rglob("*.jsonl"))) == 2
+
+    def test_cli_ambiguity_does_not_accept_piped_selection(
+        self,
+        runner: CliRunner,
+        claude_home: Path,
+        codex_home: Path,
+        project_dir: Path,
+    ) -> None:
+        """Non-terminal stdin cannot select a source and create a port."""
+        query = "shared-piped-name"
+        first_id = "11111111-1111-4111-8111-111111111111"
+        second_id = "22222222-2222-4222-8222-222222222222"
+        _write_claude_session(
+            claude_home,
+            first_id,
+            project_dir,
+            title=query,
+        )
+        _write_claude_session(
+            claude_home,
+            second_id,
+            project_dir,
+            title=query,
+        )
+
+        result = runner.invoke(
+            main,
+            [
+                "--claude-home",
+                str(claude_home),
+                "--codex-home",
+                str(codex_home),
+                "port",
+                query,
+            ],
+            input="1\n",
+        )
+
+        assert result.exit_code != 0
+        assert "Ambiguous session" in result.output
+        assert "Which source session do you want to port?" not in result.output
+        assert not (codex_home / "sessions").exists()
 
     def test_ambiguity_listing_is_capped_with_tail(
         self, claude_home: Path, codex_home: Path, tmp_path: Path

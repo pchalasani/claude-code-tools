@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Prompt
+from rich.prompt import Confirm, Prompt
 from rich.status import Status
 from rich.table import Table
 from rich.text import Text
@@ -24,6 +28,82 @@ if TYPE_CHECKING:
 
 _AGENT_LABELS = {"claude": "Claude", "codex": "Codex"}
 _MAX_CANDIDATE_TITLE_CHARS = 120
+_MACOS_CLIPBOARD_COMMANDS = (("pbcopy",),)
+_LINUX_CLIPBOARD_COMMANDS = (
+    ("wl-copy",),
+    ("xclip", "-selection", "clipboard"),
+    ("xsel", "--clipboard", "--input"),
+)
+_POWERSHELL_CLIPBOARD_ARGS = (
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    "Set-Clipboard -Value ([Console]::In.ReadToEnd())",
+)
+
+
+def _clipboard_commands(
+    platform_name: str,
+) -> tuple[tuple[str, ...], ...]:
+    """Return platform-specific clipboard commands in preference order."""
+    if platform_name == "darwin":
+        return _MACOS_CLIPBOARD_COMMANDS
+    if platform_name == "win32":
+        system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+        system32 = system_root / "System32"
+        powershell = (
+            system32
+            / "WindowsPowerShell"
+            / "v1.0"
+            / "powershell.exe"
+        )
+        return (
+            (str(system32 / "clip.exe"),),
+            (
+                str(powershell),
+                *_POWERSHELL_CLIPBOARD_ARGS,
+            ),
+        )
+    return _LINUX_CLIPBOARD_COMMANDS
+
+
+def copy_to_clipboard(
+    text: str,
+    *,
+    platform_name: str | None = None,
+) -> bool:
+    """Copy text with the first available working clipboard command.
+
+    Windows commands use explicit system paths so the current directory is
+    never searched for a clipboard executable.
+
+    Args:
+        text: Text to place on the clipboard.
+        platform_name: Platform identifier. Defaults to ``sys.platform``.
+
+    Returns:
+        True when a clipboard command succeeds, otherwise False.
+    """
+    commands = _clipboard_commands(platform_name or sys.platform)
+    for command in commands:
+        executable = shutil.which(command[0])
+        if executable is None:
+            continue
+        try:
+            completed = subprocess.run(
+                [executable, *command[1:]],
+                input=text,
+                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if completed.returncode == 0:
+            return True
+    return False
 
 
 def _agent_label(agent: str) -> str:
@@ -145,6 +225,9 @@ class PortDisplay:
                 "Rerun with a full session ID to select one of them.[/dim]"
             )
 
+        if not sys.stdin.isatty():
+            raise EOFError
+
         choices = [str(index) for index in range(1, len(error.records) + 1)]
         choices.append("q")
         choice = Prompt.ask(
@@ -222,6 +305,52 @@ class PortDisplay:
                 "[dim]Tip: Codex's /import is also available as an "
                 "interactive alternative.[/dim]"
             )
+        self.offer_session_id_copy(result.new_session_id, target_agent)
+
+    def offer_session_id_copy(
+        self,
+        session_id: str,
+        target_agent: str,
+    ) -> None:
+        """Offer to copy a newly created session ID in interactive terminals."""
+        if not self.console.is_terminal or not sys.stdin.isatty():
+            return
+        self.console.print()
+        try:
+            should_copy = Confirm.ask(
+                "[bold]Copy the new session ID to your clipboard?[/bold] "
+                "[dim](Y/n)[/dim]",
+                default=True,
+                show_choices=False,
+                show_default=False,
+                console=self.console,
+            )
+        except (EOFError, KeyboardInterrupt):
+            should_copy = False
+        if not should_copy:
+            self.console.print("[dim]Clipboard left unchanged.[/dim]")
+            return
+        if copy_to_clipboard(session_id):
+            self.console.print(
+                "[bold green]✓ Session ID copied to clipboard.[/bold green]"
+            )
+            command = (
+                "codex resume"
+                if target_agent == "codex"
+                else "claude --resume"
+            )
+            self.console.print("[bold]Now you can run:[/bold]")
+            self.console.print(
+                Text(
+                    f"  {command} <paste session ID>",
+                    style="bold cyan",
+                )
+            )
+            return
+        self.console.print(
+            "[yellow]Could not find a working system clipboard command. "
+            "The session ID is still shown above.[/yellow]"
+        )
 
     def error(self, message: str) -> None:
         """Render an expected failure without a traceback."""
