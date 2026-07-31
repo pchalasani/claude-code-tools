@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,59 @@ if PLUGIN_ROOT:
         sys.path.insert(0, hooks_dir)
 
 from command_utils import extract_subcommands
+
+# `git commit` options that consume a SEPARATE following token as their value,
+# so that token must not itself be read as an option.
+#
+# -S/--gpg-sign are deliberately absent: their argument is optional and
+# attached-only (-S<keyid>), so consuming the next token would swallow the -m of
+# `git commit -aS -m "msg"`.
+_COMMIT_VALUE_OPTS = {
+    '-m', '--message', '-F', '--file', '-c', '--reedit-message',
+    '-C', '--reuse-message', '--author', '--date', '--cleanup',
+    '-t', '--template', '--trailer', '--fixup', '--squash',
+    '--pathspec-from-file',
+}
+
+# Options that mean a commit message is already supplied, so no blank editor
+# opens. --amend reuses the previous commit's message.
+_COMMIT_MESSAGE_OPTS = {
+    '-m', '--message', '-F', '--file', '-c', '--reedit-message',
+    '-C', '--reuse-message', '--fixup', '--squash', '--amend',
+}
+
+
+def _commit_option_tokens(normalized_cmd):
+    """
+    The real option tokens of a `git commit ...` command.
+
+    Short clusters are split (-am -> -a, -m), `--opt=value` is reduced to
+    `--opt`, values of value-taking options are skipped, and everything after a
+    `--` separator is a pathspec rather than an option.
+    """
+    try:
+        argv = shlex.split(normalized_cmd)
+    except ValueError:
+        argv = normalized_cmd.split()
+
+    options = []
+    i = 2  # skip "git commit"
+    while i < len(argv):
+        token = argv[i]
+        if token == '--':
+            break
+        if token.startswith('--'):
+            name = token.split('=', 1)[0]
+            options.append(name)
+            if name in _COMMIT_VALUE_OPTS and '=' not in token:
+                i += 1
+        elif token.startswith('-') and len(token) > 1:
+            cluster = ['-' + char for char in token[1:]]
+            options.extend(cluster)
+            if any(option in _COMMIT_VALUE_OPTS for option in cluster):
+                i += 1
+        i += 1
+    return options
 
 
 def _is_allowed(flag_name: str, session_id: str = "") -> bool:
@@ -175,11 +229,18 @@ This restriction prevents accidentally staging unwanted files."""
                 reason = f"Staging directory {dir_path}/ (couldn't verify file status)"
                 return "ask", reason
 
-    # Also check for git commit -a without -m (which would open an editor)
-    # Check if command has -a flag but no -m flag
+    # Also check for git commit -a without a message flag (which would open an
+    # editor).
+    #
+    # This used to scan the whole command string for `-[a-zA-Z]*a[a-zA-Z]*` and
+    # `-[a-zA-Z]*m[a-zA-Z]*`, which matched inside any hyphenated word rather
+    # than only real option tokens: a path containing "-a" looked like the
+    # stage-everything flag, and any hyphenated word containing an "m"
+    # cancelled it again. Parse actual option tokens instead.
     if re.search(r'^git\s+commit\s+', normalized_cmd):
-        has_a_flag = re.search(r'-[a-zA-Z]*a[a-zA-Z]*', normalized_cmd)
-        has_m_flag = re.search(r'-[a-zA-Z]*m[a-zA-Z]*', normalized_cmd)
+        options = _commit_option_tokens(normalized_cmd)
+        has_a_flag = '-a' in options or '--all' in options
+        has_m_flag = any(option in _COMMIT_MESSAGE_OPTS for option in options)
         if has_a_flag and not has_m_flag:
             reason = """Avoid 'git commit -a' without a message flag. Use 'gcam "message"' instead, which is an alias for 'git commit -a -m'."""
             return True, reason
