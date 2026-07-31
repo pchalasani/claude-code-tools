@@ -75,7 +75,19 @@ vendored at `upstream/` inside this skill directory (commit recorded in
    that is a refused scan, not a clean document, so convergence must require
    a scored result (`document_classification` other than `"UNSCORED"`), not
    merely an empty issue list. Split or trim over-long inputs so they score.
-3. Respect the upstream skill's own guardrails (edit only what a pattern
+3. In edit mode, verify the rewrite preserved meaning with the bundled
+   validator. `upstream/SKILL.md` writes this as `node detector/validate.js`,
+   a relative path that fails from the user's working directory; use the
+   absolute form, as with the detector:
+
+   ```bash
+   node "$SKILL_DIR/upstream/detector/validate.js" ORIGINAL REWRITTEN
+   ```
+
+   It prints `PASS` when the preservation checks are clear, and otherwise
+   reports what changed. Treat a failure as a blocking problem with the
+   rewrite, not a style suggestion.
+4. Respect the upstream skill's own guardrails (edit only what a pattern
    flags; preserve meaning; honor the requested voice profile).
 
 ## Updating
