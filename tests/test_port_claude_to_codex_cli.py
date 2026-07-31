@@ -8,12 +8,16 @@ evidence lives in the comment block at the bottom of this file.
 
 import json
 import uuid as uuid_mod
+from io import StringIO
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner, Result
+from rich.console import Console
 
 from claude_code_tools.aichat import main
+from claude_code_tools.port_render import PortDisplay
+from claude_code_tools.port_service import PortResult
 from tests.test_port_claude_to_codex import (
     CLAUDE_SID,
     ROLLOUT_NAME_RE,
@@ -87,7 +91,8 @@ class TestCLI:
         )
         assert "New Codex session id:" in result.output
         assert "Output file:" in result.output
-        assert f"Session cwd:           {project_dir}" in result.output
+        assert "Session cwd:" in result.output
+        assert str(project_dir) in result.output
         assert (
             f"cd {project_dir} && codex resume " in result.output
         )
@@ -103,7 +108,7 @@ class TestCLI:
         m = ROLLOUT_NAME_RE.match(rollouts[0].name)
         assert m and m.group(1) in result.output
 
-    def test_claude_source_direction_line_first(
+    def test_claude_source_reports_progress_before_direction(
         self,
         runner: CliRunner,
         claude_home: Path,
@@ -115,9 +120,14 @@ class TestCLI:
             runner, ["port", CLAUDE_SID], claude_home, codex_home
         )
         assert result.exit_code == 0, result.output
-        assert result.output.splitlines()[0] == (
+        assert "Session port" in result.output
+        resolving = result.output.index("1/3  Resolving session")
+        detected = result.output.index(
             "Detected source agent: claude — porting to Codex"
         )
+        porting = result.output.index("2/3  Porting Claude → Codex")
+        ready = result.output.index("3/3  Ready")
+        assert resolving < detected < porting < ready
 
     def test_claude_source_conversion_error_is_clean(
         self,
@@ -198,6 +208,30 @@ class TestCLI:
         combined = result.output + stderr
         assert "Session not found in Claude or Codex" in combined
         assert unknown_id in combined
+
+    def test_completion_renders_bracketed_paths_literally(self) -> None:
+        """Rich markup-like path components remain visible verbatim."""
+        output = StringIO()
+        display = PortDisplay("session")
+        display.console = Console(
+            file=output,
+            color_system=None,
+            width=240,
+        )
+        cwd = "/tmp/project[red]name[/red]"
+        output_file = Path("/tmp/[blue]rollout[/blue].jsonl")
+        result = PortResult(
+            new_session_id="01234567-89ab-4def-8123-456789abcdef",
+            output_file=output_file,
+            cwd=cwd,
+            resume_hint=f"cd '{cwd}' && codex resume session-id",
+        )
+
+        display.complete(result, "claude")
+
+        rendered = output.getvalue()
+        assert cwd in rendered
+        assert str(output_file) in rendered
 
 
 class TestCodexHomeEnvVar:

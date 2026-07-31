@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
 
 if TYPE_CHECKING:
-    from claude_code_tools.resolve_session import ResolveResult
+    from claude_code_tools.resolve_session import ResolveResult, SessionRecord
 
 from claude_code_tools.session_utils import (
     detect_agent_from_content,
@@ -45,6 +45,29 @@ class PortSessionError(Exception):
     The exception message is suitable for printing directly (the CLI
     prefixes it with ``Error:`` and exits non-zero).
     """
+
+
+class PortAmbiguityError(PortSessionError):
+    """A port query with more than one valid source session.
+
+    Attributes:
+        query: Original user query.
+        records: Newest matching records available for selection.
+        match_count: Total matches, including any omitted by the cap.
+    """
+
+    def __init__(
+        self,
+        query: str,
+        records: "tuple[SessionRecord, ...]",
+        match_count: int,
+        message: str,
+    ) -> None:
+        """Initialize an ambiguity with structured candidate data."""
+        super().__init__(message)
+        self.query = query
+        self.records = records
+        self.match_count = match_count
 
 
 @dataclass
@@ -169,7 +192,7 @@ def _resolve_query_for_agent(
 
 def _ambiguity_error(
     session: str, results: "list[ResolveResult]"
-) -> PortSessionError:
+) -> PortAmbiguityError:
     """Build the multi-candidate rejection error for a port lookup.
 
     Args:
@@ -201,11 +224,17 @@ def _ambiguity_error(
     if remaining > 0:
         lines.append(f"  ... and {remaining} more")
     listing = "\n".join(lines)
-    return PortSessionError(
+    message = (
         f"Ambiguous session '{session}' matches {total} sessions:\n"
         f"{listing}\n"
         "Use a longer unique id, the exact session name, or the "
         "full file path."
+    )
+    return PortAmbiguityError(
+        session,
+        tuple(records[:_MAX_AMBIGUITY_LINES]),
+        total,
+        message,
     )
 
 

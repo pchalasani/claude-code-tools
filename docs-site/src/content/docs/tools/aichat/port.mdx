@@ -39,18 +39,27 @@ most 25 candidates and ends with a `... and N more` tail when the
 match set is larger.
 
 The source agent is auto-detected from the resolved session (or file
-path content), and the session is ported to the *other* agent. The
-detected direction is always printed first:
+path content), and the session is ported to the *other* agent. The command
+shows progress while it resolves the source, converts the transcript, and
+writes the destination session:
 
 ```text
-Detected source agent: codex — porting to Claude Code
-
-New Claude session id: e8f54e2c-2607-416b-be11-aaf68ce8e3e6
-Output file:           ~/.claude/projects/-Users-you-myproject/e8f54e2c-....jsonl
-Session cwd:           /Users/you/myproject
+╭─ Session port ───────────────╮
+│ Query  my-session-name       │
+╰──────────────────────────────╯
+1/3  Resolving session
+  ✓ Detected source agent: codex — porting to Claude Code
+    Source file  ~/.codex/sessions/.../rollout-....jsonl
+2/3  Porting Codex → Claude Code
+3/3  Ready
+╭─ Port complete ───────────────────────────────────────╮
+│ New Claude session id:  e8f54e2c-2607-416b-be11-... │
+│ Session cwd:            /Users/you/myproject         │
+│ Output file:            ~/.claude/projects/...       │
+╰───────────────────────────────────────────────────────╯
 
 To resume:
-  cd /Users/you/myproject && claude --resume e8f54e2c-2607-416b-be11-aaf68ce8e3e6
+  cd /Users/you/myproject && claude --resume e8f54e2c-...
 ```
 
 Options:
@@ -59,6 +68,20 @@ Options:
 |--------|-------------|
 | `--claude-home PATH` | Override `~/.claude` |
 | `--codex-home PATH` | Override `~/.codex` |
+
+## Ambiguous matches
+
+Codex may use an automatic title derived from the first prompt. A query can
+therefore match both a session explicitly named with `/rename` and another
+session whose automatic title happens to contain the same text.
+
+When multiple sessions match, `aichat port` does not guess. It shows an
+interactive chooser with each candidate's agent, match reason, name or title,
+project directory, session ID, and modification time. Select a number to port
+that source session, or enter `q` to cancel.
+
+If no interactive input is available, the command exits without porting a
+session and prints the candidates so a later command can use a full session ID.
 
 ## Codex → Claude
 
