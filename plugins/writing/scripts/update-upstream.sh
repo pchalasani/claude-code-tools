@@ -14,7 +14,10 @@ git clone --quiet --depth 1 \
 DEST="$ROOT/skills/remove-ai-patterns/upstream"
 mkdir -p "$DEST/detector"
 cp "$TMP/aaw/SKILL.md" "$TMP/aaw/LICENSE" "$TMP/aaw/CHANGELOG.md" "$DEST/"
+# validate.js is required by the upstream SKILL.md's edit-mode verification
+# step; it require()s ./patterns.js from the same directory.
 cp "$TMP/aaw/detector/patterns.js" "$TMP/aaw/detector/CATEGORIES.md" \
+  "$TMP/aaw/detector/validate.js" \
   "$DEST/detector/"
 git -C "$TMP/aaw" log -1 \
   --format='https://github.com/conorbronsdon/avoid-ai-writing %H %s' \

@@ -1,7 +1,7 @@
 ---
 name: avoid-ai-writing
 description: Audit and rewrite content to remove AI writing patterns ("AI-isms"). Use this skill when asked to "remove AI-isms," "clean up AI writing," "edit writing for AI patterns," "audit writing for AI tells," or "make this sound less like AI." Supports a detect-only mode, an edit-in-place mode for files, an optional voice profile (casual / professional / technical / warm / blunt), and an iterate-to-convergence pass.
-version: 3.15.0
+version: 3.22.1
 license: MIT
 compatibility: Any AI coding assistant that supports agentskills.io SKILL.md format (Claude Code, Cursor, VS Code Copilot, Hermes Agent, OpenHands, etc.) or OpenClaw. No external tools or APIs required.
 metadata:
@@ -68,7 +68,7 @@ In **edit** mode, your job is to:
 ## What to remove or fix
 
 ### Formatting
-- **Em dashes (— and --)**: Replace with commas, periods, parentheses, or rewrite as two sentences. Target: zero. Hard max: one per 1,000 words. This applies to headings and section titles too, not just body prose. Catch both the Unicode em dash (—) and the double-hyphen substitute (--).
+- **Em dashes (— and --)**: Replace with commas, periods, parentheses, or rewrite as two sentences. Target: zero. Hard max: one per 1,000 words. This applies to headings and section titles too, not just body prose. Catch both the Unicode em dash (—) and the double-hyphen substitute (--). Carve-out: an em dash acting as the separator in a bulleted or numbered list item that opens with a bolded lead term or a markdown link (`- **Term** — description`, `- [label](url) — description`) is typography, not a prose splice — don't count it toward the rate. Only the list-item form qualifies: a mid-sentence splice still counts, as does a line-initial `**Bold lead** — full sentence` outside a list (itself an AI tell), and the double-hyphen substitute is never carved out.
 - **Bold overuse**: Strip bold from most phrases. One bolded phrase per major section at most, or none. If something's important enough to bold, restructure the sentence to lead with it instead.
 - **Emoji in headers**: Remove entirely. No `## 🚀 What This Means`. Exception: social posts may use one or two emoji sparingly — at the end of a line, never mid-sentence.
 - **Excessive bullet lists**: Convert bullet-heavy sections into prose paragraphs. Bullets only for genuinely list-like content (feature comparisons, step-by-step instructions, API parameters).
@@ -76,7 +76,7 @@ In **edit** mode, your job is to:
 - **Immaculate typography in casual registers**: Same tier as curly quotes — a *weak*, register-scoped signal, never conclusive alone. Perfect spacing, punctuation, and capitalization in a context where humans type fast (issue/PR comments, chat, DMs) is corroborating evidence, not proof: a careful human can type a flawless comment, and a rushed one can type a sloppy one. Judge it alongside other signals. Inverse case worth flagging the other direction: when editing a human's casual text (a Slack message, a quick reply), preserve their typos, contractions, and idiosyncratic capitalization rather than correcting them — smoothing away the rough edges erases the fingerprint that marks the text as theirs.
 
 ### Sentence structure
-- **"It's not X — it's Y" / "This isn't about X, it's about Y"**: Rewrite as a direct positive statement. Max one per piece, and only if it serves the argument. This includes the **split-sentence form**, where the negation and the correction fall in two separate sentences rather than pivoting on a single dash or comma: "The headline isn't the speed. The real story is Y." Read on its own, each sentence looks like an innocent declarative, which is exactly why the split version slips past a check tuned to the joined phrasing — flag it the same way. AI also stacks the negation across several options before the reveal ("It's not the price. It's not the features. It's the trust."). The multi-negation countdown is the same move inflated; flag it and cut straight to the positive claim.
+- **"It's not X — it's Y" / "This isn't about X, it's about Y"**: Rewrite as a direct positive statement. Max one per piece, and only if it serves the argument. This includes the **split-sentence form**, where the negation and the correction fall in two separate sentences rather than pivoting on a single dash or comma: "The headline isn't the speed. The real story is Y." Read on its own, each sentence looks like an innocent declarative, which is exactly why the split version slips past a check tuned to the joined phrasing — flag it the same way. AI also stacks the negation across several options before the reveal ("It's not the price. It's not the features. It's the trust."). The multi-negation countdown is the same move inflated; flag it and cut straight to the positive claim. The **tailing negation** is the clipped cousin: a bare negation fragment tacked onto the end of a sentence — "The options come from the selected item, no guessing." Write the constraint as a real clause ("without forcing the user to guess") or cut it. Carve-out: negations enumerating spec constraints in a list ("no dependencies, no telemetry") are list content, not a reveal. Adapted from `blader/humanizer` P9.
 - **Hollow intensifiers**: Cut `genuine` / `genuinely`, `real` (as in "a real improvement"), `truly`, `quite frankly`, `to be honest`, `let's be clear`, `it's worth noting that`. Just state the fact.
 - **Vague endorsement ("worth [verb]ing")**: Cut or replace `worth reading`, `worth paying attention to`, `worth a look`, `worth exploring`, `worth checking out`, `worth your time`. These substitute a generic thumbs-up for a specific reason. Say *why* something matters instead.
 - **Hedging**: Cut `perhaps`, `could potentially`, `it's important to note that`, `to be clear`. Make the point directly.
@@ -94,6 +94,18 @@ Words are organized into three tiers based on how reliably they signal AI-genera
 **Match inflected forms.** Each entry below covers the listed word *and its morphological variants* — adverb (`-ly`), gerund/participle (`-ing`), plural, comparative/superlative, and verb conjugations — unless a variant carries a distinct, legitimate meaning. So `genuine` also flags `genuinely`, `leverage` also flags `leveraging` / `leveraged`, `delve` covers `delving`, and `meticulous` covers `meticulously`. When a variant has a separate honest sense (e.g. `real` meaning factual, not the intensifier in "a real improvement"), judge by context rather than matching blindly.
 
 #### Tier 1 — Always replace
+
+Tier 1 splits into two bands. **Both are always replaced**; the edit is the same. What differs is what a flag *means*.
+
+**1A — AI frequency markers.** Words claimed to appear far more often in machine text than in human writing. A cluster of these is evidence about how a passage was produced.
+
+**1B — Clarity edits.** Wordiness and inflated formality. Replacing them is good writing regardless of who wrote the sentence, and a 1B hit is **not** evidence of machine authorship. Measured against 257 paragraphs of verified pre-2023 human prose, 1B entries fire on ordinary professional and formal writing at a meaningful rate — `in order to`, `utilize`, `commence`, `ascertain`, and `endeavor` are simply the words some people reach for. The detector emits these as `tier1-clarity`, weights them like Tier 2, and excludes them from the dense-AI-vocabulary signal so a wordiness fix can never push a document toward an AI classification.
+
+In `detect` mode, report the two bands separately. Presenting a wordiness fix as authorship evidence is the error this split exists to prevent.
+
+Caveat worth keeping visible: the "appears far more often in AI text" claim behind 1A is **inherited, not measured here**. It traces to [brandonwise/humanizer](https://github.com/brandonwise/humanizer), which states a 5–20x ratio without publishing a method or dataset. Treat 1A as a well-supported convention rather than a verified statistic until this repo measures the ratios itself against a machine-written corpus.
+
+##### Tier 1A — AI frequency markers
 
 | Replace | With |
 |---|---|
@@ -115,7 +127,6 @@ Words are organized into three tiers based on how reliably they signal AI-genera
 | seamless / seamlessly | smooth, easy, without friction |
 | game-changer / game-changing | describe what specifically changed and why it matters |
 | hit differently / hits different | (say what specifically changed, or cut) |
-| utilize | use |
 | watershed moment | turning point, shift (or describe what changed) |
 | marking a pivotal moment | (state what happened) |
 | the future looks bright | (cut — say something specific or nothing) |
@@ -142,6 +153,23 @@ Words are organized into three tiers based on how reliably they signal AI-genera
 | at its core | (cut — just state the thing) |
 | synergy / synergies | (describe the actual combined effect) |
 | interplay | relationship, connection, interaction |
+| keen (as intensifier) | interested, eager, enthusiastic (or cut — just state the interest) |
+| genuinely / genuine (as intensifier) | (cut — just state the fact) |
+| symphony (metaphor) | (describe the actual coordination or combination) |
+| embrace (metaphor) | adopt, accept, use, switch to |
+| load-bearing *(metaphor)* | essential, critical, necessary — or say what breaks if you remove it |
+
+**Hyphen required:** unhyphenated "load bearing" is ordinary English ("the load bearing down on the bridge") — only the hyphenated compound is the tell.
+
+**Construction carve-out:** `load-bearing` before a literal structural noun (`wall`, `beam`, `column`, `joist`, `truss`, `member`, `footing`, `slab`, `stud`, `partition`, `masonry`, `lintel`, `pier`, `rafter`, `girder`, `capacity`), optionally with one material or position adjective in between (`load-bearing structural wall`), is standard building terminology — don't flag. Abstract-capable nouns (`structure`, `element`, `frame`, `foundation`) are excluded on purpose, so "the load-bearing structure of his argument" still flags. Known gap: predicative use ("the wall is load-bearing") still flags — see issue #56.
+
+##### Tier 1B — Clarity edits
+
+Wordiness and formality, not authorship evidence. Same fix, weaker claim.
+
+| Replace | With |
+|---|---|
+| utilize | use |
 | in order to | to |
 | due to the fact that | because |
 | serves as | is |
@@ -151,10 +179,6 @@ Words are organized into three tiers based on how reliably they signal AI-genera
 | commence | start, begin |
 | ascertain | find out, determine, learn |
 | endeavor | effort, attempt, try |
-| keen (as intensifier) | interested, eager, enthusiastic (or cut — just state the interest) |
-| genuinely / genuine (as intensifier) | (cut — just state the fact) |
-| symphony (metaphor) | (describe the actual coordination or combination) |
-| embrace (metaphor) | adopt, accept, use, switch to |
 
 #### Tier 2 — Flag when 2+ appear in the same paragraph
 
@@ -221,6 +245,7 @@ These are normal words. Only flag them when the text is saturated with them — 
 | sophisticated | Describe the sophistication |
 | instrumental | Say what role it played |
 | world-class / state-of-the-art / best-in-class | Cite a benchmark or comparison |
+| verbatim | Usually redundant with the verb ("copies X verbatim" = "copies X") — cut it. If the exactness marks a contrast, name it: byte-for-byte, word for word, unchanged. Term of art in legal/research/QA registers ("verbatim transcript / record / testimony"), so weigh density in that context before flagging |
 
 #### Tier 3 phrases — Flag at density or in clusters
 
@@ -267,6 +292,12 @@ These slot-fill constructions signal that a sentence was generated, not written.
 - Phrases like "marking a pivotal moment in the evolution of..." or "a watershed moment for the industry" inflate routine events into history-making ones. State what happened and let the reader judge significance.
 - If the sentence still works after you delete the inflation clause, delete it.
 
+### Aphorism formulas
+- Slot-fill profundity: "X is the language of Y," "X is the currency of Z," "the architecture of trust," "X becomes a trap," "X is not a tool but a mirror." The formula turns an ordinary claim into something that sounds quotable without adding precision — the shape does the persuading instead of the evidence.
+- Fix: replace the formula with the concrete claim it gestures at. "Symmetry is the language of trust" → "symmetric layouts feel more predictable to users."
+- Distinct from significance inflation (which puffs up an event's importance) and from the persuasive-authority tropes under Confidence calibration (which announce depth): this pattern manufactures a general law out of a specific observation.
+- Carve-out: quotations and established idioms ("time is money") are attributed speech or common coin — leave them. Adapted from `blader/humanizer` P32.
+
 ### Generic future-narrative closers
 - "May become one of the most important narratives of the next market cycle," "could become the defining trend of the coming decade," "is poised to become the next major chapter in [X]." AI defaults to this shape when it needs to land a closing thought without committing to a falsifiable claim. The closer is grammatically a prediction but contains no testable content.
 - Pattern: modal (may / could / will / is poised to) + "become" + (one of) the most [adjective] + (narrative / story / trend / theme / chapter / movement / force).
@@ -282,6 +313,12 @@ These slot-fill constructions signal that a sentence was generated, not written.
 - **Carve-out — named contrast:** if the sentence explicitly names what the fake/superficial version is, leave it. "Real on-chain settlement, not bridged IOUs" or "actual revenue from paying customers, not grants" is honest contrastive writing. The AI tell is the unsaid contrast.
 - Fix when no contrast is named: drop the adjective and add the specific claim. "Reward sustainability" → "rewards funded from $X/mo in fees rather than emissions."
 
+### Moral-adjective category errors
+- AI glues moral or character adjectives (`honest`, `genuine`, `faithful`, `truthful`) onto non-agentic technical nouns (`shape`, `number`, `representation`, `accuracy`, `curve`, `output`) where the adjective cannot literally modify the noun. "An honest shape" — shapes are not moral agents; it is a category error. The same move appears as the adverb form: "described honestly," "flagged honestly" — the passive voice hides that there is no subject capable of honesty.
+- **Fix:** state the concrete property instead of the moral one. "An honest shape" → "a more realistic curve." "A more honest representation" → "a clearer picture." Cut moral adverbs from passive constructions entirely — "flagged honestly" → "noted." Let the evidence carry the honesty claim.
+- **Related — ontological slop on assumptions:** "The assumption stops being true." Assumptions do not flip from true to false; they degrade in adequacy. Write "the assumption breaks down" or "no longer holds."
+- **Related — gratuitous universal quantifiers:** "Taught in every first-year biochemistry course" instead of "taught in introductory biochemistry." The universal claim ("every") is unverifiable and unnecessary — it borrows authority from a scope the writer cannot check. Replace with the actual scope or drop the quantifier.
+
 ### Hashtag stuffing
 - Long trailing hashtag blocks (6+ hashtags on a single short post) are near-universal in LLM-generated social content and rare in thoughtful human posts. The block usually mixes a project-specific tag with broad category tags (#AI #Crypto #Web3 #Innovation #FutureTech #Technology) — the categorical ones do nothing for discoverability and read as bot output.
 - **Why 6?** Empirical floor. LinkedIn and X organic engagement plateaus or declines past 3-5 tags; human posts that exceed 5 are usually launch posts trading reach for engagement, while LLM-generated posts default to 10-15. Six is the threshold where false positives on legitimate human use start dropping below false negatives on AI output. The detector treats 6+ as a hard flag; the spec treats 5+ as a soft tell worth a second look on `linkedin` and `investor-email` profiles.
@@ -296,6 +333,11 @@ These slot-fill constructions signal that a sentence was generated, not written.
 ### Copula avoidance
 - AI text avoids "is" and "has" by substituting fancier verbs: "serves as," "features," "boasts," "presents," "represents." These sound like a press release.
 - Default to "is" or "has" unless a more specific verb genuinely adds meaning.
+
+### Subjectless fragments and agentless passives
+- Sentences with the subject dropped or the actor hidden: "No configuration file needed." "The results are preserved automatically." "Support for nested queries was added." The clipped no-subject form is a shape LLMs reach for when compressing feature descriptions, and the passive hides who does what.
+- Fix: name the actor when it clarifies — "You don't need a configuration file. The CLI preserves results automatically." Prefer active voice unless the actor is irrelevant.
+- Carve-out: terse reference registers where the fragment is the correct form — README feature lists, changelog entries, parameter docs, commit subjects ("No breaking changes"). Flag in flowing prose; skip in docs and casual registers (see the tolerance matrix). A single deliberate fragment for emphasis is rhythm, not a tell. Adapted from `blader/humanizer` P13.
 
 ### Synonym cycling
 - AI rotates synonyms to avoid repeating a word: "developers… engineers… practitioners… builders" in the same paragraph. Human writers repeat the clearest word.
@@ -390,6 +432,7 @@ These slot-fill constructions signal that a sentence was generated, not written.
 ### Infomercial engagement hooks
 - Punchy fragment-hooks that tee up a reveal: "The catch?", "The kicker?", "Here's the thing.", "But here's the kicker:", "The best part?", "Plot twist:", "The result?". AI uses these to fake momentum and manufacture suspense around ordinary information — the prose equivalent of a late-night infomercial.
 - Distinct from rhetorical-question openers (which stall before a point) and chatbot artifacts (which perform helpfulness): these are mid-flow teasers that pad the rhythm. The fix is to delete the hook and state the thing. "The catch? It only works on weekends." becomes "It only works on weekends." Adapted from `Aboudjem/humanizer-skill` P41.
+- The same move in a fake-candid register: "Honestly?", "Look,", "Real talk:", "Let's be honest —" as standalone openers that stage a pause before an ordinary point. The tell is the theatrical setup-and-reveal, not the word — "honestly" or "look" mid-sentence in casual prose is ordinary English and stays unflagged. Adapted from `blader/humanizer` P33.
 
 ### Social endorsement closers
 - The curatorial sign-off LLMs append to LinkedIn and X posts that share or recommend something — usually a colon teeing up a link: "This one is worth your time:", "This one's a must-read:", "I highly recommend giving this a read.", "Do yourself a favor and read this.", "You won't want to miss this one.", "Save this for later.", "Bookmark this.", "Don't sleep on this one.", "Trust me, you'll want to read this.", "Thank me later."
@@ -404,8 +447,18 @@ These slot-fill constructions signal that a sentence was generated, not written.
 - The fix isn't "never say surprised." It's: if you claim an emotion, the writing around it should earn it. Otherwise cut the claim and present the thing directly.
 - Related pattern: "hit differently" / "hits different." AI uses trendy colloquialisms as a shortcut to sound relatable without earning the emotional beat. If something genuinely affected you, describe how. Otherwise cut.
 
+### Lingering-attention claims
+- The share-post frame that claims a thing has occupied the writer's mind: "the line I keep coming back to," "I can't stop thinking about this," "still thinking about this one," "this has been rattling around in my head all week," "I've been chewing on this since Tuesday." The claim is about the writer's attention, not about the thing, and it arrives *before* the reader has any reason to care.
+- Distinct from emotional flatline, which claims a **feeling** ("What surprised me most"). This claims **duration** of attention, which is unfalsifiable and self-flattering in a way a feeling isn't: nobody can check whether you kept coming back to it, and the frame implies the quote earned repeat visits without showing what it earned them with. Also distinct from social endorsement closers, which vouch for a link at the end of a post; this opens one.
+- **Carve-out — reason attached.** Leave it when the sentence says *why* the thing recurred: "I keep coming back to Hirschman's exit-voice framing because it predicts which engineers quit and which ones file the RFC." That's a claim about the idea's explanatory reach. The tell is the bare frame with the reason missing.
+- Fix: delete the frame and open on the thing itself. "The line I keep coming back to: agents are teenagers." becomes "Jeetu describes AI agents as teenagers." The quote either lands or it doesn't, and the frame doesn't change which.
+
 ### False concession structure
 - "While X is impressive, Y remains a challenge" or "Although X has made strides, Y is still an open question." AI uses this to sound balanced without actually weighing anything. Both halves are vague. Either make the concession specific (name what's impressive, name the actual challenge) or pick a side and argue it.
+
+### Invented contrast-pair mirroring
+- An AI-specific form of forced symmetry: one half of a contrast pair is a legitimate term of art, and the other is the AI inventing its mirror to balance the sentence. "False precision rather than genuine accuracy" — "false precision" is a real statistical term; "genuine accuracy" is a phantom counterpart generated for parallelism. The asymmetry is invisible unless you know which half is real. The same pattern can produce pairs like "real data rather than theoretical models" (both real) or "practical results rather than abstract speculation" (both real), but the AI-specific tell is when one term is borrowed from the domain and the other is entirely fabricated.
+- **Fix:** if you need a contrast, reach for an actual opposite. If no real opposite exists, drop the contrast structure and state the positive claim directly. "May create a misleadingly exact number rather than a more accurate one" — the contrast works because both halves are real descriptions.
 
 ### Rhetorical question openers
 - "But what does this mean for developers?" / "So why should you care?" / "What's next?" — AI uses rhetorical questions to stall before the actual point. If you know the answer, just say it. Rhetorical questions are earned by strong setup, not dropped as section transitions.
@@ -423,6 +476,16 @@ These slot-fill constructions signal that a sentence was generated, not written.
 ### Sycophantic tone
 - "Great question!", "Excellent point!", "You're absolutely right!", "That's a really insightful observation" — these are conversational rewards from chat interfaces, not writing. Remove entirely.
 - Distinct from chatbot artifacts: sycophancy specifically validates the reader/questioner rather than just performing helpfulness.
+
+### Narrated candor
+- Announcing your own disclosure instead of disclosing: "Two caveats I would rather flag than let you discover later:", "I want to be upfront:", "To be fully transparent:", "Rather than bury this, I'll say it plainly:", "I could have left this out, but:", "Being honest about the limitations here:". The content is "Two caveats:"; the rest advertises the writer's forthrightness.
+- Completes the set with two neighbours. Chatbot artifacts perform **helpfulness** ("I hope this helps!"); sycophantic tone validates **the reader** ("Great question!"); this performs **candor about oneself**. Assistant training rewards visible transparency, so the model narrates being forthcoming rather than simply being it.
+- Note the shape is usually a matched antithesis (flag rather than let you discover, say plainly rather than bury), which is its own tell — the symmetry is doing the work that content should.
+- **The deletion test.** Cut the frame. If the sentence loses no information, it was never content: "Two caveats I would rather flag than let you discover later: X and Y" and "Two caveats: X and Y" say the same thing.
+- **Carve-out — the disclosure itself.** Substantive admissions stay, and are the point: "I haven't tested this on Windows", "the numbers in the commit message don't reproduce on my hardware", "this is a mitigation, not a fix". Those carry information. The tell is the separable clause *about* disclosing, not the disclosure.
+- **Carve-out — conflict-of-interest disclosure.** "In the interest of full disclosure, I own shares in the company discussed here" is not narrated candor. In journalism, academia, finance, and open-source governance that opening is the conventional label that makes a disclosure legible, and the sentence carries the material fact. Leave it. The same words with nothing behind them ("in the interest of full disclosure, I want to be upfront about my thinking here") are the tell.
+- **Not the ordinary comparative.** "I'd rather fix it than let you inherit the mess" is a preference about work, not an announcement about disclosing. The construction only counts when what follows the frame is the *disclosure itself*.
+- **Judgment-only, deliberately.** This was implemented as a detector and reverted: every regex tight enough to spare the two carve-outs above stopped matching the tell, and the phrasings are shared with idiomatic disclosure language. Deciding it requires reading whether the clause carries information or only announces that information is coming, which is what a reader can do and a pattern cannot.
 
 ### Acknowledgment loops
 - "You're asking about," "The question of whether," "To answer your question," "That's a great question. The..." — AI restates the prompt before answering. In writing, this is pure filler. The reader knows what they asked. Just answer.
@@ -460,6 +523,17 @@ These slot-fill constructions signal that a sentence was generated, not written.
 - Too many headers in short text: more than 3 headings in under 300 words is almost always AI trying to look organized. Merge sections or use prose transitions instead.
 - Too many list items: 8+ bullet points in under 200 words means the content should be a paragraph, not a list.
 - Formulaic section headers: "Overview," "Key Points," "Summary," "Conclusion," "Introduction" — these are default AI scaffolding. Use headers that tell the reader something specific about what follows.
+- Fragmented headers: a heading followed by a one-line warm-up that restates it ("## Performance", then "Speed matters.") before the real content starts. Cut the warm-up; the heading already did that job. Adapted from `blader/humanizer` P29.
+
+### Diff-anchored writing
+- Documentation or comments narrating a change instead of describing the thing as it is: "This function was added to replace the previous approach of iterating through all items." A reader without the commit history gets archaeology, not documentation. The tell comes from how assistants work — they write docs in the context of the edit they just made, so the prose anchors to the diff; a person documenting later writes from the artifact.
+- Fix: describe the current behavior and why it is that way — "This function uses a hash map for O(1) lookups." If the history matters, it belongs in the changelog or the commit message.
+- Carve-out: documents that are inherently version-scoped — changelogs, release notes, migration guides, decision records — narrate change correctly and stay unflagged. Adapted from `blader/humanizer` P30.
+
+### Manufactured punchlines and staccato drama
+- A run of clipped fragments engineered so every beat lands like a quotable closer: "It had no preference for symmetry. No aesthetic prior. No nostalgia for human taste. The old rules were gone." Each fragment poses as a reveal; stacked, they read as a drumroll.
+- This composes with Rhythm and uniformity below, which encourages fragments and varied lengths: variation is the human signal, and one short sentence that lands a point is exactly that. The tell here is the opposite of variation — three or more same-shape fragments in a row, each carrying manufactured drama.
+- Fix: keep the one fragment that earns its emphasis and fold the rest into ordinary sentences with the claim stated: "AlphaEvolve did not favor symmetry or human-looking designs, which made some of the older assumptions less useful." Adapted from `blader/humanizer` P31.
 
 ### Rhythm and uniformity
 
@@ -517,8 +591,12 @@ Not all AI-isms are equal. When doing a quick pass or triaging a large document,
 - Em dash frequency (above 1 per 1,000 words)
 - Generic future-narrative closers ("may become one of the most important narratives…")
 - Social endorsement closers ("This one is worth your time:", "thank me later")
+- Lingering-attention claims ("the line I keep coming back to," "I can't stop thinking about this")
+- Narrated candor ("I would rather flag this than let you discover it later", "in the interest of full disclosure")
 - Hedge-stacked predictions ("could potentially," "may eventually")
 - Real/actual adjective inflation ("real on-chain tokenomics")
+- Moral-adjective category errors ("honest shape," "flagged honestly")
+- Invented contrast-pair mirroring ("false precision rather than genuine accuracy")
 - Bullet lists of bare noun phrases (5+ short adj+noun items, no verbs)
 - Tier 3 phrase clustering (≥3 distinct boilerplate phrases in one piece)
 
@@ -581,6 +659,9 @@ Rules not listed in the table apply at full strength across all profiles.
 | Social endorsement closers | strict (the LinkedIn share-post tell) | strict | strict | strict | skip | relaxed (1 OK in a DM) |
 | Hedge-stacked predictions | strict | strict | relaxed ("could" is hedged accuracy) | **extra strict** | relaxed | skip |
 | Real/actual inflation | strict | strict | strict | **extra strict** | relaxed | skip |
+| Moral-adjective category errors | strict | strict | relaxed | strict | relaxed | skip |
+| Invented contrast-pair mirroring | strict | strict | relaxed | strict | relaxed | skip |
+| Subjectless fragments and agentless passives | relaxed (short-form fragments are the register) | strict | relaxed | strict | skip (fragment lists are docs) | skip |
 
 **Technical-blog word table exceptions:** These terms have legitimate technical meaning and should not be flagged in technical context: `robust`, `comprehensive`, `seamless`, `ecosystem`, `leverage` (when discussing actual platform leverage/APIs), `facilitate`, `underpin`, `streamline`. Still flag: `delve`, `tapestry`, `beacon`, `embark`, `testament to`, `game-changer`, `harness`.
 
@@ -650,7 +731,7 @@ Re-read the rewritten version from section 2. Identify any remaining AI tells th
 Return your response in two sections:
 
 **1. Issues found**
-A bulleted list of every AI-ism identified, with the offending text quoted. Group by severity (P0, P1, P2).
+A bulleted list of every AI-ism identified, with the offending text quoted. Group by severity (P0, P1, P2). Keep Tier 1B clarity edits visually separate from Tier 1A markers, and say which is which — a wordiness fix is a writing suggestion, not evidence about who wrote the text.
 
 **2. Assessment**
 For each flag, note whether it's a clear problem or a judgment call. Some AI-associated patterns are effective writing techniques — uniform paragraph length is a problem, but a well-placed "however" isn't. Call out which flags the writer should definitely fix vs. which ones are worth a second look but might be fine in context. If the text is clean, say so.
@@ -665,6 +746,14 @@ A bulleted list of the changes, each with the file location and the before → a
 **2. Verification**
 Confirm you re-read the file and the flagged patterns are resolved. Note anything you deliberately left alone because it was already human or intentional.
 
+**Mechanical check (optional, recommended for edit mode).** If the repo ships the detector engine, run the preservation validator against the before and after text:
+
+```bash
+node detector/validate.js <original> <rewritten>
+```
+
+It exits non-zero when a rewrite altered a fenced code block, YAML frontmatter, a blockquote, a table cell, inline code, a URL, a file path, or the heading structure, and when the rewrite introduced more flagged patterns than it removed. Those are the promises made above; this is what checks them. Rewording a heading to fix Title Case and stripping an AI tracking parameter from a URL are carved out, because this skill instructs both.
+
 ---
 
 ## Tone calibration
@@ -678,6 +767,26 @@ Five principles for human-sounding rewrites:
 4. **Cut the neutrality** — humans have opinions. If the piece is supposed to take a position, take it.
 5. **Earn your emphasis** — don't tell the reader something is interesting. Make it interesting.
 
+Removal is half the job. A rewrite that clears every flag but reads sterile — even sentence lengths, no stance, no first person where one belongs — is still recognizably machine output. When the genre carries a voice (essays, posts, personal writing), put voice back on purpose: a reaction, a stated preference, an aside, one thought left unresolved. For encyclopedic, technical, or legal text, neutral and plain is the correct human voice; don't inject personality there. Adapted from `blader/humanizer` ("Personality and soul").
+
 If the original writing is already strong, say so and make only the necessary cuts. Don't over-edit for the sake of it.
 
 The replacement table provides defaults, not mandates. If a flagged word is clearly the right choice in context, preserve it.
+
+### Never inject these
+
+The instruction above — put voice back on purpose — has a predictable failure mode: the model reaches for a stock kit of "human" moves and installs a personality the author never had. That trades one detectable register for a louder one. An independent stress test of `blader/humanizer` found exactly this: generic AI phrasing replaced by a recognizable *humanizer* voice of fragments and staccato rhythm. A new fingerprint, not the absence of one.
+
+None of the following may be **added** to a text that did not already contain it. Every one is a rewrite failure even when the result scores clean:
+
+- **Fake first person.** "I've seen this a hundred times," "in my experience," "I'll admit" dropped into prose that had no author presence. Voice comes from the author or not at all. If the source has no `I`, the rewrite has no `I`.
+- **Manufactured stakes.** "In a world where," "now more than ever," "the stakes have never been higher." Covered as a detection rule under Speculative scenario openers; listed again here because the rewrite side is where it gets *introduced*.
+- **Forced contrarianism.** "Everyone says X, but they're wrong," "the conventional wisdom is backwards." Only legitimate when the source actually argued it. Inventing a foil is inventing a claim.
+- **Performed candor.** "Let's be honest," "real talk," "here's the thing." See Narrated candor and Infomercial engagement hooks. A rewrite that adds one is failing two rules at once.
+- **Em-dash theatrics.** Dashes staged for drama the content has not earned. The rule elsewhere is a rate ceiling; this is about *adding* dashes during a rewrite, which should never happen.
+- **Staccato conversion.** Chopping ordinary sentences into fragments to manufacture rhythm. Vary sentence length by varying the sentences, not by breaking them.
+- **Invented specifics.** A number, name, date, tool, or mechanism the source never contained. Specificity is the most tempting fix because it always reads better, and a fabricated specific is worse than the vague phrasing it replaced. If the concrete detail is missing, flag the gap and leave it. Never fill it.
+
+**The test.** For each edit, ask whether the information in the rewrite came from the source. Subtraction and sharpening are in scope: cutting filler, making an existing claim concrete, surfacing a buried point. Addition of stance, personality, or fact is not. Adapted from `isatimur/de-slop`'s guardrails, which state the rule plainly: you may subtract and sharpen, you may not add.
+
+**Why it belongs here rather than in the pattern catalog.** These are constraints on the editor, not detections on the text. A first-person aside is not a flag when the author wrote it; it is a failure when the tool inserted it. The difference is provenance, which no pattern can see, so it lives with the rewrite instructions where the decision is actually made.
