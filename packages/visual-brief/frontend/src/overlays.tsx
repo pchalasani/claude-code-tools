@@ -11,7 +11,7 @@ const KEY_BAR: [string, Action, string][] = [
   ["E", "expand-all", "Expand all"],
   ["C", "collapse-all", "Collapse all"],
   ["n", "next-awaiting", "Next open chat"],
-  ["m", "chats", "My chats"],
+  ["m", "reveal-chats", "Reveal / restore chats"],
   ["/", "search", "Search"],
   ["g", "top", "Top"],
   ["G", "bottom", "Bottom"],
@@ -26,6 +26,9 @@ export function KeyBar(props: { state: BriefState }): JSX.Element {
             type="button"
             class="key-control"
             data-action={action}
+            aria-pressed={action === "reveal-chats"
+              ? props.state.nav.chatRevealActive()
+              : undefined}
             onClick={() => props.state.run(action)}
           >
             <kbd>{key}</kbd>

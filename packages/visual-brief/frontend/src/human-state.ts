@@ -16,6 +16,9 @@ export interface HumanState {
   readonly draftWarning: Accessor<string>;
   choose: (rowId: string, open: boolean) => void;
   chooseAll: (rowIds: Iterable<string>, open: boolean) => void;
+  chooseEach: (
+    choices: Iterable<readonly [string, boolean | undefined]>,
+  ) => void;
   select: (rowId: string | null) => void;
   writeDraft: (rowId: string, text: string) => void;
   discardDraft: (rowId: string) => void;
@@ -87,6 +90,17 @@ export function createHumanState(runId = runIdFromLocation()): HumanState {
       }
       setChosen(next);
       write(sessionStore(), chosenKey, JSON.stringify(next));
+    },
+    chooseEach: (choices) => {
+      for (const [rowId, open] of choices) {
+        setChosen(rowId, open as boolean);
+      }
+      const next = { ...chosen };
+      if (Object.keys(next).length === 0) {
+        remove(sessionStore(), chosenKey);
+      } else {
+        write(sessionStore(), chosenKey, JSON.stringify(next));
+      }
     },
     select: (rowId) => {
       setCursor(rowId);
@@ -182,5 +196,13 @@ function write(store: Storage | null, key: string, value: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+function remove(store: Storage | null, key: string): void {
+  try {
+    store?.removeItem(key);
+  } catch {
+    // Storage is optional; the in-memory state still remains authoritative.
   }
 }

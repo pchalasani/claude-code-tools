@@ -18,3 +18,9 @@ Object.defineProperty(window, "localStorage", {
   configurable: true,
   value: storage,
 });
+
+Object.defineProperty(window, "scrollTo", {
+  configurable: true,
+  value: () => {},
+  writable: true,
+});

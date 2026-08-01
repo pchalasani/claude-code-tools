@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  chatRows,
   composeRow,
   effectiveCursor,
   filterRows,
@@ -60,14 +59,6 @@ describe("pure views", () => {
       "newest/changed/alpha",
       "newest/changed/alpha#q-answered",
     ]);
-  });
-
-  it("my chats keeps human threads and their paths", () => {
-    const filtered = chatRows(rows);
-    expect(filtered.filter((row) => row.kind === "thread")).toHaveLength(2);
-    expect(filtered).toContainEqual(
-      expect.objectContaining({ id: "newest/changed" }),
-    );
   });
 
   it("routes composition at evidence and update rows", () => {

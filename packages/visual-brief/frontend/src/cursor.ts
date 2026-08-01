@@ -71,16 +71,6 @@ export function filterRows(rows: Row[], query: string): Row[] {
   }
   return rows.filter((row) => kept.has(row.id));
 }
-export function chatRows(rows: Row[]): Row[] {
-  const kept = new Set<string>();
-  for (const row of rows) {
-    if (row.kind === "thread" && row.human) {
-      kept.add(row.id);
-      ancestorIds(row.id).forEach((id) => kept.add(id));
-    }
-  }
-  return rows.filter((row) => kept.has(row.id));
-}
 export function countItems(rows: Row[]): number {
   return rows.filter((row) => row.kind === "item").length;
 }

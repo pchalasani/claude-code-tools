@@ -1,6 +1,5 @@
-import { createMemo, createSignal, type Accessor } from "solid-js";
+import { batch, createMemo, createSignal, type Accessor } from "solid-js";
 import {
-  chatRows,
   countItems,
   edgeRow,
   effectiveCursor,
@@ -15,12 +14,17 @@ import { createRowIndex } from "./live-rows";
 import { createOpenness, foldChoiceIds } from "./open";
 import { ancestorIds, type Row, type RowKind } from "./outline";
 import { explicitSelectionTookOver } from "./pointer";
-import { scrollRowIntoView } from "./reveal";
+import { preserveWindowScroll, scrollRowIntoView } from "./reveal";
 export type Overlay = "none" | "search" | "help";
+interface ChatReveal {
+  layout: Map<string, boolean | undefined>;
+  pathIds: ReadonlySet<string>;
+}
 export interface Navigation {
   visible: Accessor<Row[]>;
   painted: Accessor<Row[]>;
   isVisible: (id: string) => boolean;
+  isPainted: (id: string) => boolean;
   row: (id: string) => Row | undefined;
   cursorId: Accessor<string | null>;
   currentId: () => string | null;
@@ -36,9 +40,8 @@ export interface Navigation {
   setOpen: (id: string, open: boolean) => void;
   expandAll: () => void;
   collapseAll: () => void;
-  chats: Accessor<boolean>;
-  toggleChats: () => void;
-  chatCount: Accessor<number>;
+  chatRevealActive: Accessor<boolean>;
+  toggleChatReveal: () => void;
   ordinal: (id: string) => number | null;
   query: Accessor<string>;
   setQuery: (value: string) => void;
@@ -61,25 +64,30 @@ export function createNavigation(
     () => human.seen,
   );
   const [query, setQuery] = createSignal("");
-  const [chats, setChats] = createSignal(false);
   const [overlay, setOverlay] = createSignal<Overlay>("none");
-  const filterActive = (): boolean =>
-    chats() || query().trim().length > 0;
-  const visible = createMemo(() =>
-    chats() ? chatRows(rows()) : filterRows(rows(), query()),
-  );
+  const [chatReveal, setChatReveal] = createSignal<ChatReveal | null>(null);
+  const filterActive = (): boolean => query().trim().length > 0;
+  const visible = createMemo(() => filterRows(rows(), query()));
   const visibleIds = createMemo(
     () => new Set(visible().map((row) => row.id)),
   );
   const painted = createMemo(() => {
     if (filterActive()) {
-      for (const row of visible()) {
-        openness.isOpen(row);
-      }
-      return visible();
+      const revealed = chatReveal()?.pathIds;
+      return rows().filter((row) => {
+        const included = visibleIds().has(row.id)
+          || revealed?.has(row.id) === true;
+        if (included) {
+          openness.isOpen(row);
+        }
+        return included;
+      });
     }
     return openness.painted(rows());
   });
+  const paintedIds = createMemo(
+    () => new Set(painted().map((row) => row.id)),
+  );
   const cursorId = createMemo(() =>
     effectiveCursor(painted(), human.cursor()),
   );
@@ -113,10 +121,9 @@ export function createNavigation(
     if (row === undefined) {
       return;
     }
-    const filtered = options?.dropFilter === true || !visibleIds().has(id);
+    const filtered = options?.dropFilter === true || !paintedIds().has(id);
     if (filtered) {
       setQuery("");
-      setChats(false);
       for (const ancestor of ancestorIds(id)) {
         human.choose(ancestor, true);
       }
@@ -155,6 +162,7 @@ export function createNavigation(
     visible,
     painted,
     isVisible: (id) => visibleIds().has(id),
+    isPainted: (id) => paintedIds().has(id),
     row: index.row,
     cursorId,
     currentId: cursorId,
@@ -191,9 +199,51 @@ export function createNavigation(
     },
     expandAll: () => human.chooseAll(foldChoiceIds(rows()), true),
     collapseAll: () => human.chooseAll(foldChoiceIds(rows()), false),
-    chats,
-    toggleChats: () => setChats((value) => !value),
-    chatCount: createMemo(() => outstanding().length),
+    chatRevealActive: () => chatReveal() !== null,
+    toggleChatReveal: () => {
+      explicitSelectionTookOver();
+      preserveWindowScroll(() => {
+        const captured = chatReveal();
+        if (captured !== null) {
+          const surviving = new Set(rows().map((row) => row.id));
+          batch(() => {
+            human.chooseEach(
+              [...captured.layout].map(([id, choice]) => [
+                id,
+                surviving.has(id) ? choice : undefined,
+              ] as const),
+            );
+            setChatReveal(null);
+          });
+          return;
+        }
+        const layout = new Map<string, boolean | undefined>();
+        const needed = new Set<string>();
+        const pathIds = new Set<string>();
+        for (const row of rows()) {
+          baseOpen(row.id);
+          layout.set(
+            row.id,
+            Object.hasOwn(human.chosen, row.id)
+              ? human.chosen[row.id]
+              : undefined,
+          );
+          if (row.kind !== "thread" || !row.human) {
+            continue;
+          }
+          for (const id of [row.id, ...ancestorIds(row.id)]) {
+            pathIds.add(id);
+            if (!baseOpen(id)) {
+              needed.add(id);
+            }
+          }
+        }
+        batch(() => {
+          setChatReveal({ layout, pathIds });
+          human.chooseAll(needed, true);
+        });
+      });
+    },
     ordinal: (id) => ordinals().get(id) ?? null,
     query,
     setQuery,

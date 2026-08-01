@@ -8,6 +8,20 @@ export function scrollRowIntoView(id: string): void {
     head.scrollIntoView({ block: "nearest" });
   }
 }
+export function preserveWindowScroll(change: () => void): void {
+  if (typeof window === "undefined") {
+    change();
+    return;
+  }
+  const left = window.scrollX;
+  const top = window.scrollY;
+  const restore = (): void => window.scrollTo(left, top);
+  change();
+  restore();
+  if (typeof window.requestAnimationFrame === "function") {
+    window.requestAnimationFrame(restore);
+  }
+}
 export function revealRowSoon(id: string): void {
   if (typeof window === "undefined") {
     return;

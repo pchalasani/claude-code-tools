@@ -8,7 +8,7 @@ export type Action =
   | "collapse-all"
   | "compose"
   | "next-awaiting"
-  | "chats"
+  | "reveal-chats"
   | "hints"
   | "search"
   | "top"
@@ -56,7 +56,7 @@ export const BINDINGS: Record<string, Action> = {
   c: "compose",
   a: "compose",
   n: "next-awaiting",
-  m: "chats",
+  m: "reveal-chats",
   f: "hints",
   "/": "search",
   g: "top",
@@ -80,7 +80,7 @@ export const KEY_HELP: [string, string][] = [
   ],
   [SEND_CHORD_LABEL, "Send what you have written"],
   ["n", "Jump to your next open chat"],
-  ["m", "Show every conversation you have written in"],
+  ["m", "Reveal your chats, then restore the prior fold layout"],
   ["/", "Search items"],
   ["g / G", "Top / bottom"],
   ["?", "Show this key list"],
@@ -113,7 +113,7 @@ export function resolveAction(event: KeyEventLike): Action | null {
     event.key === "Enter"
     && event.target instanceof Element
     && event.target.closest(
-      "a[href], button:not(.meta-awaiting):not(.meta-chats), "
+      "a[href], button:not(.meta-awaiting):not(.meta-attention), "
         + "input, select, textarea, summary",
     ) !== null
   ) {

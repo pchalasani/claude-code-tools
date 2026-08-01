@@ -125,7 +125,7 @@ export function VisibleRow(props: {
   children: (row: Row) => JSX.Element;
 }): JSX.Element {
   const resolved = () =>
-    props.state.nav.isVisible(props.id)
+    props.state.nav.isPainted(props.id)
       ? props.state.nav.row(props.id)
       : undefined;
   return <Show when={resolved()}>{(row) => props.children(row())}</Show>;

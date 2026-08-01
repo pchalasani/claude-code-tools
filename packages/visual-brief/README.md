@@ -56,21 +56,23 @@ comfortable reading position. Clicking a row moves the same cursor.
 | `c` | Chat wherever the cursor is: update, lane, item or conversation |
 | `⌘`/`Ctrl` + `Enter` | Send what you have written |
 | `n` | Next open chat: unanswered or a fresh unseen answer |
-| `m` | Show every conversation you have written in |
+| `m` | Reveal your chats; press again to restore the previous fold layout |
 | `/` | Search items |
 | `g` / `G` | Top / bottom |
 | `?` | Show the key list |
-| `Escape` | Close an overlay, leave the chats view, or leave a text box |
+| `Escape` | Close an overlay or leave a text box |
 
 Every granularity the mouse can chat at, the keyboard reaches: `J`/`K` onto a
 lane and `c` opens exactly the box that lane's own Chat button opens.
 
-`m` is how you find your own conversations again. Collapsing the page hides
-them, while `n` visits anything that still needs your attention: an unanswered
-conversation or a fresh answer you have not seen. The chats view collects every
-thread you have written in — answered or not — and `j`/`k` walk them. Newer
-conversations appear first. Inside an expanded lane each item also carries a
-small muted number, so a conversation can refer to "item 12".
+`m` reveals every conversation you have written in, in its existing place,
+without hiding unrelated content. Press it again to restore the exact fold
+layout from before the reveal. Each later reveal captures the layout again, and
+rows arriving between presses keep their normal fold defaults. The `n` key
+visits anything that still needs your attention: an unanswered conversation or
+a fresh answer you have not seen. Newer conversations appear first. Inside an
+expanded lane each item also carries a small muted number, so a conversation
+can refer to "item 12".
 
 Keys stay inert while you are typing, so a question can contain the letter `j`.
 Inside the chat box plain `Enter` starts a new line; sending is the chord.

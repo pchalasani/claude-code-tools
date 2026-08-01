@@ -153,7 +153,7 @@ describe("where a lane's own conversations sit", () => {
     expect(paintedCursor()).toBe(SECOND);
   });
 
-  it("is still collected by the chats view", () => {
+  it("is revealed with every other human conversation", () => {
     mount(chattedLane());
 
     press("m");

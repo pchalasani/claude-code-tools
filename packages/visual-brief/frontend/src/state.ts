@@ -37,7 +37,7 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
   createEffect(() => {
     const id = composer.target()?.rowId;
     const absent = id !== undefined && nav.row(id) === undefined;
-    const folded = id !== undefined && !nav.chats() && nav.query() === ""
+    const folded = id !== undefined && nav.query() === ""
       && !nav.painted().some((row) => row.id === id);
     if (absent || folded) composer.close();
   });
@@ -69,14 +69,12 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
     const targeted = composer.target();
     const row = targeted?.rowId === selected && selected !== null
       ? nav.row(selected) ?? null
-      : composeRow(nav.visible(), nav.currentId());
+      : composeRow(nav.painted(), nav.currentId());
     if (row !== null) composeAt(row);
   };
   const closeOne = (): void => {
     if (nav.overlay() === "help") {
       nav.closeOverlay();
-    } else if (nav.chats()) {
-      nav.toggleChats();
     } else if (nav.overlay() === "search") {
       nav.setQuery("");
       nav.closeOverlay();
@@ -104,7 +102,7 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
       "collapse-all": nav.collapseAll,
       compose: composeAtCursor,
       "next-awaiting": nav.toOpenChat,
-      chats: nav.toggleChats,
+      "reveal-chats": nav.toggleChatReveal,
       hints: () => {
         if (nav.overlay() !== "help") {
           hints.enter();

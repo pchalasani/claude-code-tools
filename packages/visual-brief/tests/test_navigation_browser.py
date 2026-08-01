@@ -8,6 +8,7 @@ that reaches a lane's chat has to open the same box its own button does.
 
 from __future__ import annotations
 
+import json
 from typing import Iterator
 
 import pytest
@@ -44,16 +45,19 @@ _FOLD_STATE = """
     })()
     """
 
-_CHATS_STATE = """
+_REVEAL_STATE = """
     (() => {
       const rows = [...document.querySelectorAll("[data-row-id]")];
-      const button = document.querySelector(".meta-chats");
+      const button = document.querySelector(".meta-attention");
       return {
         painted: rows.map((row) => row.dataset.rowId),
+        open: Object.fromEntries(
+          rows.map((row) => [row.dataset.rowId, row.dataset.open]),
+        ),
         threads: rows
           .filter((row) => row.dataset.rowKind === "thread")
           .map((row) => row.dataset.rowId),
-        count: button?.dataset.chatsCount ?? null,
+        count: button?.dataset.attentionCount ?? null,
         pressed: button?.getAttribute("aria-pressed") ?? null,
         cursor:
           document.querySelector('[data-cursor="true"]')?.dataset.rowId
@@ -64,6 +68,9 @@ _CHATS_STATE = """
             ?.dataset.rowId ?? null,
         draft:
           document.querySelector(".composer textarea")?.value ?? null,
+        overlay: document.querySelector('[role="search"]') === null
+          ? "none" : "search",
+        scroll: Math.round(window.scrollY),
       };
     })()
     """
@@ -210,102 +217,87 @@ def test_one_key_opens_the_whole_page_and_another_folds_it_back(
     assert reopened["cursor"] == revealed["cursor"], reopened
 
 
-def test_the_chats_view_finds_conversations_folding_took_away(
+def test_reveal_chats_then_restores_the_exact_fold_layout(
     browser: Browser,
 ) -> None:
-    """Filter chats without changing cursor, search, composer, or draft."""
-    draft = "Keep these words through both pure filters."
-    browser.press("E")
-    browser.run("wait", "300")
-    browser.click_row(OTHER_AWAITING)
-    assert browser.evaluate(
-        f'document.querySelector(\'[data-row-id="{OTHER_AWAITING}"]\')'
-        '?.dataset.open'
-    ) == "false"
-    browser.click_row(AWAITING_THREAD)
+    """Reveal in place, then restore every captured fold choice."""
+    draft = "Keep this draft while conversations are revealed."
+    browser.click_row(ANSWERED_THREAD)
     browser.compose_at(AWAITING_THREAD)
     browser.run("fill", ".composer textarea", draft)
+    browser.press("Escape")
     browser.evaluate(
         "document.querySelector('.composer textarea')?.blur(); true"
     )
-
-    storage_before_filters = browser.evaluate(_HUMAN_STATE_STORAGE)
-
+    browser.press("C")
+    browser.run("wait", "300")
+    browser.click_row("current-update")
     browser.press("/")
-    browser.run("fill", "#brief-search", "Cedar CLI 4.11.2")
     browser.evaluate("document.querySelector('#brief-search')?.blur(); true")
-    before = browser.evaluate(_CHATS_STATE)
-    storage_in_search = browser.evaluate(_HUMAN_STATE_STORAGE)
+    before = browser.evaluate(_REVEAL_STATE)
+    storage_before = browser.evaluate(_HUMAN_STATE_STORAGE)
 
     browser.press("m")
     browser.run("wait", "300")
-    inside = browser.evaluate(_CHATS_STATE)
-    storage_in_chats = browser.evaluate(_HUMAN_STATE_STORAGE)
+    after = browser.evaluate(_REVEAL_STATE)
+    storage_after = browser.evaluate(_HUMAN_STATE_STORAGE)
 
-    browser.press("Escape")
+    browser.press("m")
     browser.run("wait", "300")
-    outside = browser.evaluate(_CHATS_STATE)
-    storage_back_in_search = browser.evaluate(_HUMAN_STATE_STORAGE)
+    restored = browser.evaluate(_REVEAL_STATE)
+    storage_restored = browser.evaluate(_HUMAN_STATE_STORAGE)
 
-    browser.press("Escape")
-    browser.run("wait", "300")
-    storage_after_filters = browser.evaluate(_HUMAN_STATE_STORAGE)
-    browser.press("E")
-    browser.run("wait", "300")
-    restored = browser.evaluate(_CHATS_STATE)
+    threads = [AWAITING_THREAD, ANSWERED_THREAD, OTHER_AWAITING]
+    reveal_ids = set()
+    for thread in threads:
+        current = thread
+        while True:
+            reveal_ids.add(current)
+            split_at = max(current.rfind("#"), current.rfind("/"))
+            if split_at <= 0:
+                break
+            current = current[:split_at]
+    chosen_before = json.loads(storage_before["chosen"])
+    chosen_after = json.loads(storage_after["chosen"])
+    changed = {
+        key
+        for key in chosen_before.keys() | chosen_after.keys()
+        if chosen_before.get(key) != chosen_after.get(key)
+    }
+    needed = {row for row in reveal_ids if chosen_before.get(row) is False}
+    unrelated_before = set(before["open"]) - reveal_ids
 
-    assert storage_in_search == storage_before_filters
-    assert storage_in_chats == storage_before_filters
-    assert storage_back_in_search == storage_before_filters
-    assert storage_after_filters == storage_before_filters
-    assert before["cursor"] is None, before
-    assert before["query"] == "Cedar CLI 4.11.2", before
-    assert before["composer"] is None, before
-    assert inside["threads"] == [
-        AWAITING_THREAD,
-        ANSWERED_THREAD,
-        OTHER_AWAITING,
-    ], inside
-    assert inside["count"] == "3", inside
-    assert inside["pressed"] == "true", inside
-    # Nothing on the page that is not a conversation or the road to one.
+    assert set(before["painted"]) <= set(after["painted"])
+    assert after["threads"] == threads
+    assert all(after["open"][thread] == "true" for thread in threads)
     assert all(
-        any(thread.startswith(row) for thread in inside["threads"])
-        for row in inside["painted"]
-    ), inside
-    assert inside["cursor"] == AWAITING_THREAD, inside
-    assert inside["query"] == "Cedar CLI 4.11.2", inside
-    assert inside["composer"] == AWAITING_THREAD, inside
-    assert inside["draft"] == draft, inside
-    assert outside["pressed"] == "false", outside
-    assert outside["cursor"] is None, outside
-    assert outside["query"] == "Cedar CLI 4.11.2", outside
-    assert outside["composer"] is None, outside
-    assert restored["cursor"] == AWAITING_THREAD, restored
-    assert restored["composer"] == AWAITING_THREAD, restored
-    assert restored["draft"] == draft, restored
+        after["open"][row] == before["open"][row]
+        for row in unrelated_before
+    )
+    assert changed == needed
+    assert all(chosen_after[row] is True for row in changed)
+    assert storage_after["cursor"] == storage_before["cursor"]
+    assert storage_after["drafts"] == storage_before["drafts"]
+    assert storage_after["seen"] == storage_before["seen"]
+    assert after["cursor"] == before["cursor"]
+    assert after["query"] == before["query"]
+    assert after["overlay"] == before["overlay"] == "search"
+    assert after["scroll"] == before["scroll"]
+    assert after["pressed"] == "true"
+    assert after["count"] == "2"
+    assert storage_restored == storage_before
+    assert restored == before
 
 
-def test_escape_leaves_the_chats_view(browser: Browser) -> None:
-    """Give the view the exit every other surface on the page has."""
-    browser.press("m")
-    browser.run("wait", "300")
-    assert browser.evaluate(_CHATS_STATE)["pressed"] == "true"
-
-    browser.press("Escape")
-    browser.run("wait", "300")
-
-    assert browser.evaluate(_CHATS_STATE)["pressed"] == "false"
-
-
-def test_the_masthead_offers_the_same_view_to_a_hand_on_the_mouse(
+def test_the_masthead_offers_the_same_reveal_action_to_the_mouse(
     browser: Browser,
 ) -> None:
-    """Put the human's own conversations one click from the top of the page."""
-    browser.run("click", ".meta-chats")
+    """Put the human's conversations in place from the masthead control."""
+    browser.press("C")
+    browser.run("click", ".meta-attention")
     browser.run("wait", "300")
 
-    shown = browser.evaluate(_CHATS_STATE)
+    shown = browser.evaluate(_REVEAL_STATE)
 
     assert shown["pressed"] == "true", shown
     assert shown["threads"] == [
@@ -313,6 +305,75 @@ def test_the_masthead_offers_the_same_view_to_a_hand_on_the_mouse(
         ANSWERED_THREAD,
         OTHER_AWAITING,
     ], shown
+
+    browser.run("click", ".meta-attention")
+    browser.run("wait", "300")
+    restored = browser.evaluate(_REVEAL_STATE)
+
+    assert restored["pressed"] == "false", restored
+    assert restored["threads"] == [], restored
+
+
+def test_a_long_question_keeps_the_thread_controls_on_one_header_line(
+    browser: Browser,
+) -> None:
+    """Clip only the header copy while keeping the full question available."""
+    question = (
+        "Can the differential reader preserve every nested parser verdict "
+        "while keeping this deliberately long conversation question readable?"
+    )
+    thread = next(
+        thread
+        for update in browser.data["updates"]
+        for lane in update["lanes"]
+        for thread in lane.get("questions", [])
+        if thread["id"] == "q-parser-parity"
+    )
+    thread["turns"][0]["text"] = question
+    browser.data["title"] = "Long question header regression"
+    browser.publish()
+    browser.wait_for_title("Long question header regression")
+    browser.press("m")
+
+    shown = browser.evaluate(
+        f"""
+        (() => {{
+          const row = document.querySelector(
+            '[data-row-id="{ANSWERED_THREAD}"]',
+          );
+          const title = row?.querySelector(".thread-title");
+          const count = row?.querySelector(".row-count");
+          const chat = row?.querySelector(".chat-button");
+          const toggle = row?.querySelector(".row-toggle");
+          const style = title === null ? null : getComputedStyle(title);
+          return {{
+            question: title?.textContent ?? null,
+            whiteSpace: style?.whiteSpace ?? null,
+            overflow: style?.overflow ?? null,
+            ellipsis: style?.textOverflow ?? null,
+            titleHeight: title?.getBoundingClientRect().height ?? 0,
+            lineHeight: style === null ? 0 : parseFloat(style.lineHeight),
+            countVisible: (count?.getClientRects().length ?? 0) > 0,
+            chatVisible: (chat?.getClientRects().length ?? 0) > 0,
+            bodyHasQuestion:
+              row?.querySelector(".row-body")?.textContent
+                ?.includes({json.dumps(question)}) ?? false,
+            accessible:
+              toggle?.textContent?.includes({json.dumps(question)}) ?? false,
+          }};
+        }})()
+        """
+    )
+
+    assert shown["question"] == question
+    assert shown["whiteSpace"] == "nowrap"
+    assert shown["overflow"] == "hidden"
+    assert shown["ellipsis"] == "ellipsis"
+    assert shown["titleHeight"] <= shown["lineHeight"] * 1.1
+    assert shown["countVisible"] is True
+    assert shown["chatVisible"] is True
+    assert shown["bodyHasQuestion"] is True
+    assert shown["accessible"] is True
 
 
 def test_typing_a_label_jumps_straight_to_that_row(browser: Browser) -> None:
@@ -442,7 +503,7 @@ def test_the_page_says_which_keys_do_the_new_things(browser: Browser) -> None:
     named = {action: (key, label) for action, key, label in bar}
     assert named["expand-all"] == ("E", "Expand all")
     assert named["collapse-all"] == ("C", "Collapse all")
-    assert named["chats"] == ("m", "My chats")
+    assert named["reveal-chats"] == ("m", "Reveal / restore chats")
     assert named["hints"] == ("f", "Jump to a row")
     assert named["next-row"] == ("j", "Next row")
     assert named["next-awaiting"] == ("n", "Next open chat")
@@ -452,5 +513,7 @@ def test_the_page_says_which_keys_do_the_new_things(browser: Browser) -> None:
     assert "E / C" in listed
     assert listed["f"].startswith("Label every row")
     assert "conversation" in listed["c"]
-    assert listed["m"] == "Show every conversation you have written in"
+    assert listed["m"] == (
+        "Reveal your chats, then restore the prior fold layout"
+    )
     assert listed["n"] == "Jump to your next open chat"

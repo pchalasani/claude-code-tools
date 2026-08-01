@@ -72,7 +72,7 @@ export function App(props: { brief: BriefDocument }): JSX.Element {
 function Masthead(props: { state: BriefState }): JSX.Element {
   const shape = createMemo(() => describeShape(props.state.brief));
   const awaiting = () => props.state.nav.awaitingCount();
-  const chats = () => props.state.nav.outstandingCount();
+  const attention = () => props.state.nav.outstandingCount();
   return (
     <header class="masthead">
       <p class="eyebrow">Session briefing</p>
@@ -100,12 +100,13 @@ function Masthead(props: { state: BriefState }): JSX.Element {
         </button>
         <button
           type="button"
-          class="meta-count meta-chats"
-          data-chats-count={chats()}
-          aria-pressed={props.state.nav.chats()}
-          onClick={() => props.state.run("chats")}
+          class="meta-count meta-attention"
+          data-attention-count={attention()}
+          aria-label="Reveal chats, then restore the prior fold layout"
+          aria-pressed={props.state.nav.chatRevealActive()}
+          onClick={() => props.state.run("reveal-chats")}
         >
-          <b>{chats()}</b> chats
+          <b>{attention()}</b> need attention
         </button>
       </div>
       <KeyBar state={props.state} />

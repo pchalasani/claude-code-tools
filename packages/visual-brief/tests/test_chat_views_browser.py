@@ -178,10 +178,10 @@ def _submit_frames() -> str:
     return 'window["__briefSubmitFrames"] ?? []'
 
 
-def test_my_chats_keeps_search_and_counts_only_outstanding_chats(
+def test_reveal_keeps_search_and_counts_only_attention_needed(
     browser: Browser,
 ) -> None:
-    """Show twenty total chats while excluding one visited answer from badge."""
+    """Reveal folds while excluding one visited answer from the badge."""
     _make_twenty_chats(browser.data)
     target = _target_thread(browser.data)
     target["turns"][-1]["text"] = "The working sign is ready."
@@ -196,7 +196,7 @@ def test_my_chats_keeps_search_and_counts_only_outstanding_chats(
     browser.run("wait", "250")
     thread_row = f"{ITEM}#{target['id']}"
     browser.compose_at(thread_row)
-    question = "Does my-chats still find everything after this answer?"
+    question = "Does reveal still find everything after this answer?"
     browser.send(question)
     browser.read_until(
         landing_at(thread_row),
@@ -231,7 +231,10 @@ def test_my_chats_keeps_search_and_counts_only_outstanding_chats(
     painted = browser.evaluate(
         """
         (() => ({
-          badge: document.querySelector(".meta-chats")?.dataset.chatsCount,
+          badge: document.querySelector(".meta-attention")
+            ?.dataset.attentionCount,
+          pressed: document.querySelector(".meta-attention")
+            ?.getAttribute("aria-pressed") ?? null,
           threads: document.querySelectorAll(
             '[data-row-kind="thread"]',
           ).length,
@@ -243,27 +246,29 @@ def test_my_chats_keeps_search_and_counts_only_outstanding_chats(
         """
     )
 
-    assert painted == {
-        "badge": "19",
-        "threads": 20,
-        "updates": 2,
-        "query": SEARCH_MARKER,
-    }
+    assert painted["badge"] == "19"
+    assert painted["pressed"] == "true"
+    assert painted["query"] == SEARCH_MARKER
+    browser.press("Escape")
+    browser.run("wait", "250")
+    assert browser.evaluate(
+        "document.querySelectorAll('[data-row-kind=\"thread\"]').length"
+    ) == 20
 
 
-def test_a_conversation_patched_after_my_chats_open_is_painted(
+def test_a_later_conversation_uses_normal_fold_defaults(
     browser: Browser,
 ) -> None:
-    """Add one unseen answer without making badge equal all-time chats."""
+    """Do not turn an earlier reveal into a persistent mode."""
     browser.click_row(ANSWERED_THREAD)
     browser.run("wait", "250")
     outstanding_before = int(
         browser.evaluate(
-            "document.querySelector('.meta-chats')?.dataset.chatsCount"
+            "document.querySelector('.meta-attention')?.dataset.attentionCount"
         )
     )
+    browser.press("C")
     browser.press("m")
-    total_before = len(_threads(browser.data))
     update_id, lane_id, item = next(
         (update, lane, item)
         for update, lane, item in _items(browser.data)
@@ -278,45 +283,49 @@ def test_a_conversation_patched_after_my_chats_open_is_painted(
             "turns": [
                 {
                     "author": "human",
-                    "text": "Did this conversation reach the open view?",
+                    "text": "Does an old reveal remain active?",
                     "at": "2026-07-29T15:00:00Z",
                 },
                 {
                     "author": "agent",
-                    "text": "Yes. It arrived without reopening My chats.",
+                    "text": "No. Normal fold defaults still govern this.",
                     "at": "2026-07-29T15:01:00Z",
                 },
             ],
         }
     )
-    browser.data["title"] = "A new conversation reached My chats"
+    browser.data["title"] = "A later conversation used normal folds"
     browser.publish()
-    browser.wait_for_title("A new conversation reached My chats")
+    browser.wait_for_title("A later conversation used normal folds")
 
     painted = browser.read_until(
         f"""
         (() => ({{
-          badge: document.querySelector(".meta-chats")?.dataset.chatsCount,
-          pressed: document.querySelector(".meta-chats")
+          badge: document.querySelector(".meta-attention")
+            ?.dataset.attentionCount,
+          pressed: document.querySelector(".meta-attention")
             ?.getAttribute("aria-pressed"),
           thread: document.querySelector(
             '[data-row-id="{thread_row}"]',
           ) !== null,
-          threads: document.querySelectorAll(
-            '[data-row-kind="thread"]',
-          ).length,
+          chosen: Object.values(sessionStorage)
+            .map((value) => {{
+              try {{ return JSON.parse(value); }} catch {{ return null; }}
+            }})
+            .find((value) =>
+              value !== null && typeof value === "object"
+              && Object.prototype.hasOwnProperty.call(value, "{anchor}"),
+            ) ?? {{}},
         }}))()
         """,
-        lambda seen: seen["thread"] is True,
+        lambda seen: seen["badge"] == str(outstanding_before + 1),
     )
 
-    assert painted == {
-        "badge": str(outstanding_before + 1),
-        "pressed": "true",
-        "thread": True,
-        "threads": total_before + 1,
-    }
-    assert painted["badge"] != str(painted["threads"])
+    assert painted["badge"] == str(outstanding_before + 1)
+    assert painted["pressed"] == "true"
+    assert painted["thread"] is False
+    assert painted["chosen"][anchor] is False
+    assert thread_row not in painted["chosen"]
 
 
 def test_submit_keeps_one_human_turn_until_the_answer_replaces_working(
