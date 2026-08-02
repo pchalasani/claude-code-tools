@@ -58,7 +58,9 @@ install: node-ui-deps
 		echo "Building and installing lmsh..."; \
 		cd lmsh && cargo build --release; \
 		mkdir -p ~/.cargo/bin; \
-		cp target/release/lmsh ~/.cargo/bin/; \
+		cp target/release/lmsh ~/.cargo/bin/.lmsh.new; \
+		chmod 755 ~/.cargo/bin/.lmsh.new; \
+		mv -f ~/.cargo/bin/.lmsh.new ~/.cargo/bin/lmsh; \
 		echo "lmsh installed to ~/.cargo/bin/lmsh"; \
 		if ! echo "$$PATH" | grep -q ".cargo/bin"; then \
 			echo "⚠️  Add ~/.cargo/bin to your PATH if not already there"; \
@@ -177,7 +179,10 @@ lmsh:
 lmsh-install: lmsh
 	@echo "Installing lmsh to ~/.cargo/bin..."
 	@mkdir -p ~/.cargo/bin
-	@cp lmsh/target/release/lmsh ~/.cargo/bin/
+	@# Same atomic replace as aichat-search: see the note there.
+	@cp lmsh/target/release/lmsh ~/.cargo/bin/.lmsh.new
+	@chmod 755 ~/.cargo/bin/.lmsh.new
+	@mv -f ~/.cargo/bin/.lmsh.new ~/.cargo/bin/lmsh
 	@echo "lmsh installed to ~/.cargo/bin/lmsh"
 	@if ! echo "$$PATH" | grep -q ".cargo/bin"; then \
 		echo "⚠️  Add ~/.cargo/bin to your PATH if not already there"; \
@@ -202,7 +207,12 @@ aichat-search:
 aichat-search-install: aichat-search
 	@echo "Installing aichat-search to ~/.cargo/bin..."
 	@mkdir -p ~/.cargo/bin
-	@cp rust-search-ui/target/release/aichat-search ~/.cargo/bin/
+	@# Replace via a temp file + mv, not cp: overwriting a Mach-O binary in
+	@# place leaves macOS holding a stale code signature for that inode, and
+	@# the next exec is SIGKILLed ("killed: 9"). mv swaps in a fresh inode.
+	@cp rust-search-ui/target/release/aichat-search ~/.cargo/bin/.aichat-search.new
+	@chmod 755 ~/.cargo/bin/.aichat-search.new
+	@mv -f ~/.cargo/bin/.aichat-search.new ~/.cargo/bin/aichat-search
 	@echo "aichat-search installed to ~/.cargo/bin/aichat-search"
 	@if ! echo "$$PATH" | grep -q ".cargo/bin"; then \
 		echo "⚠️  Add ~/.cargo/bin to your PATH if not already there"; \
