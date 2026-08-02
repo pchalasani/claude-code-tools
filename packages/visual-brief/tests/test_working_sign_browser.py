@@ -45,15 +45,15 @@ def _working_at(row_id: str) -> str:
     """
 
 
-def _still_at(row_id: str) -> str:
-    """Return a script reading the sign's words and the mark beside them.
+def _motion_at(row_id: str) -> str:
+    """Return a script reading both working-sign animations.
 
     Args:
         row_id: Identifier of the row to read.
 
     Returns:
-        JavaScript returning the preference in force, the painted words and
-        whether anything about them is moving or see-through.
+        JavaScript returning the preference in force and the computed motion
+        and paint state for the words and mark.
     """
     return f"""
     (() => {{
@@ -62,17 +62,26 @@ def _still_at(row_id: str) -> str:
         ? null
         : row.querySelector(":scope > .row-body > p.working");
       const words = sign?.querySelector(".working-text") ?? null;
+      const waveWords = sign?.querySelector(".working-text-wave") ?? null;
       const mark = sign?.querySelector(".working-mark") ?? null;
-      if (words === null || mark === null) {{
+      if (words === null || waveWords === null || mark === null) {{
         return null;
       }}
       const style = getComputedStyle(words);
+      const wave = getComputedStyle(waveWords);
       const motion = getComputedStyle(mark);
       return {{
         reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
         text: words.textContent,
-        animation: style.animationName,
+        textAnimation: wave.animationName,
+        textIteration: wave.animationIterationCount,
+        textPosition: wave.backgroundPosition,
+        textBackground: wave.backgroundImage,
+        waveDisplay: wave.display,
+        waveHidden: waveWords.getAttribute("aria-hidden"),
+        waveFill: wave.getPropertyValue("-webkit-text-fill-color"),
         markAnimation: motion.animationName,
+        markIteration: motion.animationIterationCount,
         markOpacity: motion.opacity,
         fill: style.getPropertyValue("-webkit-text-fill-color"),
         color: style.getPropertyValue("color"),
@@ -211,15 +220,14 @@ def test_the_page_says_the_agent_is_working_until_the_answer_lands(
     assert answered == {"answer": answer, "working": 0}
 
 
-def test_the_working_sign_stands_still_where_motion_is_unwelcome(
+def test_the_working_sign_moves_only_where_motion_is_welcome(
     browser: Browser,
 ) -> None:
-    """Keep the same words readable, and stop the motion, when it is unwelcome.
+    """Wave the legible words and pulse the dot unless motion is unwelcome.
 
     Chrome's real preference is turned on for this, and the result is read off
-    the elements rather than off the stylesheet. The words are checked in both
-    states: they are never the part that moves, so nothing about them may
-    change when motion is switched off.
+    the elements rather than off the stylesheet. Every colour in the moving
+    text paint is opaque, so the words remain visible throughout the sweep.
     """
     browser.server.post_gate = threading.Event()
     try:
@@ -232,25 +240,42 @@ def test_the_working_sign_stands_still_where_motion_is_unwelcome(
         moving = browser.read_until(
             _working_at(ITEM), lambda seen: seen["count"] == 1, timeout=3
         )
-        painted = browser.evaluate(_still_at(ITEM))
+        painted = browser.evaluate(_motion_at(ITEM))
+        painted_later = browser.read_until(
+            _motion_at(ITEM),
+            lambda seen: seen["textPosition"] != painted["textPosition"],
+        )
         with browser.reduced_motion():
-            still = browser.evaluate(_still_at(ITEM))
+            still = browser.evaluate(_motion_at(ITEM))
     finally:
         browser.server.post_gate.set()
 
     assert moving["moving"] is True
-    # The words themselves: one solid colour, at every instant, either way.
-    # They used to be painted through a travelling gradient, which left them
-    # transparent for most of every cycle and fainter still at the moment a
-    # reload restarted it — the sign a human watched disappear.
-    for reading in (painted, still):
+    for reading in (painted, painted_later, still):
         assert reading is not None
         assert reading["text"] == "agent is working"
-        assert reading["animation"] == "none"
-        assert reading["fill"] == reading["color"]
-        assert reading["fill"] not in ("transparent", "rgba(0, 0, 0, 0)")
-    assert painted["markAnimation"] != "none"
+
+    assert painted["textAnimation"] == "agent-working-wave"
+    assert painted["textIteration"] == "infinite"
+    assert painted["textPosition"] != painted_later["textPosition"]
+    assert painted["textBackground"].startswith("linear-gradient(")
+    assert "rgba(0, 0, 0, 0)" not in painted["textBackground"]
+    assert "transparent" not in painted["textBackground"]
+    assert painted["waveDisplay"] == "block"
+    assert painted["waveHidden"] == "true"
+    assert painted["waveFill"] in ("transparent", "rgba(0, 0, 0, 0)")
+    assert painted["fill"] == painted["color"]
+    assert painted["fill"] not in ("transparent", "rgba(0, 0, 0, 0)")
+    assert painted["markAnimation"] == "agent-working-pulse"
+    assert painted["markIteration"] == "infinite"
+
     assert still["reduced"] is True
+    assert still["textAnimation"] == "none"
+    assert still["textBackground"] == "none"
+    assert still["waveDisplay"] == "none"
+    assert still["waveHidden"] == "true"
+    assert still["fill"] == still["color"]
+    assert still["fill"] not in ("transparent", "rgba(0, 0, 0, 0)")
     assert still["markAnimation"] == "none"
     assert still["markOpacity"] == "1"
 

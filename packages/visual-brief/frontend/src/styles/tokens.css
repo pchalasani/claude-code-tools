@@ -30,6 +30,10 @@
   --color-warning-soft: #fff3d5;
   --color-limitation: var(--palette-coral);
   --color-limitation-soft: #fde9ed;
+  --color-working-base: var(--color-text-faint);
+  --color-working-wave-leading: #006f62;
+  --color-working-wave-crest: #0f2744;
+  --color-working-wave-trailing: #2454d4;
   --color-scrim: rgb(19 34 56 / 58%);
 
   /* Local/system typography only. */
@@ -106,7 +110,8 @@
     0 10px 28px rgb(19 34 56 / 5%);
   --shadow-overlay: 0 24px 70px rgb(19 34 56 / 24%);
   --motion-fast: 140ms;
-  --motion-working: 1.4s;
+  --motion-working-wave: 1.8s;
+  --motion-working-pulse: 1.1s;
   --motion-ease: cubic-bezier(0.2, 0, 0, 1);
 }
 
@@ -130,6 +135,9 @@
     --color-warning-soft: #3b301c;
     --color-limitation: #ec7c8d;
     --color-limitation-soft: #42232d;
+    --color-working-wave-leading: #6ff5d7;
+    --color-working-wave-crest: #f5fbff;
+    --color-working-wave-trailing: #86a8ff;
     --color-scrim: rgb(4 9 15 / 78%);
     --shadow-surface: 0 1px 2px rgb(0 0 0 / 20%),
       0 12px 34px rgb(0 0 0 / 16%);

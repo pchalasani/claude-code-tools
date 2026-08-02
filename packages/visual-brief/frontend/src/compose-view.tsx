@@ -95,7 +95,12 @@ export function AgentWorking(): JSX.Element {
       <span class="working-mark" aria-hidden="true">
         ●
       </span>
-      <span class="working-text">agent is working</span>
+      <span class="working-text-wrap">
+        <span class="working-text">agent is working</span>
+        <span class="working-text-wave" aria-hidden="true">
+          agent is working
+        </span>
+      </span>
     </p>
   );
 }
