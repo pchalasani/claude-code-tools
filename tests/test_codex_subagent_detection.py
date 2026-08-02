@@ -216,3 +216,41 @@ def test_claude_sessions_are_never_exec_runs(tmp_path: Path) -> None:
     )
 
     assert extract_session_metadata(session, "claude")["is_exec_run"] is False
+
+
+def test_forked_rollout_ignores_ancestor_metadata(tmp_path: Path) -> None:
+    """A fork replays ancestor session_meta records; only the first counts.
+
+    Without this, an interactive fork of a headless ancestor inherits
+    is_exec_run and disappears from default search results.
+    """
+    rollout = tmp_path / "rollout-2026-08-01T00-39-47-019fbac3.jsonl"
+    own = {
+        "timestamp": "2026-08-01T00:39:50.261Z",
+        "type": "session_meta",
+        # No git info, so metadata extraction keeps scanning past this record.
+        "payload": _base_payload(source="cli", originator="codex-tui", git=None),
+    }
+    ancestor = {
+        "timestamp": "2026-07-30T00:00:00.000Z",
+        "type": "session_meta",
+        "payload": _base_payload(
+            source={"subagent": {"thread_spawn": {"parent_thread_id": "019f-p"}}},
+            thread_source="subagent",
+            parent_thread_id="019f-p",
+        ),
+    }
+    turn = {
+        "timestamp": "2026-08-01T00:39:55.000Z",
+        "type": "response_item",
+        "payload": {"type": "message", "role": "user", "content": [{"text": "hi"}]},
+    }
+    rollout.write_text(
+        "\n".join(json.dumps(r) for r in (own, ancestor, turn)) + "\n",
+        encoding="utf-8",
+    )
+
+    metadata = extract_session_metadata(rollout, "codex")
+
+    assert metadata["is_exec_run"] is False
+    assert metadata["is_sidechain"] is False

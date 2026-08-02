@@ -494,6 +494,13 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
     # Track session start timestamp from JSON metadata
     session_start_timestamp: str | None = None
 
+    # A forked Codex rollout replays its ancestors' session_meta records into
+    # the same file (1951 of 6880 real rollouts carry more than one, up to 29).
+    # Only the first one describes THIS session, so the launch-kind flags are
+    # taken from it alone -- otherwise an interactive fork of a headless
+    # ancestor inherits is_exec_run and vanishes from default search results.
+    codex_meta_seen = False
+
     try:
         with open(
             session_file, "r", encoding="utf-8", errors="replace"
@@ -597,10 +604,12 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
                         metadata["cwd"] = payload["cwd"]
                     if _nonempty_str(payload.get("id")):
                         metadata["session_id"] = payload["id"]
-                    if _is_codex_subagent_payload(payload):
-                        metadata["is_sidechain"] = True
-                    if _is_codex_exec_payload(payload):
-                        metadata["is_exec_run"] = True
+                    if not codex_meta_seen:
+                        codex_meta_seen = True
+                        if _is_codex_subagent_payload(payload):
+                            metadata["is_sidechain"] = True
+                        if _is_codex_exec_payload(payload):
+                            metadata["is_exec_run"] = True
                     if session_start_timestamp is None and _nonempty_str(
                         data.get("timestamp")
                     ):
