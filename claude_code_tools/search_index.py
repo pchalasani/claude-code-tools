@@ -847,8 +847,10 @@ class SessionIndex:
                 or (codex_home_str and cwd.startswith(codex_home_str))
             ):
                 stats["skipped"] += 1
-                # Mark as indexed so we don't re-parse it every launch.
-                self.state.mark_indexed(jsonl_path, file_stat)
+                # Deliberately NOT recorded in the index state: this exclusion
+                # depends on the claude_home/codex_home passed on the command
+                # line, so caching it would keep the session out of the index
+                # after a later run with different homes.
                 continue
 
             try:
