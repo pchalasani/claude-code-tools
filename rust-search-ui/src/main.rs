@@ -3265,6 +3265,9 @@ fn scan_running_sessions() -> HashMap<String, ProcessState> {
     // Collect CWD -> process counts (separated by agent type)
     let mut cwd_processes: HashMap<String, CwdProcesses> = HashMap::new();
 
+    // Agent processes found in `ps`, resolved to working directories below.
+    let mut agent_procs: Vec<(String, bool, bool, ProcessState)> = Vec::new();
+
     // Run: ps -eo pid,stat,comm to get PID, status, and command
     let ps_output = match Command::new("ps")
         .args(["-eo", "pid,stat,comm"])
@@ -3308,28 +3311,36 @@ fn scan_running_sessions() -> HashMap<String, ProcessState> {
             ProcessState::Waiting
         };
 
-        // Get the CWD for this process
-        let cwd = get_process_cwd(pid);
-        if let Some(cwd_path) = cwd {
-            cwd_processes
-                .entry(cwd_path)
-                .and_modify(|existing| {
-                    if is_claude {
-                        existing.claude_count += 1;
-                    }
-                    if is_codex {
-                        existing.codex_count += 1;
-                    }
-                    if state == ProcessState::Running {
-                        existing.best_state = ProcessState::Running;
-                    }
-                })
-                .or_insert(CwdProcesses {
-                    claude_count: if is_claude { 1 } else { 0 },
-                    codex_count: if is_codex { 1 } else { 0 },
-                    best_state: state,
-                });
-        }
+        agent_procs.push((pid.to_string(), is_claude, is_codex, state));
+    }
+
+    // Resolve every working directory in one call rather than one per process.
+    let pids: Vec<String> = agent_procs.iter().map(|(pid, _, _, _)| pid.clone()).collect();
+    let cwds = get_process_cwds(&pids);
+
+    for (pid, is_claude, is_codex, state) in agent_procs {
+        let cwd_path = match cwds.get(&pid) {
+            Some(cwd) => cwd.clone(),
+            None => continue,
+        };
+        cwd_processes
+            .entry(cwd_path)
+            .and_modify(|existing| {
+                if is_claude {
+                    existing.claude_count += 1;
+                }
+                if is_codex {
+                    existing.codex_count += 1;
+                }
+                if state == ProcessState::Running {
+                    existing.best_state = ProcessState::Running;
+                }
+            })
+            .or_insert(CwdProcesses {
+                claude_count: if is_claude { 1 } else { 0 },
+                codex_count: if is_codex { 1 } else { 0 },
+                best_state: state,
+            });
     }
 
     let home = match dirs::home_dir() {
@@ -3509,38 +3520,58 @@ fn encode_project_path(path: &str) -> String {
 }
 
 /// Get the current working directory of a process by PID
-fn get_process_cwd(pid: &str) -> Option<String> {
-    // Try lsof first (works on macOS and Linux)
-    let lsof_output = Command::new("lsof")
-        .args(["-p", pid, "-Fn"])
-        .output()
-        .ok()?;
-
-    let lsof_str = String::from_utf8_lossy(&lsof_output.stdout);
-
-    // lsof -Fn output format: lines starting with 'n' contain the path
-    // On macOS: 'fcwd' line followed by 'n' line (f = file descriptor type)
-    // On Linux: 'tcwd' line followed by 'n' line (t = type)
-    let mut found_cwd = false;
-    for line in lsof_str.lines() {
-        if line == "fcwd" || line == "tcwd" {
-            found_cwd = true;
-        } else if found_cwd && line.starts_with('n') {
-            return Some(line[1..].to_string());
-        } else if line.starts_with('f') || line.starts_with('t') {
-            found_cwd = false;
-        }
+/// Look up the working directory of many processes in one shot.
+///
+/// This runs on a timer while the TUI is interactive, so it must be cheap.
+/// One `lsof` per pid costs ~150ms each -- with a few dozen agent processes
+/// that blocked the event loop for seconds at a time. `lsof` accepts a
+/// comma-separated pid list, and `-d cwd` restricts it to the one descriptor
+/// we need, which turns the whole scan into a single ~150ms call.
+///
+/// Returns a map of pid -> working directory; pids whose cwd could not be
+/// read are simply absent.
+fn get_process_cwds(pids: &[String]) -> HashMap<String, String> {
+    let mut result = HashMap::new();
+    if pids.is_empty() {
+        return result;
     }
 
-    // Fallback for Linux: try reading /proc/<pid>/cwd
+    // Linux exposes this directly, with no subprocess at all.
     #[cfg(target_os = "linux")]
     {
-        if let Ok(cwd) = std::fs::read_link(format!("/proc/{}/cwd", pid)) {
-            return Some(cwd.to_string_lossy().to_string());
+        for pid in pids {
+            if let Ok(cwd) = std::fs::read_link(format!("/proc/{}/cwd", pid)) {
+                result.insert(pid.clone(), cwd.to_string_lossy().to_string());
+            }
+        }
+        if !result.is_empty() {
+            return result;
         }
     }
 
-    None
+    let lsof_output = match Command::new("lsof")
+        .args(["-a", "-d", "cwd", "-p", &pids.join(","), "-Fpn"])
+        .output()
+    {
+        Ok(output) => output,
+        Err(_) => return result,
+    };
+
+    // -Fpn output is a flat stream: `p<pid>` starts a process block, and the
+    // `n<path>` line that follows carries its cwd.
+    let lsof_str = String::from_utf8_lossy(&lsof_output.stdout);
+    let mut current_pid: Option<String> = None;
+    for line in lsof_str.lines() {
+        if let Some(rest) = line.strip_prefix('p') {
+            current_pid = Some(rest.to_string());
+        } else if let Some(rest) = line.strip_prefix('n') {
+            if let Some(pid) = current_pid.take() {
+                result.insert(pid, rest.to_string());
+            }
+        }
+    }
+
+    result
 }
 
 // ============================================================================
@@ -4590,6 +4621,12 @@ fn main() -> Result<()> {
                 }
             }
         }
+
+        // Wait for input rather than spinning. Without this the loop redrew
+        // the whole screen as fast as the CPU allowed, burning a core the
+        // entire time the TUI was open. The timeout still lets the debounce
+        // and live-session timers above fire promptly.
+        event::poll(Duration::from_millis(50))?;
 
         // Drain all pending events (non-blocking)
         while event::poll(Duration::from_millis(0))? {
