@@ -408,6 +408,45 @@ def extract_first_last_messages(
     return first_msg, last_msg, first_user_msg
 
 
+def _is_codex_subagent_payload(payload: dict[str, Any]) -> bool:
+    """Return True when a Codex ``session_meta`` payload describes a sub-agent.
+
+    Codex names every thread ``rollout-*.jsonl``, so sub-agent threads can only
+    be told apart by their spawn metadata. A spawned thread records
+    ``thread_source: "subagent"``, a ``source`` object keyed by ``subagent``,
+    and the id of the thread that spawned it.
+
+    Args:
+        payload: The ``payload`` object of a ``session_meta`` record.
+
+    Returns:
+        True when the payload carries any sub-agent spawn marker.
+    """
+    if payload.get("thread_source") == "subagent":
+        return True
+    source = payload.get("source")
+    if isinstance(source, dict) and "subagent" in source:
+        return True
+    return _nonempty_str(payload.get("parent_thread_id"))
+
+
+def _is_codex_exec_payload(payload: dict[str, Any]) -> bool:
+    """Return True when a Codex ``session_meta`` payload describes a headless run.
+
+    Codex records how a thread was launched: ``"exec"`` for a headless
+    ``codex exec`` run (typically spawned by an orchestrating agent or script),
+    ``"cli"`` for the interactive TUI. Sub-agent spawns carry an object here
+    instead, and are reported by :func:`_is_codex_subagent_payload`.
+
+    Args:
+        payload: The ``payload`` object of a ``session_meta`` record.
+
+    Returns:
+        True when the thread was launched headlessly.
+    """
+    return payload.get("source") == "exec"
+
+
 def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
     """
     Extract metadata from a session JSONL file.
@@ -425,9 +464,12 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
     Returns:
         Dict with extracted metadata
     """
-    # Detect sidechain from filename pattern (agent-* prefix)
+    # Detect sidechain from filename pattern (agent-* prefix).
     # This is more reliable than checking isSidechain field in JSON,
-    # which can be set on individual messages within main sessions
+    # which can be set on individual messages within main sessions.
+    # Claude sub-agent transcripts are written as agent-*.jsonl; Codex writes
+    # every thread as rollout-*.jsonl, so Codex sub-agents are detected from
+    # the session_meta record below instead.
     is_sidechain = session_file.name.startswith("agent-")
 
     metadata: dict[str, Any] = {
@@ -438,6 +480,7 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
         "branch": None,
         "derivation_type": None,
         "is_sidechain": is_sidechain,
+        "is_exec_run": False,  # Codex: launched headlessly via `codex exec`
         "session_type": None,  # "helper" for SDK/headless sessions
         "parent_session_id": None,
         "parent_session_file": None,
@@ -554,6 +597,10 @@ def extract_session_metadata(session_file: Path, agent: str) -> dict[str, Any]:
                         metadata["cwd"] = payload["cwd"]
                     if _nonempty_str(payload.get("id")):
                         metadata["session_id"] = payload["id"]
+                    if _is_codex_subagent_payload(payload):
+                        metadata["is_sidechain"] = True
+                    if _is_codex_exec_payload(payload):
+                        metadata["is_exec_run"] = True
                     if session_start_timestamp is None and _nonempty_str(
                         data.get("timestamp")
                     ):
@@ -701,6 +748,8 @@ def generate_yaml_frontmatter(metadata: dict[str, Any]) -> str:
         yaml_data["derivation_type"] = metadata["derivation_type"]
     if metadata.get("is_sidechain"):
         yaml_data["is_sidechain"] = metadata["is_sidechain"]
+    if metadata.get("is_exec_run"):
+        yaml_data["is_exec_run"] = metadata["is_exec_run"]
     if metadata.get("parent_session_id"):
         yaml_data["parent_session_id"] = metadata["parent_session_id"]
     if metadata.get("parent_session_file"):

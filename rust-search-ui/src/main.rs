@@ -116,6 +116,7 @@ struct Session {
     first_user_msg_content: String,  // First real user message (skips meta messages)
     derivation_type: String,  // "trimmed", "continued", or ""
     is_sidechain: bool,       // Sub-agent session
+    is_exec_run: bool,        // Codex session launched headlessly (`codex exec`)
     claude_home: String,      // Source Claude home directory
     custom_title: String,     // User-assigned session name (from /rename)
 }
@@ -182,6 +183,9 @@ impl Session {
         }
         if self.is_sidechain {
             display.push_str(" (s)");
+        }
+        if self.is_exec_run {
+            display.push_str(" (h)");
         }
         display
     }
@@ -345,6 +349,7 @@ struct App {
     // Filter state - inclusion-based (true = include this type)
     include_original: bool,   // true by default - include original sessions
     include_sub: bool,        // false by default - exclude sub-agents
+    include_exec: bool,       // false by default - exclude headless codex exec runs
     include_trimmed: bool,    // true by default - include trimmed sessions
     include_continued: bool,  // true by default - include continued sessions
     filter_agent: Option<String>, // None = all, Some("claude"), Some("codex")
@@ -451,6 +456,7 @@ enum FilterMenuItem {
     ClearAll,
     IncludeOriginal,
     IncludeSub,
+    IncludeExec,       // Headless `codex exec` runs (agent-spawned workers)
     IncludeTrimmed,
     IncludeContinued,  // Internally "continued", displayed as "rollover" to user
     IncludeLive,       // Only show currently running sessions
@@ -468,6 +474,7 @@ impl FilterMenuItem {
             FilterMenuItem::ClearAll,
             FilterMenuItem::IncludeOriginal,
             FilterMenuItem::IncludeSub,
+            FilterMenuItem::IncludeExec,
             FilterMenuItem::IncludeTrimmed,
             FilterMenuItem::IncludeContinued,
             FilterMenuItem::IncludeLive,
@@ -485,6 +492,7 @@ impl FilterMenuItem {
             FilterMenuItem::ClearAll => "(x) Reset to defaults",
             FilterMenuItem::IncludeOriginal => "(o) Include original sessions",
             FilterMenuItem::IncludeSub => "(s) Include sub-agent sessions",
+            FilterMenuItem::IncludeExec => "(h) Include headless exec runs",
             FilterMenuItem::IncludeTrimmed => "(t) Include trimmed sessions",
             FilterMenuItem::IncludeContinued => "(r) Include rollover sessions",
             FilterMenuItem::IncludeLive => "(!) Live sessions only",
@@ -502,6 +510,7 @@ impl FilterMenuItem {
             FilterMenuItem::ClearAll => 'x',
             FilterMenuItem::IncludeOriginal => 'o',
             FilterMenuItem::IncludeSub => 's',
+            FilterMenuItem::IncludeExec => 'h',
             FilterMenuItem::IncludeTrimmed => 't',
             FilterMenuItem::IncludeContinued => 'r',
             FilterMenuItem::IncludeLive => '!',
@@ -658,6 +667,7 @@ impl App {
             // Filter state
             include_original: true,   // Include original by default
             include_sub: false,       // Exclude sub-agents by default
+            include_exec: false,      // Exclude headless codex exec runs by default
             include_trimmed: true,    // Include trimmed by default
             include_continued: true,  // Include continued by default
             filter_agent: None,
@@ -768,6 +778,7 @@ impl App {
             // Additive flag (--sub-agent) adds sub-agents to defaults
             include_original: !cli.no_original,
             include_sub: cli.include_sub,
+            include_exec: cli.include_exec,
             include_trimmed: !cli.no_trimmed,
             include_continued: !cli.no_rollover,
             filter_agent: cli.agent_filter.clone(),
@@ -905,6 +916,13 @@ impl App {
                     // Sub-agent: include only if include_sub is true
                     // (derivation type filter does NOT apply to sub-agents)
                     if !self.include_sub {
+                        return false;
+                    }
+                } else if s.is_exec_run {
+                    // Headless `codex exec` run: agent-spawned worker.
+                    // Include only if include_exec is true (derivation type
+                    // filter does NOT apply, same as sub-agents).
+                    if !self.include_exec {
                         return false;
                     }
                 } else {
@@ -1080,6 +1098,7 @@ impl App {
             || self.filter_branch.is_some()
             || !self.include_original
             || self.include_sub
+            || self.include_exec
             || !self.include_trimmed
             || !self.include_continued
     }
@@ -1193,7 +1212,7 @@ impl App {
     fn has_annotations(&self) -> bool {
         self.filtered.iter().any(|&idx| {
             let s = &self.sessions[idx];
-            !s.derivation_type.is_empty() || s.is_sidechain
+            !s.derivation_type.is_empty() || s.is_sidechain || s.is_exec_run
         })
     }
 
@@ -1330,6 +1349,7 @@ fn render(frame: &mut Frame, app: &mut App) {
     let show_legend = app.has_annotations();
     let has_filters = !app.include_original
         || app.include_sub
+        || app.include_exec
         || !app.include_trimmed
         || !app.include_continued
         || app.filter_agent.is_some()
@@ -1623,9 +1643,12 @@ fn render_action_modal(frame: &mut Frame, app: &App, t: &Theme, area: Rect) {
 fn render_filter_modal(frame: &mut Frame, app: &App, t: &Theme, area: Rect) {
     use ratatui::widgets::{Block, Borders, Clear};
 
-    // Center the modal
+    let items = FilterMenuItem::all();
+
+    // Center the modal. Height follows the item count so adding a filter can
+    // never silently clip the bottom entries off the modal.
     let modal_width = 42u16;
-    let modal_height = 13u16; // 9 items + 2 border + 2 padding
+    let modal_height = (items.len() as u16 + 2).min(area.height);
     let x = (area.width.saturating_sub(modal_width)) / 2;
     let y = (area.height.saturating_sub(modal_height)) / 2;
     let modal_area = Rect::new(x, y, modal_width, modal_height);
@@ -1643,7 +1666,6 @@ fn render_filter_modal(frame: &mut Frame, app: &App, t: &Theme, area: Rect) {
     // Inner content area
     let inner = Rect::new(x + 2, y + 1, modal_width - 4, modal_height - 2);
 
-    let items = FilterMenuItem::all();
     let mut lines: Vec<Line> = Vec::new();
 
     for (i, item) in items.iter().enumerate() {
@@ -1654,6 +1676,7 @@ fn render_filter_modal(frame: &mut Frame, app: &App, t: &Theme, area: Rect) {
             FilterMenuItem::ClearAll => "".to_string(),
             FilterMenuItem::IncludeOriginal => if app.include_original { " [ON]" } else { " [off]" }.to_string(),
             FilterMenuItem::IncludeSub => if app.include_sub { " [ON]" } else { " [off]" }.to_string(),
+            FilterMenuItem::IncludeExec => if app.include_exec { " [ON]" } else { " [off]" }.to_string(),
             FilterMenuItem::IncludeTrimmed => if app.include_trimmed { " [ON]" } else { " [off]" }.to_string(),
             FilterMenuItem::IncludeContinued => if app.include_continued { " [ON]" } else { " [off]" }.to_string(),
             FilterMenuItem::IncludeLive => if app.include_live_only { " [ON]" } else { " [off]" }.to_string(),
@@ -2216,6 +2239,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, t: &Theme, area: Rect, show_l
     // Check if we have any active filters (need third row for legend or filters)
     let has_filters = !app.include_original
         || app.include_sub
+        || app.include_exec
         || !app.include_trimmed
         || !app.include_continued
         || app.filter_agent.is_some()
@@ -2323,7 +2347,9 @@ fn render_status_bar(frame: &mut Frame, app: &App, t: &Theme, area: Rect, show_l
                 Span::styled("(t)", Style::default().fg(t.dim_fg)),
                 Span::styled(" trimmed  ", dim),
                 Span::styled("(s)", Style::default().fg(t.dim_fg)),
-                Span::styled(" sub-agent", dim),
+                Span::styled(" sub-agent  ", dim),
+                Span::styled("(h)", Style::default().fg(t.dim_fg)),
+                Span::styled(" headless exec", dim),
             ]);
         }
 
@@ -2333,6 +2359,9 @@ fn render_status_bar(frame: &mut Frame, app: &App, t: &Theme, area: Rect, show_l
         }
         if app.include_sub {
             row3_spans.push(Span::styled(" [+sub]", filter_active));
+        }
+        if app.include_exec {
+            row3_spans.push(Span::styled(" [+exec]", filter_active));
         }
         if !app.include_trimmed {
             row3_spans.push(Span::styled(" [-trim]", filter_active));
@@ -3536,6 +3565,8 @@ fn load_sessions(index_path: &str, limit: usize) -> Result<Vec<Session>> {
     let first_user_msg_content_field = schema.get_field("first_user_msg_content").ok();
     let derivation_type_field = schema.get_field("derivation_type").context("missing derivation_type")?;
     let is_sidechain_field = schema.get_field("is_sidechain").context("missing is_sidechain")?;
+    // is_exec_run may not exist in older indexes, so make it optional
+    let is_exec_run_field = schema.get_field("is_exec_run").ok();
     // claude_home may not exist in older indexes, so make it optional
     let claude_home_field = schema.get_field("claude_home").ok();
     // custom_title may not exist in older indexes, so make it optional
@@ -3574,6 +3605,9 @@ fn load_sessions(index_path: &str, limit: usize) -> Result<Vec<Session>> {
             .unwrap_or(0);
 
         let is_sidechain_str = get_text(is_sidechain_field);
+        let is_exec_run = is_exec_run_field
+            .map(|f| get_text(f) == "true")
+            .unwrap_or(false);
 
         // Get claude_home if field exists, otherwise empty string
         let claude_home = claude_home_field
@@ -3608,6 +3642,7 @@ fn load_sessions(index_path: &str, limit: usize) -> Result<Vec<Session>> {
             first_user_msg_content,
             derivation_type: get_text(derivation_type_field),
             is_sidechain: is_sidechain_str == "true",
+            is_exec_run,
             claude_home,
             custom_title,
         });
@@ -4255,6 +4290,7 @@ fn output_json(app: &App, limit: Option<usize>) -> Result<()> {
             "file_path": s.export_path,
             "derivation_type": s.derivation_type,
             "is_sidechain": s.is_sidechain,
+            "is_exec_run": s.is_exec_run,
             "custom_title": s.custom_title,
             "snippet": app.search_snippets.get(&s.session_id).map(|s| strip_html_tags(s)),
         });
@@ -4279,6 +4315,8 @@ struct CliOptions {
     no_rollover: bool,
     // Additive flag: --sub-agent adds sub-agents to defaults
     include_sub: bool,
+    // Additive flag: --exec-runs adds headless codex exec runs to defaults
+    include_exec: bool,
     // Live sessions filter: --live shows only currently running sessions
     include_live: bool,
     min_lines: Option<i64>,
@@ -4380,6 +4418,8 @@ fn parse_cli_args() -> CliOptions {
     let no_rollover = has_flag("--no-rollover");
     // Additive flag: --sub-agent adds sub-agents to defaults
     let include_sub = has_flag("--sub-agent");
+    // Additive flag: --exec-runs adds headless codex exec runs to defaults
+    let include_exec = has_flag("--exec-runs");
     // Live sessions filter: --live shows only currently running sessions
     let include_live = has_flag("--live");
 
@@ -4416,6 +4456,7 @@ fn parse_cli_args() -> CliOptions {
         no_trimmed,
         no_rollover,
         include_sub,
+        include_exec,
         include_live,
         min_lines,
         after_date,
@@ -4804,6 +4845,7 @@ fn main() -> Result<()> {
                                     // Reset to defaults
                                     app.include_original = true;
                                     app.include_sub = false;
+                                    app.include_exec = false;
                                     app.include_trimmed = true;
                                     app.include_continued = true;
                                     app.filter_agent = None;
@@ -4816,6 +4858,10 @@ fn main() -> Result<()> {
                                 }
                                 FilterMenuItem::IncludeSub => {
                                     app.include_sub = !app.include_sub;
+                                    app.filter();
+                                }
+                                FilterMenuItem::IncludeExec => {
+                                    app.include_exec = !app.include_exec;
                                     app.filter();
                                 }
                                 FilterMenuItem::IncludeTrimmed => {
@@ -5064,6 +5110,7 @@ fn main() -> Result<()> {
                                 // Reset to defaults
                                 app.include_original = true;
                                 app.include_sub = false;
+                                app.include_exec = false;
                                 app.include_trimmed = true;
                                 app.include_continued = true;
                                 app.filter_agent = None;
@@ -5080,6 +5127,10 @@ fn main() -> Result<()> {
                             }
                             KeyCode::Char('s') => {
                                 app.include_sub = !app.include_sub;
+                                app.filter();
+                            }
+                            KeyCode::Char('h') => {
+                                app.include_exec = !app.include_exec;
                                 app.filter();
                             }
                             KeyCode::Char('t') => {
@@ -5217,6 +5268,7 @@ fn main() -> Result<()> {
                 "filter_dir": app.filter_dir,
                 "include_original": app.include_original,
                 "include_sub": app.include_sub,
+                "include_exec": app.include_exec,
                 "include_trimmed": app.include_trimmed,
                 "include_continued": app.include_continued,
                 "filter_agent": app.filter_agent,
