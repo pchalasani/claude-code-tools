@@ -77,7 +77,8 @@ def _quote_path(path: Path) -> str:
     """
     text = str(path)
     if os.name == "nt":
-        return f'"{text}"' if " " in text else text
+        # cmd.exe splits on & | ^ < > as well as spaces, so always quote.
+        return f'"{text}"'
     return shlex.quote(text)
 
 

@@ -102,6 +102,12 @@ def test_windows_paths_use_double_quotes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """cmd.exe treats POSIX single quotes literally, so use its own quoting."""
+    plain = _make_node_ui(tmp_path, ())
+    monkeypatch.setattr(node_menu_ui.os, "name", "nt")
+    # cmd.exe splits on metacharacters, not just spaces, so quote regardless.
+    assert f'--prefix "{plain}" ' in node_menu_ui._node_ui_setup_message(["meow"], plain)
+    monkeypatch.undo()
+
     spaced = tmp_path / "my checkout"
     spaced.mkdir()
     node_ui = _make_node_ui(spaced, ())
