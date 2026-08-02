@@ -1,4 +1,4 @@
-.PHONY: install node-ui-deps release patch minor major dev-install help clean publish all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply update-homebrew docs-dev docs-build docs-preview voxtype-version voxtype-test voxtype-install voxtype-build voxtype-release voxtype-publish voxtype-all voxtype-all-patch voxtype-all-minor voxtype-all-major
+.PHONY: install install-gdocs node-ui-deps release patch minor major dev-install help clean publish all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply update-homebrew docs-dev docs-build docs-preview voxtype-version voxtype-test voxtype-install voxtype-build voxtype-release voxtype-publish voxtype-all voxtype-all-patch voxtype-all-minor voxtype-all-major
 
 GIT_PRIMARY_WORKTREE := $(realpath $(shell git rev-parse \
 	--path-format=absolute --git-common-dir)/..)
@@ -68,10 +68,10 @@ install: node-ui-deps
 		echo "To install lmsh later, run: make lmsh-install"; \
 	fi
 
-install-gdocs:
+install-gdocs: node-ui-deps
 	uv tool install --force -e ".[gdocs]"
 
-dev-install:
+dev-install: node-ui-deps
 	uv pip install -e ".[dev]"
 
 release: patch
