@@ -2289,7 +2289,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, t: &Theme, area: Rect, show_l
     } else if app.command_mode {
         // Command mode indicator
         nav_spans.push(Span::styled(" CMD ", Style::default().bg(t.accent).fg(Color::Black)));
-        nav_spans.push(Span::styled(" :x clear :o orig :s sub :t trim :c cont :a agent :m lines :> after :< before ", label));
+        nav_spans.push(Span::styled(" :x clear :o orig :s sub :h exec :t trim :c cont :a agent :m lines :> after :< before ", label));
     } else {
         // Normal mode - single line with all shortcuts
         let has_selection = !app.filtered.is_empty();
