@@ -63,6 +63,24 @@ def _missing_node_ui_packages(node_ui_dir: Path | None = None) -> List[str]:
     ]
 
 
+def _quote_path(path: Path) -> str:
+    """Quote a path for the shell the user is most likely pasting into.
+
+    ``shlex.quote`` emits POSIX single quotes, which ``cmd.exe`` treats as
+    literal characters, so a Windows path containing spaces would be split.
+
+    Args:
+        path: Path to embed in a suggested command line.
+
+    Returns:
+        The path, quoted only when it needs to be.
+    """
+    text = str(path)
+    if os.name == "nt":
+        return f'"{text}"' if " " in text else text
+    return shlex.quote(text)
+
+
 def _no_node_message() -> str:
     """Build the message shown when the Node runtime is unavailable."""
     return (
@@ -81,8 +99,8 @@ def _node_ui_setup_message(missing: List[str], node_ui_dir: Path) -> str:
         "This happens when aichat runs from a source checkout (an editable\n"
         "install) whose Node dependencies were never installed. Install them\n"
         "with either of:\n"
-        f"  npm ci --prefix {shlex.quote(str(node_ui_dir))} --omit=dev\n"
-        "  make install   # from that checkout\n"
+        f"  npm ci --prefix {_quote_path(node_ui_dir)} --omit=dev\n"
+        "  make install   # from that checkout (needs GNU make)\n"
     )
 
 

@@ -98,6 +98,21 @@ def test_setup_message_quotes_paths_with_spaces(tmp_path: Path) -> None:
     assert f"--prefix {node_ui} " not in message
 
 
+def test_windows_paths_use_double_quotes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cmd.exe treats POSIX single quotes literally, so use its own quoting."""
+    spaced = tmp_path / "my checkout"
+    spaced.mkdir()
+    node_ui = _make_node_ui(spaced, ())
+    monkeypatch.setattr(node_menu_ui.os, "name", "nt")
+
+    message = node_menu_ui._node_ui_setup_message(["meow"], node_ui)
+
+    assert f'--prefix "{node_ui}" ' in message
+    assert "'" not in message.split("npm ci")[1].splitlines()[0]
+
+
 def test_run_node_reports_missing_node_runtime(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
