@@ -254,6 +254,11 @@ class TmuxCLIController:
         for line in output.split('\n'):
             if line:
                 parts = line.split('|')
+                # tmux emits six fields; anything shorter is not a pane line
+                # (an error string, a truncated read) and is skipped rather
+                # than indexed into.
+                if len(parts) < 5:
+                    continue
                 pane_id = parts[0]
                 panes.append({
                     'id': pane_id,
