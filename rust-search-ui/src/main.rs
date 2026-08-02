@@ -990,6 +990,7 @@ impl App {
                 &self.query,
                 self.filter_claude_home.as_deref(),
                 self.filter_codex_home.as_deref(),
+                !self.include_exec,
             );
             if !snippets.is_empty() {
                 // Store snippets for rendering
@@ -3664,6 +3665,7 @@ fn search_tantivy(
     query_str: &str,
     filter_claude_home: Option<&str>,
     filter_codex_home: Option<&str>,
+    exclude_exec_runs: bool,
 ) -> (HashMap<String, String>, Vec<String>) {
     // Return empty if query is empty
     if query_str.trim().is_empty() {
@@ -3741,6 +3743,26 @@ fn search_tantivy(
         } else {
             // No claude_home field in schema, just use content query
             content_query
+        };
+
+        // Headless exec runs are a large share of the corpus. When they are
+        // hidden, exclude them in the query instead of dropping them after the
+        // top-N cut, so the retrieval budget below is spent on rows the user
+        // can actually see. Older indexes have no such field; skip it there.
+        let final_query: Box<dyn tantivy::query::Query> = match (
+            exclude_exec_runs,
+            schema.get_field("is_exec_run"),
+        ) {
+            (true, Ok(exec_field)) => {
+                let term = Term::from_field_text(exec_field, "false");
+                let exec_clause: Box<dyn tantivy::query::Query> =
+                    Box::new(TermQuery::new(term, IndexRecordOption::Basic));
+                Box::new(BooleanQuery::new(vec![
+                    (Occur::Must, final_query),
+                    (Occur::Must, exec_clause),
+                ]))
+            }
+            _ => final_query,
         };
 
         // Search with high limit
