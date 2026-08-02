@@ -6,7 +6,7 @@ import {
   PendingNotes,
   WorkingSign,
 } from "./compose-view";
-import type { Lane, Update } from "./document";
+import type { Item, Lane, Update } from "./document";
 import {
   itemRowId,
   laneRowId,
@@ -63,10 +63,13 @@ export function LaneView(props: {
   state: BriefState;
   row: Row;
   lane: Lane;
+  itemId?: (item: Item) => string;
 }): JSX.Element {
+  const itemId = (item: Item): string =>
+    props.itemId?.(item) ?? itemRowId(props.row.id, item);
   const shown = () =>
     (props.lane.items ?? []).filter((item) =>
-      props.state.nav.isVisible(itemRowId(props.row.id, item)),
+      props.state.nav.isVisible(itemId(item)),
     ).length;
   return (
     <RowShell
@@ -103,7 +106,7 @@ export function LaneView(props: {
       <ComposeBox state={props.state} row={props.row} />
       <For each={props.lane.items ?? []}>
         {(item) => (
-          <VisibleRow state={props.state} id={itemRowId(props.row.id, item)}>
+          <VisibleRow state={props.state} id={itemId(item)}>
             {(row) => <ItemView state={props.state} row={row} item={item} />}
           </VisibleRow>
         )}

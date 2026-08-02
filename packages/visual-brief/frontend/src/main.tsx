@@ -5,6 +5,7 @@ import { createLiveDocument, type LiveDocument } from "./live-document";
 import { watchPointer } from "./pointer";
 import { startVersionWatch } from "./reload";
 import "./styles/base.css";
+import "./styles/current-state.css";
 import "./styles/rows.css";
 import "./styles/chrome.css";
 import "./styles/marks.css";

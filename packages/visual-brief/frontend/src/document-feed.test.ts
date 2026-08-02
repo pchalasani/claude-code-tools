@@ -9,6 +9,21 @@ import {
 
 const realFetch = globalThis.fetch;
 
+const STATE = {
+  updated_at: "2026-08-01T12:00:00Z",
+  headline: "The detailed state is active",
+  summary: "Live structured payloads remain valid.",
+  lanes: [],
+};
+
+const LEGACY_STATE = {
+  updated_at: "2026-08-01T12:00:00Z",
+  goal: "Ship the brief.",
+  focus: "Validate live payloads.",
+  blocker: null,
+  next: "Run the checks.",
+};
+
 /**
  * Answer the next request with one status and body.
  *
@@ -48,6 +63,18 @@ function payload(overrides: Record<string, unknown> = {}): string {
     document: { title: "A brief", summary: "A summary.", updates: [] },
     ...overrides,
   });
+}
+
+/** Build a parsed payload carrying one candidate current state. */
+function payloadWithState(currentState: unknown): unknown {
+  return JSON.parse(payload({
+    document: {
+      title: "A brief",
+      summary: "A summary.",
+      current_state: currentState,
+      updates: [],
+    },
+  }));
 }
 
 afterEach(() => {
@@ -127,13 +154,54 @@ describe("what the daemon says about the document", () => {
 });
 
 describe("what a document payload has to look like", () => {
-  it("accepts the three fields the page acts on", () => {
+  it("accepts a legacy document without current state", () => {
     const read = readDocumentPayload(JSON.parse(payload()));
 
     expect(read).not.toBeNull();
     expect(read?.assets).toBe("b".repeat(64));
     expect(read?.instance).toBe("c".repeat(64));
     expect(read?.document.title).toBe("A brief");
+  });
+
+  it("accepts a valid current state", () => {
+    expect(readDocumentPayload(payloadWithState(STATE))?.document.current_state)
+      .toEqual(STATE);
+  });
+
+  it("accepts the legacy current state", () => {
+    expect(
+      readDocumentPayload(payloadWithState(LEGACY_STATE))?.document
+        .current_state,
+    ).toEqual(LEGACY_STATE);
+  });
+
+  it("refuses a current state that is not an object", () => {
+    for (const state of [null, "current", 7, []]) {
+      expect(readDocumentPayload(payloadWithState(state))).toBeNull();
+    }
+  });
+
+  it("refuses a current state with an absent field", () => {
+    for (const field of Object.keys(STATE)) {
+      const state: Record<string, unknown> = { ...STATE };
+      delete state[field];
+
+      expect(readDocumentPayload(payloadWithState(state))).toBeNull();
+    }
+  });
+
+  it("refuses null required current-state fields", () => {
+    for (const field of ["updated_at", "headline", "summary"] as const) {
+      expect(readDocumentPayload(payloadWithState({ ...STATE, [field]: null })))
+        .toBeNull();
+    }
+  });
+
+  it("refuses invalid lanes or an extra current-state field", () => {
+    expect(readDocumentPayload(payloadWithState({ ...STATE, lanes: 3 })))
+      .toBeNull();
+    expect(readDocumentPayload(payloadWithState({ ...STATE, extra: true })))
+      .toBeNull();
   });
 
   it("refuses anything that is not an object at all", () => {

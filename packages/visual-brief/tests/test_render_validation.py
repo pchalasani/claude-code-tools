@@ -13,6 +13,11 @@ from visual_brief import MAX_THREAD_ID_LENGTH
 from visual_brief.render import render_content
 
 EXAMPLE_PATH = Path(__file__).parents[1] / "example.json"
+STATE_FOR_VALIDATION = {
+    "headline": "The detailed state contract is active",
+    "summary": "The current position has addressable lanes and items.",
+    "lanes": [],
+}
 
 
 def _example() -> dict[str, Any]:
@@ -26,6 +31,90 @@ def _example() -> dict[str, Any]:
 def _first_item(data: dict[str, Any]) -> dict[str, Any]:
     """Return the example's first item."""
     return data["updates"][0]["lanes"][0]["items"][0]
+
+
+def test_stored_current_state_requires_its_complete_exact_shape() -> None:
+    """Stored state accepts only schema fields and tool-owned questions."""
+    data = _example()
+    data["current_state"] = {
+        "updated_at": "2026-08-01T12:00:00Z",
+        **STATE_FOR_VALIDATION,
+        "extra": "This field does not belong in stored state.",
+    }
+
+    with pytest.raises(ValueError, match="must have exactly these fields"):
+        render_content(data)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Ship v2",
+        "Build/test/ship",
+        "Plan -> build",
+        "First line\nSecond line",
+    ],
+)
+def test_legacy_four_claim_current_state_remains_permissive(text: str) -> None:
+    """The legacy shape keeps its original non-empty text contract."""
+    data = _example()
+    data["current_state"] = {
+        "updated_at": "2026-08-01T12:00:00Z",
+        "goal": text,
+        "focus": text,
+        "blocker": text,
+        "next": text,
+    }
+
+    assert render_content(data).startswith("<!doctype html>")
+
+
+def test_legacy_four_claim_current_state_allows_no_blocker() -> None:
+    """The legacy blocker retains its nullable contract."""
+    data = _example()
+    data["current_state"] = {
+        "updated_at": "2026-08-01T12:00:00Z",
+        "goal": "Ship v2",
+        "focus": "Ship v2",
+        "blocker": None,
+        "next": "Ship v2",
+    }
+
+    assert render_content(data).startswith("<!doctype html>")
+
+
+@pytest.mark.parametrize("invalid", ["", "   ", 2, None])
+def test_legacy_four_claim_current_state_still_requires_text(
+    invalid: Any,
+) -> None:
+    """Required legacy claims remain non-empty strings."""
+    data = _example()
+    data["current_state"] = {
+        "updated_at": "2026-08-01T12:00:00Z",
+        "goal": invalid,
+        "focus": "Ship v2",
+        "blocker": None,
+        "next": "Ship v2",
+    }
+
+    with pytest.raises(ValueError, match="current_state.goal"):
+        render_content(data)
+
+
+def test_legacy_four_claim_current_state_still_requires_exact_shape() -> None:
+    """Legacy read compatibility does not admit extra fields."""
+    data = _example()
+    data["current_state"] = {
+        "updated_at": "2026-08-01T12:00:00Z",
+        "goal": "Ship v2",
+        "focus": "Ship v2",
+        "blocker": None,
+        "next": "Ship v2",
+        "extra": "Not part of the legacy shape",
+    }
+
+    with pytest.raises(ValueError, match="must have exactly these fields"):
+        render_content(data)
 
 
 def test_thread_identifier_surrounding_whitespace_is_rejected() -> None:

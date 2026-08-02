@@ -18,6 +18,7 @@ from visual_brief.writes.lint import (
     report_lint,
 )
 from visual_brief.writes.panels import add_update_command
+from visual_brief.writes.publish import publish_command
 from visual_brief.writes.runfiles import (
     CliError,
     publish_render,
@@ -36,6 +37,7 @@ __all__ = [
     "lint_run",
     "new_command",
     "publish_render",
+    "publish_command",
     "read_content",
     "read_json_payload",
     "read_text_payload",

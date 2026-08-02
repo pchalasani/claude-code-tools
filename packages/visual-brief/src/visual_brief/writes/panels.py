@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,11 @@ def add_update_command(runs_root: Path, run_id: str | None, update: Any) -> int:
         CliError: If the update is not a dated, uniquely identified object,
             or the resulting document would not validate.
     """
+    print(
+        "warning: add-update does not change current state; "
+        "normal reports must use publish",
+        file=sys.stderr,
+    )
     _, run_dir = resolve_run(runs_root, run_id)
     if not isinstance(update, dict):
         raise CliError("an update must be a JSON object")

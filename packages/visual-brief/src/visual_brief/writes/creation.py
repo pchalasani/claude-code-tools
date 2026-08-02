@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 
 from visual_brief.render import render_content
+from visual_brief.schema import BriefDocument
 from visual_brief.server.daemon import DEFAULT_PORT
 from visual_brief.server.registry import resolve_run_path, validate_run_id
 from visual_brief.writes.runfiles import CliError, run_file, utc_timestamp
@@ -96,7 +97,7 @@ def _initialize_run(runs_root: Path, run_id: str, label: str) -> None:
         "created_at": timestamp,
         "updated_at": timestamp,
     }
-    content = _initial_content(label)
+    content = _initial_content(label, timestamp)
     temporary = Path(
         tempfile.mkdtemp(dir=runs_root, prefix=f".{run_id}.", suffix=".tmp")
     )
@@ -120,17 +121,26 @@ def _initialize_run(runs_root: Path, run_id: str, label: str) -> None:
         raise
 
 
-def _initial_content(label: str) -> dict[str, object]:
+def _initial_content(label: str, timestamp: str) -> BriefDocument:
     """Build a small valid document for a newly created run."""
     return {
         "title": label,
         "summary": "This visual brief is ready for content.",
+        "current_state": {
+            "updated_at": timestamp,
+            "headline": "The visual brief is ready for its first report",
+            "summary": (
+                "Publish a detailed current snapshot and its matching dated "
+                "change together."
+            ),
+            "lanes": [],
+        },
         "updates": [
             {
                 "id": "created",
                 "timestamp": "Created",
                 "headline": "The visual brief run is ready",
-                "summary": "Append updates with visual-brief add-update.",
+                "summary": "Publish state and changes with visual-brief publish.",
                 "lanes": [],
             }
         ],

@@ -41,16 +41,41 @@ choice, and it has already been made in real use.
 Length costs you nothing here. A page can be long without being tiring, because
 what is collapsed is invisible until wanted. That is the whole reason to use one.
 
-## Updates are a timeline
+## Current state and changes travel together
 
-Publish one dated update for each report and then leave it alone. New updates
-land at the top; the newest opens and earlier updates stay folded. The visible
-age beside every timestamp tells the human what just arrived.
+Every normal report publishes two things in one atomic write. `current_state`
+replaces the detailed account of where the work stands. `changes` appends one
+dated update and is then left alone. New updates land at the top; the newest
+opens and earlier updates stay folded. The visible ages show when both parts
+arrived.
 
-There is no pinned state panel and no reserved id. Do not rewrite an old update
-to keep a portrait of the project current. Say what changed, what works, what
-comes next, and what needs a decision in the update you are already writing.
-That produces a faithful session log without asking you to curate old claims.
+**Current state must be ordinary prose a reader can understand without internal
+codenames, unexplained abbreviations, bare file names, or compressed
+implementation shorthand.** This semantic rule is the important one. The CLI
+can reject mechanical shapes, but it cannot prove that prose is understandable.
+
+State has exactly `headline`, `summary`, and `lanes`. The headline and summary
+stay compact and plain; the details belong in lanes and items. State lanes and
+items use the same visible schema as dated-update lanes and items. Do not use
+lists, headings, tables, code fences, arrows, or status chains in the state
+headline or summary.
+
+Detailed current state is fully chat-addressable. Its root, lanes, items,
+conversations, and evidence use the same navigation and composer as dated
+updates. Never put `questions` in the agent payload. The queue, `fold`, and
+`answer` own stored conversations, and `publish` carries them onto matching
+state identities automatically.
+
+State lane ids remain stable. State item ids are unique across all state lanes,
+because item identity must survive a move between lanes. A publish that removes
+a lane or item with conversations is rejected; keep the same id until those
+conversations have a home.
+
+Documents without state still work. The shipped four-claim state remains
+read-only until the next structured publish replaces it.
+
+Do not rewrite an old update to keep it current. Dated changes are the immutable
+session log. There is no reserved update id.
 
 **Your process is not news.** Test counts, review rounds, repair iterations,
 lint results, how many findings a reviewer returned, how many commits it took —
@@ -108,14 +133,53 @@ whole document before anything touches disk, writes atomically, re-renders
 exactly one run exists.
 
 ```bash
-visual-brief add-update --file update.json    # append one dated update
+visual-brief publish --file report.json  # replace state + append changes
 ```
 
-`update.json` is one update object with `id`, `timestamp`, `headline`,
-`summary`, and `lanes`. Each lane has `id`, `name`, and `items`; each item has a
-stable `id`, `glance`, `explanation`, and `trust`, plus optional `forensics`,
-`tables`, and `questions`. Updates are appended, never rewritten, so a
-duplicate id is refused.
+`report.json` has exactly two top-level keys:
+
+```json
+{
+  "current_state": {
+    "headline": "The detailed publishing contract is active",
+    "summary": "Every important detail is individually addressable.",
+    "lanes": [
+      {
+        "id": "working-now",
+        "name": "What works now",
+        "items": [
+          {
+            "id": "structured-state",
+            "glance": "The current snapshot uses lanes and items.",
+            "explanation": "It shares the dated-update content model.",
+            "trust": "verified-by-me"
+          }
+        ]
+      }
+    ]
+  },
+  "changes": {
+    "id": "state-and-changes-contract",
+    "timestamp": "2026-08-01T12:00:00Z",
+    "headline": "Publishing now carries state and changes together",
+    "summary": "The state changes while this update remains in history.",
+    "lanes": []
+  }
+}
+```
+
+The command copies `changes.timestamp` to the stored state's `updated_at`.
+Callers never repeat it. The write is all-or-nothing, and a duplicate
+`changes.id` leaves both state and history untouched.
+
+Both state and `changes` use lanes with `id`, `name`, and `items`. Each item has
+`id`, `glance`, `explanation`, and `trust`, plus optional `forensics` and
+`tables`. `changes` also has `id`, `timestamp`, `headline`, and `summary`.
+Updates are appended, never rewritten.
+
+Do not include `questions` anywhere in `current_state`. Publishing preserves
+the stored root, lane, and item conversations by stable id. State item ids must
+be globally unique within current state; dated item path rules do not change.
 
 `trust` is one of `verified-by-me`, `reported-by-agent`, `unverified`,
 `known-limitation`. Use it honestly — it is how the human tells your evidence
@@ -133,7 +197,9 @@ strong emphasis, inline code, fenced blocks, lists, and headings work; a link
 works only if its scheme is `https`, `http`, or `mailto`. Anything else stays
 the characters you wrote, and no markup you write is ever markup on the page.
 
-Both verbs take `--file F` or a bare `-` for standard input. `visual-brief
+Payload verbs take `--file F` or a bare `-` for standard input. Keep
+`add-update` only for compatibility and historical imports; it appends without
+changing state and warns that normal reports must use `publish`. `visual-brief
 render <run-id>` still exists for a file that was edited by hand.
 
 ## Answering a question
@@ -147,8 +213,8 @@ visual-brief answer q-… --file reply.md       # or --text, or -
 unchanged, appends queued replies to the thread they name, and skips what it
 has already folded — running it twice changes nothing. It prints each thread
 it touched with the thread id, the anchor path and the text, which is exactly
-what you need next. Resolve that anchor to the item it refers to before
-answering, so your answer addresses the right thing.
+what you need next. Resolve that anchor to the state root, lane, or item it
+refers to before answering, so your answer addresses the right thing.
 
 `answer` appends one `agent` turn to the named thread, dated from the real
 clock. Use `--text` for a sentence and `--file F` or `-` for a long answer, so
@@ -184,6 +250,12 @@ rules you inherit the moment you edit `content.json` yourself:
 - **Every `at` is a real ISO instant with a timezone**, and turns stay
   chronological, oldest first.
 - **Every update is appended and never edited afterwards.** No id is reserved.
+- **Stored structured state adds `updated_at`** to `headline`, `summary`, and
+  `lanes`; optional `questions` are tool-owned.
+- **Current-state anchors start with `//current-state`**. Lane anchors include
+  `/lanes/<lane-id>`; item anchors use `/items/<item-id>` without a lane id.
+- **State item ids are globally unique across state lanes.** Dated item ids
+  retain their existing per-lane path semantics.
 - **Ids are unique within their collection**, with no whitespace, `/` or `#`.
 
 ## What the checks tell you

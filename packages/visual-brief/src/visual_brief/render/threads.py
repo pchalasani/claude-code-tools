@@ -6,6 +6,12 @@ import hashlib
 from datetime import datetime
 from typing import Any
 
+from visual_brief.schema import (
+    CURRENT_STATE_ROOT,
+    current_state_item_path,
+    current_state_lane_path,
+)
+
 LEGACY_TIMESTAMP = "1970-01-01T00:00:00Z"
 UPDATES_ORDER_FIELD = "updates_order"
 APPEND_ORDER = "append"
@@ -35,6 +41,13 @@ def normalize_document(
     if not isinstance(data, dict):
         return data
     normalized = dict(data)
+    _normalize_current_state(
+        data,
+        normalized,
+        legacy_unknown_ids,
+        legacy_id_aliases,
+        legacy_sources,
+    )
     updates = data.get("updates")
     if not isinstance(updates, list):
         return normalized
@@ -89,6 +102,66 @@ def normalize_document(
                     legacy_sources,
                 )
     return normalized
+
+
+def _normalize_current_state(
+    data: dict[str, Any],
+    normalized: dict[str, Any],
+    legacy_unknown_ids: set[str] | None,
+    legacy_id_aliases: dict[str, str] | None,
+    legacy_sources: dict[str, Any] | None,
+) -> None:
+    """Copy structured state and normalize every tool-owned conversation."""
+    state = data.get("current_state")
+    if not isinstance(state, dict) or not isinstance(state.get("lanes"), list):
+        return
+    normalized_state = dict(state)
+    normalized["current_state"] = normalized_state
+    _normalize_questions(
+        normalized_state,
+        CURRENT_STATE_ROOT,
+        legacy_unknown_ids,
+        legacy_id_aliases,
+        legacy_sources,
+    )
+    lanes = state["lanes"]
+    normalized_lanes = list(lanes)
+    normalized_state["lanes"] = normalized_lanes
+    for lane_index, lane in enumerate(lanes):
+        if not isinstance(lane, dict):
+            continue
+        normalized_lane = dict(lane)
+        normalized_lanes[lane_index] = normalized_lane
+        lane_id = lane.get("id")
+        if not isinstance(lane_id, str):
+            continue
+        _normalize_questions(
+            normalized_lane,
+            current_state_lane_path(lane_id),
+            legacy_unknown_ids,
+            legacy_id_aliases,
+            legacy_sources,
+        )
+        items = lane.get("items")
+        if not isinstance(items, list):
+            continue
+        normalized_items = list(items)
+        normalized_lane["items"] = normalized_items
+        for item_index, item in enumerate(items):
+            if not isinstance(item, dict):
+                continue
+            normalized_item = dict(item)
+            normalized_items[item_index] = normalized_item
+            item_id = item.get("id")
+            if not isinstance(item_id, str):
+                continue
+            _normalize_questions(
+                normalized_item,
+                current_state_item_path(item_id),
+                legacy_unknown_ids,
+                legacy_id_aliases,
+                legacy_sources,
+            )
 
 
 def _migrate_pinned_now(

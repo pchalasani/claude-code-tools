@@ -59,11 +59,36 @@ def project_document(data: dict[str, Any]) -> dict[str, Any]:
     Returns:
         A new document holding the fields the page renders.
     """
-    return {
+    projected: dict[str, Any] = {
         "title": data["title"],
         "summary": data["summary"],
         "updates": [_project_update(update) for update in data["updates"]],
     }
+    if "current_state" in data:
+        projected["current_state"] = _project_current_state(
+            data["current_state"]
+        )
+    return projected
+
+
+def _project_current_state(state: dict[str, Any]) -> dict[str, Any]:
+    """Return either supported stored current-state shape."""
+    if "lanes" not in state:
+        return {
+            "updated_at": state["updated_at"],
+            "goal": state["goal"],
+            "focus": state["focus"],
+            "blocker": state["blocker"],
+            "next": state["next"],
+        }
+    projected: dict[str, Any] = {
+        "updated_at": state["updated_at"],
+        "headline": state["headline"],
+        "summary": state["summary"],
+        "lanes": [_project_lane(lane) for lane in state["lanes"]],
+    }
+    _attach_questions(projected, state)
+    return projected
 
 
 def _project_update(update: dict[str, Any]) -> dict[str, Any]:

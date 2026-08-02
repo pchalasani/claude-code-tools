@@ -191,11 +191,7 @@ def publish_render(run_dir: Path, data: Any) -> Path:
 
 
 def save_document(run_dir: Path, data: Any) -> Path:
-    """Validate a document, then publish content and page atomically.
-
-    The content file is written first because it is the source of truth: a
-    failure between the two writes leaves a saved document and a stale page,
-    which one ``visual-brief render`` repairs.
+    """Validate a document, then publish content and page together.
 
     Args:
         run_dir: The run directory.
@@ -213,12 +209,60 @@ def save_document(run_dir: Path, data: Any) -> Path:
     meta_path = run_output_file(run_dir, "meta.json")
     payload = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
     try:
-        touch_updated_at(meta_path)
-        write_text_atomic(content_path, payload)
-        write_text_atomic(index_path, html + "\n")
+        with rollback_replaced_files(content_path, index_path, meta_path):
+            write_text_atomic(content_path, payload)
+            write_text_atomic(index_path, html + "\n")
+            touch_updated_at(meta_path)
     except OSError as error:
         raise CliError(f"cannot write run: {error}") from error
     return index_path
+
+
+@contextmanager
+def rollback_replaced_files(*paths: Path) -> Iterator[None]:
+    """Restore files byte-for-byte if a group of replacements fails.
+
+    Args:
+        *paths: Files that the guarded operation may replace.
+
+    Yields:
+        Control while replacements are attempted.
+    """
+    originals: list[tuple[Path, bytes | None]] = []
+    for path in paths:
+        try:
+            original = path.read_bytes()
+        except FileNotFoundError:
+            original = None
+        originals.append((path, original))
+    try:
+        yield
+    except BaseException:
+        for path, original in originals:
+            if original is None:
+                path.unlink(missing_ok=True)
+            else:
+                _write_bytes_atomic(path, original)
+        raise
+
+
+def _write_bytes_atomic(path: Path, content: bytes) -> None:
+    """Replace one file atomically with exact bytes."""
+    descriptor, temporary = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(content)
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def run_file(run_dir: Path, name: str) -> Path:

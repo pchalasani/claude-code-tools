@@ -1,5 +1,6 @@
 import {
   For,
+  Show,
   createEffect,
   createMemo,
   createSignal,
@@ -7,6 +8,7 @@ import {
   onMount,
   type JSX,
 } from "solid-js";
+import { CurrentStateView } from "./current-state";
 import {
   TRUST_LABELS,
   TRUST_ORDER,
@@ -49,6 +51,15 @@ export function App(props: { brief: BriefDocument }): JSX.Element {
       <StructureMap state={state} />
       <main class="stream" onClick={(event) => selectFromClick(state, event)}>
         <Masthead state={state} />
+        <Show when={props.brief.current_state}>
+          {(current) => (
+            <CurrentStateView
+              state={state}
+              current={current()}
+              now={now()}
+            />
+          )}
+        </Show>
         <For each={ordered()}>
           {(update) => (
             <VisibleRow state={state} id={update.id}>

@@ -15,6 +15,11 @@ from visual_brief.server.counting_io import (
     _read_json_object,
 )
 from visual_brief.server.queue import MAX_QUESTION_LENGTH
+from visual_brief.schema import (
+    CURRENT_STATE_ROOT,
+    current_state_item_path,
+    current_state_lane_path,
+)
 
 FoldedKey = tuple[str | None, str, str, datetime | str | None]
 ThreadState = tuple[str, bool]
@@ -75,15 +80,38 @@ def _collect_thread_state(
     """Collect thread state, folding keys, threads, and anchor owners."""
     if not isinstance(normalized, dict):
         return {}, Counter(), {}, {}
-    updates = normalized.get("updates")
-    if not isinstance(updates, list):
-        return {}, Counter(), {}, {}
-
     states: dict[str, ThreadState] = {}
     folded: Counter[FoldedKey] = Counter()
     threads: dict[str, dict[str, Any]] = {}
     owners: dict[str, dict[str, Any]] = {}
     legacy_ids = legacy_unknown_ids or set()
+    state = normalized.get("current_state")
+    if isinstance(state, dict) and isinstance(state.get("lanes"), list):
+        owners[CURRENT_STATE_ROOT] = state
+        _collect_threads(
+            states,
+            folded,
+            threads,
+            state.get("questions"),
+            CURRENT_STATE_ROOT,
+            legacy_ids,
+        )
+        for lane in state["lanes"]:
+            if not isinstance(lane, dict) or not isinstance(lane.get("id"), str):
+                continue
+            _collect_lane(
+                states,
+                folded,
+                threads,
+                owners,
+                current_state_lane_path(lane["id"]),
+                lane,
+                legacy_ids,
+                stable_item_paths=True,
+            )
+    updates = normalized.get("updates")
+    if not isinstance(updates, list):
+        return states, folded, threads, owners
     for update in updates:
         if not isinstance(update, dict):
             continue
@@ -92,8 +120,16 @@ def _collect_thread_state(
         if not isinstance(update_id, str) or not isinstance(lanes, list):
             continue
         for lane in lanes:
+            if not isinstance(lane, dict) or not isinstance(lane.get("id"), str):
+                continue
             _collect_lane(
-                states, folded, threads, owners, update_id, lane, legacy_ids
+                states,
+                folded,
+                threads,
+                owners,
+                f"{update_id}/{lane['id']}",
+                lane,
+                legacy_ids,
             )
     return states, folded, threads, owners
 
@@ -103,9 +139,11 @@ def _collect_lane(
     folded: Counter[FoldedKey],
     threads: dict[str, dict[str, Any]],
     owners: dict[str, dict[str, Any]],
-    update_id: str,
+    lane_anchor: str,
     lane: Any,
     legacy_unknown_ids: set[str],
+    *,
+    stable_item_paths: bool = False,
 ) -> None:
     """Collect threads from a recognized lane and its items."""
     if not isinstance(lane, dict):
@@ -113,7 +151,6 @@ def _collect_lane(
     lane_id = lane.get("id")
     if not isinstance(lane_id, str):
         return
-    lane_anchor = f"{update_id}/{lane_id}"
     owners[lane_anchor] = lane
     _collect_threads(
         states, folded, threads, lane.get("questions"), lane_anchor,
@@ -128,7 +165,11 @@ def _collect_lane(
         item_id = item.get("id")
         if not isinstance(item_id, str):
             continue
-        anchor = f"{lane_anchor}/{item_id}"
+        anchor = (
+            current_state_item_path(item_id)
+            if stable_item_paths
+            else f"{lane_anchor}/{item_id}"
+        )
         owners[anchor] = item
         _collect_threads(
             states, folded, threads, item.get("questions"), anchor,

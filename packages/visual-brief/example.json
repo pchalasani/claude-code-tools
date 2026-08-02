@@ -1,6 +1,52 @@
 {
   "title": "Cedar reader parity is close — and now measurable",
   "summary": "The Cedar reader now agrees with Amazon's own parser on a focused differential test after four review rounds. The checker can distinguish valid-but-unsupported Cedar from malformed Cedar, which keeps the repair loop on the right path. A later cold review found four remaining edge cases; those fixes are in progress.",
+  "current_state": {
+    "updated_at": "2026-07-25T20:00:00Z",
+    "headline": "Cedar parser parity is close but not complete",
+    "summary": "The focused comparison passes while four wider edge cases remain.",
+    "lanes": [
+      {
+        "id": "working-now",
+        "name": "What works now",
+        "items": [
+          {
+            "id": "focused-parity",
+            "glance": "The focused differential set shows no parser disagreement.",
+            "explanation": "Twelve targeted inputs agree with Amazon Cedar CLI 4.11.2 in both acceptance directions.",
+            "trust": "verified-by-me",
+            "forensics": [
+              "focused cases: 12\ndisagreements: 0"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "still-open",
+        "name": "What is still open",
+        "items": [
+          {
+            "id": "four-edge-cases",
+            "glance": "Four wider parser and limit cases remain unresolved.",
+            "explanation": "The truncated policy, escaped wildcard, duplicate key, and profile-limit cases still need verification.",
+            "trust": "known-limitation"
+          }
+        ]
+      },
+      {
+        "id": "next",
+        "name": "What comes next",
+        "items": [
+          {
+            "id": "permanent-parity-gate",
+            "glance": "Parser parity still needs a permanent automated gate.",
+            "explanation": "The next report should verify the fixes and record the repeatable comparison as a build check.",
+            "trust": "reported-by-agent"
+          }
+        ]
+      }
+    ]
+  },
   "updates": [
     {
       "id": "review-round-four",
@@ -81,7 +127,7 @@
     },
     {
       "id": "current-update",
-      "timestamp": "Current update",
+      "timestamp": "2026-07-25T20:00:00Z",
       "headline": "The Cedar reader now agrees with Amazon's own Cedar parser, after four review rounds",
       "summary": "A twelve-input differential test found no disagreement in the targeted cases, and all eleven build gates pass. A later cold review then widened the edge-case set and found four concrete mismatches that are being fixed now.",
       "lanes": [

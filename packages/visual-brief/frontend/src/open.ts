@@ -1,6 +1,6 @@
 import type { Accessor } from "solid-js";
 import type { ChosenMap, SeenMap } from "./human-state";
-import { ancestorIds, type Row } from "./outline";
+import { ancestorRowIds, type Row } from "./outline";
 export interface Openness {
   isOpen: (row: Row) => boolean;
   painted: (rows: Row[]) => Row[];
@@ -21,7 +21,7 @@ export function createOpenness(
     return current.some(
       (candidate) =>
         candidate.kind === "thread"
-        && ancestorIds(candidate.id).includes(row.id)
+        && ancestorRowIds(current, candidate.id).includes(row.id)
         && threadOutstanding(candidate, seen()),
     );
   };
@@ -74,6 +74,9 @@ export function bornDefault(
   rows: Row[],
   seen: Readonly<SeenMap>,
 ): boolean {
+  if (row.kind === "state") {
+    return true;
+  }
   if (row.kind === "update") {
     return rows.find((candidate) => candidate.kind === "update")?.id === row.id;
   }
@@ -87,7 +90,7 @@ export function bornDefault(
     return rows.some(
       (candidate) =>
         candidate.kind === "thread"
-        && ancestorIds(candidate.id).includes(row.id)
+        && ancestorRowIds(rows, candidate.id).includes(row.id)
         && threadOutstanding(candidate, seen),
     );
   }

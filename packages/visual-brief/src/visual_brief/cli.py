@@ -27,6 +27,7 @@ from visual_brief.writes import (
     fold_command,
     lint_command,
     new_command,
+    publish_command,
     publish_render,
     read_content,
     read_json_payload,
@@ -101,6 +102,14 @@ def build_parser() -> argparse.ArgumentParser:
     update_parser.add_argument("--file", help="read the update from a file")
     _add_stdin_argument(update_parser)
 
+    publish_parser = subparsers.add_parser(
+        "publish",
+        help="replace current state and append one dated update",
+    )
+    _add_run_option(publish_parser)
+    publish_parser.add_argument("--file", help="read the publish from a file")
+    _add_stdin_argument(publish_parser)
+
     lint_parser = subparsers.add_parser("lint", help="check one run's content")
     _add_run_option(lint_parser)
     lint_parser.add_argument(
@@ -169,6 +178,12 @@ def _dispatch(args: argparse.Namespace) -> int:
         )
     if args.command == "add-update":
         return add_update_command(
+            runs_root,
+            args.run,
+            read_json_payload(args.file, args.stdin == "-"),
+        )
+    if args.command == "publish":
+        return publish_command(
             runs_root,
             args.run,
             read_json_payload(args.file, args.stdin == "-"),

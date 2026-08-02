@@ -1,6 +1,19 @@
 import { createComputed, createMemo, createSignal, type Accessor } from "solid-js";
-import type { BriefDocument, Thread } from "./document";
-import { ancestorIds, itemRowId, laneRowId, threadRowId } from "./outline";
+import {
+  isStructuredCurrentState,
+  type BriefDocument,
+  type Thread,
+} from "./document";
+import {
+  CURRENT_STATE_ROOT_ID,
+  ancestorRowIds,
+  currentStateItemRowId,
+  currentStateLaneRowId,
+  itemRowId,
+  laneRowId,
+  outline,
+  threadRowId,
+} from "./outline";
 import { readSentRecords, saveSentRecords, type SentRecord } from "./session-store";
 export const STALL_POLLS = 3;
 export interface PendingNote {
@@ -31,6 +44,30 @@ interface Waiting {
 }
 export function conversations(brief: BriefDocument): Located[] {
   const found: Located[] = [];
+  const state = brief.current_state;
+  if (state !== undefined && isStructuredCurrentState(state)) {
+    for (const thread of state.questions ?? []) {
+      found.push({
+        id: threadRowId(CURRENT_STATE_ROOT_ID, thread),
+        turns: thread.turns,
+      });
+    }
+    for (const lane of state.lanes ?? []) {
+      const lanePath = currentStateLaneRowId(lane);
+      for (const thread of lane.questions ?? []) {
+        found.push({ id: threadRowId(lanePath, thread), turns: thread.turns });
+      }
+      for (const item of lane.items ?? []) {
+        const itemPath = currentStateItemRowId(item);
+        for (const thread of item.questions ?? []) {
+          found.push({
+            id: threadRowId(itemPath, thread),
+            turns: thread.turns,
+          });
+        }
+      }
+    }
+  }
   for (const update of brief.updates ?? []) {
     for (const lane of update.lanes ?? []) {
       const lanePath = laneRowId(update.id, lane);
@@ -97,6 +134,10 @@ export function createPending(
   const live = createMemo(() =>
     held().filter((_, index) => located()[index] === null),
   );
+  const rows = createMemo(() => {
+    const document = brief();
+    return document === null ? [] : outline(document);
+  });
   createComputed(() => saveSentRecords(live().map((one) => one.record)));
   const views = new WeakMap<Waiting, PendingNote>();
   const note = (one: Waiting): PendingNote => {
@@ -139,7 +180,7 @@ export function createPending(
       ).map(note),
     within: (rowId) =>
       live().some((one) => one.record.failed !== true
-        && ancestorIds(one.record.rowId).includes(rowId)),
+        && ancestorRowIds(rows(), one.record.rowId).includes(rowId)),
     add: (sent) => { begin(sent); },
     begin,
     stamp: (token, at) => {

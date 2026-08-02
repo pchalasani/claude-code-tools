@@ -9,7 +9,7 @@
  * arrives without replacing the page it lands on.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   click,
@@ -46,7 +46,35 @@ describe("what a publish does to something half-written", () => {
     ).toBe(BETA);
   });
 
-  it("closes the chat box when the row it was written at has gone", () => {
+  it("does not restore selection when the focused composer survives", () => {
+    const { publish } = mountLive();
+    composeAt(BETA);
+    typeInto(".composer textarea", "Half a question about beta");
+    const textarea = document.querySelector<HTMLTextAreaElement>(
+      ".composer textarea",
+    );
+    if (textarea === null) {
+      throw new Error("composer textarea was not rendered");
+    }
+    textarea.focus();
+    textarea.setSelectionRange(5, 20, "backward");
+    const focus = vi.spyOn(textarea, "focus");
+    const setSelectionRange = vi.spyOn(textarea, "setSelectionRange");
+
+    const next = sampleBrief();
+    itemOf(next, ALPHA).glance = "Something else entirely";
+    publish(next);
+
+    expect(document.querySelector(".composer textarea")).toBe(textarea);
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.selectionStart).toBe(5);
+    expect(textarea.selectionEnd).toBe(20);
+    expect(textarea.selectionDirection).toBe("backward");
+    expect(focus).not.toHaveBeenCalled();
+    expect(setSelectionRange).not.toHaveBeenCalled();
+  });
+
+  it("closes the chat box when the row it was written at has gone", async () => {
     const { publish } = mountLive();
     composeAt(BETA);
     typeInto(".composer textarea", "A question about a row that is leaving");
@@ -55,6 +83,7 @@ describe("what a publish does to something half-written", () => {
     const lane = laneOf(next, "newest", "changed");
     lane.items = lane.items.filter((item) => item.id !== "beta");
     publish(next);
+    await Promise.resolve();
 
     expect(document.querySelector(".composer")).toBeNull();
     publish(sampleBrief());

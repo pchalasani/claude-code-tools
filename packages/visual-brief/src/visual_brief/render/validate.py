@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from datetime import datetime
 from typing import Any
 
 from visual_brief import MAX_THREAD_ID_LENGTH
 from visual_brief.render.note_names import note_name, require_distinct_note_names
+from visual_brief.schema import (
+    CURRENT_STATE_ROOT,
+    current_state_item_path,
+    current_state_lane_path,
+)
 
 TRUST_LABELS = {
     "verified-by-me": "Verified by me",
@@ -14,6 +21,42 @@ TRUST_LABELS = {
     "unverified": "Unverified",
     "known-limitation": "Known limitation",
 }
+
+_LEGACY_STATE_FIELDS = {"updated_at", "goal", "focus", "blocker", "next"}
+_LEGACY_STATE_PROSE_FIELDS = ("goal", "focus", "blocker", "next")
+_STRUCTURED_STATE_FIELDS = {"updated_at", "headline", "summary", "lanes"}
+_STRUCTURED_STATE_OPTIONAL_FIELDS = {"questions"}
+_SENTENCE_END = re.compile(r"[.!?…]$")
+_BULLET = r"[\u2022\u2023\u2043\u204c\u204d\u25aa\u25cf\u25e6]"
+_BULLET_MARKER = rf"(?:[-*+]|{_BULLET})"
+_NUMBERED_MARKER = r"(?:\d+[.)]|\(\d+\))"
+_LIST_START = re.compile(
+    rf"^\s*(?:{_BULLET_MARKER}\s+|{_NUMBERED_MARKER}\s+)"
+)
+_INLINE_BULLET_LIST = re.compile(
+    rf"(?:^|\s){_BULLET_MARKER}\s+\S.*?\s{_BULLET_MARKER}\s+\S"
+)
+_INLINE_UNICODE_BULLET_ITEM = re.compile(rf"(?:^|\s){_BULLET}\s+\S")
+_INLINE_NUMBERED_LIST = re.compile(
+    rf"(?:^|\s){_NUMBERED_MARKER}\s+\S.*?\s{_NUMBERED_MARKER}\s+\S"
+)
+_HEADING_START = re.compile(r"^\s*#{1,6}\s+")
+_COMPACT_STATUS_TOKEN = r"(?=[\w-]*[^\W\d_])[\w-]+"
+_COMPACT_STATUS_CHAIN = re.compile(
+    rf"(?<![\w./>]){_COMPACT_STATUS_TOKEN}([/>]){_COMPACT_STATUS_TOKEN}"
+    rf"(?:\1{_COMPACT_STATUS_TOKEN}){{1,}}(?:\.(?![\w./>])|(?![\w./>]))"
+)
+_SPACED_STATUS_CHAIN = re.compile(
+    r"\S+(?:\s+\S+)*\s+([/>])\s+\S+(?:\s+\S+)*\s+\1\s+\S+"
+)
+_MIXED_STATUS_CHAIN = re.compile(
+    rf"(?<![\w./>]){_COMPACT_STATUS_TOKEN}\s*(?:"
+    rf"/\s*{_COMPACT_STATUS_TOKEN}(?:\s+{_COMPACT_STATUS_TOKEN})*\s*>"
+    rf"\s*{_COMPACT_STATUS_TOKEN}|"
+    rf">\s*{_COMPACT_STATUS_TOKEN}(?:\s+{_COMPACT_STATUS_TOKEN})*\s*/"
+    rf"\s*{_COMPACT_STATUS_TOKEN})"
+)
+_ASCII_ARROW = re.compile(r"(?:->|<-|=>)")
 
 
 def require_text(value: Any, location: str) -> str:
@@ -32,6 +75,147 @@ def require_text(value: Any, location: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{location} must be non-empty text")
     return value.strip()
+
+
+def _require_exact_fields(
+    value: dict[str, Any],
+    expected: set[str],
+    location: str,
+) -> None:
+    """Require an object to carry exactly the named fields."""
+    actual = set(value)
+    if actual == expected:
+        return
+    missing = sorted(expected - actual)
+    unexpected = sorted(str(field) for field in actual - expected)
+    details: list[str] = []
+    if missing:
+        details.append(f"missing {', '.join(missing)}")
+    if unexpected:
+        details.append(f"unexpected {', '.join(unexpected)}")
+    raise ValueError(
+        f"{location} must have exactly these fields: " + "; ".join(details)
+    )
+
+
+def _validate_state_prose(
+    value: Any,
+    location: str,
+    *,
+    limit: int = 240,
+    sentence: bool = True,
+) -> str:
+    """Validate one mechanically plain current-state text field."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{location} must be non-empty text")
+    if len(value) > limit:
+        raise ValueError(f"{location} must be at most {limit} characters")
+    if value.splitlines() != [value]:
+        raise ValueError(f"{location} must be one line")
+    if (
+        _LIST_START.search(value)
+        or _INLINE_BULLET_LIST.search(value)
+        or _INLINE_UNICODE_BULLET_ITEM.search(value)
+        or _INLINE_NUMBERED_LIST.search(value)
+    ):
+        raise ValueError(f"{location} must not be a list")
+    if _HEADING_START.search(value):
+        raise ValueError(f"{location} must not be a heading")
+    if "|" in value:
+        raise ValueError(f"{location} must not be a table")
+    if "```" in value or "~~~" in value:
+        raise ValueError(f"{location} must not contain a code fence")
+    if _ASCII_ARROW.search(value) or any(
+        "ARROW" in unicodedata.name(character, "") for character in value
+    ):
+        raise ValueError(f"{location} must not contain arrows")
+    if (
+        _COMPACT_STATUS_CHAIN.search(value)
+        or _SPACED_STATUS_CHAIN.search(value)
+        or _MIXED_STATUS_CHAIN.search(value)
+    ):
+        raise ValueError(f"{location} must not contain a status chain")
+    if len(re.findall(r"\b\w+\b", value, flags=re.UNICODE)) < 4:
+        raise ValueError(f"{location} must contain at least four words")
+    if sentence and _SENTENCE_END.search(value) is None:
+        raise ValueError(f"{location} must end in sentence punctuation")
+    return value
+
+
+def validate_current_state(value: Any, location: str = "current_state") -> None:
+    """Validate either supported stored current-state shape.
+
+    Args:
+        value: Candidate stored state.
+        location: JSON path used in validation errors.
+
+    Raises:
+        ValueError: If the state violates its exact mechanical schema.
+    """
+    if not isinstance(value, dict):
+        raise ValueError(f"{location} must be an object")
+    if set(value) == _LEGACY_STATE_FIELDS:
+        _validate_legacy_current_state(value, location)
+        return
+    _validate_structured_current_state(value, location)
+
+
+def _validate_legacy_current_state(
+    value: dict[str, Any],
+    location: str,
+) -> None:
+    """Validate the already-shipped four-claim state shape."""
+    require_text(value.get("updated_at"), f"{location}.updated_at")
+    for field in _LEGACY_STATE_PROSE_FIELDS:
+        candidate = value.get(field)
+        field_location = f"{location}.{field}"
+        if field == "blocker" and candidate is None:
+            continue
+        require_text(candidate, field_location)
+
+
+def _validate_structured_current_state(
+    value: dict[str, Any],
+    location: str,
+) -> None:
+    """Validate detailed current state and its stable conversation paths."""
+    actual = set(value)
+    allowed = _STRUCTURED_STATE_FIELDS | _STRUCTURED_STATE_OPTIONAL_FIELDS
+    if not _STRUCTURED_STATE_FIELDS.issubset(actual) or not actual <= allowed:
+        _require_exact_fields(value, _STRUCTURED_STATE_FIELDS, location)
+    require_text(value.get("updated_at"), f"{location}.updated_at")
+    _validate_state_prose(
+        value.get("headline"),
+        f"{location}.headline",
+        limit=200,
+        sentence=False,
+    )
+    _validate_state_prose(
+        value.get("summary"),
+        f"{location}.summary",
+        limit=480,
+    )
+    thread_ids = _validate_questions(
+        value.get("questions"),
+        f"{location}.questions",
+        CURRENT_STATE_ROOT,
+    )
+    lanes = value.get("lanes")
+    if not isinstance(lanes, list):
+        raise ValueError(f"{location}.lanes must be a list")
+    _validate_unique_ids(lanes, f"{location}.lanes")
+    item_ids: list[str] = []
+    for index, lane in enumerate(lanes):
+        lane_location = f"{location}.lanes[{index}]"
+        lane_threads, lane_items = _validate_state_lane(lane, lane_location)
+        thread_ids.extend(lane_threads)
+        item_ids.extend(lane_items)
+    if len(item_ids) != len(set(item_ids)):
+        raise ValueError(
+            f"{location} item ids must be unique across every state lane"
+        )
+    if len(thread_ids) != len(set(thread_ids)):
+        raise ValueError(f"{location} question thread ids must be unique")
 
 
 def identifier(value: Any, location: str) -> str:
@@ -322,6 +506,41 @@ def _validate_lane(lane: Any, location: str, update_id: str) -> list[str]:
     return thread_ids
 
 
+def _validate_state_lane(
+    lane: Any,
+    location: str,
+) -> tuple[list[str], list[str]]:
+    """Validate one state lane using stable lane and global item anchors."""
+    if not isinstance(lane, dict):
+        raise ValueError(f"{location} must be an object")
+    lane_id = identifier(lane.get("id"), f"{location}.id")
+    require_text(lane.get("name"), f"{location}.name")
+    items = lane.get("items")
+    if not isinstance(items, list):
+        raise ValueError(f"{location}.items must be a list")
+    _validate_unique_ids(items, f"{location}.items")
+    thread_ids = _validate_questions(
+        lane.get("questions"),
+        f"{location}.questions",
+        current_state_lane_path(lane_id),
+    )
+    item_ids: list[str] = []
+    for index, item in enumerate(items):
+        item_location = f"{location}.items[{index}]"
+        if not isinstance(item, dict):
+            raise ValueError(f"{item_location} must be an object")
+        item_id = identifier(item.get("id"), f"{item_location}.id")
+        item_ids.append(item_id)
+        thread_ids.extend(
+            _validate_item(
+                item,
+                item_location,
+                current_state_item_path(item_id),
+            )
+        )
+    return thread_ids, item_ids
+
+
 def _validate_update(update: Any, location: str) -> list[str]:
     """Validate one timeline update."""
     if not isinstance(update, dict):
@@ -362,11 +581,28 @@ def validate_document(data: Any) -> dict[str, Any]:
         raise ValueError("top-level JSON value must be an object")
     require_text(data.get("title"), "title")
     require_text(data.get("summary"), "summary")
+    thread_ids: list[str] = []
+    if "current_state" in data:
+        validate_current_state(data["current_state"])
+        state = data["current_state"]
+        if isinstance(state, dict) and "lanes" in state:
+            thread_ids.extend(
+                _validate_questions(
+                    state.get("questions"),
+                    "current_state.questions",
+                    CURRENT_STATE_ROOT,
+                )
+            )
+            for index, lane in enumerate(state.get("lanes", [])):
+                lane_threads, _ = _validate_state_lane(
+                    lane,
+                    f"current_state.lanes[{index}]",
+                )
+                thread_ids.extend(lane_threads)
     updates = data.get("updates")
     if not isinstance(updates, list):
         raise ValueError("updates must be a list")
     _validate_unique_ids(updates, "updates")
-    thread_ids: list[str] = []
     for index, update in enumerate(updates):
         thread_ids.extend(_validate_update(update, f"updates[{index}]"))
     if len(thread_ids) != len(set(thread_ids)):

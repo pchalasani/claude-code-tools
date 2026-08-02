@@ -24,12 +24,75 @@ validates the whole document first, writes atomically, and re-renders the
 page:
 
 ```bash
-visual-brief add-update --file update.json # append one dated update
+visual-brief publish --file report.json    # replace state and append changes
+visual-brief add-update --file update.json # compatibility and imports only
 visual-brief fold                          # queued questions into the page
 visual-brief answer <thread-id> --text "…" # reply to one conversation
 visual-brief lint                          # the checks the verbs already run
 visual-brief render <run-id>               # re-render a hand-edited file
 ```
+
+Normal reports use `publish`. Its JSON payload has exactly two top-level
+fields: `current_state` and `changes`. The write replaces current state and
+appends the dated change in one transaction, so neither can appear without the
+other:
+
+```json
+{
+  "current_state": {
+    "headline": "The detailed publishing contract is active",
+    "summary": "Every important detail is individually addressable.",
+    "lanes": [
+      {
+        "id": "working-now",
+        "name": "What works now",
+        "items": [
+          {
+            "id": "structured-state",
+            "glance": "The current snapshot uses lanes and items.",
+            "explanation": "It shares the dated-update content model.",
+            "trust": "verified-by-me"
+          }
+        ]
+      }
+    ]
+  },
+  "changes": {
+    "id": "state-and-changes-contract",
+    "timestamp": "2026-08-01T12:00:00Z",
+    "headline": "Publishing now carries state and changes together",
+    "summary": "The state changes while this update remains in history.",
+    "lanes": []
+  }
+}
+```
+
+Publish-side state uses exactly `headline`, `summary`, and `lanes`. State lanes
+and items have the same visible schema as dated-update lanes and items. Put
+detailed content in those lanes and items instead of compressing it into the
+root summary.
+
+The headline and summary use ordinary language that does not depend on internal
+codenames, unexplained abbreviations, bare file names, or status shorthand.
+The CLI rejects lists, headings, tables, code fences, arrows, status chains,
+and other mechanically cryptic shapes. Human judgment still determines whether
+otherwise valid prose is understandable.
+
+`changes` has the ordinary immutable update shape. Its timestamp becomes the
+stored state's `updated_at`. A duplicate update id rejects the whole publish.
+Older documents without state remain valid and gain it on their first publish.
+The shipped `{updated_at, goal, focus, blocker, next}` state remains readable
+until a structured publish replaces it.
+
+The agent never submits state `questions`. Queue folding and answering own
+stored conversations. Publishing carries those conversations onto matching
+state root, lane, and item identities. It rejects removal of a lane or item
+that owns a conversation, so a replacement cannot silently discard chat.
+State item ids are unique across all state lanes, and moving an item with the
+same id preserves its conversation and row identity.
+
+`add-update` still appends history for compatibility, but warns because it does
+not update current state.
 
 Runs are stored below `$VISUAL_BRIEF_HOME`, which defaults to
 `~/.claude/visual-brief/runs/`. The dashboard is available at
@@ -53,7 +116,7 @@ comfortable reading position. Clicking a row moves the same cursor.
 | `Space` | Expand or collapse the cursor row |
 | `E` / `C` | Expand everything / collapse back to lanes |
 | `f` | Label every row on the page, then type a label to jump there |
-| `c` | Chat wherever the cursor is: update, lane, item or conversation |
+| `c` | Chat at current state, a lane, an item, or a conversation |
 | `⌘`/`Ctrl` + `Enter` | Send what you have written |
 | `n` | Next open chat: unanswered or a fresh unseen answer |
 | `m` | Reveal your chats; press again to restore the previous fold layout |
@@ -95,6 +158,18 @@ cursor, every fold you chose, an open chat box and the words in it, the search
 you were running and any panel you had up all stay exactly as they were, and
 rows nobody edited keep the very elements they were drawn as. New material
 arrives under the ordinary rules, so nothing lands hidden.
+
+Detailed current state appears before the timeline as a calm, compact outline
+root. Its lanes, items, conversations, and evidence use the same row machinery
+as dated updates, including Chat, keyboard navigation, folds, drafts, search,
+`m` reveal, pending and working signs, new-answer marks, the structure map, and
+counts. The old four-claim state stays in its read-only card until the next
+structured publish.
+
+Current-state anchors start with `//current-state`, which a dated update id
+cannot spell. Lane anchors end in `/lanes/<lane-id>`. Item anchors end in
+`/items/<item-id>` and omit the lane id, so they remain stable when an item
+moves.
 
 The waiting sign follows the message rather than the page. It is recognised by
 its own words and the instant the daemon queued them, so it is retired wherever

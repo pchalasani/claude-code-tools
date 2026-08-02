@@ -79,9 +79,73 @@ export interface Update {
   lanes: Lane[];
 }
 
+export interface LegacyCurrentState {
+  updated_at: string;
+  goal: string;
+  focus: string;
+  blocker: string | null;
+  next: string;
+}
+
+export interface StructuredCurrentState {
+  updated_at: string;
+  headline: string;
+  summary: string;
+  lanes: Lane[];
+  questions?: Thread[];
+}
+
+export type CurrentState = LegacyCurrentState | StructuredCurrentState;
+
+const LEGACY_CURRENT_STATE_FIELDS = new Set(
+  ["updated_at", "goal", "focus", "blocker", "next"],
+);
+const STRUCTURED_CURRENT_STATE_FIELDS = new Set(
+  ["updated_at", "headline", "summary", "lanes", "questions"],
+);
+
+/** Report whether current state uses the detailed lane-and-item shape. */
+export function isStructuredCurrentState(
+  value: CurrentState,
+): value is StructuredCurrentState {
+  return "lanes" in value;
+}
+
+/** Report whether a value has the exact stored current-state shape. */
+export function isCurrentState(value: unknown): value is CurrentState {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const state = value as Record<string, unknown>;
+  const fields = Object.keys(state);
+  const legacy = fields.length === LEGACY_CURRENT_STATE_FIELDS.size
+    && fields.every((field) => LEGACY_CURRENT_STATE_FIELDS.has(field))
+    && typeof state.updated_at === "string"
+    && typeof state.goal === "string"
+    && typeof state.focus === "string"
+    && (typeof state.blocker === "string" || state.blocker === null)
+    && typeof state.next === "string";
+  if (legacy) {
+    return true;
+  }
+  return (
+    fields.every((field) => STRUCTURED_CURRENT_STATE_FIELDS.has(field))
+    && fields.includes("updated_at")
+    && fields.includes("headline")
+    && fields.includes("summary")
+    && fields.includes("lanes")
+    && typeof state.updated_at === "string"
+    && typeof state.headline === "string"
+    && typeof state.summary === "string"
+    && Array.isArray(state.lanes)
+    && (state.questions === undefined || Array.isArray(state.questions))
+  );
+}
+
 export interface BriefDocument {
   title: string;
   summary: string;
+  current_state?: CurrentState;
   updates: Update[];
 }
 
@@ -156,6 +220,13 @@ export function readEmbeddedDocument(
   if (parsed === null || typeof parsed !== "object") {
     throw new Error("embedded brief document is not an object");
   }
+  const brief = parsed as Record<string, unknown>;
+  if (
+    Object.hasOwn(brief, "current_state")
+    && !isCurrentState(brief.current_state)
+  ) {
+    throw new Error("embedded brief document has invalid current state");
+  }
   return parsed as BriefDocument;
 }
 
@@ -167,6 +238,18 @@ export function readEmbeddedDocument(
  */
 export function describeShape(brief: BriefDocument): DocumentShape {
   const shape: DocumentShape = { updates: 0, lanes: 0, items: 0, threads: 0 };
+  const current = brief.current_state;
+  if (current !== undefined && isStructuredCurrentState(current)) {
+    shape.threads += (current.questions ?? []).length;
+    for (const lane of current.lanes ?? []) {
+      shape.lanes += 1;
+      shape.threads += (lane.questions ?? []).length;
+      for (const item of lane.items ?? []) {
+        shape.items += 1;
+        shape.threads += (item.questions ?? []).length;
+      }
+    }
+  }
   for (const update of brief.updates ?? []) {
     shape.updates += 1;
     for (const lane of update.lanes ?? []) {

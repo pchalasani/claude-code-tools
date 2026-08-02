@@ -284,10 +284,14 @@ def test_concurrent_add_updates_preserve_every_publish(
 
     results = [process.communicate(timeout=30) for process in processes]
 
+    warning = (
+        "warning: add-update does not change current state; "
+        "normal reports must use publish\n"
+    )
     assert [
         (process.returncode, stdout, stderr)
         for process, (stdout, stderr) in zip(processes, results, strict=True)
-        if process.returncode != 0
+        if process.returncode != 0 or stderr != warning
     ] == []
     saved_ids = {
         update["id"] for update in read_content_file(root / "write-run")["updates"]
@@ -323,6 +327,19 @@ def test_add_update_refuses_a_duplicate_id(tmp_path: Path) -> None:
     assert add_update_command(root, None, copy.deepcopy(UPDATE)) == 0
     with pytest.raises(CliError, match="already exists"):
         add_update_command(root, None, copy.deepcopy(UPDATE))
+
+
+def test_add_update_warns_that_normal_reports_use_publish(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The compatibility writer directs ordinary reporting to publish."""
+    root = tmp_path / "runs"
+    make_run(root)
+
+    assert add_update_command(root, None, copy.deepcopy(UPDATE)) == 0
+
+    assert "normal reports must use publish" in capsys.readouterr().err
 
 
 def test_add_update_requires_an_object(tmp_path: Path) -> None:

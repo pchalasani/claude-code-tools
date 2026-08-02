@@ -12,7 +12,7 @@ import type { BriefDocument } from "./document";
 import type { HumanState } from "./human-state";
 import { createRowIndex } from "./live-rows";
 import { createOpenness, foldChoiceIds } from "./open";
-import { ancestorIds, type Row, type RowKind } from "./outline";
+import { ancestorRowIds, type Row, type RowKind } from "./outline";
 import { explicitSelectionTookOver } from "./pointer";
 import { preserveWindowScroll, scrollRowIntoView } from "./reveal";
 export type Overlay = "none" | "search" | "help";
@@ -26,6 +26,7 @@ export interface Navigation {
   isVisible: (id: string) => boolean;
   isPainted: (id: string) => boolean;
   row: (id: string) => Row | undefined;
+  ancestors: (id: string) => string[];
   cursorId: Accessor<string | null>;
   currentId: () => string | null;
   isCursor: (id: string) => boolean;
@@ -38,6 +39,7 @@ export interface Navigation {
   isOpen: (id: string) => boolean;
   toggle: (id: string) => void;
   setOpen: (id: string, open: boolean) => void;
+  openMovedAncestor: (id: string) => void;
   expandAll: () => void;
   collapseAll: () => void;
   chatRevealActive: Accessor<boolean>;
@@ -103,6 +105,7 @@ export function createNavigation(
     return result;
   });
   const outstanding = createMemo(() => openness.outstanding(rows()));
+  const ancestors = (id: string): string[] => ancestorRowIds(rows(), id);
   const visit = (row: Row): void => {
     if (
       row.kind === "thread"
@@ -124,7 +127,7 @@ export function createNavigation(
     const filtered = options?.dropFilter === true || !paintedIds().has(id);
     if (filtered) {
       setQuery("");
-      for (const ancestor of ancestorIds(id)) {
+      for (const ancestor of ancestors(id)) {
         human.choose(ancestor, true);
       }
     }
@@ -164,6 +167,7 @@ export function createNavigation(
     isVisible: (id) => visibleIds().has(id),
     isPainted: (id) => paintedIds().has(id),
     row: index.row,
+    ancestors,
     cursorId,
     currentId: cursorId,
     isCursor: (id) => cursorId() === id,
@@ -195,6 +199,16 @@ export function createNavigation(
       const row = index.row(id);
       if (row !== undefined) {
         human.choose(id, open);
+      }
+    },
+    openMovedAncestor: (id) => {
+      const row = index.row(id);
+      if (row !== undefined) {
+        const captured = chatReveal();
+        if (captured?.layout.has(id) === true) {
+          captured.layout.set(id, true);
+        }
+        human.choose(id, true);
       }
     },
     expandAll: () => human.chooseAll(foldChoiceIds(rows()), true),
@@ -231,7 +245,7 @@ export function createNavigation(
           if (row.kind !== "thread" || !row.human) {
             continue;
           }
-          for (const id of [row.id, ...ancestorIds(row.id)]) {
+          for (const id of [row.id, ...ancestors(row.id)]) {
             pathIds.add(id);
             if (!baseOpen(id)) {
               needed.add(id);

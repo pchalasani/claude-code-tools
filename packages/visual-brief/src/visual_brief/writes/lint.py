@@ -15,6 +15,11 @@ from pathlib import Path
 from typing import Any
 
 from visual_brief.render.threads import is_legacy_pair, normalize_document
+from visual_brief.schema import (
+    CURRENT_STATE_ROOT,
+    current_state_item_path,
+    current_state_lane_path,
+)
 from visual_brief.server.counting_io import _contained_child
 from visual_brief.writes.queue_view import (
     document_view,
@@ -48,7 +53,22 @@ def lint_document(
         One message per fault, in document order.
     """
     warnings: list[str] = []
-    updates = data.get("updates") if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        return warnings
+    state = data.get("current_state")
+    if isinstance(state, dict) and isinstance(state.get("lanes"), list):
+        warnings.extend(
+            _lint_threads(
+                state.get("questions"),
+                CURRENT_STATE_ROOT,
+                settled_pairs,
+            )
+        )
+        for lane in state["lanes"]:
+            warnings.extend(
+                _lint_lane(lane, True, settled_pairs)
+            )
+    updates = data.get("updates")
     if not isinstance(updates, list):
         return warnings
     for update in updates:
@@ -59,27 +79,44 @@ def lint_document(
         if not isinstance(update_id, str) or not isinstance(lanes, list):
             continue
         for lane in lanes:
-            if not isinstance(lane, dict):
-                continue
-            lane_id = lane.get("id")
-            if not isinstance(lane_id, str):
-                continue
-            lane_path = f"{update_id}/{lane_id}"
             warnings.extend(
-                _lint_threads(lane.get("questions"), lane_path, settled_pairs)
+                _lint_lane(lane, False, settled_pairs, update_id)
             )
-            items = lane.get("items")
-            if not isinstance(items, list):
-                continue
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                item_id = item.get("id")
-                if not isinstance(item_id, str):
-                    continue
-                warnings.extend(
-                    _lint_item(item, f"{lane_path}/{item_id}", settled_pairs)
-                )
+    return warnings
+
+
+def _lint_lane(
+    lane: Any,
+    current_state: bool,
+    settled_pairs: frozenset[tuple[str, str]],
+    update_id: str = "",
+) -> list[str]:
+    """Lint one lane using the anchor namespace it belongs to."""
+    if not isinstance(lane, dict) or not isinstance(lane.get("id"), str):
+        return []
+    lane_id = lane["id"]
+    lane_path = (
+        current_state_lane_path(lane_id)
+        if current_state
+        else f"{update_id}/{lane_id}"
+    )
+    warnings = _lint_threads(
+        lane.get("questions"),
+        lane_path,
+        settled_pairs,
+    )
+    items = lane.get("items")
+    if not isinstance(items, list):
+        return warnings
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            continue
+        item_path = (
+            current_state_item_path(item["id"])
+            if current_state
+            else f"{lane_path}/{item['id']}"
+        )
+        warnings.extend(_lint_item(item, item_path, settled_pairs))
     return warnings
 
 

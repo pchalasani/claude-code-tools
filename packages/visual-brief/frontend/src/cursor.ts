@@ -1,4 +1,4 @@
-import { ancestorIds, type Row, type RowKind } from "./outline";
+import { ancestorRowIds, type Row, type RowKind } from "./outline";
 export type Edge = "top" | "bottom";
 export function moveByRow(
   rows: Row[],
@@ -67,7 +67,7 @@ export function filterRows(rows: Row[], query: string): Row[] {
       continue;
     }
     kept.add(row.id);
-    ancestorIds(row.id).forEach((id) => kept.add(id));
+    ancestorRowIds(rows, row.id).forEach((id) => kept.add(id));
   }
   return rows.filter((row) => kept.has(row.id));
 }

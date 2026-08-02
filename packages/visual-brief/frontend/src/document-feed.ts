@@ -12,7 +12,7 @@
  * the end that can be replaced.
  */
 
-import type { BriefDocument } from "./document";
+import { isCurrentState, type BriefDocument } from "./document";
 
 /** Run-relative endpoint answering the generation being served. */
 export const VERSION_PATH = "render-version";
@@ -75,6 +75,10 @@ export function readDocumentPayload(value: unknown): DocumentPayload | null {
     typeof brief.title !== "string"
     || typeof brief.summary !== "string"
     || !Array.isArray(brief.updates)
+    || (
+      Object.hasOwn(brief, "current_state")
+      && !isCurrentState(brief.current_state)
+    )
   ) {
     return null;
   }
