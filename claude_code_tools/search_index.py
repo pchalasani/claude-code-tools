@@ -21,7 +21,8 @@ from claude_code_tools.session_utils import is_valid_session
 #: install keeps the same version across every code change.
 #: rev 2: Codex sub-agent (is_sidechain) detection.
 #: rev 3: headless `codex exec` run (is_exec_run) detection.
-INDEX_LOGIC_REVISION = 3
+#: rev 4: launch flags read from the session's own session_meta record only.
+INDEX_LOGIC_REVISION = 4
 
 
 def _get_index_version() -> str:
