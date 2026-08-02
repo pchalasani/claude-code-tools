@@ -215,6 +215,8 @@ class TestBlocked(unittest.TestCase):
     def test_supported_wrappers(self):
         self.assertBlocked("sudo command cat " + DOTENV)
         self.assertBlocked("sudo --user root cat " + DOTENV)
+        self.assertBlocked("sudo -nu root cat " + DOTENV)
+        self.assertBlocked("sudo -nuroot cat " + DOTENV)
         self.assertBlocked("env -i MODE=test cat " + DOTENV)
         self.assertBlocked("sudo sh -c 'cat " + DOTENV + "'")
 

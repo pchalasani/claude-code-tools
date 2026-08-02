@@ -524,13 +524,14 @@ class TestUncommittedChangesProbeTargetsTheRightRepo(unittest.TestCase):
         )
         self.assertFalse(blocked)
 
-    def test_branch_reset_creation_carries_dirty_work(self):
+    def test_branch_reset_checks_dirty_work(self):
         for option in ("-B feature", "-Bfeature"):
             with self.subTest(option=option):
-                blocked, _ = check_git_checkout_command(
+                blocked, reason = check_git_checkout_command(
                     f"git -C {self.repo} checkout {option}"
                 )
-                self.assertFalse(blocked)
+                self.assertTrue(blocked)
+                self.assertIn("dirty-file.txt", reason)
 
 
 if __name__ == "__main__":

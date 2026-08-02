@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""
-Hook to protect .env files from being read or searched.
-Blocks commands that would expose .env contents and suggests safer alternatives.
-"""
+"""Protect dotenv files from commands that could expose their contents."""
 import fnmatch
 import os
 import re
@@ -537,11 +534,14 @@ def _command_position(
             while cursor < len(segment) and segment[cursor].startswith('-'):
                 option = segment[cursor]
                 cursor += 1
-                if option in (
-                        '-C', '-D', '-g', '-h', '-p', '-R', '-r', '-t', '-T',
-                        '-U', '-u', '--chdir', '--group', '--host',
+                value_index = next((index for index, char
+                                    in enumerate(option[1:])
+                                    if char in 'CDghpRrtTUu'), None)
+                if (option in (
+                        '--chdir', '--group', '--host',
                         '--other-user', '--prompt', '--role', '--type',
-                        '--user'):
+                        '--user') or not option.startswith('--')
+                        and value_index == len(option) - 2):
                     cursor += 1
             continue
         if command_word == 'time':

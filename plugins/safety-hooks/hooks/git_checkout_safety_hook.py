@@ -503,7 +503,7 @@ def _check_single_git_checkout_command(
 
     # Creating a branch carries uncommitted work across rather than discarding
     # it, so it stays exempt from the uncommitted-changes prompt below.
-    if {"-b", "-B"} & flags:
+    if "-b" in flags:
         return False, None
 
     # Everything above reads only the COMMAND. Everything below reads a
