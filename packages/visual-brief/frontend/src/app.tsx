@@ -60,20 +60,29 @@ export function App(props: { brief: BriefDocument }): JSX.Element {
             />
           )}
         </Show>
-        <For each={ordered()}>
-          {(update) => (
-            <VisibleRow state={state} id={update.id}>
-              {(row) => (
-                <UpdateView
-                  state={state}
-                  row={row}
-                  update={update}
-                  now={now()}
-                />
+        <section class="history-ledger" aria-labelledby="history-heading">
+          <header class="history-heading">
+            <p class="history-kicker">Dated changes</p>
+            <h2 id="history-heading">Change ledger</h2>
+            <p>What changed, newest first.</p>
+          </header>
+          <div class="history-entries">
+            <For each={ordered()}>
+              {(update) => (
+                <VisibleRow state={state} id={update.id}>
+                  {(row) => (
+                    <UpdateView
+                      state={state}
+                      row={row}
+                      update={update}
+                      now={now()}
+                    />
+                  )}
+                </VisibleRow>
               )}
-            </VisibleRow>
-          )}
-        </For>
+            </For>
+          </div>
+        </section>
       </main>
       <SearchOverlay state={state} />
       <HelpOverlay state={state} />

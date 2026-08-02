@@ -49,6 +49,14 @@ describe("the append-only update timeline", () => {
     expect(paintedOpen("older")).toBe("false");
     expect(document.querySelector(".earlier-heading")).toBeNull();
     expect(document.querySelector(".now-mark")).toBeNull();
+    expect(document.querySelector(".history-heading")?.textContent).toContain(
+      "Dated changes",
+    );
+    expect(
+      document.querySelector(".history-entries")?.querySelectorAll(
+        ':scope > [data-row-kind="update"]',
+      ),
+    ).toHaveLength(3);
   });
 
   it("opens an appended update delivered to the live page", () => {

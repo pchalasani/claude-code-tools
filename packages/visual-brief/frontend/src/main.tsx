@@ -4,6 +4,7 @@ import { readEmbeddedDocument } from "./document";
 import { createLiveDocument, type LiveDocument } from "./live-document";
 import { watchPointer } from "./pointer";
 import { startVersionWatch } from "./reload";
+import "./styles/tokens.css";
 import "./styles/base.css";
 import "./styles/current-state.css";
 import "./styles/rows.css";

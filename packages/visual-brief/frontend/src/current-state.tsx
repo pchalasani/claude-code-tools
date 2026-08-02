@@ -94,23 +94,25 @@ export function CurrentStateView(props: {
               <PendingNotes state={props.state} row={row} />
               <WorkingSign state={props.state} row={row} />
               <ComposeBox state={props.state} row={row} />
-              <For each={current().lanes ?? []}>
-                {(lane) => (
-                  <VisibleRow
-                    state={props.state}
-                    id={currentStateLaneRowId(lane)}
-                  >
-                    {(laneRow) => (
-                      <LaneView
-                        state={props.state}
-                        row={laneRow}
-                        lane={lane}
-                        itemId={currentStateItemRowId}
-                      />
-                    )}
-                  </VisibleRow>
-                )}
-              </For>
+              <div class="current-state-lanes">
+                <For each={current().lanes ?? []}>
+                  {(lane) => (
+                    <VisibleRow
+                      state={props.state}
+                      id={currentStateLaneRowId(lane)}
+                    >
+                      {(laneRow) => (
+                        <LaneView
+                          state={props.state}
+                          row={laneRow}
+                          lane={lane}
+                          itemId={currentStateItemRowId}
+                        />
+                      )}
+                    </VisibleRow>
+                  )}
+                </For>
+              </div>
             </RowShell>
           )}
         </VisibleRow>

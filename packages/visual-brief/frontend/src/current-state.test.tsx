@@ -175,6 +175,11 @@ describe("Detailed current-state rows", () => {
     expect(rowNode(ROOT)?.getAttribute("data-row-kind")).toBe("state");
     expect(rowNode(ACTIVE)?.getAttribute("data-row-kind")).toBe("lane");
     expect(rowNode(PARSER)?.getAttribute("data-row-kind")).toBe("item");
+    expect(
+      rowNode(ACTIVE)?.parentElement?.classList.contains(
+        "current-state-lanes",
+      ),
+    ).toBe(true);
     expect(rowNode(ROOT_CHAT)?.getAttribute("data-row-kind")).toBe("thread");
     expect(rowNode(LANE_CHAT)).not.toBeNull();
     expect(rowNode(ITEM_CHAT)).not.toBeNull();
