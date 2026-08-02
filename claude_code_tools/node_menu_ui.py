@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -60,6 +61,14 @@ def _missing_node_ui_packages(node_ui_dir: Path | None = None) -> List[str]:
         for name in NODE_UI_REQUIRED_PACKAGES
         if not (node_modules / name).is_dir()
     ]
+
+
+def _no_node_message() -> str:
+    """Build the message shown when the Node runtime is unavailable."""
+    return (
+        "aichat could not start its interactive menu: 'node' was not found "
+        "on PATH.\nInstall Node.js (>=18) and try again."
+    )
 
 
 def _node_ui_setup_message(missing: List[str], node_ui_dir: Path) -> str:
@@ -119,6 +128,12 @@ def _run_node(data_path: Path, out_path: Path, stderr_mode: bool = False) -> int
     Returns the process return code. A missing Node runtime or missing Node UI
     dependencies are reported as an actionable message and return code 1.
     """
+    # Check the runtime before its packages: on a machine without Node, telling
+    # the user to run npm is useless advice.
+    if shutil.which("node") is None:
+        print(_no_node_message(), file=sys.stderr)
+        return 1
+
     node_ui_dir = _node_ui_dir()
     missing = _missing_node_ui_packages(node_ui_dir)
     if missing:
@@ -134,11 +149,8 @@ def _run_node(data_path: Path, out_path: Path, stderr_mode: bool = False) -> int
     try:
         proc = subprocess.run(cmd, env=env)
     except FileNotFoundError:
-        print(
-            "aichat could not start its interactive menu: 'node' was not found "
-            "on PATH.\nInstall Node.js (>=18) and try again.",
-            file=sys.stderr,
-        )
+        # Node disappeared between the check above and the spawn.
+        print(_no_node_message(), file=sys.stderr)
         return 1
     return proc.returncode
 

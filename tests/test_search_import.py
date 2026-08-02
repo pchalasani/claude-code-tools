@@ -26,13 +26,16 @@ def test_export_session_import_error_handling():
         raise
 
 
-def test_search_command_without_deps_gives_helpful_error():
+def test_search_command_without_deps_gives_helpful_error(tmp_path):
     """
     When tantivy or yaml is not installed, 'aichat search' should give a
     helpful error message rather than a raw ImportError traceback.
     """
     # Run aichat search in a subprocess to simulate the user's environment
-    # We use --help since it should work even without deps if imports are lazy
+    # We use --help since it should work even without deps if imports are lazy.
+    # HOME is redirected at a temp dir: aichat auto-indexes on every command,
+    # and pointing it at the developer's real home makes this rebuild their
+    # live session index, which blows past the timeout.
     result = subprocess.run(
         [
             sys.executable,
@@ -43,7 +46,7 @@ def test_search_command_without_deps_gives_helpful_error():
         ],
         capture_output=True,
         text=True,
-        env={"PATH": ""},  # Minimal env
+        env={"PATH": "", "HOME": str(tmp_path)},  # Minimal, isolated env
         timeout=SUBPROCESS_TIMEOUT_SECONDS,
     )
 

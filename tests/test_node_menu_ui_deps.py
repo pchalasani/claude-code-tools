@@ -127,3 +127,21 @@ def test_repository_requirements_match_package_manifest() -> None:
 
     for name in node_menu_ui.NODE_UI_REQUIRED_PACKAGES:
         assert name in dependencies
+
+
+def test_missing_node_runtime_is_reported_before_packages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Without Node installed, telling the user to run npm would be useless."""
+    node_ui = _make_node_ui(tmp_path, ())
+    monkeypatch.setattr(node_menu_ui, "_node_ui_dir", lambda: node_ui)
+    monkeypatch.setattr(node_menu_ui.shutil, "which", lambda _name: None)
+
+    code = node_menu_ui._run_node(tmp_path / "in.json", tmp_path / "out.json")
+
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "'node' was not found on PATH" in err
+    assert "npm ci" not in err
