@@ -236,17 +236,23 @@ class SessionIndex:
                 stored_version = version_file.read_text().strip()
                 if stored_version != current_version:
                     needs_rebuild = True
+                    # stderr, not stdout: `aichat search --json` emits JSONL on
+                    # stdout, and an upgrade notice there is invalid output.
                     print(
                         f"Index version changed ({stored_version} -> {current_version}), "
-                        "rebuilding index..."
+                        "rebuilding index...",
+                        file=sys.stderr,
                     )
             except IOError:
                 needs_rebuild = True
-                print("Index version file corrupted, rebuilding...")
+                print("Index version file corrupted, rebuilding...", file=sys.stderr)
         elif (self.index_path / "meta.json").exists():
             # Index exists but no VERSION file - legacy index, rebuild
             needs_rebuild = True
-            print("Upgrading index to versioned format, rebuilding...")
+            print(
+                "Upgrading index to versioned format, rebuilding...",
+                file=sys.stderr,
+            )
 
         if needs_rebuild:
             # Clear index directory contents (but keep the directory itself)

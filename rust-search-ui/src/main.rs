@@ -1664,8 +1664,15 @@ fn render_filter_modal(frame: &mut Frame, app: &App, t: &Theme, area: Rect) {
         .style(Style::default().bg(t.search_bg));
     frame.render_widget(block, modal_area);
 
-    // Inner content area
-    let inner = Rect::new(x + 2, y + 1, modal_width - 4, modal_height - 2);
+    // Inner content area. The height is derived from the item count and
+    // clamped to the terminal, so on a very short terminal it can be smaller
+    // than the border allowance -- saturate rather than underflow.
+    let inner = Rect::new(
+        x + 2,
+        y + 1,
+        modal_width.saturating_sub(4),
+        modal_height.saturating_sub(2),
+    );
 
     let mut lines: Vec<Line> = Vec::new();
 
