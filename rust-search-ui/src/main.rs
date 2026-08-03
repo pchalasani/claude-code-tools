@@ -3544,13 +3544,22 @@ fn get_process_cwds(pids: &[String]) -> HashMap<String, String> {
                 result.insert(pid.clone(), cwd.to_string_lossy().to_string());
             }
         }
-        if !result.is_empty() {
-            return result;
-        }
+    }
+
+    // Whatever /proc could not answer still goes to lsof, which may hold
+    // privileges that a direct read_link does not. On macOS nothing is
+    // resolved above, so this is every pid.
+    let remaining: Vec<&str> = pids
+        .iter()
+        .filter(|pid| !result.contains_key(*pid))
+        .map(|pid| pid.as_str())
+        .collect();
+    if remaining.is_empty() {
+        return result;
     }
 
     let lsof_output = match Command::new("lsof")
-        .args(["-a", "-d", "cwd", "-p", &pids.join(","), "-Fpn"])
+        .args(["-a", "-d", "cwd", "-p", &remaining.join(","), "-Fpn"])
         .output()
     {
         Ok(output) => output,
