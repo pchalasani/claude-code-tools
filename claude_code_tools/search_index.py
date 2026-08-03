@@ -2,6 +2,7 @@
 
 import json
 import math
+import os
 import shutil
 import sys
 from dataclasses import dataclass
@@ -14,12 +15,26 @@ from claude_code_tools.export_session import _is_meta_user_message
 from claude_code_tools.session_utils import is_valid_session
 
 
-def _get_package_version() -> str:
-    """Get installed package version for automatic index rebuilding."""
+#: Revision of the indexing logic itself. Bump this whenever a change alters
+#: what gets stored for a session (new field, corrected detection), so existing
+#: indexes rebuild even when the package version has not changed -- an editable
+#: install keeps the same version across every code change.
+#: rev 2: Codex sub-agent (is_sidechain) detection.
+#: rev 3: headless `codex exec` run (is_exec_run) detection.
+#: rev 4: launch flags read from the session's own session_meta record only.
+INDEX_LOGIC_REVISION = 4
+
+
+def _get_index_version() -> str:
+    """Return the index identity: package version plus indexing-logic revision.
+
+    A mismatch against the stored value triggers a full rebuild.
+    """
     try:
-        return get_pkg_version("claude-code-tools")
+        version = get_pkg_version("claude-code-tools")
     except Exception:
-        return "unknown"
+        version = "unknown"
+    return f"{version}+idx{INDEX_LOGIC_REVISION}"
 
 # Lazy imports to allow module to load even if deps not installed
 try:
@@ -129,9 +144,18 @@ class IndexState:
             or stat.st_size != stored.get("size")
         )
 
-    def mark_indexed(self, file_path: Path):
-        """Mark file as indexed with current metadata."""
-        stat = file_path.stat()
+    def mark_indexed(
+        self, file_path: Path, stat_result: Optional[os.stat_result] = None
+    ):
+        """Mark file as indexed.
+
+        Args:
+            file_path: Session file that was processed.
+            stat_result: File state to record. Pass the state captured BEFORE
+                reading the file, so content appended while it was being read
+                is not recorded as already indexed. Defaults to current state.
+        """
+        stat = stat_result if stat_result is not None else file_path.stat()
         self.indexed_files[str(file_path)] = {
             "mtime": stat.st_mtime,
             "size": stat.st_size,
@@ -183,6 +207,9 @@ class SessionIndex:
         # Session type fields (for filtering in TUI)
         self.schema_builder.add_text_field("derivation_type", stored=True)
         self.schema_builder.add_text_field("is_sidechain", stored=True)  # "true"/"false"
+        # Codex sessions launched headlessly via `codex exec` (agent-spawned
+        # workers). Excluded from results by default, like sub-agents.
+        self.schema_builder.add_text_field("is_exec_run", stored=True)  # "true"/"false"
 
         # Claude home field (for filtering by source Claude home directory)
         # Use "raw" tokenizer so paths are indexed as single tokens for exact matching
@@ -201,7 +228,7 @@ class SessionIndex:
 
         # Check index version - rebuild if package version changed
         version_file = self.index_path / "VERSION"
-        current_version = _get_package_version()
+        current_version = _get_index_version()
         needs_rebuild = False
 
         if version_file.exists():
@@ -209,17 +236,23 @@ class SessionIndex:
                 stored_version = version_file.read_text().strip()
                 if stored_version != current_version:
                     needs_rebuild = True
+                    # stderr, not stdout: `aichat search --json` emits JSONL on
+                    # stdout, and an upgrade notice there is invalid output.
                     print(
-                        f"Package version changed ({stored_version} -> {current_version}), "
-                        "rebuilding index..."
+                        f"Index version changed ({stored_version} -> {current_version}), "
+                        "rebuilding index...",
+                        file=sys.stderr,
                     )
             except IOError:
                 needs_rebuild = True
-                print("Index version file corrupted, rebuilding...")
+                print("Index version file corrupted, rebuilding...", file=sys.stderr)
         elif (self.index_path / "meta.json").exists():
             # Index exists but no VERSION file - legacy index, rebuild
             needs_rebuild = True
-            print("Upgrading index to versioned format, rebuilding...")
+            print(
+                "Upgrading index to versioned format, rebuilding...",
+                file=sys.stderr,
+            )
 
         if needs_rebuild:
             # Clear index directory contents (but keep the directory itself)
@@ -336,6 +369,10 @@ class SessionIndex:
                 "is_sidechain",
                 "true" if metadata.get("is_sidechain") else "false"
             )
+            doc.add_text(
+                "is_exec_run",
+                "true" if metadata.get("is_exec_run") else "false"
+            )
 
             # Custom title (from /rename command)
             doc.add_text("custom_title", metadata.get("customTitle", "") or "")
@@ -423,6 +460,10 @@ class SessionIndex:
             doc.add_text(
                 "is_sidechain",
                 "true" if metadata.get("is_sidechain") else "false"
+            )
+            doc.add_text(
+                "is_exec_run",
+                "true" if metadata.get("is_exec_run") else "false"
             )
 
             # Custom title (from /rename command)
@@ -685,6 +726,7 @@ class SessionIndex:
                     "created": metadata.get("created", "") or "",
                     "modified": metadata.get("modified", "") or "",
                     "is_sidechain": metadata.get("is_sidechain", False),
+                    "is_exec_run": metadata.get("is_exec_run", False),
                     "derivation_type": metadata.get("derivation_type", "") or "",
                     "session_type": metadata.get("session_type"),
                     "customTitle": metadata.get("customTitle", "") or "",
@@ -753,11 +795,21 @@ class SessionIndex:
                 stats["skipped"] += 1
                 continue
 
+            # Snapshot the file state BEFORE reading it. A live session can
+            # append while we read; recording the post-read state would mark
+            # that new content as already indexed and hide the session until
+            # its next write.
+            try:
+                file_stat = jsonl_path.stat()
+            except OSError:
+                stats["skipped"] += 1
+                continue
+
             # Skip invalid sessions (metadata-only files like file-history-snapshot)
             if not is_valid_session(jsonl_path):
                 stats["skipped"] += 1
                 # Mark as indexed so we don't re-check next time
-                self.state.mark_indexed(jsonl_path)
+                self.state.mark_indexed(jsonl_path, file_stat)
                 continue
 
             # Parse JSONL file
@@ -768,6 +820,10 @@ class SessionIndex:
                     reason = parsed.get("_skip_reason", "unknown")
                     if reason == "empty":
                         stats["empty"] += 1
+                        # Mark as indexed so we don't re-parse it every launch.
+                        # If the session later gains messages its mtime/size
+                        # changes, which re-triggers indexing.
+                        self.state.mark_indexed(jsonl_path, file_stat)
                     elif reason == "parse_error":
                         stats["parse_error"] += 1
                 continue
@@ -781,7 +837,7 @@ class SessionIndex:
             if metadata.get("session_type") == "helper":
                 stats["skipped"] += 1
                 # Mark as indexed so we don't re-check next time
-                self.state.mark_indexed(jsonl_path)
+                self.state.mark_indexed(jsonl_path, file_stat)
                 continue
 
             # Skip sessions run from inside claude_home or codex_home directories
@@ -791,6 +847,10 @@ class SessionIndex:
                 or (codex_home_str and cwd.startswith(codex_home_str))
             ):
                 stats["skipped"] += 1
+                # Deliberately NOT recorded in the index state: this exclusion
+                # depends on the claude_home/codex_home passed on the command
+                # line, so caching it would keep the session out of the index
+                # after a later run with different homes.
                 continue
 
             try:
@@ -829,6 +889,10 @@ class SessionIndex:
                     "is_sidechain",
                     "true" if metadata.get("is_sidechain") else "false"
                 )
+                doc.add_text(
+                    "is_exec_run",
+                    "true" if metadata.get("is_exec_run") else "false"
+                )
 
                 # Custom title (from /rename command)
                 doc.add_text("custom_title", metadata.get("customTitle", "") or "")
@@ -846,7 +910,7 @@ class SessionIndex:
                 doc.add_text("content", parsed["content"])
 
                 writer.add_document(doc)
-                self.state.mark_indexed(jsonl_path)
+                self.state.mark_indexed(jsonl_path, file_stat)
                 stats["indexed"] += 1
             except Exception:
                 stats["failed"] += 1

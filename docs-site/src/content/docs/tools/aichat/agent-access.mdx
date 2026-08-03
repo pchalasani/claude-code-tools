@@ -110,6 +110,27 @@ consume tokens in your main conversation.
 
 The full list of `aichat` subcommands:
 
+Most of them share one lookup. `info`, `export`, `copy`, `move`, `query`,
+`clone`, `rollover`, `lineage`, `smart-trim`, `trim`, and `resume` all accept
+a full session id, a partial id (prefix, middle, or suffix fragment), a
+session name (set with `/rename`), a rollout filename fragment (e.g.
+`2026-03-25T14-50`), or a session file path — across both agents, with the
+agent auto-detected. See [Resolve](../resolve/) for the exact match
+precedence.
+
+An ambiguous query fails with the list of matching sessions rather than
+silently picking one. `--agent` restricts which agent home is searched; a
+session file path searches no home at all, so there `--agent` instead
+requires the file to belong to that agent. `delete` and `menu` keep their
+legacy id-or-path lookup, so the bare `aichat <id>` shortcut (which routes to
+`menu`) does too.
+
+[`port`](../port/) accepts the same query forms, but resolves them slightly
+differently: it has no `--agent`, it searches both homes for every non-path
+query (a file path is classified from its content instead), and it calls a
+query ambiguous whenever each agent yields a match, even when one of them
+matched on a stronger tier.
+
 <Tabs>
   <TabItem label="Session management">
 
@@ -119,10 +140,12 @@ The full list of `aichat` subcommands:
     | `aichat resume [id]` | Resume with strategy options |
     | `aichat rollover [id]` | Rollover to fresh session |
     | `aichat trim [id]` | Trim session content |
+    | `aichat smart-trim [id]` | AI-guided trim of session content |
     | `aichat clone [id]` | Clone a session file |
     | `aichat menu [id]` | Interactive action menu |
     | `aichat lineage [id]` | Show parent lineage chain |
     | `aichat query [id]` | Query a session with AI |
+    | `aichat port <session>` | Port a session to the other agent |
 
   </TabItem>
   <TabItem label="Search & index">
@@ -143,7 +166,7 @@ The full list of `aichat` subcommands:
     | `aichat info [id]` | Show session metadata |
     | `aichat export [id]` | Export session to text |
     | `aichat copy [id]` | Copy session file |
-    | `aichat move [id]` | Move session file |
+    | `aichat move <session> <new-project>` | Move session to another project |
     | `aichat delete [id]` | Delete a session |
 
   </TabItem>
