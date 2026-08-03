@@ -236,6 +236,7 @@ def test_a_glance_link_activates_without_toggling_its_row(
         f'document.querySelector(\'[data-row-id="{ITEM}"]\').dataset.open'
     )
 
+    browser.run("scrollintoview", selector)
     browser.run("click", selector)
     assert browser.evaluate("window.__glanceClicks") == 1
     assert browser.evaluate(

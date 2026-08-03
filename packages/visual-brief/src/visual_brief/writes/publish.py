@@ -30,6 +30,8 @@ from visual_brief.writes.runfiles import (
 
 _PAYLOAD_FIELDS = {"current_state", "changes"}
 _INPUT_STATE_FIELDS = {"headline", "summary", "lanes"}
+_MIN_STATE_LANES = 1
+_MAX_STATE_LANES = 6
 
 
 def publish_command(
@@ -107,6 +109,11 @@ def _validate_envelope(
         raise CliError("current_state must be an object")
     _reject_agent_questions(state)
     _require_exact_fields(state, _INPUT_STATE_FIELDS, "current_state")
+    lanes = state.get("lanes")
+    if not isinstance(lanes, list):
+        raise CliError("current_state.lanes must be a list")
+    if not _MIN_STATE_LANES <= len(lanes) <= _MAX_STATE_LANES:
+        raise CliError("current_state.lanes must contain 1 to 6 sections")
     changes = payload.get("changes")
     if not isinstance(changes, dict):
         raise CliError("changes must be a JSON object")

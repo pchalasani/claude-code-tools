@@ -145,7 +145,7 @@ def test_lowercase_keys_reach_their_own_targets(browser: Browser) -> None:
     browser.press("G")
     browser.press("g")
     browser.run("wait", "150")
-    assert browser.cursor_row() == "current-update"
+    assert browser.cursor_row() == "//current-state"
 
     browser.press("n")
     browser.run("wait", "200")

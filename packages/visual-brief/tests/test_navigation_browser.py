@@ -182,7 +182,7 @@ def browser() -> Iterator[Browser]:
 def test_one_key_opens_the_whole_page_and_another_folds_it_back(
     browser: Browser,
 ) -> None:
-    """Bulk folds change choices without reconciling the human's cursor."""
+    """Collapse-all selects its first row so Space works immediately."""
     browser.press("E")
     browser.run("wait", "300")
     browser.press("g")
@@ -193,6 +193,14 @@ def test_one_key_opens_the_whole_page_and_another_folds_it_back(
     browser.press("C")
     browser.run("wait", "300")
     folded = browser.evaluate(_FOLD_STATE)
+
+    browser.press(" ")
+    browser.run("wait", "300")
+    opened_top = browser.evaluate(_FOLD_STATE)
+
+    browser.press(" ")
+    browser.run("wait", "300")
+    refolded = browser.evaluate(_FOLD_STATE)
 
     browser.press("n")
     browser.run("wait", "300")
@@ -208,10 +216,11 @@ def test_one_key_opens_the_whole_page_and_another_folds_it_back(
     assert folded["openKinds"] == [], folded
     assert folded["open"] == 0, folded
     assert folded["threads"] == 0, folded
-    assert folded["rows"] == 2, folded
-    # The selected conversation is temporarily not painted. Collapse-all may
-    # write fold choices, but it must not move the human-owned cursor.
-    assert folded["cursor"] is None, folded
+    assert folded["rows"] == 3, folded
+    assert folded["cursor"] == "//current-state", folded
+    assert opened_top["cursor"] == "//current-state", opened_top
+    assert opened_top["open"] > folded["open"], opened_top
+    assert refolded == folded, refolded
     assert revealed["cursor"] is not None, revealed
     assert revealed["threads"] > 0, revealed
     assert reopened["cursor"] == revealed["cursor"], reopened
@@ -428,7 +437,7 @@ def test_the_page_numbers_what_it_is_showing_so_it_can_be_cited(
 
     numbers = [mark for _, mark in opened["numbered"]]
     assert numbers == [str(one) for one in range(1, len(numbers) + 1)]
-    assert len(numbers) == 12, opened
+    assert len(numbers) == 15, opened
     assert opened["onFolded"] == 0, opened
     # Folded content carries no number, which is what makes a number readable
     # off the screen at all.

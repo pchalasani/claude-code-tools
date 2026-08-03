@@ -43,12 +43,12 @@
     "Segoe UI", system-ui, -apple-system, sans-serif;
   --font-utility: SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas,
     "Liberation Mono", monospace;
-  --font-size-xs: 0.6875rem;
-  --font-size-sm: 0.8125rem;
-  --font-size-base: 0.9375rem;
-  --font-size-md: 1.0625rem;
-  --font-size-lg: 1.3125rem;
-  --font-size-xl: clamp(1.7rem, 1.2rem + 1.6vw, 2.45rem);
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.875rem;
+  --font-size-base: 1rem;
+  --font-size-md: 1.125rem;
+  --font-size-lg: 1.375rem;
+  --font-size-xl: clamp(1.85rem, 1.3rem + 1.7vw, 2.65rem);
   --line-height-reading: 1.62;
   --line-height-tight: 1.18;
 
@@ -82,7 +82,7 @@
   --width-state-claim-label-max: 8rem;
   --width-update-title: 12rem;
   --width-glance: 10rem;
-  --width-thread-title: 8rem;
+  --width-thread-title: 10rem;
   --width-row-fold: 0.9em;
   --row-scroll-margin: 35vh;
 

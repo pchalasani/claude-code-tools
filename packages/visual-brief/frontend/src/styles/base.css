@@ -56,13 +56,17 @@ kbd {
 }
 
 .shell {
-  display: grid;
-  grid-template-columns: minmax(0, var(--width-map)) minmax(0, 1fr);
   min-width: 0;
+  transition: padding-left var(--motion-fast) var(--motion-ease);
   width: var(--width-page);
 }
 
+.shell:has(.map[data-open="true"]) {
+  padding-left: var(--width-map);
+}
+
 .stream {
+  margin-inline: auto;
   max-width: var(--width-content);
   min-width: 0;
   padding: var(--space-6) var(--space-6) var(--space-page-bottom);
@@ -240,14 +244,101 @@ button.meta-count:hover {
 }
 
 .map {
-  align-self: start;
-  background: color-mix(in srgb, var(--color-surface-quiet) 45%, transparent);
+  background: var(--color-surface);
   border-right: var(--border-thin) solid var(--color-border);
+  box-shadow: var(--shadow-overlay);
   height: var(--height-map);
+  left: 0;
+  max-width: calc(100vw - var(--space-4));
   overflow-y: auto;
   padding: var(--space-6) var(--space-3) var(--space-7);
-  position: sticky;
+  position: fixed;
   top: 0;
+  transform: translateX(calc(-100% - var(--space-2)));
+  transition:
+    transform var(--motion-fast) var(--motion-ease),
+    visibility 0s linear var(--motion-fast);
+  visibility: hidden;
+  width: var(--width-map);
+  z-index: 8;
+}
+
+.map[data-open="true"] {
+  transform: translateX(0);
+  transition-delay: 0s;
+  visibility: visible;
+}
+
+.map-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin: 0 0 var(--space-3) var(--space-1);
+}
+
+.map-close {
+  align-items: center;
+  background: transparent;
+  border: var(--border-thin) solid transparent;
+  border-radius: var(--radius-control);
+  color: var(--color-text-faint);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: var(--font-size-lg);
+  height: var(--height-control-min);
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  width: var(--height-control-min);
+}
+
+.map-close:hover {
+  background: var(--color-surface-quiet);
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+
+.map-trigger {
+  align-items: center;
+  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+  border: var(--border-thin) solid var(--color-border-strong);
+  border-left: 0;
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
+  box-shadow: var(--shadow-surface);
+  color: var(--color-text-faint);
+  cursor: e-resize;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  left: 0;
+  padding: var(--space-2) var(--space-1);
+  position: fixed;
+  top: 38vh;
+  transition:
+    background-color var(--motion-fast) linear,
+    color var(--motion-fast) linear;
+  z-index: 7;
+}
+
+.map-trigger:hover,
+.map-trigger:focus-visible,
+.map-trigger[aria-expanded="true"] {
+  background: var(--color-current-soft);
+  color: var(--color-current-strong);
+}
+
+.map-trigger-mark {
+  color: var(--color-current);
+  font-size: var(--font-size-sm);
+  line-height: 1;
+}
+
+.map-trigger-label {
+  font-family: var(--font-utility);
+  font-size: var(--font-size-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  writing-mode: vertical-rl;
 }
 
 .map-title {
@@ -255,7 +346,7 @@ button.meta-count:hover {
   font-family: var(--font-utility);
   font-size: var(--font-size-xs);
   letter-spacing: 0.18em;
-  margin: 0 0 var(--space-3) var(--space-1);
+  margin: 0;
   text-transform: uppercase;
 }
 
@@ -351,40 +442,8 @@ button.meta-count:hover {
 }
 
 @media (width <= 64rem) {
-  .shell {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .map {
-    border-bottom: var(--border-thin) solid var(--color-border);
-    border-right: 0;
-    display: flex;
-    gap: var(--space-3);
-    height: auto;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding: var(--space-2) var(--space-3);
-    position: static;
-  }
-
-  .map-title {
-    display: none;
-  }
-
-  .map-update {
-    flex: none;
-    margin-bottom: 0;
-  }
-
-  .map-current-state {
-    border-bottom: 0;
-    border-right: var(--border-thin) solid var(--color-border);
-    padding-bottom: 0;
-    padding-right: var(--space-3);
-  }
-
-  .map-label {
-    max-width: var(--width-map-label);
+  .shell:has(.map[data-open="true"]) {
+    padding-left: 0;
   }
 
   .stream {

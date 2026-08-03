@@ -44,8 +44,8 @@ other:
     "summary": "Every important detail is individually addressable.",
     "lanes": [
       {
-        "id": "working-now",
-        "name": "What works now",
+        "id": "structured-publishing",
+        "name": "Structured publishing",
         "items": [
           {
             "id": "structured-state",
@@ -68,9 +68,10 @@ other:
 ```
 
 Publish-side state uses exactly `headline`, `summary`, and `lanes`. State lanes
-and items have the same visible schema as dated-update lanes and items. Put
-detailed content in those lanes and items instead of compressing it into the
-root summary.
+and items have the same visible schema as dated-update lanes and items. Choose
+one to six plainly named lanes that fit the actual work; there is no mandatory
+recurring set. Put detailed content in those lanes and items instead of
+compressing it into the root summary.
 
 The headline and summary use ordinary language that does not depend on internal
 codenames, unexplained abbreviations, bare file names, or status shorthand.

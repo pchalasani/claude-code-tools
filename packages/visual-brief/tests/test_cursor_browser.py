@@ -343,7 +343,7 @@ def test_the_map_cannot_send_the_cursor_off_the_filtered_page(
 ) -> None:
     """Keep exactly one row marked when a click reaches a hidden lane.
 
-    The structure map offers every lane whatever the search is showing, so a
+    The updates log offers every lane whatever the search is showing, so a
     click can name a row the filter removed. The cursor has to end up on a row
     that is on the page: here the search gives way and the lane is marked.
     """
@@ -357,6 +357,22 @@ def test_the_map_cannot_send_the_cursor_off_the_filtered_page(
         "document.querySelector('[data-cursor=\"true\"]')"
     ) is None
 
+    browser.run("click", '[aria-label="Open updates log"]')
+    browser.run("wait", "200")
+    geometry = browser.evaluate(
+        """
+        (() => {
+          const drawer = document.querySelector(".map").getBoundingClientRect();
+          const stream = document.querySelector(".stream").getBoundingClientRect();
+          const search = document.querySelector(".search").getBoundingClientRect();
+          return { drawerRight: drawer.right, streamLeft: stream.left,
+            searchLeft: search.left, desktop: innerWidth > 64 * 16 };
+        })()
+        """
+    )
+    if geometry["desktop"]:
+        assert geometry["drawerRight"] <= geometry["streamLeft"], geometry
+        assert geometry["searchLeft"] >= geometry["drawerRight"], geometry
     browser.run("scrollintoview", f'[data-map-lane="{lane}"]')
     browser.run("click", f'[data-map-lane="{lane}"]')
     browser.run("wait", "300")

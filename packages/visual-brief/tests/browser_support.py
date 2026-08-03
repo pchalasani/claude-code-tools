@@ -137,7 +137,7 @@ class Browser:
 
     def press(self, key: str) -> None:
         """Press a real browser key."""
-        if key == "Enter" and os.environ.get("AGENT_BROWSER_CDP"):
+        if key == "Enter":
             press_enter(self.run("get", "cdp-url").strip(), self.url)
             return
         self.run("press", key)

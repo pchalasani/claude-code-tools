@@ -237,7 +237,8 @@
 .thread-title {
   color: var(--color-text-muted);
   flex: var(--width-thread-title);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-base);
+  font-weight: 600;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

@@ -212,7 +212,13 @@ export function createNavigation(
       }
     },
     expandAll: () => human.chooseAll(foldChoiceIds(rows()), true),
-    collapseAll: () => human.chooseAll(foldChoiceIds(rows()), false),
+    collapseAll: () => {
+      human.chooseAll(foldChoiceIds(rows()), false);
+      const first = edgeRow(painted(), "top");
+      if (first !== null) {
+        select(first);
+      }
+    },
     chatRevealActive: () => chatReveal() !== null,
     toggleChatReveal: () => {
       explicitSelectionTookOver();

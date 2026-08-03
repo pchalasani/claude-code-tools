@@ -197,4 +197,4 @@ def test_the_masthead_still_counts_what_it_always_counted(
         """
     )
 
-    assert counts[:3] == ["2 updates", "7 lanes", "12 items"], counts
+    assert counts[:3] == ["2 updates", "10 lanes", "15 items"], counts

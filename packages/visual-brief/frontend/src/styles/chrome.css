@@ -237,12 +237,16 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-  left: var(--width-map);
+  left: 0;
   padding: var(--space-3) var(--space-4);
   position: fixed;
   right: 0;
   bottom: 0;
   z-index: 5;
+}
+
+.shell:has(.map[data-open="true"]) .search {
+  left: var(--width-map);
 }
 
 .search label {
@@ -366,7 +370,7 @@
 }
 
 @media (width <= 64rem) {
-  .search {
+  .shell:has(.map[data-open="true"]) .search {
     left: 0;
   }
 }

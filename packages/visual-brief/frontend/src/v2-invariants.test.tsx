@@ -151,6 +151,20 @@ describe("pure views", () => {
 });
 
 describe("human fold actions", () => {
+  it("aims collapse-all at the first row so Space can open it", () => {
+    mount();
+    click(ALPHA);
+
+    press("C");
+
+    expect(paintedCursor()).toBe("newest");
+    expect(paintedOpen("newest")).toBe("false");
+
+    press(" ");
+
+    expect(paintedOpen("newest")).toBe("true");
+  });
+
   it("keeps collapsed search matches while adding chat paths in order", () => {
     mount();
     press("C");
@@ -463,6 +477,130 @@ describe("human fold actions", () => {
       explicitSelectionTookOver();
       stop();
     }
+  });
+});
+
+describe("updates log drawer", () => {
+  const point = (
+    target: Element,
+    eventName: "pointerenter" | "pointerleave",
+    pointerType: string,
+  ): void => {
+    const event = new Event(eventName);
+    Object.defineProperty(event, "pointerType", { value: pointerType });
+    target.dispatchEvent(event);
+  };
+
+  it("starts hidden and names every visible control for the updates log", () => {
+    mount();
+    const trigger = document.querySelector<HTMLButtonElement>(".map-trigger");
+    const map = document.querySelector<HTMLElement>("#brief-structure-map");
+    const close = document.querySelector<HTMLButtonElement>(".map-close");
+
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(trigger?.getAttribute("aria-label")).toBe("Open updates log");
+    expect(trigger?.textContent).toContain("Updates log");
+    expect(map?.getAttribute("data-open")).toBe("false");
+    expect(map?.getAttribute("aria-hidden")).toBe("true");
+    expect(map?.getAttribute("aria-label")).toBe("Updates log");
+    expect(close?.getAttribute("aria-label")).toBe("Close updates log");
+  });
+
+  it("waits for mouse intent and cancels on leave and cleanup", () => {
+    vi.useFakeTimers();
+    try {
+      mount();
+      const trigger = document.querySelector<HTMLButtonElement>(".map-trigger");
+
+      point(trigger as HTMLButtonElement, "pointerenter", "mouse");
+      vi.advanceTimersByTime(199);
+      expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+
+      point(trigger as HTMLButtonElement, "pointerleave", "mouse");
+      vi.advanceTimersByTime(1);
+      expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+
+      point(trigger as HTMLButtonElement, "pointerenter", "mouse");
+      vi.advanceTimersByTime(200);
+      expect(trigger?.getAttribute("aria-expanded")).toBe("true");
+
+      pressAt(trigger as HTMLButtonElement, "Escape");
+      point(trigger as HTMLButtonElement, "pointerenter", "mouse");
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores touch and pen hover but opens immediately on focus or click", () => {
+    mount();
+    const trigger = document.querySelector<HTMLButtonElement>(".map-trigger");
+
+    point(trigger as HTMLButtonElement, "pointerenter", "touch");
+    point(trigger as HTMLButtonElement, "pointerenter", "pen");
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+
+    trigger?.focus();
+    expect(trigger?.getAttribute("aria-expanded")).toBe("true");
+
+    pressAt(trigger as HTMLButtonElement, "Escape");
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger);
+
+    trigger?.click();
+    expect(trigger?.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("restores drawer focus before closing but leaves outside focus alone", () => {
+    vi.useFakeTimers();
+    mount();
+    try {
+      const trigger = document.querySelector<HTMLButtonElement>(".map-trigger");
+      const close = document.querySelector<HTMLButtonElement>(".map-close");
+      trigger?.click();
+      close?.focus();
+      close?.click();
+
+      expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+      expect(document.activeElement).toBe(trigger);
+
+      press("/");
+      const search = document.querySelector<HTMLInputElement>("#brief-search");
+      search?.focus();
+      point(trigger as HTMLButtonElement, "pointerenter", "mouse");
+      vi.advanceTimersByTime(200);
+      pressAt(search as HTMLInputElement, "Escape");
+
+      expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+      expect(document.activeElement).toBe(search);
+      expect(document.querySelector("#brief-search")).not.toBeNull();
+
+      pressAt(search as HTMLInputElement, "Escape");
+      expect(document.querySelector("#brief-search")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("closes help before closing the updates log", () => {
+    mount();
+    const trigger = document.querySelector<HTMLButtonElement>(".map-trigger");
+    trigger?.click();
+    press("?");
+
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(trigger?.getAttribute("aria-expanded")).toBe("true");
+
+    press("Escape");
+
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(trigger?.getAttribute("aria-expanded")).toBe("true");
+
+    press("Escape");
+
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
   });
 });
 

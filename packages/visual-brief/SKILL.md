@@ -1,10 +1,11 @@
 ---
 name: visual-brief
 description: >-
-  Report progress on a local HTML page instead of in the terminal. Everything
-  you would have written in chat goes on the page, organized into layers the
-  human can expand; the chat gets a link. Use for any update longer than a
-  couple of lines, and whenever the human asks for a canvas or a brief.
+  Publish substantial implementation, investigation, review, or design results
+  on a local structured HTML page instead of in the terminal. Use after a
+  meaningful block of work that benefits from layered detail, or whenever the
+  human explicitly asks for a canvas or visual brief. Do not use for trivial
+  progress, quick answers, tiny fixes, or routine status messages.
 ---
 
 # Visual Brief
@@ -41,6 +42,19 @@ choice, and it has already been made in real use.
 Length costs you nothing here. A page can be long without being tiring, because
 what is collapsed is invisible until wanted. That is the whole reason to use one.
 
+## Publish only substantial work
+
+Use a visual brief for a completed block of implementation, a design proposal
+or decision set, an investigation with meaningful findings, or another report
+whose structure helps the human understand the result. Do not create or publish
+one merely because you ran a command, made a tiny fix, answered a short
+question, or owe the human a routine progress update. Report those directly in
+the normal conversation.
+
+An explicit request for a visual brief overrides this threshold. Questions sent
+through an existing visual-brief page also stay on that page; answer them there
+even when the answer is short.
+
 ## Current state and changes travel together
 
 Every normal report publishes two things in one atomic write. `current_state`
@@ -54,11 +68,16 @@ codenames, unexplained abbreviations, bare file names, or compressed
 implementation shorthand.** This semantic rule is the important one. The CLI
 can reject mechanical shapes, but it cannot prove that prose is understandable.
 
-State has exactly `headline`, `summary`, and `lanes`. The headline and summary
-stay compact and plain; the details belong in lanes and items. State lanes and
-items use the same visible schema as dated-update lanes and items. Do not use
-lists, headings, tables, code fences, arrows, or status chains in the state
-headline or summary.
+State has exactly `headline`, `summary`, and `lanes`. Choose one to six lanes
+whose names describe the actual work in plain language. Use the fewest lanes
+that make the state easy to scan, and never add an empty lane merely to satisfy
+a familiar template. Do not mechanically repeat headings such as "What works
+now," "What is still open," or "What comes next"; use them only when they are
+the clearest names for this particular report. The headline and summary stay
+compact and plain; details belong in lanes and items. State lanes and items use
+the same visible schema as dated-update lanes and items. Do not use lists,
+headings, tables, code fences, arrows, or status chains in the state headline
+or summary.
 
 Detailed current state is fully chat-addressable. Its root, lanes, items,
 conversations, and evidence use the same navigation and composer as dated
@@ -145,8 +164,8 @@ visual-brief publish --file report.json  # replace state + append changes
     "summary": "Every important detail is individually addressable.",
     "lanes": [
       {
-        "id": "working-now",
-        "name": "What works now",
+        "id": "structured-publishing",
+        "name": "Structured publishing",
         "items": [
           {
             "id": "structured-state",
@@ -176,6 +195,11 @@ Both state and `changes` use lanes with `id`, `name`, and `items`. Each item has
 `id`, `glance`, `explanation`, and `trust`, plus optional `forensics` and
 `tables`. `changes` also has `id`, `timestamp`, `headline`, and `summary`.
 Updates are appended, never rewritten.
+
+`current_state.lanes` must contain one to six sections. This limit applies to a
+new publish, not to an uninitialized brief that has not received its first
+report. The lane names and count are chosen for the work; there is no mandatory
+recurring set.
 
 Do not include `questions` anywhere in `current_state`. Publishing preserves
 the stored root, lane, and item conversations by stable id. State item ids must

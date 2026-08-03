@@ -53,7 +53,11 @@ def test_bundle_executes_and_renders_the_delivered_document(
     )
 
     expected = embedded_document(browser.server.html)
-    lanes = [lane for update in expected["updates"] for lane in update["lanes"]]
+    current = expected.get("current_state", {})
+    lanes = list(current.get("lanes", []))
+    lanes.extend(
+        lane for update in expected["updates"] for lane in update["lanes"]
+    )
     total_items = sum(len(lane["items"]) for lane in lanes)
     assert mounted["mounted"] is True
     assert mounted["title"] == expected["title"]

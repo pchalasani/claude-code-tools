@@ -26,8 +26,8 @@ the other.
     "summary": "Every important detail is individually addressable.",
     "lanes": [
       {
-        "id": "working-now",
-        "name": "What works now",
+        "id": "structured-publishing",
+        "name": "Structured publishing",
         "items": [
           {
             "id": "structured-state",
@@ -52,6 +52,11 @@ the other.
 The publish-side `current_state` object has exactly `headline`, `summary`, and
 `lanes`. The command copies `changes.timestamp` into stored state as
 `updated_at`; callers do not submit it.
+
+Current state contains one to six lanes chosen for the actual work. There is no
+mandatory recurring set of headings. Each name must plainly describe its
+section; familiar names such as "What works now" remain available when they
+fit, but they are not a template to fill mechanically.
 
 Lanes and items use the same visible content schema as dated-update lanes and
 items. A lane has `id`, `name`, and `items`, plus the existing optional `open`
@@ -111,6 +116,8 @@ adds detailed state. The already-shipped legacy object also remains valid:
 
 Legacy state may render in its prior read-only card. The next normal publish
 replaces it with structured state. New runs start with structured state.
+Their initial placeholder may have no lanes until the first report; every
+agent-authored publish must supply one to six.
 
 `add-update` remains available for imports and compatibility. It appends
 history without changing state and warns that normal reports use `publish`.

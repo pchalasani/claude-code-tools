@@ -216,7 +216,8 @@ connection above, or through the package's own CDP harness in
     presentation with a deliberately small font; the human wants normal-size
     text, differentiated by colour or some other cue instead. Decision
     postponed to the design overhaul, along with the larger question of how
-    chat threads relate to lanes/items visually.
+    chat threads relate to lanes/items visually. Reconfirmed on 2026-08-02:
+    the title of a newly created chat lane is especially too small.
 
 26. **Bring back the colour-wave on "agent is working."** The human wants the
     Claude-Code-style shimmer sweeping through the text, alongside the pulsing
@@ -252,3 +253,34 @@ connection above, or through the package's own CDP harness in
     interaction stops existing because the mode stops existing. (The human has
     never used search; the search-preservation clauses only ever mattered
     because `m` was a filter.)
+
+30. **The page's fonts should be larger overall.** The current type scale makes
+    body copy and supporting labels harder to read than they need to be. Raise
+    the scale coherently rather than enlarging isolated text ad hoc, while
+    preserving the calm hierarchy and checking that denser rows still fit on
+    desktop and mobile.
+
+31. **Collapse-all should select the first visible row.** After `C`, the top
+    state row looks highlighted but the cursor still points at a hidden child,
+    so Space does nothing until the human presses `J`. Make the first painted
+    row the real selection after collapse-all so Space opens it immediately.
+
+32. **Hide the updates log by default.** Resolved on 2026-08-03 with a subtle
+    edge indicator, mouse-hover intent, immediate focus and click opening, and
+    an explicit `×` close button.
+
+33. **Call the sidebar "Updates log," not "Structure."** Resolved on
+    2026-08-03 across its visible and accessibility-facing labels.
+
+34. **An open updates log should accommodate the briefing, not cover it.**
+    Resolved on 2026-08-03: desktop pages reflow the briefing and search bar;
+    screens at 64rem and below retain the overlay behavior.
+
+35. **Use agent-chosen current-state sections.** The recurring four sections
+    may constrain a report that has a different natural shape. Decision settled
+    on 2026-08-03: every publish carries one to six plainly named sections
+    chosen for the actual work. Familiar headings remain available when they
+    fit, but they are not a mandatory template. The skill also says not to use
+    Visual Brief for trivial progress, quick answers, tiny fixes, or routine
+    status updates; reserve it for substantial implementation, investigation,
+    review, or design results unless the human explicitly asks for one.

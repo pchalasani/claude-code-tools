@@ -72,6 +72,16 @@ STATE = {
     ],
 }
 
+_STATE_LANE_NAMES = (
+    "Delivered behavior",
+    "Remaining risks",
+    "Decisions needed",
+    "User-visible effects",
+    "Evidence worth opening",
+    "Next verification",
+    "Deferred work",
+)
+
 
 def payload() -> dict[str, Any]:
     """Return an independent valid publish envelope."""
@@ -79,6 +89,18 @@ def payload() -> dict[str, Any]:
         "current_state": copy.deepcopy(STATE),
         "changes": copy.deepcopy(CHANGE),
     }
+
+
+def state_lanes(count: int) -> list[dict[str, Any]]:
+    """Return a valid set of context-specific state lanes."""
+    return [
+        {
+            "id": f"section-{index + 1}",
+            "name": _STATE_LANE_NAMES[index],
+            "items": [],
+        }
+        for index in range(count)
+    ]
 
 
 def run_bytes(run_dir: Path) -> dict[str, bytes]:
@@ -232,6 +254,42 @@ def test_malformed_or_cryptic_state_changes_no_run_byte(
     mutate(candidate)
 
     with pytest.raises(CliError, match=message):
+        publish_command(root, None, candidate)
+
+    assert run_bytes(run_dir) == before
+
+
+@pytest.mark.parametrize("count", [1, 6])
+def test_publish_accepts_one_to_six_state_sections(
+    tmp_path: Path,
+    count: int,
+) -> None:
+    """The publish boundary accepts both ends of the section range."""
+    root = tmp_path / "runs"
+    run_dir = make_run(root)
+    candidate = payload()
+    candidate["current_state"]["lanes"] = state_lanes(count)
+
+    assert publish_command(root, None, candidate) == 0
+    assert len(read_content_file(run_dir)["current_state"]["lanes"]) == count
+
+
+@pytest.mark.parametrize("count", [0, 7])
+def test_publish_rejects_state_section_counts_outside_range(
+    tmp_path: Path,
+    count: int,
+) -> None:
+    """A rejected section count leaves every run file unchanged."""
+    root = tmp_path / "runs"
+    run_dir = make_run(root)
+    before = run_bytes(run_dir)
+    candidate = payload()
+    candidate["current_state"]["lanes"] = state_lanes(count)
+
+    with pytest.raises(
+        CliError,
+        match="current_state.lanes must contain 1 to 6 sections",
+    ):
         publish_command(root, None, candidate)
 
     assert run_bytes(run_dir) == before
