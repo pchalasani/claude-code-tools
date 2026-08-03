@@ -41,8 +41,9 @@ The test suite covers:
 - **Python** -- Editable mode (`make install`), so
   changes apply immediately. No reinstall needed.
 - **Node.js** -- Runs directly from `node_ui/`. No
-  build step. Run `cd node_ui && npm install` if
-  you add new npm dependencies.
+  build step. Run `make node-ui-deps` if you add new
+  npm dependencies, or in a fresh clone or worktree
+  that has no `node_ui/node_modules` yet.
 - **Rust** -- Must rebuild after changes:
 
   ```bash

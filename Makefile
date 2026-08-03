@@ -1,4 +1,4 @@
-.PHONY: install release patch minor major dev-install help clean publish all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply update-homebrew docs-dev docs-build docs-preview voxtype-version voxtype-test voxtype-install voxtype-build voxtype-release voxtype-publish voxtype-all voxtype-all-patch voxtype-all-minor voxtype-all-major
+.PHONY: install install-gdocs node-ui-deps release patch minor major dev-install help clean publish all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply update-homebrew docs-dev docs-build docs-preview voxtype-version voxtype-test voxtype-install voxtype-build voxtype-release voxtype-publish voxtype-all voxtype-all-patch voxtype-all-minor voxtype-all-major
 
 GIT_PRIMARY_WORKTREE := $(realpath $(shell git rev-parse \
 	--path-format=absolute --git-common-dir)/..)
@@ -8,6 +8,7 @@ help:
 	@echo "Available commands:"
 	@echo "  make install      - Install in editable mode (for development)"
 	@echo "  make dev-install  - Install with dev dependencies (includes commitizen)"
+	@echo "  make node-ui-deps - Install node_ui/ npm deps (needed by aichat menus)"
 	@echo "  make release      - Bump patch version and install globally"
 	@echo "  make patch        - Bump patch version (0.0.X) and install"
 	@echo "  make minor        - Bump minor version (0.X.0) and install"
@@ -40,15 +41,26 @@ help:
 	@echo "  make voxtype-publish - Publish dist/voxtype-* to PyPI"
 	@echo "  make voxtype-all [BUMP=...] - voxtype-release + voxtype-publish in one shot"
 
-install:
+node-ui-deps:
+	@if command -v npm >/dev/null 2>&1; then \
+		echo "[node-ui] Installing Node UI dependencies into node_ui/node_modules..."; \
+		npm ci --prefix node_ui --omit=dev --no-audit --no-fund || \
+			npm install --prefix node_ui --omit=dev --no-audit --no-fund; \
+	else \
+		echo "⚠️  [node-ui] npm not found - aichat's interactive menus will not run."; \
+		echo "   Install Node.js/npm, then run: make node-ui-deps"; \
+	fi
+
+install: node-ui-deps
 	uv tool install --force -e .
-	@echo "[node-ui] Note: Node-based alt UI uses node_ui/menu.js (no build step)."
-	@echo "[node-ui] If you haven't yet: cd node_ui && npm install"
+	@echo "[node-ui] Node-based UI runs from node_ui/menu.js (no build step)."
 	@if command -v cargo >/dev/null 2>&1; then \
 		echo "Building and installing lmsh..."; \
 		cd lmsh && cargo build --release; \
 		mkdir -p ~/.cargo/bin; \
-		cp target/release/lmsh ~/.cargo/bin/; \
+		cp target/release/lmsh ~/.cargo/bin/.lmsh.new; \
+		chmod 755 ~/.cargo/bin/.lmsh.new; \
+		mv -f ~/.cargo/bin/.lmsh.new ~/.cargo/bin/lmsh; \
 		echo "lmsh installed to ~/.cargo/bin/lmsh"; \
 		if ! echo "$$PATH" | grep -q ".cargo/bin"; then \
 			echo "⚠️  Add ~/.cargo/bin to your PATH if not already there"; \
@@ -58,10 +70,10 @@ install:
 		echo "To install lmsh later, run: make lmsh-install"; \
 	fi
 
-install-gdocs:
+install-gdocs: node-ui-deps
 	uv tool install --force -e ".[gdocs]"
 
-dev-install:
+dev-install: node-ui-deps
 	uv pip install -e ".[dev]"
 
 release: patch
@@ -167,7 +179,10 @@ lmsh:
 lmsh-install: lmsh
 	@echo "Installing lmsh to ~/.cargo/bin..."
 	@mkdir -p ~/.cargo/bin
-	@cp lmsh/target/release/lmsh ~/.cargo/bin/
+	@# Same atomic replace as aichat-search: see the note there.
+	@cp lmsh/target/release/lmsh ~/.cargo/bin/.lmsh.new
+	@chmod 755 ~/.cargo/bin/.lmsh.new
+	@mv -f ~/.cargo/bin/.lmsh.new ~/.cargo/bin/lmsh
 	@echo "lmsh installed to ~/.cargo/bin/lmsh"
 	@if ! echo "$$PATH" | grep -q ".cargo/bin"; then \
 		echo "⚠️  Add ~/.cargo/bin to your PATH if not already there"; \
@@ -192,7 +207,12 @@ aichat-search:
 aichat-search-install: aichat-search
 	@echo "Installing aichat-search to ~/.cargo/bin..."
 	@mkdir -p ~/.cargo/bin
-	@cp rust-search-ui/target/release/aichat-search ~/.cargo/bin/
+	@# Replace via a temp file + mv, not cp: overwriting a Mach-O binary in
+	@# place leaves macOS holding a stale code signature for that inode, and
+	@# the next exec is SIGKILLed ("killed: 9"). mv swaps in a fresh inode.
+	@cp rust-search-ui/target/release/aichat-search ~/.cargo/bin/.aichat-search.new
+	@chmod 755 ~/.cargo/bin/.aichat-search.new
+	@mv -f ~/.cargo/bin/.aichat-search.new ~/.cargo/bin/aichat-search
 	@echo "aichat-search installed to ~/.cargo/bin/aichat-search"
 	@if ! echo "$$PATH" | grep -q ".cargo/bin"; then \
 		echo "⚠️  Add ~/.cargo/bin to your PATH if not already there"; \
