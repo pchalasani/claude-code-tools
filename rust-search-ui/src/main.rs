@@ -1659,7 +1659,7 @@ fn render_filter_modal(frame: &mut Frame, app: &App, t: &Theme, area: Rect) {
 
     // Modal border
     let block = Block::default()
-        .title(" Filters (|) ")
+        .title(" Filters (C-f) ")
         .borders(Borders::ALL)
         .style(Style::default().bg(t.search_bg));
     frame.render_widget(block, modal_area);

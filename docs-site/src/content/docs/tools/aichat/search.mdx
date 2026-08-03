@@ -130,9 +130,13 @@ agents spawned. Search hides two such kinds by default:
 - **Sub-agent sessions.** Claude names these
   `agent-*.jsonl`; Codex records the spawn in the
   session's own metadata.
-- **Headless `codex exec` runs.** Workers launched by
-  orchestrating agents, scripts and review loops, rather
-  than by you at a terminal.
+- **Headless `codex exec` runs.** Every `codex exec`
+  invocation, whichever way it was started. Most are
+  workers spawned by orchestrating agents, scripts and
+  review loops -- but a `codex exec` you run yourself is
+  hidden too, so reach for `--exec-runs` when a session
+  you started that way is missing. Interactive `codex`
+  sessions are unaffected.
 
 On a machine driving agents hard these can outnumber real
 sessions by ten to one, so leaving them in makes search
@@ -147,7 +151,7 @@ aichat search "query" --sub-agent    # add sub-agents
 aichat search "query" --exec-runs    # add headless runs
 ```
 
-In the TUI, open the filter menu with `|` and toggle
+In the TUI, open the filter menu with `Ctrl-F` and toggle
 `(s)` for sub-agents or `(h)` for headless runs; `:s` and
 `:h` do the same from command mode. When shown, these
 sessions are marked `(s)` and `(h)` in the session list.
