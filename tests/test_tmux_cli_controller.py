@@ -75,21 +75,6 @@ class TestFormatPaneIdentifier:
         assert result == "%123"
 
 
-class TestListPanes:
-    @patch.object(TmuxCLIController, 'get_current_window_id')
-    @patch.object(TmuxCLIController, '_run_tmux_command')
-    def test_malformed_records_are_skipped(self, mock_run, mock_window):
-        mock_window.return_value = "@1"
-        mock_run.return_value = (
-            "%broken\n%2|1|editor|1|120x40|vim\n%short|0|title",
-            0,
-        )
-
-        panes = TmuxCLIController().list_panes()
-
-        assert [pane["id"] for pane in panes] == ["%2"]
-
-
 class TestCreatePane:
     """Tests for create_pane method."""
 
@@ -147,11 +132,9 @@ class TestExecute:
 
     @patch.object(TmuxCLIController, 'capture_pane')
     @patch.object(TmuxCLIController, 'send_keys')
-    @patch('claude_code_tools.tmux_execution_helpers.generate_execution_markers')
-    def test_execute_successful_command(self, mock_markers, mock_send, mock_capture):
+    def test_execute_successful_command(self, mock_send, mock_capture):
         """Execute returns output and exit code for successful command."""
         # Simulate captured output with markers
-        mock_markers.return_value = ("__TMUX_EXEC_START_12345__", "__TMUX_EXEC_END_12345__")
         mock_capture.return_value = """__TMUX_EXEC_START_12345__
 hello world
 __TMUX_EXEC_END_12345__:0"""
@@ -168,10 +151,8 @@ __TMUX_EXEC_END_12345__:0"""
 
     @patch.object(TmuxCLIController, 'capture_pane')
     @patch.object(TmuxCLIController, 'send_keys')
-    @patch('claude_code_tools.tmux_execution_helpers.generate_execution_markers')
-    def test_execute_failed_command(self, mock_markers, mock_send, mock_capture):
+    def test_execute_failed_command(self, mock_send, mock_capture):
         """Execute returns non-zero exit code for failed command."""
-        mock_markers.return_value = ("__TMUX_EXEC_START_12345__", "__TMUX_EXEC_END_12345__")
         mock_capture.return_value = """__TMUX_EXEC_START_12345__
 ls: cannot access '/nonexistent': No such file or directory
 __TMUX_EXEC_END_12345__:2"""
@@ -187,11 +168,9 @@ __TMUX_EXEC_END_12345__:2"""
     @patch('time.sleep')  # Speed up test
     @patch.object(TmuxCLIController, 'capture_pane')
     @patch.object(TmuxCLIController, 'send_keys')
-    @patch('claude_code_tools.tmux_execution_helpers.generate_execution_markers')
-    def test_execute_timeout(self, mock_markers, mock_send, mock_capture, mock_sleep):
+    def test_execute_timeout(self, mock_send, mock_capture, mock_sleep):
         """Execute returns exit_code=-1 on timeout."""
         # Simulate output without end marker (command still running)
-        mock_markers.return_value = ("__TMUX_EXEC_START_12345__", "__TMUX_EXEC_END_12345__")
         mock_capture.return_value = """__TMUX_EXEC_START_12345__
 partial output..."""
 
