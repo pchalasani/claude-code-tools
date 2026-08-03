@@ -47,8 +47,12 @@ session:
 
 - **Claude:** the `custom-title` recorded in the
   transcript — not the auto-generated `ai-title`.
-- **Codex:** the `title` column in the Codex
-  `threads` database.
+- **Codex:** the `thread_name` recorded in the
+  home-level `session_index.jsonl`. When a thread has
+  no explicit name, the `title` column of the Codex
+  `threads` database is used instead — that one is
+  auto-captured from your first message, not chosen
+  by you.
 
 ## Match precedence
 
@@ -135,7 +139,9 @@ aichat lineage 88e9-43d7
 
 Those commands search **both** agent homes and detect
 the agent themselves, so `--agent` there narrows the
-search rather than selecting a home. Pass a session
+search rather than selecting a home. It may come
+before or after the session argument, and
+`--agent=codex` works as well as `--agent codex`. Pass a session
 file path and no home is searched at all: the agent
 comes from the file's content, and `--agent` then
 requires the file to be that agent's. An ambiguous

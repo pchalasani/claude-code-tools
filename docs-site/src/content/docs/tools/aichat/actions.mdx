@@ -119,3 +119,35 @@ exports go to:
 
 You can specify a custom destination path when
 prompted.
+
+## Move action
+
+`aichat move <session> <new-project>` re-homes a
+session on a different project directory. Both
+arguments are required, and the session may be named
+any way the [shared lookup](../resolve/) accepts:
+
+```bash
+aichat move session-finder ~/Git/other-repo
+aichat move 2945d228 ~/Git/other-repo
+```
+
+It rewrites the working directory recorded on every
+line of the transcript, then:
+
+- **Claude:** relocates the transcript into the new
+  project's directory under the Claude home. The
+  destination filename and the resume command it
+  prints both come from the session id recorded
+  *inside* the transcript, so a file you renamed
+  yourself still lands as `<session-id>.jsonl`.
+- **Codex:** rewrites the rollout in place. Codex
+  organizes sessions by date rather than by project,
+  so the file itself does not move.
+
+A name you set with `/rename` survives either way: a
+Claude name is recorded inside the transcript, and a
+Codex name lives in the home-level
+`session_index.jsonl`, keyed by a session id that
+`move` never changes. Afterwards `move` offers to
+switch to the new directory and resume the session.
