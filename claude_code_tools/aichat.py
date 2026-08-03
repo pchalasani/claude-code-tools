@@ -2710,6 +2710,8 @@ def index_stats(index, cwd, claude_home, codex_home):
               help='Limit number of results displayed')
 @click.option('--no-original', is_flag=True, help='Exclude original sessions')
 @click.option('--sub-agent', is_flag=True, help='Include sub-agent sessions (additive)')
+@click.option('--exec-runs', 'exec_runs', is_flag=True,
+              help='Include headless `codex exec` runs (additive)')
 @click.option('--no-trimmed', is_flag=True, help='Exclude trimmed sessions')
 @click.option('--no-rollover', is_flag=True, help='Exclude rollover sessions')
 @click.option('--live', is_flag=True, help='Show only currently running sessions')
@@ -2725,14 +2727,14 @@ def index_stats(index, cwd, claude_home, codex_home):
               help='Output as JSONL for AI agents. Fields per line: session_id, '
                    'agent, project, branch, cwd, lines, created, modified, '
                    'first_msg, last_msg, file_path, derivation_type, '
-                   'is_sidechain, snippet')
+                   'is_sidechain, is_exec_run, snippet')
 @click.option('--by-time', 'by_time', is_flag=True,
               help='Sort results by last-modified time (default: sort by relevance)')
 @click.argument('query', required=False)
 def search(
     claude_home_arg, codex_home_arg, global_search, filter_dir, filter_branch,
-    num_results, no_original, sub_agent, no_trimmed, no_rollover, live, min_lines,
-    after, before, agent, json_output, by_time, query
+    num_results, no_original, sub_agent, exec_runs, no_trimmed, no_rollover, live,
+    min_lines, after, before, agent, json_output, by_time, query
 ):
     """Launch interactive TUI for full-text session search.
 
@@ -2828,6 +2830,8 @@ def search(
         rust_args.append("--no-original")
     if sub_agent:
         rust_args.append("--sub-agent")
+    if exec_runs:
+        rust_args.append("--exec-runs")
     if live:
         rust_args.append("--live")
     if no_trimmed:
@@ -3008,6 +3012,8 @@ def search(
                 rust_args.append("--no-original")
             if filter_state.get("include_sub"):
                 rust_args.append("--sub-agent")
+            if filter_state.get("include_exec"):
+                rust_args.append("--exec-runs")
             if filter_state.get("include_live_only"):
                 rust_args.append("--live")
             if not filter_state.get("include_trimmed", True):
