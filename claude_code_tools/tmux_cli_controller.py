@@ -254,6 +254,8 @@ class TmuxCLIController:
         for line in output.split('\n'):
             if line:
                 parts = line.split('|')
+                if len(parts) < 5:
+                    continue
                 pane_id = parts[0]
                 panes.append({
                     'id': pane_id,
