@@ -756,20 +756,22 @@ class TestPortCLI:
         )
         assert list(proj.glob("*.jsonl"))
 
-    def test_detected_direction_is_first_output(
+    def test_port_progress_is_ordered_and_auto_index_is_silent(
         self, runner, codex_home, claude_home, project_dir
     ):
-        """Nothing (e.g. auto-index progress) may print before the
-        detected-direction line."""
+        """Port phases are ordered and auto-index output stays absent."""
         write_modern_rollout(codex_home, project_dir)
         result = self._invoke(
             runner, ["port", MODERN_UUID], claude_home, codex_home
         )
         assert result.exit_code == 0, result.output
-        first_line = result.output.splitlines()[0]
-        assert first_line == (
+        resolving = result.output.index("1/3  Resolving session")
+        detected = result.output.index(
             "Detected source agent: codex — porting to Claude Code"
         )
+        porting = result.output.index("2/3  Porting Codex → Claude Code")
+        ready = result.output.index("3/3  Ready")
+        assert resolving < detected < porting < ready
         try:
             stderr = result.stderr
         except ValueError:  # older click: stderr mixed into output

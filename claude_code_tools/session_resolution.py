@@ -22,7 +22,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional, cast
 
 if TYPE_CHECKING:
-    from claude_code_tools.resolve_session import ResolveResult, ResolverError
+    from claude_code_tools.resolve_session import (
+        ResolveResult,
+        ResolverError,
+        SessionRecord,
+    )
 
 from claude_code_tools.session_utils import (
     _iter_named_session_files,
@@ -164,6 +168,32 @@ def _resolve_query_for_agent(
         return None
 
 
+def ambiguity_candidates(
+    results: "list[ResolveResult]",
+) -> "tuple[tuple[SessionRecord, ...], int]":
+    """Return the displayable candidates for an ambiguous query.
+
+    Single source of truth for how ambiguous matches are ordered and
+    capped, so a caller that RENDERS the candidates (an interactive
+    picker) and one that only formats the message agree on which
+    sessions they are talking about.
+
+    Args:
+        results: Non-empty resolver results from one or both agents.
+
+    Returns:
+        Newest-first candidates capped at ``_MAX_AMBIGUITY_LINES``,
+        paired with the total match count before capping.
+    """
+    records = [record for result in results for record in result.records]
+    records.sort(key=lambda record: record._modified_timestamp, reverse=True)
+    total = sum(
+        1 if result.kind == "single" else result.match_count
+        for result in results
+    )
+    return tuple(records[:_MAX_AMBIGUITY_LINES]), total
+
+
 def build_ambiguity_message(
     session: str, results: "list[ResolveResult]"
 ) -> str:
@@ -176,14 +206,9 @@ def build_ambiguity_message(
     Returns:
         A user-facing message listing the matching candidates.
     """
-    records = [record for result in results for record in result.records]
-    records.sort(key=lambda record: record._modified_timestamp, reverse=True)
-    total = sum(
-        1 if result.kind == "single" else result.match_count
-        for result in results
-    )
+    records, total = ambiguity_candidates(results)
     lines = []
-    for record in records[:_MAX_AMBIGUITY_LINES]:
+    for record in records:
         # Codex auto-titles can contain entire prompts. Normalize whitespace
         # and truncate them to keep every candidate on a readable line.
         name = " ".join((record.name or "").split())
@@ -194,7 +219,7 @@ def build_ambiguity_message(
             f"  [{record.agent}] {record.session_id}{name_part}"
             f"  modified {record.modified}"
         )
-    remaining = total - len(records[:_MAX_AMBIGUITY_LINES])
+    remaining = total - len(records)
     if remaining > 0:
         lines.append(f"  ... and {remaining} more")
     listing = "\n".join(lines)

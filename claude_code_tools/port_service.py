@@ -25,11 +25,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
 
 if TYPE_CHECKING:
-    from claude_code_tools.resolve_session import ResolveResult
+    from claude_code_tools.resolve_session import ResolveResult, SessionRecord
 
 from claude_code_tools.session_resolution import (
     _detect_direct_path_agent,
     _resolve_query_for_agent,
+    ambiguity_candidates,
     build_ambiguity_message,
 )
 
@@ -40,6 +41,39 @@ class PortSessionError(Exception):
     The exception message is suitable for printing directly (the CLI
     prefixes it with ``Error:`` and exits non-zero).
     """
+
+
+class PortAmbiguityError(PortSessionError):
+    """A port query with more than one valid source session.
+
+    Carries the candidates alongside the printable message so the CLI
+    can offer them interactively instead of only reporting them.
+
+    Attributes:
+        query: Original user query.
+        records: Newest matching records available for selection.
+        match_count: Total matches, including any omitted by the cap.
+    """
+
+    def __init__(
+        self,
+        query: str,
+        records: "tuple[SessionRecord, ...]",
+        match_count: int,
+        message: str,
+    ) -> None:
+        """Initialize an ambiguity with structured candidate data.
+
+        Args:
+            query: Original user query.
+            records: Newest matching records available for selection.
+            match_count: Total matches before the display cap.
+            message: User-facing message listing the candidates.
+        """
+        super().__init__(message)
+        self.query = query
+        self.records = records
+        self.match_count = match_count
 
 
 @dataclass
@@ -99,8 +133,10 @@ def resolve_port_session(
         The resolved session file with its detected agent.
 
     Raises:
-        PortSessionError: When the session cannot be found, is
-            ambiguous, or its agent cannot be detected.
+        PortAmbiguityError: When the query matches more than one
+            session; carries the candidates for interactive choice.
+        PortSessionError: When the session cannot be found or its
+            agent cannot be detected.
     """
     # Arbitrary session names are legitimate queries here, and some
     # (e.g. "~nonexistent-user" or names with NUL bytes) make path
@@ -137,7 +173,13 @@ def resolve_port_session(
         return ResolvedSession(
             agent=record.agent, session_file=Path(record.session_file)
         )
-    raise PortSessionError(build_ambiguity_message(session, results))
+    records, match_count = ambiguity_candidates(results)
+    raise PortAmbiguityError(
+        session,
+        records,
+        match_count,
+        build_ambiguity_message(session, results),
+    )
 
 
 def _read_output_cwd(output_file: Path) -> str:

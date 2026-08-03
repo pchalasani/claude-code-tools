@@ -1768,7 +1768,9 @@ def port_session(
     """
     import sys
 
+    from claude_code_tools.port_render import PortDisplay
     from claude_code_tools.port_service import (
+        PortAmbiguityError,
         PortSessionError,
         port_claude_session,
         port_codex_session,
@@ -1782,56 +1784,54 @@ def port_session(
     claude_home = claude_home or root_obj.get("claude_home")
     codex_home = codex_home or root_obj.get("codex_home")
 
+    display = PortDisplay(session)
+    display.start()
     try:
-        resolved = resolve_port_session(
-            session, claude_home=claude_home, codex_home=codex_home
-        )
+        with display.resolving():
+            resolved = resolve_port_session(
+                session,
+                claude_home=claude_home,
+                codex_home=codex_home,
+            )
+    except PortAmbiguityError as error:
+        try:
+            resolved = display.choose_candidate(error)
+        except (EOFError, KeyboardInterrupt):
+            display.error(str(error))
+            sys.exit(1)
+        if resolved is None:
+            display.cancelled()
+            sys.exit(1)
     except PortSessionError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        display.error(str(e))
         sys.exit(1)
 
+    display.resolved(resolved)
     if resolved.agent == "claude":
-        print("Detected source agent: claude — porting to Codex")
         try:
-            result = port_claude_session(
-                resolved.session_file, codex_home=codex_home
-            )
+            with display.porting(resolved.agent):
+                result = port_claude_session(
+                    resolved.session_file,
+                    codex_home=codex_home,
+                )
         except PortSessionError as e:
-            print(f"Error: {e}", file=sys.stderr)
+            display.error(str(e))
             sys.exit(1)
-
-        print()
-        print(f"New Codex session id:  {result.new_session_id}")
-        print(f"Output file:           {result.output_file}")
-        print(f"Session cwd:           {result.cwd}")
-        print()
-        print("To resume:")
-        print(f"  {result.resume_hint}")
-        print()
-        print(
-            "Tip: codex's /import can also import Claude sessions "
-            "natively (interactive alternative)."
-        )
+        display.complete(result, resolved.agent)
         return
 
-    print("Detected source agent: codex — porting to Claude Code")
     try:
-        result = port_codex_session(
-            resolved.session_file, claude_home=claude_home
-        )
+        with display.porting(resolved.agent):
+            result = port_codex_session(
+                resolved.session_file,
+                claude_home=claude_home,
+            )
     except PortSessionError as e:
         # Expected failure modes (missing/empty session, filesystem
         # or encoding errors) become a clean error, not a traceback.
-        print(f"Error: {e}", file=sys.stderr)
+        display.error(str(e))
         sys.exit(1)
-
-    print()
-    print(f"New Claude session id: {result.new_session_id}")
-    print(f"Output file:           {result.output_file}")
-    print(f"Session cwd:           {result.cwd}")
-    print()
-    print("To resume:")
-    print(f"  {result.resume_hint}")
+    display.complete(result, resolved.agent)
 
 
 @main.command("query")

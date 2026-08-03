@@ -8,18 +8,30 @@ evidence lives in the comment block at the bottom of this file.
 
 import json
 import uuid as uuid_mod
+from io import StringIO
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner, Result
+from rich.console import Console
 
 from claude_code_tools.aichat import main
+from claude_code_tools.port_render import PortDisplay, copy_to_clipboard
+from claude_code_tools.port_service import PortResult
 from tests.test_port_claude_to_codex import (
     CLAUDE_SID,
     ROLLOUT_NAME_RE,
     _ts,
     write_claude_session,
 )
+
+
+class TerminalInput(StringIO):
+    """String input stream that behaves like an interactive terminal."""
+
+    def isatty(self) -> bool:
+        """Report that the test input stream is interactive."""
+        return True
 
 
 @pytest.fixture
@@ -87,7 +99,8 @@ class TestCLI:
         )
         assert "New Codex session id:" in result.output
         assert "Output file:" in result.output
-        assert f"Session cwd:           {project_dir}" in result.output
+        assert "Session cwd:" in result.output
+        assert str(project_dir) in result.output
         assert (
             f"cd {project_dir} && codex resume " in result.output
         )
@@ -103,7 +116,7 @@ class TestCLI:
         m = ROLLOUT_NAME_RE.match(rollouts[0].name)
         assert m and m.group(1) in result.output
 
-    def test_claude_source_direction_line_first(
+    def test_claude_source_reports_progress_before_direction(
         self,
         runner: CliRunner,
         claude_home: Path,
@@ -115,9 +128,14 @@ class TestCLI:
             runner, ["port", CLAUDE_SID], claude_home, codex_home
         )
         assert result.exit_code == 0, result.output
-        assert result.output.splitlines()[0] == (
+        assert "Session port" in result.output
+        resolving = result.output.index("1/3  Resolving session")
+        detected = result.output.index(
             "Detected source agent: claude — porting to Codex"
         )
+        porting = result.output.index("2/3  Porting Claude → Codex")
+        ready = result.output.index("3/3  Ready")
+        assert resolving < detected < porting < ready
 
     def test_claude_source_conversion_error_is_clean(
         self,
@@ -198,6 +216,187 @@ class TestCLI:
         combined = result.output + stderr
         assert "Session not found in Claude or Codex" in combined
         assert unknown_id in combined
+
+    def test_completion_renders_bracketed_paths_literally(self) -> None:
+        """Rich markup-like path components remain visible verbatim."""
+        output = StringIO()
+        display = PortDisplay("session")
+        display.console = Console(
+            file=output,
+            color_system=None,
+            width=240,
+        )
+        cwd = "/tmp/project[red]name[/red]"
+        output_file = Path("/tmp/[blue]rollout[/blue].jsonl")
+        result = PortResult(
+            new_session_id="01234567-89ab-4def-8123-456789abcdef",
+            output_file=output_file,
+            cwd=cwd,
+            resume_hint=f"cd '{cwd}' && codex resume session-id",
+        )
+
+        display.complete(result, "claude")
+
+        rendered = output.getvalue()
+        assert cwd in rendered
+        assert str(output_file) in rendered
+
+    def test_noninteractive_completion_does_not_prompt(
+        self,
+        runner: CliRunner,
+        claude_home: Path,
+        codex_home: Path,
+        project_dir: Path,
+    ) -> None:
+        """Redirected and scripted commands never wait for clipboard input."""
+        write_claude_session(claude_home, project_dir)
+
+        result = self._invoke(
+            runner, ["port", CLAUDE_SID], claude_home, codex_home
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Copy the new session ID" not in result.output
+
+
+class TestPortClipboard:
+    """Clipboard support shared by both port directions."""
+
+    @pytest.mark.parametrize(
+        ("platform_name", "command"),
+        [
+            ("darwin", "pbcopy"),
+            ("linux", "wl-copy"),
+            ("win32", "clip.exe"),
+        ],
+    )
+    def test_platform_clipboard_commands_copy_exact_session_id(
+        self,
+        platform_name: str,
+        command: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Representative macOS, Linux, and Windows commands receive the ID."""
+        capture = tmp_path / "clipboard.txt"
+        if platform_name == "win32":
+            executable = tmp_path / "System32" / command
+            executable.parent.mkdir()
+            monkeypatch.setenv("SystemRoot", str(tmp_path))
+        else:
+            executable = tmp_path / command
+        executable.write_text(
+            "#!/bin/sh\n/bin/cat > \"$AICHAT_CLIPBOARD_CAPTURE\"\n",
+            encoding="utf-8",
+        )
+        executable.chmod(0o755)
+        monkeypatch.setenv("PATH", str(tmp_path))
+        monkeypatch.setenv("AICHAT_CLIPBOARD_CAPTURE", str(capture))
+        session_id = "01234567-89ab-4def-8123-456789abcdef"
+
+        assert copy_to_clipboard(
+            session_id,
+            platform_name=platform_name,
+        )
+        assert capture.read_text(encoding="utf-8") == session_id
+
+    def test_windows_ignores_clip_executable_on_path(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Windows clipboard lookup never executes a project-local helper."""
+        capture = tmp_path / "untrusted-ran.txt"
+        planted = tmp_path / "clip.exe"
+        planted.write_text(
+            "#!/bin/sh\n/bin/cat > \"$AICHAT_CLIPBOARD_CAPTURE\"\n",
+            encoding="utf-8",
+        )
+        planted.chmod(0o755)
+        system_root = tmp_path / "windows"
+        system_root.mkdir()
+        monkeypatch.setenv("SystemRoot", str(system_root))
+        monkeypatch.setenv("PATH", str(tmp_path))
+        monkeypatch.setenv("AICHAT_CLIPBOARD_CAPTURE", str(capture))
+
+        copied = copy_to_clipboard(
+            "session-id",
+            platform_name="win32",
+        )
+
+        assert not copied
+        assert not capture.exists()
+
+    def test_explicit_no_leaves_clipboard_unchanged(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The default-safe decline path never invokes a clipboard command."""
+        capture = tmp_path / "clipboard.txt"
+        executable = tmp_path / "pbcopy"
+        executable.write_text(
+            "#!/bin/sh\n/bin/cat > \"$AICHAT_CLIPBOARD_CAPTURE\"\n",
+            encoding="utf-8",
+        )
+        executable.chmod(0o755)
+        monkeypatch.setenv("PATH", str(tmp_path))
+        monkeypatch.setenv("AICHAT_CLIPBOARD_CAPTURE", str(capture))
+        monkeypatch.setattr("sys.stdin", TerminalInput("n\n"))
+        output = StringIO()
+        display = PortDisplay("session")
+        display.console = Console(
+            file=output,
+            color_system=None,
+            force_terminal=True,
+            width=120,
+        )
+
+        display.offer_session_id_copy("session-id", "codex")
+
+        assert not capture.exists()
+        assert "Clipboard left unchanged" in output.getvalue()
+
+    @pytest.mark.parametrize(
+        ("target_agent", "expected_command"),
+        [
+            ("codex", "codex resume <paste session ID>"),
+            ("claude", "claude --resume <paste session ID>"),
+        ],
+    )
+    def test_default_yes_copies_session_id_and_prints_resume_hint(
+        self,
+        target_agent: str,
+        expected_command: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An explicit yes copies only the newly created session ID."""
+        capture = tmp_path / "clipboard.txt"
+        executable = tmp_path / "pbcopy"
+        executable.write_text(
+            "#!/bin/sh\n/bin/cat > \"$AICHAT_CLIPBOARD_CAPTURE\"\n",
+            encoding="utf-8",
+        )
+        executable.chmod(0o755)
+        monkeypatch.setenv("PATH", str(tmp_path))
+        monkeypatch.setenv("AICHAT_CLIPBOARD_CAPTURE", str(capture))
+        monkeypatch.setattr("sys.stdin", TerminalInput("\n"))
+        output = StringIO()
+        display = PortDisplay("session")
+        display.console = Console(
+            file=output,
+            color_system=None,
+            force_terminal=True,
+            width=120,
+        )
+        session_id = "01234567-89ab-4def-8123-456789abcdef"
+
+        display.offer_session_id_copy(session_id, target_agent)
+
+        assert capture.read_text(encoding="utf-8") == session_id
+        assert "Session ID copied to clipboard" in output.getvalue()
+        assert expected_command in output.getvalue()
 
 
 class TestCodexHomeEnvVar:
