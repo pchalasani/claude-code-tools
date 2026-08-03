@@ -530,8 +530,9 @@ if __name__ == "__main__":
 
     # Get the command being executed
     command = data.get("tool_input", {}).get("command", "")
+    session_id = data.get("session_id", "")
 
-    decision, reason = check_git_commit_command(command)
+    decision, reason = check_git_commit_command(command, session_id=session_id)
 
     if decision == "ask":
         print(json.dumps({
