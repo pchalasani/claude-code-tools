@@ -17,6 +17,7 @@ commands. Below they are grouped by category.
 | `make install` | Install Python in editable mode (for development) |
 | `make install-gdocs` | Install with Google Docs extras |
 | `make dev-install` | Install with dev dependencies (includes commitizen) |
+| `make node-ui-deps` | Install `node_ui/` npm packages (needed by aichat's menus) |
 
 ## Version Bumping
 
