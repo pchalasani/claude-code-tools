@@ -198,11 +198,21 @@ aichat resume
 
 # Resume a specific session (opens resume menu)
 aichat resume <session_id>
+
+# A session name, or a partial id, works too
+aichat resume session-finder
+aichat resume a15f9ced
 ```
 
 The resume menu presents the strategy options listed
 above. Pick one and the tool handles cloning,
 trimming, or rollover automatically.
+
+The session argument accepts a name (set with
+`/rename`), a full or partial id, a rollout filename
+fragment, or a file path, across both agents — see
+[Resolve](../resolve/). An ambiguous query lists the
+candidates instead of guessing.
 
 ## Rollover options
 
