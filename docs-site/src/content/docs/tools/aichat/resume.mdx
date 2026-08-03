@@ -214,6 +214,14 @@ fragment, or a file path, across both agents — see
 [Resolve](../resolve/). An ambiguous query lists the
 candidates instead of guessing.
 
+Cloning follows the transcript you actually named.
+Give `aichat clone` a file path and it copies **that
+file** into the configured Claude project's session
+directory under a fresh session id, even if the
+transcript lives outside the Claude home — it does
+not rebuild a path from the working directory the
+session happens to record.
+
 ## Rollover options
 
 The `rollover` subcommand gives direct access to
