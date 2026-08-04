@@ -10,6 +10,7 @@ pending-state directory is redirected via ``AICHAT_TRIM_STATE_DIR``.
 from __future__ import annotations
 
 import ast
+import importlib.util
 import json
 import os
 import re
@@ -44,7 +45,8 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 # integer sizes (float() would overflow), "negative" = negative
 # savings, "floatnum" = float-typed tokens_saved, "nobackup" =
 # applied without a backup_file, "noisy" = warning line before the
-# JSON, "exitfail" = valid result JSON but nonzero exit.
+# JSON, "exitfail" = valid result JSON but nonzero exit, "hang" =
+# prints to stderr then blocks forever (never returns a result).
 STUB_SOURCE = '''#!/usr/bin/env python3
 """Stub `aichat` CLI for hook tests (records argv, prints JSON)."""
 import json
@@ -58,6 +60,14 @@ with open(RECORD, "a") as f:
     f.write(json.dumps(args) + "\\n")
 
 mode = os.environ.get("STUB_MODE", "")
+if mode == "hang":
+    import time
+    sys.stdout.write("stub: partial stdout\\n")
+    sys.stdout.flush()
+    sys.stderr.write("stub: about to hang\\n")
+    sys.stderr.flush()
+    time.sleep(300)
+    sys.exit(0)
 if mode == "error":
     print(json.dumps({"error": "boom: simulated failure"}))
     sys.exit(1)
@@ -220,6 +230,22 @@ def _reason(proc: subprocess.CompletedProcess[str]) -> str:
     out = json.loads(proc.stdout)
     assert out["decision"] == "block"
     return ANSI_RE.sub("", out["reason"])
+
+
+def _load_hook_module() -> Any:
+    """Import the hook script as a module, for pure-function checks.
+
+    Everything else here drives the hook as a real subprocess; a couple
+    of side-effect-free helpers (timeout sizing) are cheaper to check
+    directly than to infer from a message.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "aichat_resume_hook_under_test", HOOK
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 # ---------------------------------------------------------------------------
@@ -576,6 +602,185 @@ def test_invalid_cli_output_at_apply_time_is_graceful(
     reason = _reason(proc)
     assert "Trim failed" in reason
     assert not hk.state_file().exists()
+
+
+def test_timeout_says_what_timed_out(hk: Harness) -> None:
+    """A hung CLI must produce an actionable message.
+
+    The previous catch-all ("Trim command failed to run (timeout or
+    error)") was indistinguishable from every other failure, so a
+    recurring timeout looked like an unknown error. The message now
+    names the budget that ran out, the binary that actually ran, the
+    command to reproduce it by hand, and whatever the CLI managed to
+    print first.
+    """
+    proc = hk.run(
+        ">trim", env={"STUB_MODE": "hang", "AICHAT_TRIM_TIMEOUT": "1"}
+    )
+    reason = _reason(proc)
+    assert "did not finish within 1s" in reason
+    assert str(hk.stub) in reason
+    assert "--dry-run" in reason
+    assert str(hk.transcript) in reason
+    assert "nothing was changed" in reason.lower()
+    # Whichever stream the CLI got a word out on is the only clue to
+    # where it wedged, so neither may be dropped.
+    assert "stub: about to hang" in reason
+    assert "stub: partial stdout" in reason
+    assert not hk.state_file().exists()
+
+
+def test_timeout_reports_the_budget_it_actually_used(hk: Harness) -> None:
+    """A fractional budget must be reported as it was set - rounding
+    1.5s to "2s" names a limit that was never applied."""
+    proc = hk.run(
+        ">trim", env={"STUB_MODE": "hang", "AICHAT_TRIM_TIMEOUT": "1.5"}
+    )
+
+    reason = _reason(proc)
+    assert "did not finish within 1.5s" in reason
+
+
+def test_preview_timeout_command_is_shell_quoted(tmp_path: Path) -> None:
+    """The reproduce-by-hand command must survive copy-paste.
+
+    Session paths routinely contain spaces, so an unquoted command
+    would silently reproduce something else (or nothing).
+    """
+    hk = Harness(tmp_path)
+    spacey = tmp_path / "a dir with spaces"
+    spacey.mkdir()
+    hk.transcript = spacey / "my session.jsonl"
+    hk.transcript.write_text('{"type": "user"}\n')
+
+    proc = hk.run(
+        ">trim", env={"STUB_MODE": "hang", "AICHAT_TRIM_TIMEOUT": "1"}
+    )
+
+    reason = _reason(proc)
+    assert f"'{hk.transcript}'" in reason
+    assert f"{hk.transcript} --dry-run" not in reason
+
+
+def test_timeout_at_apply_time_admits_it_may_have_written(
+    hk: Harness,
+) -> None:
+    """A timeout while APPLYING must not promise the file is untouched.
+
+    subprocess kills the child outright, so the trim may already have
+    swapped the rewritten transcript in. The message has to say the
+    outcome is unknown and point at the backup, and the stale preview
+    must not stay armed.
+    """
+    hk.run(">trim")
+    assert hk.state_file().exists()
+
+    proc = hk.run(
+        ">trim yes", env={"STUB_MODE": "hang", "AICHAT_TRIM_TIMEOUT": "1"}
+    )
+
+    reason = _reason(proc)
+    assert "Trim failed" in reason
+    assert "did not finish within 1s" in reason
+    assert "UNKNOWN" in reason
+    assert ".bak" in reason
+    assert "nothing was changed" not in reason.lower()
+    # It timed out applying, so the reproduce command must not be a
+    # dry run - that would exercise a different code path.
+    assert "--dry-run" not in reason
+    assert not hk.state_file().exists()
+
+
+def test_transcript_path_with_nul_is_a_graceful_error(hk: Harness) -> None:
+    """A transcript path carrying an embedded NUL makes subprocess
+    raise ValueError before spawning; the hook must still block with a
+    message instead of silently passing the prompt through."""
+    proc = hk.run(">trim", transcript="/tmp/bad\x00path.jsonl")
+
+    reason = _reason(proc)
+    assert "Trim preview failed" in reason
+    assert "Cannot run the trim command" in reason
+    assert not hk.state_file().exists()
+
+
+@pytest.mark.parametrize(
+    "value", ["", "   ", "0", "-5", "abc", "nan", "inf", "1e999"]
+)
+def test_unusable_timeout_override_falls_back(
+    hk: Harness, value: str
+) -> None:
+    """A malformed AICHAT_TRIM_TIMEOUT must fall back to the computed
+    budget, never to zero/NaN/infinity - a zero budget would make every
+    trim "time out" instantly."""
+    proc = hk.run(">trim", env={"AICHAT_TRIM_TIMEOUT": value})
+
+    reason = _reason(proc)
+    assert "Trim preview" in reason
+    assert hk.state_file().exists()
+
+
+def test_timeout_budget_grows_with_transcript_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The budget scales with the file (trimming is ~linear in size)
+    and stays bounded, so a big session gets room without letting a
+    wedged CLI hold the prompt open indefinitely."""
+    monkeypatch.delenv("AICHAT_TRIM_TIMEOUT", raising=False)
+    hook = _load_hook_module()
+    base = hook.TRIM_TIMEOUT_BASE_SECS
+    cap = hook.TRIM_TIMEOUT_MAX_SECS
+    assert cap > base and hook.TRIM_TIMEOUT_PER_MB_SECS > 0
+
+    small = tmp_path / "small.jsonl"
+    small.write_text('{"type": "user"}\n')
+    assert hook._trim_timeout_secs(str(small)) == pytest.approx(
+        base, abs=0.1
+    )
+
+    # Sparse files: size without the I/O of actually writing them.
+    big = tmp_path / "big.jsonl"
+    with open(big, "wb") as fh:
+        fh.truncate(20 * 1024 * 1024)
+    assert base < hook._trim_timeout_secs(str(big)) <= cap
+
+    huge = tmp_path / "huge.jsonl"
+    with open(huge, "wb") as fh:
+        fh.truncate(200 * 1024 * 1024)
+    assert hook._trim_timeout_secs(str(huge)) == cap
+
+    # A missing file must not raise; it just gets the base budget.
+    assert hook._trim_timeout_secs(
+        str(tmp_path / "gone.jsonl")
+    ) == pytest.approx(base)
+
+    # A NUL in the path must not raise out of the size lookup.
+    assert hook._trim_timeout_secs("/tmp/bad\x00path") == pytest.approx(
+        base
+    )
+
+
+def test_no_child_budget_can_outlive_the_hook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every child budget - env override included - must stay under the
+    hook's own timeout in hooks.json, or Claude Code kills the hook
+    before it can report the timeout it just hit."""
+    hook = _load_hook_module()
+    session = tmp_path / "s.jsonl"
+    session.write_text("{}\n")
+
+    hook_timeout = json.loads(
+        (HOOK.parent / "hooks.json").read_text()
+    )["hooks"]["UserPromptSubmit"][0]["hooks"][0]["timeout"]
+    assert hook.TRIM_TIMEOUT_HARD_CAP_SECS < hook_timeout
+    assert hook.TRIM_TIMEOUT_MAX_SECS <= hook.TRIM_TIMEOUT_HARD_CAP_SECS
+
+    for override in ("1e15", "999999", str(hook_timeout + 1)):
+        monkeypatch.setenv("AICHAT_TRIM_TIMEOUT", override)
+        assert (
+            hook._trim_timeout_secs(str(session))
+            == hook.TRIM_TIMEOUT_HARD_CAP_SECS
+        )
 
 
 def test_missing_cli_suggests_install(hk: Harness) -> None:
