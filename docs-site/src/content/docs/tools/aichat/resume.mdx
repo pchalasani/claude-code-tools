@@ -164,6 +164,32 @@ same session ID and writes a timestamped backup
 (`<id>.pre-trim-<ts>.jsonl.bak`) next to the file, which the
 truncation placeholders reference.
 
+### When a trim times out
+
+The hook gives the trim a time budget: 25 seconds, plus a second
+per megabyte of transcript, capped at 60. If that runs out, the
+trim is stopped and the message tells you the budget that
+expired, the transcript and its size, which `aichat` your PATH
+resolved to, a copy-pasteable command to reproduce it, and
+whatever the CLI printed before it stopped.
+
+A preview that times out changes nothing. An **apply** that times
+out is different: the subprocess is killed outright, so the
+rewrite may or may not have landed. That message says the outcome
+is unknown and points you at the timestamped
+`.pre-trim-<ts>.jsonl.bak` backup — check it before retrying.
+
+Set `AICHAT_TRIM_TIMEOUT` (seconds, hard-capped at 75) before
+starting Claude to widen the budget:
+
+```bash
+AICHAT_TRIM_TIMEOUT=70 claude
+```
+
+The cap exists so the trim can never outlive the hook itself —
+otherwise Claude Code would kill the hook first and you would get
+no explanation at all.
+
 ### Same engine on the command line
 
 `>trim` shells out to `aichat trim-in-place`, which you can run
