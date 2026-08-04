@@ -168,7 +168,7 @@ describe("Current state compatibility", () => {
 });
 
 describe("Detailed current-state rows", () => {
-  it("uses shared rows, chats, evidence, counts, and map navigation", () => {
+  it("uses shared rows, chats, evidence, and map navigation", () => {
     mount(withState());
     press("E");
 
@@ -191,12 +191,8 @@ describe("Detailed current-state rows", () => {
     expect(rowNode(ACTIVE)?.querySelector(".chat-button")).not.toBeNull();
     expect(rowNode(PARSER)?.querySelector(".chat-button")).not.toBeNull();
     expect(document.querySelector(`[data-map-lane="${ACTIVE}"]`)).not.toBeNull();
-    expect(document.querySelector('[data-count="lanes"] b')?.textContent)
-      .toBe("5");
-    expect(document.querySelector('[data-count="items"] b')?.textContent)
-      .toBe("6");
-    expect(document.querySelector('[data-awaiting-count] b')?.textContent)
-      .toBe("2");
+    expect(document.querySelector("[data-count]")).toBeNull();
+    expect(document.querySelector("[data-awaiting-count]")).toBeNull();
 
     press("J");
     expect(paintedCursor()).toBe(ACTIVE);

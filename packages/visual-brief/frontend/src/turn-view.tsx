@@ -1,4 +1,5 @@
 import type { JSX } from "solid-js";
+import { formatTimestamp } from "./age";
 import type { Turn } from "./document";
 import { Markdown } from "./markdown-view";
 export function TurnView(props: {
@@ -14,7 +15,7 @@ export function TurnView(props: {
     >
       <div class="turn-meta">
         <span class="turn-author">{props.turn.author}</span>
-        <time>{props.turn.at}</time>
+        <time dateTime={props.turn.at}>{formatTimestamp(props.turn.at)}</time>
       </div>
       <div class="turn-text">
         <Markdown text={props.turn.text} />

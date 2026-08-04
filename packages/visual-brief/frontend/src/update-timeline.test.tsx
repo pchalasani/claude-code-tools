@@ -1,10 +1,46 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { humanAge } from "./age";
-import { mount, mountLive, paintedOpen, useHarness } from "../test/harness";
+import { formatTimestamp, humanAge } from "./age";
+import {
+  mount,
+  mountLive,
+  paintedOpen,
+  rowNode,
+  useHarness,
+} from "../test/harness";
 import { itemOf, sampleBrief } from "../test/sample-brief";
 
 useHarness();
+
+const MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+] as const;
+
+function expectedLocalTimestamp(timestamp: string): string {
+  const date = new Date(timestamp);
+  const hour = date.getHours();
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  const year = String(date.getFullYear() % 100).padStart(2, "0");
+  const datePart = `${date.getDate()}-${MONTHS[date.getMonth()]}-${year}`;
+  const clockHour = hour % 12 || 12;
+  return `${datePart} ${clockHour}:${minute} ${hour < 12 ? "AM" : "PM"}`;
+}
+
+function expectMinutePrecision(value: string): void {
+  expect(value).not.toMatch(/:\d{2}:\d{2}/);
+  expect(value).not.toMatch(/\.\d{3}/);
+}
 
 /**
  * Read painted update ids from top to bottom.
@@ -78,30 +114,69 @@ describe("the append-only update timeline", () => {
 });
 
 describe("visible update ages", () => {
-  it("puts a readable age beside the original timestamp", () => {
+  it("puts a local minute-precision timestamp beside the relative age", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-25T10:04:00Z"));
     try {
-      mount();
+      const brief = sampleBrief();
+      const stamp = "2026-07-25T09:59:42.987Z";
+      const newest = brief.updates.find((update) => update.id === "newest");
+      if (newest === undefined) {
+        throw new Error("sample lost its newest update");
+      }
+      newest.timestamp = stamp;
+      mount(brief);
 
       const head = document.querySelector(
         '[data-row-id="newest"] > .row-head',
       );
-      expect(head?.querySelector(".update-time")?.textContent).toBe(
-        "2026-07-25T10:00:00Z",
-      );
+      const updateTime = head?.querySelector(".update-time");
+      expect(updateTime?.getAttribute("datetime")).toBe(stamp);
+      expect(updateTime?.textContent).toBe(expectedLocalTimestamp(stamp));
+      expectMinutePrecision(updateTime?.textContent ?? "");
       expect(head?.querySelector(".update-age")?.textContent).toBe(
-        "4 minutes ago",
+        "4min",
       );
+      const mapTime = document.querySelector(".map-update-head time");
+      expect(mapTime?.getAttribute("datetime")).toBe(stamp);
+      expect(mapTime?.textContent).toBe(expectedLocalTimestamp(stamp));
     } finally {
       vi.useRealTimers();
     }
   });
 
+  it("formats chat turn metadata in local time without losing dateTime", () => {
+    const brief = sampleBrief();
+    const stamp = "2026-08-02T19:22:51.456Z";
+    const turn = itemOf(brief, "newest/changed/alpha")
+      .questions?.[0]?.turns[0];
+    if (turn === undefined) {
+      throw new Error("sample lost its first chat turn");
+    }
+    turn.at = stamp;
+    mount(brief);
+
+    const time = rowNode("newest/changed/alpha#q-answered")
+      ?.querySelector("time");
+    expect(time?.getAttribute("datetime")).toBe(stamp);
+    expect(time?.textContent).toBe(expectedLocalTimestamp(stamp));
+    expectMinutePrecision(time?.textContent ?? "");
+  });
+
   it("uses natural calendar words and degrades legacy prose clearly", () => {
     const now = Date.parse("2026-07-25T10:04:00Z");
 
-    expect(humanAge("2026-07-24T10:04:00Z", now)).toBe("yesterday");
+    expect(humanAge("2026-07-24T10:04:00Z", now)).toBe("1d");
+    expect(humanAge("2026-07-25T10:02:00Z", now)).toBe("2min");
+    expect(humanAge("2026-07-25T17:04:00Z", now)).toBe("7h");
+    expect(humanAge("2026-05-25T10:04:00Z", now)).toBe("2mos");
     expect(humanAge("Review round four", now)).toBe("age unavailable");
+    expect(formatTimestamp("Review round four")).toBe("Review round four");
+    expect(formatTimestamp("Review 4")).toBe("Review 4");
+    expect(formatTimestamp("May 2025")).toBe("May 2025");
+    expect(humanAge("May 2025", now)).toBe("age unavailable");
+    expect(formatTimestamp("2026-07-25 10:04")).toMatch(
+      /^25-Jul-26 10:04 [AP]M$/,
+    );
   });
 });

@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
+  readAcceptedSignalWork,
   readHealedStandoff,
   readSentRecords,
   rememberHealedStandoff,
+  signalWorkStorageKey,
   saveSentRecords,
 } from "./session-store";
 import { forgetStores, withoutSessionStorage } from "../test/storage";
@@ -93,5 +95,36 @@ describe("what a tab remembers about what it sent", () => {
     );
 
     expect(readSentRecords()).toEqual([]);
+  });
+});
+
+describe("accepted signal storage", () => {
+  it("ignores malformed rows and malformed stored data", () => {
+    window.sessionStorage.setItem(
+      signalWorkStorageKey(),
+      JSON.stringify({
+        "newest/changed/alpha": "newest",
+        "newest/changed/beta": 3,
+        "newest/next/gamma": null,
+        "newest/next/delta": {
+          baseline: "newest",
+          signal: "show-evidence",
+        },
+        "newest/next/broken": { baseline: [], signal: "go-deeper" },
+        "": "newest",
+      }),
+    );
+
+    expect(readAcceptedSignalWork()).toEqual({
+      "newest/changed/alpha": { baseline: "newest" },
+      "newest/next/gamma": { baseline: null },
+      "newest/next/delta": {
+        baseline: "newest",
+        signal: "show-evidence",
+      },
+    });
+
+    window.sessionStorage.setItem(signalWorkStorageKey(), "not json");
+    expect(readAcceptedSignalWork()).toEqual({});
   });
 });

@@ -53,6 +53,16 @@
   width: var(--width-row-fold);
 }
 
+.row-shortcut {
+  color: var(--color-current-strong);
+  flex: none;
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  min-width: 1.7em;
+  text-align: center;
+}
+
 .row-actions {
   align-items: center;
   display: flex;
@@ -64,7 +74,7 @@
 .row-count {
   color: var(--color-text-faint);
   flex: none;
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-xs);
   font-variant-numeric: tabular-nums;
 }
@@ -108,9 +118,8 @@
 }
 
 .history-heading h2 {
-  font-family: var(--font-display);
   font-size: var(--font-size-lg);
-  font-weight: 650;
+  font-weight: 500;
   letter-spacing: -0.015em;
   line-height: var(--line-height-tight);
   margin: 0 0 var(--space-1);
@@ -142,9 +151,8 @@
 
 .update-title {
   flex: var(--width-update-title);
-  font-family: var(--font-display);
   font-size: var(--font-size-md);
-  font-weight: 620;
+  font-weight: 500;
   letter-spacing: -0.01em;
   line-height: 1.35;
 }
@@ -154,7 +162,7 @@
   color: var(--color-text-faint);
   display: inline-flex;
   flex: 0 auto;
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-xs);
   gap: var(--space-2);
   margin-left: auto;
@@ -189,7 +197,7 @@
 .lane-name {
   color: var(--color-text-muted);
   flex: auto;
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-xs);
   font-weight: 650;
   letter-spacing: 0.16em;
@@ -202,6 +210,14 @@
 
 .row-item {
   margin-top: var(--space-1);
+  position: relative;
+}
+
+.row-item[data-owning-item="true"] {
+  background: var(--color-context-wash);
+  border-radius: var(--radius-control);
+  outline: var(--border-emphasis) solid var(--color-context);
+  outline-offset: var(--border-thin);
 }
 
 .row-item > .row-head {
@@ -210,6 +226,7 @@
 }
 
 .glance {
+  color: var(--color-agent-text);
   flex: var(--width-glance);
   min-width: 0;
   overflow-wrap: anywhere;
@@ -217,10 +234,12 @@
 
 .glance > .md-paragraph {
   display: inline;
+  font-weight: 500;
   margin: 0;
 }
 
 .explanation {
+  color: var(--color-agent-text-muted);
   margin: var(--space-2) 0 var(--space-3);
   max-width: var(--width-reading);
 }
@@ -235,10 +254,10 @@
 }
 
 .thread-title {
-  color: var(--color-text-muted);
+  color: var(--color-human-text);
   flex: var(--width-thread-title);
   font-size: var(--font-size-base);
-  font-weight: 600;
+  font-weight: 500;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -265,10 +284,18 @@
   border-left-color: var(--color-active);
 }
 
+.turn-human .turn-text {
+  color: var(--color-human-text);
+}
+
+.turn-agent .turn-text {
+  color: var(--color-agent-text-muted);
+}
+
 .turn-meta {
   color: var(--color-text-faint);
   display: flex;
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-xs);
   gap: var(--space-2);
   letter-spacing: 0.08em;
@@ -286,7 +313,7 @@
 
 .evidence-title {
   color: var(--color-text-muted);
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-sm);
 }
 
@@ -298,8 +325,9 @@
   background: var(--color-surface-quiet);
   border: var(--border-thin) solid var(--color-border);
   border-radius: var(--radius-control);
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-sm);
+  font-weight: 400;
   margin: var(--space-2) 0;
   overflow-wrap: anywhere;
   padding: var(--space-2) var(--space-3);
@@ -325,7 +353,7 @@ table {
 
 caption {
   color: var(--color-text-faint);
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-xs);
   letter-spacing: 0.12em;
   padding-bottom: var(--space-1);
@@ -343,11 +371,15 @@ td {
 
 th {
   background: var(--color-surface-quiet);
-  font-weight: 650;
+  font-weight: 500;
 }
 
 td.wrong {
   color: var(--color-limitation);
+}
+
+td {
+  font-weight: 400;
 }
 
 @media (width <= 38rem) {

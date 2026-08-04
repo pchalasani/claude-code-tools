@@ -35,6 +35,7 @@ export interface Navigation {
   move: (kind: RowKind | "row", delta: number) => void;
   jump: (edge: Edge) => void;
   toOpenChat: () => void;
+  toLatestUpdateAttention: () => void;
   isFresh: (id: string) => boolean;
   isOpen: (id: string) => boolean;
   toggle: (id: string) => void;
@@ -44,15 +45,13 @@ export interface Navigation {
   collapseAll: () => void;
   chatRevealActive: Accessor<boolean>;
   toggleChatReveal: () => void;
-  ordinal: (id: string) => number | null;
   query: Accessor<string>;
   setQuery: (value: string) => void;
   matchCount: Accessor<number>;
   overlay: Accessor<Overlay>;
   openOverlay: (overlay: Overlay) => void;
   closeOverlay: () => void;
-  awaitingCount: Accessor<number>;
-  outstandingCount: Accessor<number>;
+  latestUpdateOutstandingCount: Accessor<number>;
 }
 export function createNavigation(
   brief: Accessor<BriefDocument>,
@@ -91,20 +90,19 @@ export function createNavigation(
     () => new Set(painted().map((row) => row.id)),
   );
   const cursorId = createMemo(() =>
-    effectiveCursor(painted(), human.cursor()),
+    effectiveCursor(painted(), human.cursor())
+      ?? edgeRow(painted(), "top"),
   );
-  const ordinals = createMemo(() => {
-    const result = new Map<string, number>();
-    let next = 0;
-    for (const row of painted()) {
-      if (row.kind === "item") {
-        next += 1;
-        result.set(row.id, next);
-      }
-    }
-    return result;
-  });
   const outstanding = createMemo(() => openness.outstanding(rows()));
+  const latestUpdateOutstanding = createMemo(() => {
+    const latestUpdateId = brief().updates.at(-1)?.id;
+    if (latestUpdateId === undefined) {
+      return [];
+    }
+    return outstanding().filter(
+      (row) => ancestorRowIds(rows(), row.id).includes(latestUpdateId),
+    );
+  });
   const ancestors = (id: string): string[] => ancestorRowIds(rows(), id);
   const visit = (row: Row): void => {
     if (
@@ -187,6 +185,13 @@ export function createNavigation(
         select(next, { dropFilter: true });
       }
     },
+    toLatestUpdateAttention: () => {
+      const next = cycleAfter(latestUpdateOutstanding(), cursorId());
+      if (next !== null) {
+        human.choose(next, true);
+        select(next, { dropFilter: true });
+      }
+    },
     isFresh: (id) => {
       const row = index.row(id);
       return row?.kind === "thread"
@@ -264,15 +269,15 @@ export function createNavigation(
         });
       });
     },
-    ordinal: (id) => ordinals().get(id) ?? null,
     query,
     setQuery,
     matchCount: createMemo(() => countItems(filterRows(rows(), query()))),
     overlay,
     openOverlay: setOverlay,
     closeOverlay: () => setOverlay("none"),
-    awaitingCount: index.awaitingCount,
-    outstandingCount: createMemo(() => outstanding().length),
+    latestUpdateOutstandingCount: createMemo(
+      () => latestUpdateOutstanding().length,
+    ),
   };
 }
 function cycleAfter(rows: Row[], currentId: string | null): string | null {

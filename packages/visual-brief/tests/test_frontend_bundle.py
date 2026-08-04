@@ -34,6 +34,13 @@ from visual_brief.render.assets import (
 PACKAGE_ROOT = Path(__file__).parents[1]
 STAMP_TOOL = PACKAGE_ROOT / "tools" / "frontend_stamp.py"
 STATIC_DIR = PACKAGE_ROOT / "src" / "visual_brief" / "static"
+FONT_LICENSE = (
+    PACKAGE_ROOT
+    / "src"
+    / "visual_brief"
+    / "licenses"
+    / "ATKINSON-HYPERLEGIBLE-NEXT-OFL.txt"
+)
 # The C0 controls, less the three that are ordinary whitespace.
 CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
@@ -68,6 +75,37 @@ def test_bundle_is_two_files_with_stable_names() -> None:
     )
 
     assert emitted == [STYLE_NAME, SCRIPT_NAME]
+
+
+def test_the_local_display_font_is_inlined_and_carries_its_license() -> None:
+    """Ship the title face without a request and retain its OFL metadata."""
+    style = bundle_style()
+
+    assert "Atkinson Hyperlegible Next Variable" in style
+    assert "data:font/woff2;base64," in style
+    assert "http://" not in style
+    assert "https://" not in style
+    assert "SIL OPEN FONT LICENSE Version 1.1" in FONT_LICENSE.read_text(
+        encoding="utf-8",
+    )
+
+
+def test_the_shipped_typography_has_one_deliberate_scale() -> None:
+    """Keep one reversible adjustment over the deliberate type scale."""
+    style = bundle_style()
+
+    adjustment = "var(--font-size-adjustment)"
+    assert "--font-size-adjustment:-.0625rem" in style
+    assert f"--font-size-xs:calc(.875rem + {adjustment})" in style
+    assert f"--font-size-sm:calc(1rem + {adjustment})" in style
+    assert f"--font-size-base:calc(1.125rem + {adjustment})" in style
+    assert f"--font-size-md:calc(1.125rem + {adjustment})" in style
+    assert f"--font-size-lg:calc(1.375rem + {adjustment})" in style
+    assert f"calc(2.65rem + {adjustment})" in style
+    assert '--font-display:"Atkinson Hyperlegible Next Variable"' in style
+    assert "--font-brief:SFMono-Regular" in style
+    assert "--font-reading:" not in style
+    assert "--font-utility:" not in style
 
 
 def test_the_stamp_survives_a_bare_vite_build() -> None:

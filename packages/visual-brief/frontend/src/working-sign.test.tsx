@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import type { BriefDocument } from "./document";
-import { saveSentRecords } from "./session-store";
-import { mount, useHarness } from "../test/harness";
-import { sampleBrief } from "../test/sample-brief";
+import { saveAcceptedSignalWork, saveSentRecords } from "./session-store";
+import { mount, mountLive, useHarness } from "../test/harness";
+import { SAMPLE_SUGGESTIONS, sampleBrief } from "../test/sample-brief";
 
 const ITEM = "newest/next/gamma";
+const SIGNAL_ITEM = "newest/changed/alpha";
 const FOLDED = `${ITEM}#q-pending-9f2`;
 // The sample page already carries one unanswered conversation of its own,
 // which wears its own sign throughout. Its presence in these readings is the
@@ -25,6 +26,17 @@ useHarness();
  */
 function sentBeforeTheLoad(): void {
   saveSentRecords([{ rowId: ITEM, anchorId: ITEM, text: ASKED, at: STAMP }]);
+}
+
+function signalBeforeTheLoad(): void {
+  saveAcceptedSignalWork({
+    [SIGNAL_ITEM]: {
+      baseline: "newest",
+      at: STAMP,
+      signal: SAMPLE_SUGGESTIONS[0]?.message,
+      text: SAMPLE_SUGGESTIONS[0]?.message,
+    },
+  });
 }
 
 /**
@@ -106,4 +118,138 @@ describe("the sign across a page load that followed a send", () => {
     expect(signs().filter((row) => row === FOLDED)).toHaveLength(1);
   });
 
+});
+
+describe("the sign after accepted feedback", () => {
+  it("paints the existing working sign once on its row after reload", () => {
+    signalBeforeTheLoad();
+
+    mount();
+
+    expect(signs().filter((row) => row === SIGNAL_ITEM)).toEqual([
+      SIGNAL_ITEM,
+    ]);
+    expect(
+      document.querySelector(
+        `[data-row-id="${SIGNAL_ITEM}"] [data-suggestion="${
+          SAMPLE_SUGGESTIONS[0]?.message
+        }"]`,
+      )?.getAttribute("aria-pressed"),
+    ).toBe("true");
+  });
+
+  it("survives a live patch with the same final update", () => {
+    signalBeforeTheLoad();
+    const { publish } = mountLive();
+    const patched = sampleBrief();
+    patched.summary = "Changed without appending an update.";
+
+    publish(patched);
+
+    expect(signs().filter((row) => row === SIGNAL_ITEM)).toEqual([
+      SIGNAL_ITEM,
+    ]);
+    expect(
+      document.querySelector(
+        `[data-row-id="${SIGNAL_ITEM}"] [data-suggestion="${
+          SAMPLE_SUGGESTIONS[0]?.message
+        }"]`,
+      )?.getAttribute("aria-pressed"),
+    ).toBe("true");
+  });
+
+  it("does not duplicate the item sign on its folded conversation", () => {
+    signalBeforeTheLoad();
+    const brief = sampleBrief();
+    const item = brief.updates[1]?.lanes[0]?.items[0];
+    if (item === undefined) {
+      throw new Error("the sample document lost the suggested-reply item");
+    }
+    item.questions = [...(item.questions ?? []), {
+      id: "q-suggestion-working",
+      anchor: { kind: "element", path: SIGNAL_ITEM },
+      turns: [{
+        author: "human",
+        text: SAMPLE_SUGGESTIONS[0]?.message ?? "",
+        at: STAMP,
+      }],
+    }];
+
+    mount(brief);
+
+    expect(signs().filter((row) => row === SIGNAL_ITEM)).toHaveLength(1);
+    expect(signs()).not.toContain(`${SIGNAL_ITEM}#q-suggestion-working`);
+  });
+
+  it("clears when a different final update is appended", async () => {
+    signalBeforeTheLoad();
+    const { publish } = mountLive();
+    const appended = sampleBrief();
+    appended.updates.push({
+      id: "after-feedback",
+      timestamp: "2026-07-28T09:00:00Z",
+      headline: "The agent completed more work",
+      summary: "A new update is now final.",
+      lanes: [],
+    });
+
+    publish(appended);
+    await Promise.resolve();
+
+    expect(signs()).not.toContain(SIGNAL_ITEM);
+    expect(
+      document.querySelector(
+        `[data-row-id="${SIGNAL_ITEM}"] [data-suggestion="${
+          SAMPLE_SUGGESTIONS[0]?.message
+        }"]`,
+      )?.getAttribute("aria-pressed"),
+    ).toBe("false");
+  });
+
+  it("clears when an inline agent answer arrives without a new update", async () => {
+    signalBeforeTheLoad();
+    const { publish } = mountLive();
+    const answered = sampleBrief();
+    answered.updates[1]?.lanes[0]?.items[0]?.questions?.push({
+      id: "q-suggestion",
+      anchor: { kind: "element", path: SIGNAL_ITEM },
+      turns: [
+        {
+          author: "human",
+          text: SAMPLE_SUGGESTIONS[0]?.message ?? "",
+          at: STAMP,
+        },
+        {
+          author: "agent",
+          text: "Here is the additional evidence.",
+          at: "2026-07-28T08:00:00Z",
+        },
+      ],
+    });
+
+    publish(answered);
+    await Promise.resolve();
+
+    expect(signs()).not.toContain(SIGNAL_ITEM);
+    expect(
+      document.querySelector(
+        `[data-row-id="${SIGNAL_ITEM}"] [data-suggestion="${
+          SAMPLE_SUGGESTIONS[0]?.message
+        }"]`,
+      )?.getAttribute("aria-pressed"),
+    ).toBe("false");
+  });
+
+  it("clears legacy work that cannot identify a later inline answer", () => {
+    saveAcceptedSignalWork({ [SIGNAL_ITEM]: "newest" });
+
+    mount();
+
+    expect(signs()).not.toContain(SIGNAL_ITEM);
+    expect(
+      document.querySelectorAll(
+        `[data-row-id="${SIGNAL_ITEM}"] .signal[aria-pressed="true"]`,
+      ),
+    ).toHaveLength(0);
+  });
 });

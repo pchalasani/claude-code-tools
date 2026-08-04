@@ -185,16 +185,14 @@ def test_the_toggle_names_the_one_body_it_opens(
     assert named["found"] is True, named
 
 
-def test_the_masthead_still_counts_what_it_always_counted(
+def test_the_masthead_omits_aggregate_structure_counts(
     browser: Browser,
 ) -> None:
-    """Leave the page's own arithmetic alone: evidence is not an item."""
+    """Keep the briefing surface free of replacement aggregate statistics."""
     counts = browser.evaluate(
         """
-        [...document.querySelectorAll(".meta-count")].map(
-          (count) => count.textContent,
-        )
+        document.querySelectorAll("[data-count], [data-awaiting-count]").length
         """
     )
 
-    assert counts[:3] == ["2 updates", "10 lanes", "15 items"], counts
+    assert counts == 0

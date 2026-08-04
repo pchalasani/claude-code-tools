@@ -123,6 +123,15 @@ def _project_item(item: dict[str, Any]) -> dict[str, Any]:
         "explanation": item["explanation"],
         "trust": item["trust"],
     }
+    suggestions = item.get("suggestions", [])
+    if suggestions:
+        projected["suggestions"] = [
+            {
+                "label": suggestion["label"].strip(),
+                "message": suggestion["message"].strip(),
+            }
+            for suggestion in suggestions
+        ]
     forensics = item.get("forensics", [])
     if forensics:
         projected["forensics"] = [

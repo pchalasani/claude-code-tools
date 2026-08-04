@@ -12,7 +12,7 @@ from typing import Iterator
 import pytest
 
 from visual_brief.server.daemon import HOST, VisualBriefServer, create_server
-from visual_brief.server.queue import MAX_QUESTION_LENGTH
+from visual_brief.server.queue import MAX_QUESTION_LENGTH, build_signal_record
 from visual_brief.server.registry import count_unanswered_questions
 
 
@@ -332,16 +332,18 @@ def test_maximum_accepted_question_is_visible_to_registry(
         ("localhost", "/r/demo-run/signal"),
     ],
 )
-def test_post_signal_accepts_fixed_vocabulary_in_both_forms(
+def test_post_signal_accepts_an_authored_reply_in_both_forms(
     live_server: tuple[VisualBriefServer, Path],
     host: str,
     path: str,
 ) -> None:
-    """Feedback buttons queue inert signal records in either URL form."""
+    """Suggested replies queue a foldable human turn in either URL form."""
     server, run_dir = live_server
-    payload = json.dumps(
-        {"anchor_id": "update/lane/item", "signal": "go-deeper"}
-    ).encode("utf-8")
+    payload = json.dumps({
+        "anchor_id": "update/lane/item",
+        "label": "Show proof",
+        "text": "Show me the concrete evidence behind this claim.",
+    }).encode("utf-8")
 
     status, _ = request(
         server,
@@ -356,17 +358,24 @@ def test_post_signal_accepts_fixed_vocabulary_in_both_forms(
     record = json.loads(
         (run_dir / "questions.jsonl").read_text(encoding="utf-8")
     )
-    assert record["type"] == "signal"
-    assert record["signal"] == "go-deeper"
+    assert record["type"] == "question"
+    assert record["label"] == "Show proof"
+    assert record["text"] == (
+        "Show me the concrete evidence behind this claim."
+    )
+    assert record["parent_id"] is None
+    assert count_unanswered_questions(run_dir) == 1
 
 
+@pytest.mark.parametrize("signal", ["execute-this"])
 def test_post_signal_rejects_unknown_value(
     live_server: tuple[VisualBriefServer, Path],
+    signal: str,
 ) -> None:
-    """Only feedback values rendered by the client are accepted."""
+    """Reject values the client never offered."""
     server, run_dir = live_server
     payload = json.dumps(
-        {"anchor_id": "update/lane/item", "signal": "execute-this"}
+        {"anchor_id": "update/lane/item", "signal": signal}
     ).encode("utf-8")
 
     status, _ = request(
@@ -379,6 +388,51 @@ def test_post_signal_rejects_unknown_value(
 
     assert status == 400
     assert not (run_dir / "questions.jsonl").exists()
+
+
+@pytest.mark.parametrize(
+    "signal",
+    ["too-dense", "show-evidence", "go-deeper", "skip"],
+)
+def test_signal_record_keeps_legacy_vocabulary_compatible(signal: str) -> None:
+    """Accept already-open pages that still send the former vocabulary."""
+    record = build_signal_record(
+        {"anchor_id": "update/lane/item", "signal": signal}
+    )
+
+    assert record["type"] == "signal"
+    assert record["signal"] == signal
+
+
+@pytest.mark.parametrize("signal", ["execute-this"])
+def test_signal_record_rejects_unknown_value(signal: str) -> None:
+    """Reject values outside the former client vocabulary."""
+    with pytest.raises(ValueError, match="supported feedback signal"):
+        build_signal_record(
+            {"anchor_id": "update/lane/item", "signal": signal}
+        )
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (
+            {"anchor_id": "u/l/i", "label": "", "text": "Message"},
+            "Field 'label' must be non-empty text",
+        ),
+        (
+            {"anchor_id": "u/l/i", "label": "Useful", "text": ""},
+            "Field 'text' must be non-empty text",
+        ),
+    ],
+)
+def test_signal_record_rejects_an_incomplete_authored_reply(
+    payload: dict[str, str],
+    message: str,
+) -> None:
+    """Require both halves of an authored reply shortcut."""
+    with pytest.raises(ValueError, match=message):
+        build_signal_record(payload)
 
 
 def test_dashboard_survives_boundary_timestamp(

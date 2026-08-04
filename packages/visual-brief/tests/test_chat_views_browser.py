@@ -231,9 +231,7 @@ def test_reveal_keeps_search_and_counts_only_attention_needed(
     painted = browser.evaluate(
         """
         (() => ({
-          badge: document.querySelector(".meta-attention")
-            ?.dataset.attentionCount,
-          pressed: document.querySelector(".meta-attention")
+          pressed: document.querySelector('[data-action="reveal-chats"]')
             ?.getAttribute("aria-pressed") ?? null,
           threads: document.querySelectorAll(
             '[data-row-kind="thread"]',
@@ -246,7 +244,6 @@ def test_reveal_keeps_search_and_counts_only_attention_needed(
         """
     )
 
-    assert painted["badge"] == "19"
     assert painted["pressed"] == "true"
     assert painted["query"] == SEARCH_MARKER
     browser.press("Escape")
@@ -262,11 +259,6 @@ def test_a_later_conversation_uses_normal_fold_defaults(
     """Do not turn an earlier reveal into a persistent mode."""
     browser.click_row(ANSWERED_THREAD)
     browser.run("wait", "250")
-    outstanding_before = int(
-        browser.evaluate(
-            "document.querySelector('.meta-attention')?.dataset.attentionCount"
-        )
-    )
     browser.press("C")
     browser.press("m")
     update_id, lane_id, item = next(
@@ -301,9 +293,7 @@ def test_a_later_conversation_uses_normal_fold_defaults(
     painted = browser.read_until(
         f"""
         (() => ({{
-          badge: document.querySelector(".meta-attention")
-            ?.dataset.attentionCount,
-          pressed: document.querySelector(".meta-attention")
+          pressed: document.querySelector('[data-action="reveal-chats"]')
             ?.getAttribute("aria-pressed"),
           thread: document.querySelector(
             '[data-row-id="{thread_row}"]',
@@ -318,10 +308,9 @@ def test_a_later_conversation_uses_normal_fold_defaults(
             ) ?? {{}},
         }}))()
         """,
-        lambda seen: seen["badge"] == str(outstanding_before + 1),
+        lambda seen: seen["pressed"] == "true",
     )
 
-    assert painted["badge"] == str(outstanding_before + 1)
     assert painted["pressed"] == "true"
     assert painted["thread"] is False
     assert painted["chosen"][anchor] is False

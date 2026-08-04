@@ -53,11 +53,17 @@ export interface Table {
   rows: string[][];
 }
 
+export interface SuggestedReply {
+  label: string;
+  message: string;
+}
+
 export interface Item {
   id: string;
   glance: string;
   explanation: string;
   trust: TrustLevel;
+  suggestions?: SuggestedReply[];
   forensics?: Forensic[];
   tables?: Table[];
   questions?: Thread[];

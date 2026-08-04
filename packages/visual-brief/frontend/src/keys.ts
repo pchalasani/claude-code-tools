@@ -14,7 +14,16 @@ export type Action =
   | "top"
   | "bottom"
   | "help"
-  | "close";
+  | "close"
+  | "digit-1"
+  | "digit-2"
+  | "digit-3"
+  | "digit-4"
+  | "digit-5"
+  | "digit-6"
+  | "digit-7"
+  | "digit-8"
+  | "digit-9";
 export interface KeyEventLike {
   key: string;
   ctrlKey?: boolean;
@@ -63,6 +72,15 @@ export const BINDINGS: Record<string, Action> = {
   G: "bottom",
   "?": "help",
   Escape: "close",
+  "1": "digit-1",
+  "2": "digit-2",
+  "3": "digit-3",
+  "4": "digit-4",
+  "5": "digit-5",
+  "6": "digit-6",
+  "7": "digit-7",
+  "8": "digit-8",
+  "9": "digit-9",
 };
 export const SHIFTED_BINDINGS: Record<string, Action> = {
   ArrowDown: "next-lane",
@@ -79,6 +97,7 @@ export const KEY_HELP: [string, string][] = [
     "Chat wherever the cursor is — update, lane, item or conversation",
   ],
   [SEND_CHORD_LABEL, "Send what you have written"],
+  ["1–9", "Jump to a numbered row or choose a numbered reply"],
   ["n", "Jump to your next open chat"],
   ["m", "Reveal your chats, then restore the prior fold layout"],
   ["/", "Search items"],
@@ -100,6 +119,9 @@ export function resolveAction(event: KeyEventLike): Action | null {
   if (event.ctrlKey === true || event.metaKey === true || event.altKey === true) {
     return null;
   }
+  if (event.shiftKey === true && /^[1-9]$/.test(event.key)) {
+    return null;
+  }
   const action = event.shiftKey === true
     ? SHIFTED_BINDINGS[event.key] ?? BINDINGS[event.key]
     : BINDINGS[event.key];
@@ -113,8 +135,7 @@ export function resolveAction(event: KeyEventLike): Action | null {
     event.key === "Enter"
     && event.target instanceof Element
     && event.target.closest(
-      "a[href], button:not(.meta-awaiting):not(.meta-attention), "
-        + "input, select, textarea, summary",
+      "a[href], button, input, select, textarea, summary",
     ) !== null
   ) {
     return null;

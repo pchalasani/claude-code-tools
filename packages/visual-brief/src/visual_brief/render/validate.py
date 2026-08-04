@@ -11,6 +11,9 @@ from visual_brief import MAX_THREAD_ID_LENGTH
 from visual_brief.render.note_names import note_name, require_distinct_note_names
 from visual_brief.schema import (
     CURRENT_STATE_ROOT,
+    MAX_SUGGESTIONS,
+    MAX_SUGGESTION_LABEL_LENGTH,
+    MAX_SUGGESTION_MESSAGE_LENGTH,
     current_state_item_path,
     current_state_lane_path,
 )
@@ -453,6 +456,53 @@ def _validate_table(table: Any, location: str) -> None:
             )
 
 
+def _validate_suggestions(suggestions: Any, location: str) -> None:
+    """Validate zero to three agent-authored human reply shorthands."""
+    if not isinstance(suggestions, list):
+        raise ValueError(f"{location} must be a list")
+    if len(suggestions) > MAX_SUGGESTIONS:
+        raise ValueError(
+            f"{location} must contain at most {MAX_SUGGESTIONS} replies"
+        )
+    labels: list[str] = []
+    messages: list[str] = []
+    for index, suggestion in enumerate(suggestions):
+        suggestion_location = f"{location}[{index}]"
+        if not isinstance(suggestion, dict):
+            raise ValueError(f"{suggestion_location} must be an object")
+        _require_exact_fields(
+            suggestion,
+            {"label", "message"},
+            suggestion_location,
+        )
+        label = require_text(
+            suggestion.get("label"),
+            f"{suggestion_location}.label",
+        )
+        message = require_text(
+            suggestion.get("message"),
+            f"{suggestion_location}.message",
+        )
+        if label.splitlines() != [label]:
+            raise ValueError(f"{suggestion_location}.label must be one line")
+        if len(label) > MAX_SUGGESTION_LABEL_LENGTH:
+            raise ValueError(
+                f"{suggestion_location}.label must be at most "
+                f"{MAX_SUGGESTION_LABEL_LENGTH} characters"
+            )
+        if len(message) > MAX_SUGGESTION_MESSAGE_LENGTH:
+            raise ValueError(
+                f"{suggestion_location}.message must be at most "
+                f"{MAX_SUGGESTION_MESSAGE_LENGTH} characters"
+            )
+        labels.append(label.casefold())
+        messages.append(message)
+    if len(labels) != len(set(labels)):
+        raise ValueError(f"{location} labels must be unique")
+    if len(messages) != len(set(messages)):
+        raise ValueError(f"{location} messages must be unique")
+
+
 def _validate_item(item: Any, location: str, path: str) -> list[str]:
     """Validate one lane item."""
     if not isinstance(item, dict):
@@ -464,6 +514,10 @@ def _validate_item(item: Any, location: str, path: str) -> list[str]:
     trust = require_text(raw_trust, f"{location}.trust")
     if raw_trust != trust or trust not in TRUST_LABELS:
         raise ValueError(f"{location}.trust is not a recognized trust chip")
+    _validate_suggestions(
+        item.get("suggestions", []),
+        f"{location}.suggestions",
+    )
     _validate_forensics(item.get("forensics", []), f"{location}.forensics")
     tables = item.get("tables", [])
     if not isinstance(tables, list):

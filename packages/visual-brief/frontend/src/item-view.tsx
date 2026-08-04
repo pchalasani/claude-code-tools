@@ -29,6 +29,7 @@ export function ItemView(props: {
       state={props.state}
       row={props.row}
       separateHead
+      toggleSeparateHead
       head={
         <>
           <div class="glance">
@@ -77,7 +78,13 @@ export function ItemView(props: {
       <PendingNotes state={props.state} row={props.row} />
       <WorkingSign state={props.state} row={props.row} />
       <ComposeBox state={props.state} row={props.row} />
-      <SignalBar state={props.state} row={props.row} />
+      <Show when={(props.item.suggestions ?? []).length > 0}>
+        <SignalBar
+          state={props.state}
+          row={props.row}
+          suggestions={props.item.suggestions ?? []}
+        />
+      </Show>
     </RowShell>
   );
 }

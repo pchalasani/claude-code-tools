@@ -6,6 +6,9 @@ from typing import NotRequired, TypedDict
 
 # Authored update ids cannot contain '/', so no dated path can use this root.
 CURRENT_STATE_ROOT = "//current-state"
+MAX_SUGGESTIONS = 3
+MAX_SUGGESTION_LABEL_LENGTH = 40
+MAX_SUGGESTION_MESSAGE_LENGTH = 20_000
 
 
 def current_state_lane_path(lane_id: str) -> str:
@@ -58,6 +61,13 @@ class Table(TypedDict):
     rows: list[list[str]]
 
 
+class SuggestedReply(TypedDict):
+    """One optional shorthand for a useful human response."""
+
+    label: str
+    message: str
+
+
 class Item(TypedDict):
     """Visible item content shared by state and dated updates."""
 
@@ -65,6 +75,7 @@ class Item(TypedDict):
     glance: str
     explanation: str
     trust: str
+    suggestions: NotRequired[list[SuggestedReply]]
     forensics: NotRequired[list[str | NestedNote]]
     tables: NotRequired[list[Table]]
     questions: NotRequired[list[Thread]]

@@ -171,7 +171,13 @@ visual-brief publish --file report.json  # replace state + append changes
             "id": "structured-state",
             "glance": "The current snapshot uses lanes and items.",
             "explanation": "It shares the dated-update content model.",
-            "trust": "verified-by-me"
+            "trust": "verified-by-me",
+            "suggestions": [
+              {
+                "label": "Show example",
+                "message": "Show me a concrete example of this structure."
+              }
+            ]
           }
         ]
       }
@@ -193,8 +199,23 @@ Callers never repeat it. The write is all-or-nothing, and a duplicate
 
 Both state and `changes` use lanes with `id`, `name`, and `items`. Each item has
 `id`, `glance`, `explanation`, and `trust`, plus optional `forensics` and
-`tables`. `changes` also has `id`, `timestamp`, `headline`, and `summary`.
-Updates are appended, never rewritten.
+`tables`. An item may also offer zero to three `suggestions`, each with a short
+`label` and the full `message` it sends on the human's behalf. `changes` also
+has `id`, `timestamp`, `headline`, and `summary`. Updates are appended, never
+rewritten.
+
+Suggestions are optional shortcuts, not a mandatory footer. Add them only when
+one to three specific replies would genuinely help the human act on that exact
+item; otherwise omit `suggestions` entirely. Never fill every item with generic
+defaults. Keep each label short and distinct, and write each message as the
+complete, plain-language response the human would actually send. Numeric keys
+select them in the order authored.
+
+Treat a selected suggestion exactly like a human chat message. It enters the
+question queue as a new human turn, so fold it, answer it inline, and apply the
+same immediate-acknowledgment rule when it requests a substantial work block.
+Never leave a selected suggestion with only a working indicator and no agent
+turn.
 
 `current_state.lanes` must contain one to six sections. This limit applies to a
 new publish, not to an uninitialized brief that has not received its first
@@ -252,6 +273,16 @@ cannot tell "read, nothing more needed" from "ignored": a thread whose newest
 turn is the human's shows *agent is working* forever. When the human's message
 closes the loop, reply with one acknowledging line via `answer`; folding their
 words in is not answering them.
+
+**Acknowledge work requests before starting the work.** If a page message says
+something like "implement that" and fulfilling it will require a substantial
+work block, first use `answer` to send one short confirmation such as "Yes —
+I’ll implement that now and publish the result here when it is ready." Only
+then begin the implementation. This gives the human an immediate reply instead
+of leaving the thread on *agent is working* for the entire work block. The
+acknowledgment is not the result: after the work, publish the normal current
+state and dated changes. If the request can be completed immediately, answer it
+directly instead of adding a separate acknowledgment.
 
 **The answer must live on the page, complete.** Never answer with a pointer to
 the clipboard, the terminal, a file, or anywhere else. If the human asked for

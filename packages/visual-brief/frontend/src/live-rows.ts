@@ -1,5 +1,5 @@
 import { createMemo, type Accessor } from "solid-js";
-import type { BriefDocument } from "./document";
+import type { BriefDocument, SuggestedReply } from "./document";
 import { awaitingThreadCount, outline, type Row } from "./outline";
 export interface RowIndex {
   rows: Accessor<Row[]>;
@@ -66,6 +66,9 @@ function liveRow(
     },
     get answerState(): string | undefined {
       return now()?.answerState;
+    },
+    get suggestions(): SuggestedReply[] | undefined {
+      return now()?.suggestions;
     },
   };
 }

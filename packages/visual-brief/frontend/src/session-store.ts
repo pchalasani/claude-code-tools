@@ -8,9 +8,23 @@ export interface SentRecord {
   after?: number;
   failed?: boolean;
 }
+export interface AcceptedSignalRecord {
+  baseline: string | null;
+  at?: string;
+  signal?: string;
+  text?: string;
+}
+export type AcceptedSignalWork = Record<string, AcceptedSignalRecord>;
+export type StoredAcceptedSignalWork = Record<
+  string,
+  AcceptedSignalRecord | string | null
+>;
 const HISTORY_NAMESPACE = "visual-brief-v2";
 export function sentStorageKey(): string { return humanStorageKey("sent"); }
 export function healedStorageKey(): string { return humanStorageKey("healed"); }
+export function signalWorkStorageKey(): string {
+  return humanStorageKey("signal-work");
+}
 export function readSentRecords(): SentRecord[] {
   const raw = readSession(sentStorageKey());
   if (raw === null || raw === "") {
@@ -25,6 +39,63 @@ export function readSentRecords(): SentRecord[] {
 }
 export function saveSentRecords(records: SentRecord[]): void {
   writeSession(sentStorageKey(), JSON.stringify(records));
+}
+export function readAcceptedSignalWork(): AcceptedSignalWork {
+  const raw = readSession(signalWorkStorageKey());
+  if (raw === null || raw === "") {
+    return {};
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      parsed === null
+      || typeof parsed !== "object"
+      || Array.isArray(parsed)
+    ) {
+      return {};
+    }
+    return Object.fromEntries(
+      Object.entries(parsed).flatMap(([rowId, value]) => {
+        const record = acceptedSignalRecord(value);
+        return rowId === "" || record === null ? [] : [[rowId, record]];
+      }),
+    );
+  } catch {
+    return {};
+  }
+}
+export function saveAcceptedSignalWork(work: StoredAcceptedSignalWork): void {
+  writeSession(signalWorkStorageKey(), JSON.stringify(work));
+}
+function acceptedSignalRecord(value: unknown): AcceptedSignalRecord | null {
+  if (typeof value === "string" || value === null) {
+    return { baseline: value };
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.baseline !== "string"
+    && record.baseline !== null
+  ) {
+    return null;
+  }
+  if (record.signal !== undefined && typeof record.signal !== "string") {
+    return null;
+  }
+  if (record.at !== undefined && typeof record.at !== "string") {
+    return null;
+  }
+  if (record.text !== undefined && typeof record.text !== "string") {
+    return null;
+  }
+  return {
+    baseline: record.baseline,
+    ...(record.at === undefined ? {} : { at: record.at }),
+    ...(record.signal === undefined ? {} : { signal: record.signal }),
+    ...(record.text === undefined ? {} : { text: record.text }),
+  };
 }
 export function readHealedStandoff(): string | null {
   const storageKey = healedStorageKey();

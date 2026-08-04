@@ -1,6 +1,6 @@
 import { For, Show, type JSX } from "solid-js";
 
-import { humanAge } from "./age";
+import { formatTimestamp, humanAge } from "./age";
 import {
   ComposeBox,
   ComposeButton,
@@ -57,7 +57,7 @@ export function CurrentStateView(props: {
                   <span class="current-state-when">
                     <time
                       dateTime={current().updated_at}
-                      title={current().updated_at}
+                      title={formatTimestamp(current().updated_at)}
                     >
                       {humanAge(current().updated_at, props.now)}
                     </time>
@@ -130,7 +130,10 @@ function LegacyCurrentStateView(props: {
     <section class="current-state current-state-legacy">
       <header class="current-state-head">
         <h2>Current state</h2>
-        <time dateTime={props.state.updated_at} title={props.state.updated_at}>
+        <time
+          dateTime={props.state.updated_at}
+          title={formatTimestamp(props.state.updated_at)}
+        >
           {humanAge(props.state.updated_at, props.now)}
         </time>
       </header>

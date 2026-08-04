@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
@@ -253,6 +254,8 @@ def test_an_appended_update_arrives_open_at_the_top_with_its_age(
             open: latest?.dataset.open ?? null,
             timestamp:
               latest?.querySelector(".update-time")?.textContent ?? null,
+            dateTime:
+              latest?.querySelector(".update-time")?.dateTime ?? null,
             age: latest?.querySelector(".update-age")?.textContent ?? null,
             divider: document.querySelector(".earlier-heading") !== null,
             nowMark: document.querySelector(".now-mark") !== null,
@@ -263,7 +266,11 @@ def test_an_appended_update_arrives_open_at_the_top_with_its_age(
 
     assert state["order"][0] == "just-published", state
     assert state["open"] == "true", state
-    assert state["timestamp"] == timestamp, state
-    assert state["age"] in {"4 minutes ago", "5 minutes ago"}, state
+    assert state["dateTime"] == timestamp, state
+    assert re.fullmatch(
+        r"\d{1,2}-[A-Z][a-z]{2}-\d{2} \d{1,2}:\d{2} (?:AM|PM)",
+        state["timestamp"],
+    ), state
+    assert state["age"] in {"4min", "5min"}, state
     assert state["divider"] is False, state
     assert state["nowMark"] is False, state

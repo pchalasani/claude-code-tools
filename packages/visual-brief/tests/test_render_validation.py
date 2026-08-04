@@ -263,3 +263,50 @@ def test_trust_chip_with_surrounding_whitespace_is_rejected() -> None:
         r"is not a recognized trust chip$",
     ):
         render_content(data)
+
+
+def test_item_accepts_zero_to_three_authored_suggestions() -> None:
+    """An item may carry a small ordered set of useful reply shortcuts."""
+    data = _example()
+    _first_item(data)["suggestions"] = [
+        {"label": "Short", "message": "Say the full useful thing."},
+        {"label": "Another", "message": "Send a different full message."},
+    ]
+
+    assert render_content(data).startswith("<!doctype html>")
+
+
+def test_item_rejects_more_than_three_suggestions() -> None:
+    """Keep the numeric reply strip deliberately small."""
+    data = _example()
+    _first_item(data)["suggestions"] = [
+        {"label": f"Choice {index}", "message": f"Message {index}."}
+        for index in range(4)
+    ]
+
+    with pytest.raises(ValueError, match="must contain at most 3 replies"):
+        render_content(data)
+
+
+@pytest.mark.parametrize("field", ["label", "message"])
+def test_item_suggestion_requires_both_exact_fields(field: str) -> None:
+    """A shortcut always explains both what is shown and what gets sent."""
+    data = _example()
+    suggestion = {"label": "Useful", "message": "Do the useful thing."}
+    suggestion.pop(field)
+    _first_item(data)["suggestions"] = [suggestion]
+
+    with pytest.raises(ValueError, match="must have exactly these fields"):
+        render_content(data)
+
+
+def test_item_suggestion_labels_are_unique() -> None:
+    """Do not present two visually indistinguishable choices."""
+    data = _example()
+    _first_item(data)["suggestions"] = [
+        {"label": "Show proof", "message": "Show the direct output."},
+        {"label": "show proof", "message": "Show the test result."},
+    ]
+
+    with pytest.raises(ValueError, match="labels must be unique"):
+        render_content(data)

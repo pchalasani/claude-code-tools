@@ -49,6 +49,7 @@ _REVEAL_STATE = """
     (() => {
       const rows = [...document.querySelectorAll("[data-row-id]")];
       const button = document.querySelector(".meta-attention");
+      const reveal = document.querySelector('[data-action="reveal-chats"]');
       return {
         painted: rows.map((row) => row.dataset.rowId),
         open: Object.fromEntries(
@@ -58,7 +59,7 @@ _REVEAL_STATE = """
           .filter((row) => row.dataset.rowKind === "thread")
           .map((row) => row.dataset.rowId),
         count: button?.dataset.attentionCount ?? null,
-        pressed: button?.getAttribute("aria-pressed") ?? null,
+        pressed: reveal?.getAttribute("aria-pressed") ?? null,
         cursor:
           document.querySelector('[data-cursor="true"]')?.dataset.rowId
           ?? null,
@@ -117,28 +118,6 @@ _HINT_STATE = """
         cursor:
           document.querySelector('[data-cursor="true"]')?.dataset.rowId
           ?? null,
-      };
-    })()
-    """
-
-_ORDINALS = """
-    (() => {
-      const marks = [...document.querySelectorAll("[data-row-id]")].map(
-        (row) => [
-          row.dataset.rowId,
-          row.querySelector(":scope > .row-head > .ordinal")?.textContent
-            ?? null,
-        ],
-      );
-      return {
-        numbered: marks.filter(([, mark]) => mark !== null),
-        onFolded: marks.filter(
-          ([id, mark]) =>
-            mark !== null
-            && document.querySelector(
-              '[data-row-id="' + id + '"]',
-            ).dataset.rowKind !== "item",
-        ).length,
       };
     })()
     """
@@ -293,34 +272,68 @@ def test_reveal_chats_then_restores_the_exact_fold_layout(
     assert after["overlay"] == before["overlay"] == "search"
     assert after["scroll"] == before["scroll"]
     assert after["pressed"] == "true"
-    assert after["count"] == "2"
+    assert after["count"] == "1"
     assert storage_restored == storage_before
     assert restored == before
 
 
-def test_the_masthead_offers_the_same_reveal_action_to_the_mouse(
+def test_the_masthead_attention_reveals_the_next_latest_update_thread(
     browser: Browser,
 ) -> None:
-    """Put the human's conversations in place from the masthead control."""
+    """Cycle only the latest update's outstanding conversations by mouse."""
     browser.press("C")
+    browser.run("scrollintoview", ".meta-attention")
     browser.run("click", ".meta-attention")
     browser.run("wait", "300")
 
-    shown = browser.evaluate(_REVEAL_STATE)
+    first = browser.evaluate(_REVEAL_STATE)
 
-    assert shown["pressed"] == "true", shown
-    assert shown["threads"] == [
-        AWAITING_THREAD,
-        ANSWERED_THREAD,
-        OTHER_AWAITING,
-    ], shown
+    assert first["cursor"] == AWAITING_THREAD, first
+    assert first["count"] == "2", first
+    assert AWAITING_THREAD in first["threads"], first
+    assert first["open"][AWAITING_THREAD] == "true", first
+    assert OTHER_AWAITING not in first["threads"], first
 
+    browser.run("scrollintoview", ".meta-attention")
     browser.run("click", ".meta-attention")
     browser.run("wait", "300")
-    restored = browser.evaluate(_REVEAL_STATE)
+    second = browser.evaluate(_REVEAL_STATE)
 
-    assert restored["pressed"] == "false", restored
-    assert restored["threads"] == [], restored
+    assert second["cursor"] == ANSWERED_THREAD, second
+    assert second["count"] == "1", second
+    assert ANSWERED_THREAD in second["threads"], second
+    assert second["open"][ANSWERED_THREAD] == "true", second
+    assert OTHER_AWAITING not in second["threads"], second
+
+
+def test_the_masthead_attention_button_accepts_enter(browser: Browser) -> None:
+    """Keep the latest-update action usable from ordinary keyboard focus."""
+    browser.press("C")
+    browser.evaluate("document.querySelector('.meta-attention')?.focus(); true")
+
+    browser.press("Enter")
+    browser.run("wait", "300")
+
+    assert browser.cursor_row() == AWAITING_THREAD
+
+
+def test_attention_click_releases_enter_to_the_visible_cursor(
+    browser: Browser,
+) -> None:
+    """Do not let an off-screen masthead button steal the next Enter press."""
+    browser.press("C")
+    browser.run("scrollintoview", ".meta-attention")
+    browser.run("click", ".meta-attention")
+    browser.run("wait", "300")
+
+    assert browser.cursor_row() == AWAITING_THREAD
+    assert browser.evaluate(_REVEAL_STATE)["open"][AWAITING_THREAD] == "true"
+
+    browser.press("Enter")
+    browser.run("wait", "300")
+
+    assert browser.cursor_row() == AWAITING_THREAD
+    assert browser.evaluate(_REVEAL_STATE)["open"][AWAITING_THREAD] == "false"
 
 
 def test_a_long_question_keeps_the_thread_controls_on_one_header_line(
@@ -423,27 +436,6 @@ def test_escape_takes_the_labels_away_without_moving(browser: Browser) -> None:
     assert left["cursor"] == before
 
 
-def test_the_page_numbers_what_it_is_showing_so_it_can_be_cited(
-    browser: Browser,
-) -> None:
-    """Number the visible items, and only the visible items."""
-    browser.press("E")
-    browser.run("wait", "300")
-    opened = browser.evaluate(_ORDINALS)
-
-    browser.press("C")
-    browser.run("wait", "300")
-    folded = browser.evaluate(_ORDINALS)
-
-    numbers = [mark for _, mark in opened["numbered"]]
-    assert numbers == [str(one) for one in range(1, len(numbers) + 1)]
-    assert len(numbers) == 15, opened
-    assert opened["onFolded"] == 0, opened
-    # Folded content carries no number, which is what makes a number readable
-    # off the screen at all.
-    assert folded["numbered"] == [], folded
-
-
 def test_a_lane_chat_opens_from_the_keyboard_as_it_does_from_its_button(
     browser: Browser,
 ) -> None:
@@ -526,3 +518,46 @@ def test_the_page_says_which_keys_do_the_new_things(browser: Browser) -> None:
         "Reveal your chats, then restore the prior fold layout"
     )
     assert listed["n"] == "Jump to your next open chat"
+
+
+def test_shortcut_glyphs_and_labels_stay_readable_on_a_small_screen(
+    browser: Browser,
+) -> None:
+    """Keep every always-visible shortcut legible while the controls wrap."""
+    browser.run("set", "viewport", "480", "800")
+    browser.run("wait", "150")
+
+    painted = browser.evaluate(
+        """
+        (() => {
+          const controls = [...document.querySelectorAll(".key-control")];
+          const readings = controls.map((control) => {
+            const key = control.querySelector("kbd");
+            const label = control.querySelector("span");
+            return {
+              label: label?.textContent?.trim() ?? "",
+              labelVisible: (label?.getClientRects().length ?? 0) > 0,
+              labelSize: parseFloat(getComputedStyle(label).fontSize),
+              keyVisible: (key?.getClientRects().length ?? 0) > 0,
+              keySize: parseFloat(getComputedStyle(key).fontSize),
+              top: Math.round(control.getBoundingClientRect().top),
+            };
+          });
+          return {
+            readings,
+            rows: new Set(readings.map((reading) => reading.top)).size,
+          };
+        })()
+        """
+    )
+
+    assert painted["rows"] > 1, painted
+    assert all(reading["label"] for reading in painted["readings"]), painted
+    assert all(
+        reading["labelVisible"] and reading["labelSize"] >= 14
+        for reading in painted["readings"]
+    ), painted
+    assert all(
+        reading["keyVisible"] and reading["keySize"] >= 16
+        for reading in painted["readings"]
+    ), painted

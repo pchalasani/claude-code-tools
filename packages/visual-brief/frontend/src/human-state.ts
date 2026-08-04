@@ -38,7 +38,7 @@ export function runIdFromLocation(): string {
     : "";
 }
 export function humanStorageKey(
-  part: HumanStoragePart | "sent" | "healed",
+  part: HumanStoragePart | "sent" | "healed" | "signal-work",
   runId: string = runIdFromLocation(),
 ): string {
   const instance = runInstanceFromPage();

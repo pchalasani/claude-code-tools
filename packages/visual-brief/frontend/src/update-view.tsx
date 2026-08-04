@@ -1,5 +1,5 @@
 import { For, type JSX } from "solid-js";
-import { humanAge } from "./age";
+import { formatTimestamp, humanAge } from "./age";
 import {
   ComposeBox,
   ComposeButton,
@@ -34,7 +34,7 @@ export function UpdateView(props: {
           <span class="update-title">{props.update.headline}</span>
           <span class="update-when">
             <time class="update-time" dateTime={props.update.timestamp}>
-              {props.update.timestamp}
+              {formatTimestamp(props.update.timestamp)}
             </time>
             <span class="update-age">
               {humanAge(props.update.timestamp, props.now)}

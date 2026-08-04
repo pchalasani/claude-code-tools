@@ -1,6 +1,8 @@
 import { createSignal, type Accessor } from "solid-js";
 import { createHumanState, type HumanState } from "./human-state";
 import { createPending, type Pending, type PendingNote } from "./pending";
+import { createSignalWork, type SignalWork } from "./signal-work";
+import type { SuggestedReply } from "./document";
 export interface ComposeTarget {
   rowId: string;
   anchorId: string;
@@ -10,12 +12,6 @@ export interface PostReply {
   ok: boolean;
   timestamp: string;
 }
-export const SIGNALS: [string, string][] = [
-  ["too-dense", "Too dense"],
-  ["show-evidence", "Show evidence"],
-  ["go-deeper", "Go deeper"],
-  ["skip", "Skip"],
-];
 export type Post = (path: string, payload: unknown) => Promise<PostReply>;
 export type Release = (rowId: string, sent: boolean) => void;
 export interface Composer {
@@ -33,8 +29,20 @@ export interface Composer {
   draftWarning: Accessor<string>;
   submit: () => Promise<void>;
   pendingAt: (rowId: string) => PendingNote[];
-  sendSignal: (rowId: string, anchorId: string, signal: string) => Promise<void>;
+  sendSignal: (
+    rowId: string,
+    anchorId: string,
+    suggestion: SuggestedReply,
+  ) => Promise<void>;
   signalStatus: (rowId: string) => string;
+  signalWorkingAt: (rowId: string) => boolean;
+  selectedSignalAt: (rowId: string) => string | null;
+}
+interface SignalRequest {
+  baseline: string | null;
+  key: string;
+  label: string;
+  sequence: number;
 }
 export async function postJson(path: string, payload: unknown): Promise<PostReply> {
   const response = await fetch(path, {
@@ -60,13 +68,22 @@ export function createComposer(
   release: Release = () => undefined,
   pending: Pending = createPending(),
   human: HumanState = createHumanState(),
+  signalWork: SignalWork = createSignalWork(),
 ): Composer {
   const [target, setTarget] = createSignal<ComposeTarget | null>(null);
   const [sendingRow, setSendingRow] = createSignal<string | null>(null);
   const [status, setStatus] = createSignal("");
   const [discardArmed, setDiscardArmed] = createSignal<string | null>(null);
-  const [signals, setSignals] = createSignal<Record<string, string>>({});
-  const [inFlight, setInFlight] = createSignal<ReadonlySet<string>>(new Set());
+  const [signalRequests, setSignalRequests] = createSignal<
+    Record<string, SignalRequest[]>
+  >({});
+  const [signalOutcomes, setSignalOutcomes] = createSignal<
+    Record<string, { sequence: number; message: string }>
+  >({});
+  const [signalSelections, setSignalSelections] = createSignal<
+    Record<string, { sequence: number; signal: string | null }>
+  >({});
+  let signalSequence = 0;
   const text = (): string => {
     const current = target();
     if (current === null) {
@@ -203,38 +220,114 @@ export function createComposer(
     draftWarning: human.draftWarning,
     submit,
     pendingAt: pending.at,
-    sendSignal: async (rowId, anchorId, signal) => {
-      const label = SIGNALS.find(([name]) => name === signal)?.[1] ?? signal;
+    sendSignal: async (rowId, anchorId, suggestion) => {
+      const signal = suggestion.message;
+      const label = suggestion.label;
       const key = `${rowId}:${signal}`;
-      if (inFlight().has(key)) {
+      if (
+        signalWork.selectedAt(rowId) === signal
+        || signalRequests()[rowId]?.some((request) => request.key === key)
+      ) {
         return;
       }
-      setInFlight((current) => new Set(current).add(key));
-      setSignals((current) => ({
+      signalSequence += 1;
+      const request = {
+        baseline: signalWork.baseline(),
+        key,
+        label,
+        sequence: signalSequence,
+      };
+      setSignalSelections((current) => ({
         ...current,
-        [rowId]: `Sending ${label}…`,
+        [rowId]: { sequence: request.sequence, signal },
+      }));
+      setSignalRequests((current) => ({
+        ...current,
+        [rowId]: [...(current[rowId] ?? []), request],
       }));
       try {
-        const reply = await post("signal", { anchor_id: anchorId, signal });
-        setSignals((current) => ({
-          ...current,
-          [rowId]: reply.ok
-            ? `Feedback received: ${label}`
-            : "Could not send feedback.",
-        }));
-      } catch {
-        setSignals((current) => ({
-          ...current,
-          [rowId]: "Could not send feedback.",
-        }));
-      } finally {
-        setInFlight((current) => {
-          const next = new Set(current);
-          next.delete(key);
-          return next;
+        const reply = await post("signal", {
+          anchor_id: anchorId,
+          label,
+          text: suggestion.message,
         });
+        if (reply.ok) {
+          const latest = signalSelections()[rowId]?.sequence
+            === request.sequence;
+          signalWork.accept(
+            rowId,
+            signal,
+            request.baseline,
+            request.sequence,
+            suggestion.message,
+            reply.timestamp,
+          );
+          if (latest) {
+            setSignalSelections((current) => withoutKey(current, rowId));
+          }
+          setSignalOutcome(rowId, request.sequence, "");
+        } else {
+          clearRejectedSelection(rowId, request.sequence);
+          setSignalOutcome(
+            rowId,
+            request.sequence,
+            "Could not send feedback.",
+          );
+        }
+      } catch {
+        clearRejectedSelection(rowId, request.sequence);
+        setSignalOutcome(
+          rowId,
+          request.sequence,
+          "Could not send feedback.",
+        );
+      } finally {
+        setSignalRequests((current) => ({
+          ...current,
+          [rowId]: (current[rowId] ?? []).filter(
+            (active) => active.sequence !== request.sequence,
+          ),
+        }));
       }
     },
-    signalStatus: (rowId) => signals()[rowId] ?? "",
+    signalStatus: (rowId) => {
+      const active = signalRequests()[rowId] ?? [];
+      const latest = active.at(-1);
+      return latest === undefined
+        ? signalOutcomes()[rowId]?.message ?? ""
+        : `Sending ${latest.label}…`;
+    },
+    signalWorkingAt: signalWork.at,
+    selectedSignalAt: (rowId) => {
+      const current = signalSelections()[rowId];
+      return current === undefined ? signalWork.selectedAt(rowId) : current.signal;
+    },
   };
+
+  function clearRejectedSelection(rowId: string, sequence: number): void {
+    setSignalSelections((current) =>
+      current[rowId]?.sequence === sequence
+        ? withoutKey(current, rowId)
+        : current
+    );
+  }
+
+  function setSignalOutcome(
+    rowId: string,
+    sequence: number,
+    message: string,
+  ): void {
+    setSignalOutcomes((current) => {
+      if ((current[rowId]?.sequence ?? -1) > sequence) {
+        return current;
+      }
+      return { ...current, [rowId]: { sequence, message } };
+    });
+  }
+}
+
+function withoutKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  const next = { ...record };
+  delete next[key];
+  return next;
 }

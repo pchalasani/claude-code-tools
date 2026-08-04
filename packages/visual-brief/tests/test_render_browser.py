@@ -15,7 +15,7 @@ from typing import Iterator
 import pytest
 
 from browser_support import FIRST_ITEM, Browser, browser_session
-from page_document import embedded_document, is_awaiting, iter_threads
+from page_document import embedded_document, iter_threads
 from visual_brief.render import render_content
 
 
@@ -35,15 +35,12 @@ def test_bundle_executes_and_renders_the_delivered_document(
         (() => {
           const root = document.getElementById("visual-brief-root");
           const app = root && root.querySelector("[data-mounted]");
-          const count = (name) =>
-            app.querySelector(`[data-count="${name}"] b`).textContent;
           return {
             mounted: Boolean(app),
             title: app && app.querySelector(".brief-title").textContent,
-            items: count("items"),
-            lanes: count("lanes"),
-            awaiting: app.querySelector("[data-awaiting-count]")
-              .dataset.awaitingCount,
+            aggregateCounts: app.querySelectorAll(
+              "[data-count], [data-awaiting-count]",
+            ).length,
             painted: document.querySelectorAll(
               '[data-row-kind="item"]',
             ).length,
@@ -61,28 +58,34 @@ def test_bundle_executes_and_renders_the_delivered_document(
     total_items = sum(len(lane["items"]) for lane in lanes)
     assert mounted["mounted"] is True
     assert mounted["title"] == expected["title"]
-    assert mounted["items"] == str(total_items)
-    assert mounted["lanes"] == str(len(lanes))
+    assert mounted["aggregateCounts"] == 0
     assert 0 < int(mounted["painted"]) <= total_items
 
 
-def test_the_page_agrees_with_the_document_on_what_awaits_an_answer(
+def test_the_page_scopes_attention_to_the_latest_dated_update(
     browser: Browser,
 ) -> None:
-    """Show the same outstanding count the run accounting works from."""
+    """Count awaiting and unseen-answer threads only in the latest update."""
     shown = browser.evaluate(
         """
-        document.querySelector("[data-awaiting-count]").dataset.awaitingCount
+        ({
+          count: document.querySelector(".meta-attention")
+            ?.dataset.attentionCount ?? null,
+          copy: document.querySelector(".meta-attention")?.textContent ?? null,
+        })
         """
     )
 
     delivered = embedded_document(browser.server.html)
-    awaiting = [
-        thread
-        for _, thread in iter_threads(delivered)
-        if is_awaiting(thread)
+    latest = delivered["updates"][-1]
+    latest_threads = [
+        thread for _, thread in iter_threads({"updates": [latest]})
     ]
-    assert int(shown) == len(awaiting) == 2
+    assert len(latest_threads) == 2
+    assert shown == {
+        "count": "2",
+        "copy": "2 need attention in latest update",
+    }
 
 
 def test_page_makes_no_request_other_than_its_own_local_channel(

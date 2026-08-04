@@ -10,11 +10,14 @@ from pathlib import Path
 from typing import Any
 
 from visual_brief import MAX_THREAD_ID_LENGTH
+from visual_brief.schema import MAX_SUGGESTION_LABEL_LENGTH
 
 MAX_ANCHOR_LENGTH = 200
 MAX_QUESTION_LENGTH = 20_000
 MAX_QUEUE_RECORD_BYTES = 128 * 1024
-SIGNALS = frozenset({"too-dense", "show-evidence", "go-deeper", "skip"})
+LEGACY_SIGNALS = frozenset(
+    {"too-dense", "show-evidence", "go-deeper", "skip"}
+)
 
 
 def build_question_record(
@@ -44,11 +47,24 @@ def build_question_record(
     }
 
 
-def build_signal_record(data: dict[str, Any]) -> dict[str, str]:
-    """Build a validated fixed-vocabulary feedback record."""
+def build_signal_record(data: dict[str, Any]) -> dict[str, str | None]:
+    """Build one validated agent-authored suggested-reply record."""
     anchor = _required_text(data, "anchor_id", MAX_ANCHOR_LENGTH)
+    if "label" in data or "text" in data:
+        return {
+            "timestamp": _timestamp(),
+            "type": "question",
+            "anchor_id": anchor,
+            "label": _required_text(
+                data,
+                "label",
+                MAX_SUGGESTION_LABEL_LENGTH,
+            ),
+            "text": _required_text(data, "text", MAX_QUESTION_LENGTH),
+            "parent_id": None,
+        }
     signal = data.get("signal")
-    if not isinstance(signal, str) or signal not in SIGNALS:
+    if not isinstance(signal, str) or signal not in LEGACY_SIGNALS:
         raise ValueError("Field 'signal' must be a supported feedback signal")
     return {
         "timestamp": _timestamp(),

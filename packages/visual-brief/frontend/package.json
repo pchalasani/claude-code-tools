@@ -15,6 +15,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fontsource-variable/atkinson-hyperlegible-next": "5.3.0",
     "solid-js": "1.9.14"
   },
   "devDependencies": {

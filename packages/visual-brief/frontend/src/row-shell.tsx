@@ -7,6 +7,7 @@ export function RowShell(props: {
   row: Row;
   head: JSX.Element;
   separateHead?: boolean;
+  toggleSeparateHead?: boolean;
   actions?: JSX.Element;
   children?: JSX.Element;
 }): JSX.Element {
@@ -15,7 +16,6 @@ export function RowShell(props: {
   const bodyId = () => `body:${props.row.id}`;
   const waitingId = () => `waiting:${props.row.id}`;
   const hint = () => props.state.hints.labelFor(props.row.id);
-  const ordinal = () => props.state.nav.ordinal(props.row.id);
   const waiting = (): "direct" | "contained" | undefined => {
     if (
       (props.row.kind === "thread" && props.row.awaiting)
@@ -41,6 +41,12 @@ export function RowShell(props: {
       data-row-id={props.row.id}
       data-row-kind={props.row.kind}
       data-cursor={isCursor() ? "true" : "false"}
+      data-owning-item={
+        props.row.kind === "item"
+        && props.state.owningItem()?.id === props.row.id
+          ? "true"
+          : "false"
+      }
       data-open={isOpen() ? "true" : "false"}
       data-awaiting={props.row.awaiting ? "true" : "false"}
       data-waiting={waiting()}
@@ -80,10 +86,30 @@ export function RowShell(props: {
           <span class="row-fold" aria-hidden="true">
             {isOpen() ? "▾" : "▸"}
           </span>
+          <Show when={props.state.rowShortcutNumber(props.row.id)}>
+            {(number) => (
+              <kbd class="row-shortcut" aria-hidden="true">
+                {number()}
+              </kbd>
+            )}
+          </Show>
           <Show when={!props.separateHead}>{props.head}</Show>
         </button>
         <Show when={props.separateHead}>
-          <div class="row-static-head">{props.head}</div>
+          <div
+            class="row-static-head"
+            onClick={(event) => {
+              if (
+                !props.toggleSeparateHead
+                || clickTargetsInteractiveDescendant(event)
+              ) {
+                return;
+              }
+              props.state.nav.toggle(props.row.id);
+            }}
+          >
+            {props.head}
+          </div>
         </Show>
         <Show when={waitingDescription()}>
           {(description) => (
@@ -91,11 +117,6 @@ export function RowShell(props: {
               {description()}
             </span>
           )}
-        </Show>
-        <Show when={ordinal() !== null}>
-          <span class="ordinal" aria-hidden="true">
-            {ordinal()}
-          </span>
         </Show>
         <Show when={props.actions !== undefined}>
           <span class="row-actions">{props.actions}</span>
@@ -108,6 +129,38 @@ export function RowShell(props: {
       </Show>
     </article>
   );
+}
+const INTERACTIVE_DESCENDANT = [
+  "a[href]",
+  "button",
+  "input",
+  "select",
+  "textarea",
+  "label",
+  "summary",
+  "form",
+  '[contenteditable]:not([contenteditable="false"])',
+  '[role="button"]',
+  '[role="link"]',
+  '[role="checkbox"]',
+  '[role="menuitem"]',
+  '[role="option"]',
+  '[role="radio"]',
+  '[role="slider"]',
+  '[role="spinbutton"]',
+  '[role="switch"]',
+  '[role="tab"]',
+  '[role="textbox"]',
+].join(", ");
+function clickTargetsInteractiveDescendant(
+  event: MouseEvent & { currentTarget: HTMLDivElement },
+): boolean {
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    return true;
+  }
+  const interactive = target.closest(INTERACTIVE_DESCENDANT);
+  return interactive !== null && event.currentTarget.contains(interactive);
 }
 function HintLabel(props: { label: string; typed: string }): JSX.Element {
   const done = () =>

@@ -84,6 +84,42 @@ export function conversations(brief: BriefDocument): Located[] {
   }
   return found;
 }
+
+/** Identify the agent turns currently attached directly below one row. */
+export function agentAnswerVersion(
+  brief: BriefDocument,
+  rowId: string,
+): string {
+  const turns = conversations(brief)
+    .filter((thread) => thread.id.startsWith(`${rowId}#`))
+    .flatMap((thread) => thread.turns.flatMap((turn, position) =>
+      turn.author === "agent"
+        ? [`${thread.id}:${position}:${turn.at}`]
+        : []
+    ));
+  return JSON.stringify(turns);
+}
+
+/** Report whether the exact suggested-reply turn has an agent answer. */
+export function suggestedReplyAnswered(
+  brief: BriefDocument,
+  rowId: string,
+  text: string,
+  at: string,
+): boolean {
+  for (const thread of conversations(brief)) {
+    if (!thread.id.startsWith(`${rowId}#`)) continue;
+    let found = false;
+    for (const turn of thread.turns) {
+      if (!found) {
+        found = turn.author === "human" && turn.text === text && turn.at === at;
+      } else if (turn.author === "agent") {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 function turnKey(threadId: string, position: number): string {
   return `${threadId} ${position}`;
 }

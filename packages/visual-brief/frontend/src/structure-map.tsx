@@ -6,6 +6,7 @@ import {
   onMount,
   type JSX,
 } from "solid-js";
+import { formatTimestamp } from "./age";
 import { isStructuredCurrentState, type Lane } from "./document";
 import {
   CURRENT_STATE_ROOT_ID,
@@ -161,7 +162,9 @@ export function StructureMap(props: { state: BriefState }): JSX.Element {
                   { dropFilter: true },
                 )}
               >
-                {update.timestamp}
+                <time dateTime={update.timestamp}>
+                  {formatTimestamp(update.timestamp)}
+                </time>
               </button>
               <MapLanes
                 state={props.state}

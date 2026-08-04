@@ -1,5 +1,5 @@
 import { For, Show, type JSX } from "solid-js";
-import { SIGNALS } from "./composer";
+import type { SuggestedReply } from "./document";
 import { SEND_CHORD_LABEL, isSendChord } from "./keys";
 import type { Row } from "./outline";
 import type { BriefState } from "./state";
@@ -145,31 +145,70 @@ export function PendingNotes(props: {
 export function SignalBar(props: {
   state: BriefState;
   row: Row;
+  suggestions: SuggestedReply[];
 }): JSX.Element {
+  const numbers = () => props.suggestions.flatMap((_, index) => {
+    const number = props.state.suggestionShortcutNumber(props.row.id, index);
+    return number === null ? [] : [number];
+  });
   return (
     <div class="signals">
-      <span class="signals-label">Tell the agent</span>
-      <For each={SIGNALS}>
-        {([signal, label]) => (
-          <button
-            type="button"
-            class="signal"
-            data-signal={signal}
-            onClick={() =>
-              void props.state.composer.sendSignal(
-                props.row.id,
-                props.row.anchorId,
-                signal,
-              )
-            }
-          >
-            {label}
-          </button>
-        )}
-      </For>
+      <div class="signals-heading">
+        <span class="signals-label">Tell the agent</span>
+        <span class="signals-hint">
+          ({signalShortcutHint(numbers())})
+        </span>
+      </div>
+      <div class="signal-choices">
+        <For each={props.suggestions}>
+          {(suggestion, index) => {
+            const number = () => props.state.suggestionShortcutNumber(
+              props.row.id,
+              index(),
+            );
+            return (
+              <button
+                type="button"
+                class="signal"
+                data-suggestion={suggestion.message}
+                aria-keyshortcuts={number() === null
+                  ? undefined
+                  : String(number())}
+                aria-pressed={
+                  props.state.composer.selectedSignalAt(props.row.id)
+                    === suggestion.message
+                }
+                onClick={() => {
+                  props.state.nav.select(props.row.id, { scroll: false });
+                  void props.state.composer.sendSignal(
+                    props.row.id,
+                    props.row.anchorId,
+                    suggestion,
+                  );
+                }}
+              >
+                <Show when={number()}>
+                  {(shown) => <kbd aria-hidden="true">{shown()}</kbd>}
+                </Show>
+                <span>{suggestion.label}</span>
+              </button>
+            );
+          }}
+        </For>
+      </div>
       <span class="status" aria-live="polite">
         {props.state.composer.signalStatus(props.row.id)}
       </span>
     </div>
   );
+}
+
+export function signalShortcutHint(numbers: readonly number[]): string {
+  if (numbers.length < 1) {
+    return "c to chat";
+  }
+  const first = numbers[0];
+  const last = numbers.at(-1);
+  const range = numbers.length === 1 ? String(first) : `${first}–${last}`;
+  return `type ${range} to select, c to chat`;
 }

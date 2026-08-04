@@ -394,3 +394,44 @@ def test_unused_deeply_nested_field_does_not_break_rendering() -> None:
 
     assert rendered.startswith("<!doctype html>")
     assert "unused" not in embedded_document(rendered)
+
+
+def test_suggested_replies_reach_the_browser_as_inert_data() -> None:
+    """Project both authored fields the Solid view needs for each shortcut."""
+    data = _example()
+    item = data["updates"][0]["lanes"][0]["items"][0]
+    item["suggestions"] = [
+        {
+            "label": "Show proof",
+            "message": "Show me the concrete evidence behind this claim.",
+        }
+    ]
+
+    delivered = embedded_document(render_content(data))
+
+    assert delivered["updates"][0]["lanes"][0]["items"][0][
+        "suggestions"
+    ] == item["suggestions"]
+
+
+def test_suggested_replies_are_trimmed_before_reaching_the_browser() -> None:
+    """Keep the browser's reply identity identical to the queued question."""
+    data = _example()
+    item = data["updates"][0]["lanes"][0]["items"][0]
+    item["suggestions"] = [
+        {
+            "label": "  Show proof  ",
+            "message": "  Show me the concrete evidence.  ",
+        }
+    ]
+
+    delivered = embedded_document(render_content(data))
+
+    assert delivered["updates"][0]["lanes"][0]["items"][0][
+        "suggestions"
+    ] == [
+        {
+            "label": "Show proof",
+            "message": "Show me the concrete evidence.",
+        }
+    ]

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { createComposer, type Post } from "./composer";
+import { createComposer, type Post, type PostReply } from "./composer";
+import type { SuggestedReply } from "./document";
 import type { Row } from "./outline";
 import { isWorking } from "./working";
 
@@ -9,6 +10,19 @@ interface Sent {
   path: string;
   payload: unknown;
 }
+
+const DENSE: SuggestedReply = {
+  label: "Less dense",
+  message: "Rewrite this item so it is easier to scan.",
+};
+const EVIDENCE: SuggestedReply = {
+  label: "Show proof",
+  message: "Show me the concrete evidence behind this claim.",
+};
+const DEEPER: SuggestedReply = {
+  label: "Go deeper",
+  message: "Explain this item in more depth.",
+};
 
 /**
  * Build the row an item would have in the outline.
@@ -229,31 +243,122 @@ describe("composition", () => {
     const daemon = recorder();
     const composer = createComposer(daemon.post);
 
-    const first = composer.sendSignal("u/l/i", "u/l/i", "too-dense");
-    const second = composer.sendSignal("u/l/i", "u/l/i", "too-dense");
+    const first = composer.sendSignal("u/l/i", "u/l/i", DENSE);
+    const second = composer.sendSignal("u/l/i", "u/l/i", DENSE);
 
-    expect(composer.signalStatus("u/l/i")).toBe("Sending Too dense…");
+    expect(composer.signalStatus("u/l/i")).toBe("Sending Less dense…");
+    expect(composer.selectedSignalAt("u/l/i")).toBe(DENSE.message);
     daemon.release();
     await Promise.all([first, second]);
 
     expect(daemon.sent).toHaveLength(1);
-    expect(composer.signalStatus("u/l/i")).toBe("Feedback received: Too dense");
+    expect(composer.signalStatus("u/l/i")).toBe("");
+    expect(composer.signalWorkingAt("u/l/i")).toBe(true);
+    expect(composer.selectedSignalAt("u/l/i")).toBe(DENSE.message);
+
+    await composer.sendSignal("u/l/i", "u/l/i", DENSE);
+    expect(daemon.sent).toHaveLength(1);
   });
 
   it("still reports a different signal pressed while one is in flight", async () => {
     const daemon = recorder();
     const composer = createComposer(daemon.post);
 
-    const first = composer.sendSignal("u/l/i", "u/l/i", "too-dense");
-    const second = composer.sendSignal("u/l/i", "u/l/i", "go-deeper");
+    const first = composer.sendSignal("u/l/i", "u/l/i", DENSE);
+    const second = composer.sendSignal("u/l/i", "u/l/i", DEEPER);
     daemon.release();
     await Promise.all([first, second]);
 
     expect(daemon.sent.map((call) => call.payload)).toEqual([
-      { anchor_id: "u/l/i", signal: "too-dense" },
-      { anchor_id: "u/l/i", signal: "go-deeper" },
+      { anchor_id: "u/l/i", label: DENSE.label, text: DENSE.message },
+      { anchor_id: "u/l/i", label: DEEPER.label, text: DEEPER.message },
     ]);
-    expect(composer.signalStatus("u/l/i")).toBe("Feedback received: Go deeper");
+    expect(composer.signalStatus("u/l/i")).toBe("");
+    expect(composer.signalWorkingAt("u/l/i")).toBe(true);
+  });
+
+  it("does not start signal work when feedback is rejected", async () => {
+    const daemon = recorder(false);
+    const composer = createComposer(daemon.post);
+
+    const sent = composer.sendSignal("u/l/i", "u/l/i", EVIDENCE);
+    expect(composer.signalStatus("u/l/i")).toBe("Sending Show proof…");
+    expect(composer.signalWorkingAt("u/l/i")).toBe(false);
+    expect(composer.selectedSignalAt("u/l/i")).toBe(EVIDENCE.message);
+    daemon.release();
+    await sent;
+
+    expect(composer.signalStatus("u/l/i")).toBe(
+      "Could not send feedback.",
+    );
+    expect(composer.signalWorkingAt("u/l/i")).toBe(false);
+    expect(composer.selectedSignalAt("u/l/i")).toBeNull();
+  });
+
+  it("restores an accepted selection when a later retry is rejected", async () => {
+    let retryReply: ((reply: PostReply) => void) | undefined;
+    let attempt = 0;
+    const post: Post = async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        return { ok: true, timestamp: "" };
+      }
+      return new Promise<PostReply>((resolve) => {
+        retryReply = resolve;
+      });
+    };
+    const composer = createComposer(post);
+
+    await composer.sendSignal("u/l/i", "u/l/i", EVIDENCE);
+    const retry = composer.sendSignal("u/l/i", "u/l/i", DEEPER);
+    expect(composer.selectedSignalAt("u/l/i")).toBe(DEEPER.message);
+
+    retryReply?.({ ok: false, timestamp: "" });
+    await retry;
+
+    expect(composer.signalWorkingAt("u/l/i")).toBe(true);
+    expect(composer.selectedSignalAt("u/l/i")).toBe(EVIDENCE.message);
+  });
+
+  it("restores an older success when a newer request is rejected", async () => {
+    const replies: ((reply: PostReply) => void)[] = [];
+    const post: Post = async () => new Promise<PostReply>((resolve) => {
+      replies.push(resolve);
+    });
+    const composer = createComposer(post);
+
+    const older = composer.sendSignal("u/l/i", "u/l/i", DENSE);
+    const newer = composer.sendSignal("u/l/i", "u/l/i", DEEPER);
+
+    replies[0]?.({ ok: true, timestamp: "" });
+    await older;
+    expect(composer.selectedSignalAt("u/l/i")).toBe(DEEPER.message);
+
+    replies[1]?.({ ok: false, timestamp: "" });
+    await newer;
+    expect(composer.selectedSignalAt("u/l/i")).toBe(DENSE.message);
+    expect(createComposer().selectedSignalAt("u/l/i")).toBe(DENSE.message);
+  });
+
+  it("does not let an older success replace a newer success", async () => {
+    const replies: ((reply: PostReply) => void)[] = [];
+    const post: Post = async () => new Promise<PostReply>((resolve) => {
+      replies.push(resolve);
+    });
+    const composer = createComposer(post);
+
+    const older = composer.sendSignal("u/l/i", "u/l/i", DENSE);
+    const newer = composer.sendSignal("u/l/i", "u/l/i", DEEPER);
+    expect(composer.selectedSignalAt("u/l/i")).toBe(DEEPER.message);
+
+    replies[1]?.({ ok: true, timestamp: "" });
+    await newer;
+    expect(composer.selectedSignalAt("u/l/i")).toBe(DEEPER.message);
+
+    replies[0]?.({ ok: true, timestamp: "" });
+    await older;
+    expect(composer.selectedSignalAt("u/l/i")).toBe(DEEPER.message);
+    expect(createComposer().selectedSignalAt("u/l/i")).toBe(DEEPER.message);
   });
 
   it("keeps what was written when the daemon refuses it", async () => {
@@ -319,11 +424,19 @@ describe("composition", () => {
     daemon.release();
     const composer = createComposer(daemon.post);
 
-    await composer.sendSignal("u/l/i", "u/l/i", "too-dense");
+    await composer.sendSignal("u/l/i", "u/l/i", DENSE);
 
     expect(daemon.sent).toEqual([
-      { path: "signal", payload: { anchor_id: "u/l/i", signal: "too-dense" } },
+      {
+        path: "signal",
+        payload: {
+          anchor_id: "u/l/i",
+          label: DENSE.label,
+          text: DENSE.message,
+        },
+      },
     ]);
-    expect(composer.signalStatus("u/l/i")).toBe("Feedback received: Too dense");
+    expect(composer.signalStatus("u/l/i")).toBe("");
+    expect(composer.signalWorkingAt("u/l/i")).toBe(true);
   });
 });

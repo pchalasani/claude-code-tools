@@ -270,7 +270,7 @@ class VisualBriefHandler(JsonResponder):
         self._append_queue_record(run_dir, record)
 
     def _record_signal(self, run_dir: Path) -> None:
-        """Validate and append one fixed-vocabulary feedback signal."""
+        """Validate and append one agent-authored suggested reply."""
         data = self._read_json_object()
         if data is None:
             return

@@ -9,8 +9,9 @@ html {
 body {
   background: var(--color-page);
   color: var(--color-text);
-  font-family: var(--font-reading);
+  font-family: var(--font-brief);
   font-size: var(--font-size-base);
+  font-weight: 400;
   line-height: var(--line-height-reading);
   margin: 0;
   min-width: 0;
@@ -34,7 +35,7 @@ kbd {
   border: var(--border-thin) solid var(--color-border-strong);
   border-radius: var(--radius-control);
   color: var(--color-text-muted);
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-xs);
   padding: 0.05em 0.35em;
   white-space: nowrap;
@@ -75,7 +76,7 @@ kbd {
 
 .brief-error {
   color: var(--color-limitation);
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   margin: var(--space-6) var(--space-5);
 }
 
@@ -88,7 +89,7 @@ kbd {
 .eyebrow,
 .history-kicker {
   color: var(--color-current);
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-xs);
   font-weight: 650;
   letter-spacing: 0.18em;
@@ -121,30 +122,23 @@ kbd {
   margin-bottom: var(--space-3);
 }
 
-.meta-count {
+.meta-attention {
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-control);
   color: var(--color-text-faint);
-  font-family: var(--font-utility);
-  font-size: var(--font-size-xs);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  padding: var(--space-1);
 }
 
-.meta-count b {
+.meta-attention b {
   color: var(--color-text);
-  font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
   font-weight: 650;
 }
 
-button.meta-count {
-  background: transparent;
-  border: 0;
-  border-radius: var(--radius-control);
-  cursor: pointer;
-  padding: var(--space-1);
-}
-
-button.meta-count:hover {
+.meta-attention:hover {
   color: var(--color-current-strong);
 }
 
@@ -166,9 +160,16 @@ button.meta-count:hover {
   border-radius: var(--radius-control);
   cursor: pointer;
   display: inline-flex;
-  font-size: var(--font-size-xs);
-  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+  gap: var(--space-2);
   padding: var(--space-1) var(--space-2);
+  text-align: left;
+}
+
+.key-control kbd {
+  font-size: var(--font-size-base);
+  min-width: 1.7em;
+  text-align: center;
 }
 
 .key-control:hover,
@@ -181,13 +182,22 @@ button.meta-count:hover {
   color: var(--color-text-muted);
 }
 
+.key-guide {
+  cursor: default;
+}
+
+.key-guide:hover {
+  background: transparent;
+  border-color: transparent;
+}
+
 .chip {
   align-items: center;
   border: var(--border-thin) solid transparent;
   border-radius: var(--radius-pill);
   display: inline-flex;
   flex: none;
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-xs);
   gap: 0.3em;
   letter-spacing: 0.01em;
@@ -236,7 +246,7 @@ button.meta-count:hover {
 
 .legend-label {
   color: var(--color-text-faint);
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-xs);
   letter-spacing: 0.16em;
   margin-right: var(--space-1);
@@ -334,7 +344,7 @@ button.meta-count:hover {
 }
 
 .map-trigger-label {
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-xs);
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -343,7 +353,7 @@ button.meta-count:hover {
 
 .map-title {
   color: var(--color-text-faint);
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-xs);
   letter-spacing: 0.18em;
   margin: 0;
@@ -371,7 +381,7 @@ button.meta-count:hover {
   color: var(--color-text-faint);
   cursor: pointer;
   display: block;
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-xs);
   overflow: hidden;
   padding: var(--space-1);
@@ -457,10 +467,12 @@ button.meta-count:hover {
   }
 
   .key-control {
+    flex: 1 1 9rem;
     min-height: var(--height-control-min);
   }
 
   .key-control span {
-    font-size: 0;
+    min-width: 0;
+    white-space: normal;
   }
 }

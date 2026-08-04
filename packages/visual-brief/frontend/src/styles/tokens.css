@@ -19,6 +19,9 @@
   --color-text: var(--palette-ink);
   --color-text-muted: #53647a;
   --color-text-faint: #596b82;
+  --color-agent-text: #132238;
+  --color-agent-text-muted: #42536a;
+  --color-human-text: #2447bd;
   --color-border: #d6e0eb;
   --color-border-strong: #798b9e;
   --color-current: var(--palette-cobalt);
@@ -28,6 +31,8 @@
   --color-active-soft: #e0f3ef;
   --color-warning: var(--palette-amber);
   --color-warning-soft: #fff3d5;
+  --color-context: #b77900;
+  --color-context-wash: rgb(255 196 61 / 7%);
   --color-limitation: var(--palette-coral);
   --color-limitation-soft: #fde9ed;
   --color-working-base: var(--color-text-faint);
@@ -36,19 +41,23 @@
   --color-working-wave-trailing: #2454d4;
   --color-scrim: rgb(19 34 56 / 58%);
 
-  /* Local/system typography only. */
-  --font-display: "Avenir Next", Avenir, "Segoe UI Variable Display",
-    "Segoe UI", system-ui, sans-serif;
-  --font-reading: "Avenir Next", Avenir, "Segoe UI Variable Text",
-    "Segoe UI", system-ui, -apple-system, sans-serif;
-  --font-utility: SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas,
+  /* One terminal face serves the brief; Atkinson is reserved for its title. */
+  --font-display: "Atkinson Hyperlegible Next Variable",
+    "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --font-brief: SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas,
     "Liberation Mono", monospace;
-  --font-size-xs: 0.75rem;
-  --font-size-sm: 0.875rem;
-  --font-size-base: 1rem;
-  --font-size-md: 1.125rem;
-  --font-size-lg: 1.375rem;
-  --font-size-xl: clamp(1.85rem, 1.3rem + 1.7vw, 2.65rem);
+  /* One reversible adjustment lowers or raises the entire type scale. */
+  --font-size-adjustment: -0.0625rem;
+  --font-size-xs: calc(0.875rem + var(--font-size-adjustment));
+  --font-size-sm: calc(1rem + var(--font-size-adjustment));
+  --font-size-base: calc(1.125rem + var(--font-size-adjustment));
+  --font-size-md: calc(1.125rem + var(--font-size-adjustment));
+  --font-size-lg: calc(1.375rem + var(--font-size-adjustment));
+  --font-size-xl: clamp(
+    calc(1.85rem + var(--font-size-adjustment)),
+    calc(1.3rem + 1.7vw + var(--font-size-adjustment)),
+    calc(2.65rem + var(--font-size-adjustment))
+  );
   --line-height-reading: 1.62;
   --line-height-tight: 1.18;
 
@@ -124,6 +133,9 @@
     --color-text: #e6edf5;
     --color-text-muted: #aab8c8;
     --color-text-faint: #8193a8;
+    --color-agent-text: #f1f5f9;
+    --color-agent-text-muted: #c7d2df;
+    --color-human-text: #91a8f8;
     --color-border: #26384b;
     --color-border-strong: #5f7389;
     --color-current: #6f8df0;
@@ -133,6 +145,8 @@
     --color-active-soft: #153b38;
     --color-warning: #e0ac4f;
     --color-warning-soft: #3b301c;
+    --color-context: #e0ac4f;
+    --color-context-wash: rgb(224 172 79 / 8%);
     --color-limitation: #ec7c8d;
     --color-limitation-soft: #42232d;
     --color-working-wave-leading: #6ff5d7;

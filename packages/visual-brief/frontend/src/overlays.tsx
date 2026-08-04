@@ -36,6 +36,13 @@ export function KeyBar(props: { state: BriefState }): JSX.Element {
           </button>
         )}
       </For>
+      <span
+        class="key-control key-guide"
+        aria-label="Number keys 1 through 9 choose the matching visible tag"
+      >
+        <kbd>1–9</kbd>
+        <span>Numbered choice</span>
+      </span>
     </nav>
   );
 }

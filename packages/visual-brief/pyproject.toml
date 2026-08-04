@@ -30,6 +30,7 @@ build-backend = "hatchling.build"
 # patterns that keep them out of the repository's global VCS excludes.
 artifacts = [
     "src/visual_brief/static/*",
+    "src/visual_brief/licenses/*",
     "frontend/package-lock.json",
 ]
 

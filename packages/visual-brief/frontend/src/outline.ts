@@ -5,6 +5,7 @@ import {
   type BriefDocument,
   type Item,
   type Lane,
+  type SuggestedReply,
   type Thread,
   type Update,
 } from "./document";
@@ -30,6 +31,7 @@ export interface Row {
   awaiting: boolean;
   human: boolean;
   answerState?: string;
+  suggestions?: SuggestedReply[];
 }
 
 export function orderedUpdates(brief: BriefDocument): Update[] {
@@ -151,6 +153,7 @@ function appendLane(
       search: itemSearchText(item),
       awaiting: false,
       human: false,
+      suggestions: item.suggestions,
     };
     rows.push(itemRow);
     rows.push(...evidenceRows(item, path));

@@ -9,7 +9,7 @@
  * arrives without replacing the page it lands on.
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   click,
@@ -19,7 +19,12 @@ import {
   typeInto,
   useHarness,
 } from "../test/harness";
-import { itemOf, laneOf, sampleBrief } from "../test/sample-brief";
+import {
+  itemOf,
+  laneOf,
+  SAMPLE_SUGGESTIONS,
+  sampleBrief,
+} from "../test/sample-brief";
 
 const ALPHA = "newest/changed/alpha";
 const BETA = "newest/changed/beta";
@@ -27,6 +32,12 @@ const OPEN_THREAD = `${BETA}#q-open`;
 const NEXT_LANE = "newest/next";
 
 useHarness();
+
+const realFetch = globalThis.fetch;
+
+afterEach(() => {
+  globalThis.fetch = realFetch;
+});
 
 describe("what a publish does to something half-written", () => {
   it("leaves an open chat box open, with the words still in it", () => {
@@ -115,6 +126,41 @@ describe("what a publish does to something half-written", () => {
 });
 
 describe("what a publish tells the human has changed", () => {
+  it("does not attach pending feedback to an update appended later", async () => {
+    let answer: ((response: Response) => void) | undefined;
+    globalThis.fetch = (() => new Promise<Response>((resolve) => {
+      answer = resolve;
+    })) as typeof globalThis.fetch;
+    const { publish } = mountLive();
+    const button = document.querySelector<HTMLButtonElement>(
+      `[data-row-id="${ALPHA}"] [data-suggestion="${
+        SAMPLE_SUGGESTIONS[0]?.message
+      }"]`,
+    );
+
+    button?.click();
+    expect(button?.getAttribute("aria-pressed")).toBe("true");
+
+    const appended = sampleBrief();
+    appended.updates.push({
+      id: "after-feedback",
+      timestamp: "2026-07-28T09:00:00Z",
+      headline: "The agent completed more work",
+      summary: "A new update is now final.",
+      lanes: [],
+    });
+    publish(appended);
+    await Promise.resolve();
+
+    answer?.(new Response("{}", { status: 200 }));
+    await vi.waitFor(() => {
+      expect(button?.getAttribute("aria-pressed")).toBe("false");
+    });
+    expect(
+      rowNode(ALPHA)?.querySelector(":scope > .row-body > .working"),
+    ).toBeNull();
+  });
+
   it("marks an answer that arrived as new, until it is visited", () => {
     const { publish } = mountLive();
     expect(rowNode(OPEN_THREAD)?.getAttribute("data-fresh")).toBe("false");
@@ -137,7 +183,7 @@ describe("what a publish tells the human has changed", () => {
     expect(rowNode(OPEN_THREAD)?.getAttribute("data-fresh")).toBe("false");
   });
 
-  it("follows the new document on counts, on the map and on the title", () => {
+  it("follows the new document on the map and on the title", () => {
     const { publish } = mountLive();
 
     const next = sampleBrief();
@@ -151,10 +197,7 @@ describe("what a publish tells the human has changed", () => {
     publish(next);
 
     expect(document.title).toBe("A different brief");
-    // Four items in the sample document, and the one that just arrived.
-    expect(
-      document.querySelector('[data-count="items"] b')?.textContent,
-    ).toBe("5");
+    expect(document.querySelector("[data-count]")).toBeNull();
     expect(document.querySelector(".brief-title")?.textContent).toBe(
       "A different brief",
     );

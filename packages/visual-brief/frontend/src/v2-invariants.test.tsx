@@ -20,7 +20,12 @@ import {
   unmount,
   useHarness,
 } from "../test/harness";
-import { itemOf, laneOf, sampleBrief } from "../test/sample-brief";
+import {
+  itemOf,
+  laneOf,
+  SAMPLE_SUGGESTIONS,
+  sampleBrief,
+} from "../test/sample-brief";
 
 const ALPHA = "newest/changed/alpha";
 const ANSWERED = `${ALPHA}#q-answered`;
@@ -91,6 +96,31 @@ describe("non-human events cannot write human state", () => {
 });
 
 describe("pure views", () => {
+  it("does not paint lowest-level ordinal numbers", () => {
+    mount();
+
+    expect(document.querySelector(".ordinal")).toBeNull();
+  });
+
+  it("marks exactly the owning item while its descendants hold the cursor", () => {
+    mount();
+    expect(document.querySelector('[data-owning-item="true"]')).toBeNull();
+
+    composeAt(ALPHA);
+    expect(document.querySelectorAll('[data-owning-item="true"]'))
+      .toHaveLength(1);
+    expect(rowNode(ALPHA)?.getAttribute("data-owning-item")).toBe("true");
+
+    click(ANSWERED);
+    const boundary = document.querySelector('[data-owning-item="true"]');
+    expect(paintedCursor()).toBe(ANSWERED);
+    expect(boundary).toBe(rowNode(ALPHA));
+    expect(boundary?.contains(rowNode(ANSWERED))).toBe(true);
+
+    click("newest/changed");
+    expect(document.querySelector('[data-owning-item="true"]')).toBeNull();
+  });
+
   it("reveals a folded match without changing folds or the active query", () => {
     mount();
     click(ALPHA);
@@ -223,7 +253,6 @@ describe("human fold actions", () => {
     press("j");
     press("j");
     press("j");
-    press("j");
 
     expect(paintedCursor()).toBe(ANSWERED);
     expect(
@@ -273,11 +302,6 @@ describe("human fold actions", () => {
         seen: before.seen,
       });
       expect(
-        document.querySelector(".meta-attention")?.getAttribute(
-          "aria-pressed",
-        ),
-      ).toBe("true");
-      expect(
         document.querySelector('[data-action="reveal-chats"]')?.getAttribute(
           "aria-pressed",
         ),
@@ -289,12 +313,6 @@ describe("human fold actions", () => {
       expect(storedHumanState()).toEqual(before);
       expect(document.querySelector(".composer textarea")).not.toBeNull();
       expect(scrollIntoView).not.toHaveBeenCalled();
-      expect(
-        document.querySelector(".meta-attention")?.getAttribute(
-          "aria-pressed",
-        ),
-      ).toBe("false");
-
       click("older");
       const laterLayout = paintedLayout();
       press("m");
@@ -318,7 +336,7 @@ describe("human fold actions", () => {
     expect(rowNode(ANSWERED)).toBeNull();
     expect(rowNode(`${BETA}#q-open`)).toBeNull();
     const action = document.querySelector<HTMLButtonElement>(
-      ".meta-attention",
+      '[data-action="reveal-chats"]',
     );
 
     action?.click();
@@ -446,7 +464,7 @@ describe("human fold actions", () => {
     }
   });
 
-  it("keeps a stationary mouse from taking the cursor after reveal", () => {
+  it("keeps a stationary mouse from retaking the cursor after attention", () => {
     mount();
     press("C");
     click("older");
@@ -469,10 +487,13 @@ describe("human fold actions", () => {
       expect(pointerIsDriving()).toBe(true);
 
       action?.click();
+      const selectedByAttention = paintedCursor();
+      expect(selectedByAttention).toBe(ANSWERED);
       expect(pointerIsDriving()).toBe(false);
       pointerMove(rowNode(ALPHA) as Element);
 
-      expect(paintedCursor()).toBe(before);
+      expect(paintedCursor()).not.toBe(before);
+      expect(paintedCursor()).toBe(selectedByAttention);
     } finally {
       explicitSelectionTookOver();
       stop();
@@ -605,6 +626,101 @@ describe("updates log drawer", () => {
 });
 
 describe("keyboard ownership", () => {
+  it("numbers children before the active item's suggested replies", () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ timestamp: "queued" }), { status: 200 }),
+    );
+    mount();
+
+    press("1");
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    click(ALPHA);
+    expect(paintedOpen(ALPHA)).toBe("false");
+    press("1");
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    composeAt(ALPHA);
+    press("1");
+    expect(paintedCursor()).toBe(ANSWERED);
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    composeAt(ALPHA);
+    press("2");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(
+      rowNode(ALPHA)?.querySelector(
+        `[data-suggestion="${SAMPLE_SUGGESTIONS[0]?.message}"]`,
+      )
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    composeAt(ANSWERED);
+    press("2");
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(fetchSpy.mock.calls[1]?.[1]?.body))).toEqual({
+      anchor_id: ALPHA,
+      label: SAMPLE_SUGGESTIONS[1]?.label,
+      text: SAMPLE_SUGGESTIONS[1]?.message,
+    });
+
+    document.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "3",
+      shiftKey: true,
+      bubbles: true,
+    }));
+    document.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "3",
+      ctrlKey: true,
+      bubbles: true,
+    }));
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    fetchSpy.mockRestore();
+  });
+
+  it("leaves numeric feedback inert while typing or using owned overlays",
+    async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(JSON.stringify({ timestamp: "queued" }), { status: 200 }),
+      );
+      mount();
+      composeAt(ALPHA);
+      await Promise.resolve();
+      const textarea = document.querySelector(".composer textarea");
+      expect(textarea).not.toBeNull();
+
+      pressAt(textarea as Element, "1");
+      expect(fetchSpy).not.toHaveBeenCalled();
+
+      (textarea as HTMLElement).blur();
+      press("?");
+      press("2");
+      expect(fetchSpy).not.toHaveBeenCalled();
+      press("Escape");
+
+      press("f");
+      press("3");
+      expect(fetchSpy).not.toHaveBeenCalled();
+      fetchSpy.mockRestore();
+    });
+
+  it("leaves numbers beyond the offered replies available to the page", () => {
+    const brief = sampleBrief();
+    itemOf(brief, ALPHA).suggestions = SAMPLE_SUGGESTIONS.slice(0, 2);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ timestamp: "queued" }), { status: 200 }),
+    );
+    mount(brief);
+    composeAt(ALPHA);
+
+    press("4");
+    expect(fetchSpy).not.toHaveBeenCalled();
+    press("3");
+    expect(fetchSpy).toHaveBeenCalledOnce();
+
+    fetchSpy.mockRestore();
+  });
+
   it.each(["c", "a"])(
     "opens the composer with %s on a revealed nonmatching row",
     (key) => {
@@ -626,7 +742,7 @@ describe("keyboard ownership", () => {
       ).toBe("reader agrees");
       expect(document.querySelector('[role="search"]')).not.toBeNull();
       expect(
-        document.querySelector(".meta-attention")?.getAttribute(
+        document.querySelector('[data-action="reveal-chats"]')?.getAttribute(
           "aria-pressed",
         ),
       ).toBe("true");
@@ -672,19 +788,89 @@ describe("live document derivations", () => {
     ids.forEach((id, index) => expect(rowNode(id)).toBe(before[index]));
   });
 
-  it("counts unseen and awaiting chats, then removes only a visited answer", () => {
-    mount();
-    const badge = document.querySelector<HTMLElement>(".meta-attention");
-    expect(badge?.dataset.attentionCount).toBe("2");
+  it("scopes masthead attention to the latest update and cycles its chats", () => {
+    const brief = sampleBrief();
+    const older = laneOf(brief, "older", "history").items[0];
+    if (older === undefined) {
+      throw new Error("sample lost the older item");
+    }
+    older.questions = [{
+      id: "q-old-open",
+      anchor: { kind: "element", path: "older/history/one" },
+      turns: [{
+        author: "human",
+        text: "Does the older update still need work?",
+        at: "2026-07-24T11:00:00Z",
+      }],
+    }];
+    mount(brief);
+    const attention = document.querySelector<HTMLButtonElement>(
+      ".meta-attention",
+    );
 
-    click(ANSWERED);
+    expect(attention?.dataset.attentionCount).toBe("2");
+    expect(attention?.textContent).toBe(
+      "2 need attention in latest update",
+    );
+    expect(document.querySelector("[data-count]")).toBeNull();
+    expect(document.querySelector("[data-awaiting-count]")).toBeNull();
 
-    expect(badge?.dataset.attentionCount).toBe("1");
+    attention?.click();
+
+    expect(paintedCursor()).toBe(ANSWERED);
+    expect(attention?.dataset.attentionCount).toBe("1");
+    expect(attention?.textContent).toBe(
+      "1 needs attention in latest update",
+    );
     expect(
       JSON.parse(
         window.sessionStorage.getItem(humanStorageKey("seen", "")) ?? "{}",
       ),
     ).toMatchObject({ "q-answered": "2:answered" });
+
+    attention?.click();
+
+    expect(paintedCursor()).toBe(`${BETA}#q-open`);
+    expect(rowNode(`${BETA}#q-open`)).not.toBeNull();
+  });
+
+  it("omits latest attention while global n still finds an older chat", () => {
+    const brief = sampleBrief();
+    itemOf(brief, ALPHA).questions = [];
+    itemOf(brief, BETA).questions = [];
+    const older = laneOf(brief, "older", "history").items[0];
+    if (older === undefined) {
+      throw new Error("sample lost the older item");
+    }
+    older.questions = [{
+      id: "q-old-open",
+      anchor: { kind: "element", path: "older/history/one" },
+      turns: [{
+        author: "human",
+        text: "Only the older update needs attention.",
+        at: "2026-07-24T11:00:00Z",
+      }],
+    }];
+    mount(brief);
+
+    expect(document.querySelector(".meta-attention")).toBeNull();
+
+    press("C");
+    press("n");
+
+    expect(paintedCursor()).toBe("older/history/one#q-old-open");
+    expect(rowNode("older/history/one#q-old-open")).not.toBeNull();
+  });
+
+  it("keeps a readable label beside every always-visible shortcut", () => {
+    mount();
+    const controls = [...document.querySelectorAll(".key-control")];
+    const labels = controls.map((control) =>
+      control.querySelector("span")?.textContent?.trim() ?? ""
+    );
+
+    expect(controls.length).toBeGreaterThan(0);
+    expect(labels.every((label) => label.length > 0)).toBe(true);
   });
 
   it("restores surviving folds across a patch and defaults new rows", () => {
@@ -750,7 +936,7 @@ describe("pending presentation", () => {
         timestamp: "2026-07-29T12:00:00Z",
       }), { status: 200 }));
       await vi.waitFor(() => {
-        expect(pending?.querySelector("time")?.textContent).toBe(
+        expect(pending?.querySelector("time")?.getAttribute("datetime")).toBe(
           "2026-07-29T12:00:00Z",
         );
       });
@@ -792,4 +978,5 @@ describe("prose rendering", () => {
       "strong",
     );
   });
+
 });

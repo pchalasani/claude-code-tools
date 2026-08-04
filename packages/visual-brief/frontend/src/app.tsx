@@ -12,7 +12,6 @@ import { CurrentStateView } from "./current-state";
 import {
   TRUST_LABELS,
   TRUST_ORDER,
-  describeShape,
   type BriefDocument,
 } from "./document";
 import { TrustChip } from "./item-view";
@@ -90,9 +89,7 @@ export function App(props: { brief: BriefDocument }): JSX.Element {
   );
 }
 function Masthead(props: { state: BriefState }): JSX.Element {
-  const shape = createMemo(() => describeShape(props.state.brief));
-  const awaiting = () => props.state.nav.awaitingCount();
-  const attention = () => props.state.nav.outstandingCount();
+  const attention = () => props.state.nav.latestUpdateOutstandingCount();
   return (
     <header class="masthead">
       <p class="eyebrow">Session briefing</p>
@@ -100,35 +97,22 @@ function Masthead(props: { state: BriefState }): JSX.Element {
       <div class="brief-summary">
         <Markdown text={props.state.brief.summary} />
       </div>
-      <div class="meta">
-        <span class="meta-count" data-count="updates">
-          <b>{shape().updates}</b> updates
-        </span>
-        <span class="meta-count" data-count="lanes">
-          <b>{shape().lanes}</b> lanes
-        </span>
-        <span class="meta-count" data-count="items">
-          <b>{shape().items}</b> items
-        </span>
-        <button
-          type="button"
-          class="meta-count meta-awaiting"
-          data-awaiting-count={awaiting()}
-          onClick={() => props.state.run("next-awaiting")}
-        >
-          <b>{awaiting()}</b> unanswered
-        </button>
-        <button
-          type="button"
-          class="meta-count meta-attention"
-          data-attention-count={attention()}
-          aria-label="Reveal chats, then restore the prior fold layout"
-          aria-pressed={props.state.nav.chatRevealActive()}
-          onClick={() => props.state.run("reveal-chats")}
-        >
-          <b>{attention()}</b> need attention
-        </button>
-      </div>
+      <Show when={attention() > 0}>
+        <div class="meta">
+          <button
+            type="button"
+            class="meta-attention"
+            data-attention-count={attention()}
+            onClick={(event) => {
+              event.currentTarget.blur();
+              props.state.nav.toLatestUpdateAttention();
+            }}
+          >
+            <b>{attention()}</b>{" "}
+            {attention() === 1 ? "needs" : "need"} attention in latest update
+          </button>
+        </div>
+      </Show>
       <KeyBar state={props.state} />
       <div class="legend">
         <span class="legend-label">Trust</span>

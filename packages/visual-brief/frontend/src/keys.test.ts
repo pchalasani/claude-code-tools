@@ -40,6 +40,15 @@ describe("every binding", () => {
     ["G", "bottom"],
     ["?", "help"],
     ["Escape", "close"],
+    ["1", "digit-1"],
+    ["2", "digit-2"],
+    ["3", "digit-3"],
+    ["4", "digit-4"],
+    ["5", "digit-5"],
+    ["6", "digit-6"],
+    ["7", "digit-7"],
+    ["8", "digit-8"],
+    ["9", "digit-9"],
   ];
 
   it.each(expected)("resolves %s", (key, action) => {
@@ -75,6 +84,10 @@ describe("every binding", () => {
     expect(resolveAction({ key: "j", metaKey: true })).toBeNull();
     expect(resolveAction({ key: "G", ctrlKey: true })).toBeNull();
     expect(resolveAction({ key: "a", altKey: true })).toBeNull();
+    expect(resolveAction({ key: "1", metaKey: true })).toBeNull();
+    expect(resolveAction({ key: "2", ctrlKey: true })).toBeNull();
+    expect(resolveAction({ key: "3", altKey: true })).toBeNull();
+    expect(resolveAction({ key: "1", shiftKey: true })).toBeNull();
   });
 
   it("leaves Enter native on a row disclosure", () => {
@@ -104,12 +117,12 @@ describe("every binding", () => {
     })).toBeNull();
   });
 
-  it("aims Enter at the cursor when unrelated focus was left behind", () => {
-    const stale = element(
-      "<button class='meta-awaiting'>2 unanswered</button>",
+  it("leaves Enter native on the latest-update attention button", () => {
+    const attention = element(
+      "<button class='meta-attention'>2 need attention in latest update</button>",
     );
 
-    expect(resolveAction({ key: "Enter", target: stale })).toBe("toggle");
+    expect(resolveAction({ key: "Enter", target: attention })).toBeNull();
   });
 
   it("still leaves Enter alone while the human is typing", () => {
@@ -160,7 +173,10 @@ describe("while the human is typing", () => {
     const target = box.querySelector("span") ?? box;
 
     expect(isTypingTarget(target)).toBe(true);
-    const keys = ["j", "k", "J", "K", "a", "c", "n", "g", "G", "?", "/", " "];
+    const keys = [
+      "j", "k", "J", "K", "a", "c", "n", "g", "G", "?", "/", " ",
+      "1", "2", "3",
+    ];
     for (const key of keys) {
       expect(resolveAction({ key, target })).toBeNull();
     }

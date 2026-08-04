@@ -1,4 +1,4 @@
-import { createEffect, type Accessor } from "solid-js";
+import { createEffect, createMemo, type Accessor } from "solid-js";
 import {
   createComposer,
   postJson,
@@ -16,8 +16,13 @@ import {
   type Overlay,
 } from "./navigation";
 import type { Row } from "./outline";
-import { createPending, type Pending } from "./pending";
+import {
+  createPending,
+  suggestedReplyAnswered,
+  type Pending,
+} from "./pending";
 import { focusLater } from "./reveal";
+import { createSignalWork } from "./signal-work";
 export interface BriefState {
   readonly brief: BriefDocument;
   human: HumanState;
@@ -25,6 +30,10 @@ export interface BriefState {
   composer: Composer;
   hints: Hints;
   pending: Pending;
+  owningItem: Accessor<Row | null>;
+  feedbackItem: Accessor<Row | null>;
+  rowShortcutNumber: (rowId: string) => number | null;
+  suggestionShortcutNumber: (rowId: string, index: number) => number | null;
   composeAt: (row: Row) => void;
   run: (action: Action) => void;
   handleKey: (event: KeyboardEvent) => void;
@@ -33,7 +42,65 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
   const human = createHumanState();
   const pending = createPending(brief);
   const nav = createNavigation(brief, human);
-  const composer = createComposer(postJson, () => undefined, pending, human);
+  const signalWork = createSignalWork({
+    latestUpdateId: () => brief().updates.at(-1)?.id,
+    rowExists: (rowId) => nav.row(rowId) !== undefined,
+    answered: (rowId, text, at) =>
+      suggestedReplyAnswered(brief(), rowId, text, at),
+  });
+  const composer = createComposer(
+    postJson,
+    () => undefined,
+    pending,
+    human,
+    signalWork,
+  );
+  const owningItem = createMemo(() => {
+    const selected = nav.currentId();
+    if (selected === null) {
+      return null;
+    }
+    return [selected, ...nav.ancestors(selected)]
+      .map((id) => nav.row(id))
+      .find((row) => row?.kind === "item") ?? null;
+  });
+  const feedbackItem = createMemo(() => {
+    const item = owningItem();
+    return item !== null
+      && (item.suggestions?.length ?? 0) > 0
+      && nav.isPainted(item.id)
+      && nav.isOpen(item.id)
+      ? item
+      : null;
+  });
+  const numberedRows = createMemo(() => {
+    const currentId = nav.currentId();
+    const current = currentId === null ? undefined : nav.row(currentId);
+    if (current === undefined) {
+      return [];
+    }
+    const parentId = nav.isOpen(current.id) ? current.id : current.parentId;
+    const suggestionCount = feedbackItem()?.suggestions?.length ?? 0;
+    const rowLimit = Math.max(0, 9 - suggestionCount);
+    return nav.painted()
+      .filter((row) => row.parentId === parentId)
+      .slice(0, rowLimit);
+  });
+  const rowShortcutNumber = (rowId: string): number | null => {
+    const index = numberedRows().findIndex((row) => row.id === rowId);
+    return index === -1 ? null : index + 1;
+  };
+  const suggestionShortcutNumber = (
+    rowId: string,
+    index: number,
+  ): number | null => {
+    const item = feedbackItem();
+    if (item?.id !== rowId || item.suggestions?.[index] === undefined) {
+      return null;
+    }
+    const number = numberedRows().length + index + 1;
+    return number <= 9 ? number : null;
+  };
   let previousTarget: { id: string; ancestors: string[] } | null = null;
   let previousCursor: { id: string; ancestors: string[] } | null = null;
   createEffect(() => {
@@ -138,6 +205,21 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
     nav.openOverlay(overlay);
   };
   const run = (action: Action): void => {
+    const sendSuggestion = (index: number): void => {
+      const item = feedbackItem();
+      const suggestion = item?.suggestions?.[index];
+      if (item !== null && suggestion !== undefined) {
+        void composer.sendSignal(item.id, item.anchorId, suggestion);
+      }
+    };
+    const activateDigit = (number: number): void => {
+      const row = numberedRows()[number - 1];
+      if (row !== undefined) {
+        nav.select(row.id);
+        return;
+      }
+      sendSuggestion(number - numberedRows().length - 1);
+    };
     const actions: Record<Action, () => void> = {
       "next-row": () => nav.move("row", 1),
       "previous-row": () => nav.move("row", -1),
@@ -167,6 +249,15 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
       bottom: () => nav.jump("bottom"),
       help: () => showOverlay("help"),
       close: closeOne,
+      "digit-1": () => activateDigit(1),
+      "digit-2": () => activateDigit(2),
+      "digit-3": () => activateDigit(3),
+      "digit-4": () => activateDigit(4),
+      "digit-5": () => activateDigit(5),
+      "digit-6": () => activateDigit(6),
+      "digit-7": () => activateDigit(7),
+      "digit-8": () => activateDigit(8),
+      "digit-9": () => activateDigit(9),
     };
     actions[action]();
   };
@@ -179,6 +270,10 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
     composer,
     hints,
     pending,
+    owningItem,
+    feedbackItem,
+    rowShortcutNumber,
+    suggestionShortcutNumber,
     composeAt,
     run,
     handleKey: (event) => {
@@ -197,6 +292,17 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
       }
       const action = resolveAction(event);
       if (action !== null) {
+        if (action.startsWith("digit-")) {
+          const number = Number(action.at(-1));
+          const row = numberedRows()[number - 1];
+          const suggestionIndex = number - numberedRows().length - 1;
+          if (
+            row === undefined
+            && feedbackItem()?.suggestions?.[suggestionIndex] === undefined
+          ) {
+            return;
+          }
+        }
         event.preventDefault();
         if (
           (action.endsWith("-row") || action.endsWith("-lane")

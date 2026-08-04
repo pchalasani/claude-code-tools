@@ -9,6 +9,21 @@
 
 import type { BriefDocument, Item, Lane, Update } from "../src/document";
 
+export const SAMPLE_SUGGESTIONS = [
+  {
+    label: "Show proof",
+    message: "Show me the concrete evidence behind this claim.",
+  },
+  {
+    label: "Explain tradeoff",
+    message: "Explain the tradeoff behind this choice in plain language.",
+  },
+  {
+    label: "What next?",
+    message: "Tell me what you recommend doing next about this item.",
+  },
+];
+
 /**
  * Build an independent copy of the sample document.
  *
@@ -56,6 +71,9 @@ export function sampleBrief(): BriefDocument {
                 glance: "Alpha moved forward",
                 explanation: "The reader agrees with the reference parser.",
                 trust: "verified-by-me",
+                suggestions: SAMPLE_SUGGESTIONS.map((suggestion) => ({
+                  ...suggestion,
+                })),
                 tables: [
                   {
                     caption: "Parity",

@@ -1,4 +1,5 @@
 import { render } from "solid-js/web";
+import "@fontsource-variable/atkinson-hyperlegible-next";
 import { App } from "./app";
 import { readEmbeddedDocument } from "./document";
 import { createLiveDocument, type LiveDocument } from "./live-document";

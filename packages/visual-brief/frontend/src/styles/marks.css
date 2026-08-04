@@ -4,7 +4,7 @@
   border-radius: var(--radius-control);
   color: var(--color-surface);
   flex: none;
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-xs);
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -19,23 +19,9 @@
   font-weight: 700;
 }
 
-.ordinal {
-  color: var(--color-text-faint);
-  flex: none;
-  font-family: var(--font-utility);
-  font-size: var(--font-size-xs);
-  font-variant-numeric: tabular-nums;
-  padding-right: var(--space-1);
-  user-select: none;
-}
-
-.row[data-cursor="true"] > .row-head .ordinal {
-  color: var(--color-current-strong);
-}
-
 .stalled {
   color: var(--color-warning);
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-xs);
   letter-spacing: 0.1em;
   margin: var(--space-2) 0 var(--space-3);
@@ -56,9 +42,4 @@
 
 .row[data-waiting][data-fresh="true"] > .row-head {
   border-left-color: var(--color-active);
-}
-
-button.meta-attention[aria-pressed="true"],
-button.meta-attention[aria-pressed="true"] b {
-  color: var(--color-current-strong);
 }

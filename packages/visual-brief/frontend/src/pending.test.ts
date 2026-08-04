@@ -4,8 +4,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BriefDocument, Turn } from "./document";
 import {
   STALL_POLLS,
+  agentAnswerVersion,
   createPending,
   locateSubmissions,
+  suggestedReplyAnswered,
   type Pending,
 } from "./pending";
 import {
@@ -113,6 +115,55 @@ afterEach(() => {
 });
 
 describe("finding what a sent message became", () => {
+  it("versions agent answers without treating a human follow-up as a reply", () => {
+    const base = briefWith([["q-1", [asked("Why this way?")]]]);
+    const humanFollowUp = briefWith([["q-1", [
+      asked("Why this way?"),
+      asked("Can you clarify?", "2026-07-27T09:01:00.000Z"),
+    ]]]);
+    const answered = briefWith([["q-1", [
+      asked("Why this way?"),
+      {
+        author: "agent",
+        text: "Here is the evidence.",
+        at: "2026-07-27T09:02:00.000Z",
+      },
+    ]]]);
+
+    expect(agentAnswerVersion(humanFollowUp, ITEM)).toBe(
+      agentAnswerVersion(base, ITEM),
+    );
+    expect(agentAnswerVersion(answered, ITEM)).not.toBe(
+      agentAnswerVersion(base, ITEM),
+    );
+  });
+
+  it("ties a suggested reply to its own thread", () => {
+    const text = "Show me the evidence.";
+    const unrelated = briefWith([
+      ["q-old", [
+        asked("An older question"),
+        {
+          author: "agent",
+          text: "An unrelated answer.",
+          at: "2026-07-27T09:02:00.000Z",
+        },
+      ]],
+      ["q-suggestion", [asked(text)]],
+    ]);
+    const answered = briefWith([["q-suggestion", [
+      asked(text),
+      {
+        author: "agent",
+        text: "The requested evidence.",
+        at: "2026-07-27T09:02:00.000Z",
+      },
+    ]]]);
+
+    expect(suggestedReplyAnswered(unrelated, ITEM, text, SENT_AT)).toBe(false);
+    expect(suggestedReplyAnswered(answered, ITEM, text, SENT_AT)).toBe(true);
+  });
+
   it("matches the queue line's words and timestamp", () => {
     const brief = briefWith([["q-pending-1", [asked("Why this way?")]]]);
 

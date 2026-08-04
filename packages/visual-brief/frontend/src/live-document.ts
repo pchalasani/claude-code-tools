@@ -58,7 +58,7 @@ function controlId(element: HTMLElement): string {
     element.className,
     element.getAttribute("type") ?? "",
     element.dataset.action ?? "",
-    element.dataset.signal ?? "",
+    element.dataset.suggestion ?? "",
     element.getAttribute("href") ?? "",
   ].join("|");
 }

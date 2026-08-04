@@ -4,7 +4,7 @@
   border-radius: var(--radius-control);
   color: var(--color-text-faint);
   cursor: pointer;
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-xs);
   padding: var(--space-1) var(--space-2);
   text-decoration-color: transparent;
@@ -31,7 +31,7 @@
 
 .composer-label {
   color: var(--color-text-muted);
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-xs);
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -41,7 +41,7 @@
   background: var(--color-surface);
   border: var(--border-thin) solid var(--color-border-strong);
   border-radius: var(--radius-control);
-  color: var(--color-text);
+  color: var(--color-human-text);
   font: inherit;
   min-height: var(--height-composer-min);
   padding: var(--space-2) var(--space-3);
@@ -118,7 +118,7 @@
 .working {
   align-items: baseline;
   display: flex;
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-xs);
   gap: var(--space-2);
   letter-spacing: 0.12em;
@@ -195,31 +195,55 @@
 }
 
 .signals {
-  align-items: center;
   border-top: var(--border-thin) solid var(--color-border);
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
+  display: block;
   margin-top: var(--space-3);
   padding-top: var(--space-2);
 }
 
+.signals-heading {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
 .signals-label {
   color: var(--color-text-faint);
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-xs);
   letter-spacing: 0.12em;
-  margin-right: var(--space-1);
   text-transform: uppercase;
 }
 
+.signals-hint {
+  color: var(--color-text-faint);
+  font-size: var(--font-size-xs);
+}
+
+.signal-choices {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+.signals > .status:not(:empty) {
+  display: block;
+  margin-top: var(--space-1);
+}
+
 .signal {
+  align-items: center;
   background: transparent;
   border: var(--border-thin) solid var(--color-border);
   border-radius: var(--radius-pill);
   color: var(--color-text-muted);
   cursor: pointer;
+  display: inline-flex;
   font-size: var(--font-size-xs);
+  gap: var(--space-1);
   padding: var(--space-1) var(--space-2);
 }
 
@@ -227,6 +251,23 @@
   background: var(--color-current-soft);
   border-color: var(--color-current);
   color: var(--color-current-strong);
+}
+
+.signal[aria-pressed="true"] {
+  background: var(--color-warning-soft);
+  border-color: var(--color-context);
+  color: var(--color-warning);
+}
+
+.signal kbd {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  border-color: color-mix(in srgb, currentColor 38%, transparent);
+  color: inherit;
+  font-size: 0.82em;
+  line-height: 1.25;
+  min-width: 1.4em;
+  padding-inline: 0.25em;
+  text-align: center;
 }
 
 .search {
@@ -251,7 +292,7 @@
 
 .search label {
   color: var(--color-text-faint);
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-xs);
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -269,7 +310,7 @@
 
 .match-count {
   color: var(--color-text-muted);
-  font-family: var(--font-utility);
+  font-family: var(--font-brief);
   font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
 }
@@ -298,8 +339,8 @@
 }
 
 .help h2 {
-  font-family: var(--font-display);
   font-size: var(--font-size-lg);
+  font-weight: 500;
   letter-spacing: -0.01em;
   margin: 0 0 var(--space-3);
 }
