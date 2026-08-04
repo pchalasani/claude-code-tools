@@ -81,7 +81,13 @@ export function RowShell(props: {
             props.separateHead ? `Toggle ${props.row.label}` : undefined
           }
           aria-describedby={waiting() === undefined ? undefined : waitingId()}
-          onClick={() => props.state.nav.toggle(props.row.id)}
+          onClick={(event) => {
+            event.stopPropagation();
+            props.state.nav.toggle(props.row.id);
+            props.state.nav.select(props.row.id, {
+              scroll: false,
+            });
+          }}
         >
           <span class="row-fold" aria-hidden="true">
             {isOpen() ? "▾" : "▸"}
@@ -105,7 +111,11 @@ export function RowShell(props: {
               ) {
                 return;
               }
+              event.stopPropagation();
               props.state.nav.toggle(props.row.id);
+              props.state.nav.select(props.row.id, {
+                scroll: false,
+              });
             }}
           >
             {props.head}

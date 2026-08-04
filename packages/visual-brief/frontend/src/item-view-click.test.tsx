@@ -15,6 +15,7 @@ import {
   sampleBrief,
 } from "../test/sample-brief";
 import { signalShortcutHint } from "./compose-view";
+import { watchPointer } from "./pointer";
 
 const ITEM = "newest/changed/alpha";
 
@@ -54,6 +55,38 @@ describe("item header clicks", () => {
     expect(paintedOpen(ITEM)).not.toBe(before);
   });
 
+  it("does not reopen a mouse-collapsed row", () => {
+    mount();
+    const stale = document.querySelector<HTMLElement>(
+      `[data-row-id="${ITEM}"] > .row-head .row-toggle`,
+    );
+    const target = document.querySelector(
+      `[data-row-id="${ITEM}"] .glance .md-paragraph`,
+    );
+    const stop = watchPointer(document);
+    const move = new Event("pointermove", { bubbles: true });
+    Object.defineProperties(move, {
+      pointerType: { value: "mouse" },
+      clientX: { value: 40 },
+      clientY: { value: 50 },
+    });
+
+    try {
+      stale?.focus();
+      target?.dispatchEvent(move);
+      click(`[data-row-id="${ITEM}"] .glance .md-paragraph`);
+      expect(paintedCursor()).toBe(ITEM);
+      expect(paintedOpen(ITEM)).toBe("false");
+
+      press("Escape");
+      expect(paintedCursor()).toBe("newest/changed");
+      expect(paintedOpen(ITEM)).toBe("false");
+      expect(document.activeElement).not.toBe(stale);
+    } finally {
+      stop();
+    }
+  });
+
   it("leaves a markdown link and chat control in charge of their clicks", () => {
     const brief = sampleBrief();
     const item = brief.updates[1]?.lanes[0]?.items[0];
@@ -87,6 +120,9 @@ describe("item feedback controls", () => {
   it("advertises the shared number keys in the page guide", () => {
     mount();
 
+    const toggle = document.querySelector('[data-action="toggle"]');
+    expect(toggle?.querySelector("kbd")?.textContent).toBe("Space / Enter");
+    expect(toggle?.textContent).toContain("Open / close");
     expect(document.querySelector(".key-guide kbd")?.textContent).toBe("1–9");
     expect(document.querySelector(".key-guide")?.textContent).toContain(
       "Numbered choice",
@@ -116,6 +152,52 @@ describe("item feedback controls", () => {
     press(" ");
     press("1");
     expect(paintedCursor()).toBe("newest/next/gamma");
+  });
+
+  it("uses Escape only to collapse or move to the parent", () => {
+    mount();
+    press("C");
+    press("1");
+    press(" ");
+    press("1");
+    press(" ");
+    press("1");
+
+    expect(paintedCursor()).toBe(ITEM);
+    expect(paintedOpen("newest")).toBe("true");
+    expect(paintedOpen("newest/changed")).toBe("true");
+
+    press("Escape");
+    expect(paintedCursor()).toBe("newest/changed");
+    expect(paintedOpen("newest/changed")).toBe("true");
+
+    press("Escape");
+    expect(paintedCursor()).toBe("newest/changed");
+    expect(paintedOpen("newest/changed")).toBe("false");
+
+    press("Escape");
+    expect(paintedCursor()).toBe("newest");
+    expect(paintedOpen("newest")).toBe("true");
+
+    press("Escape");
+    expect(paintedCursor()).toBe("newest");
+    expect(paintedOpen("newest")).toBe("false");
+  });
+
+  it("never reopens a row that was just collapsed", () => {
+    mount();
+    press("C");
+    press("1");
+    press(" ");
+    press("1");
+    press(" ");
+    press(" ");
+
+    expect(paintedCursor()).toBe("newest/changed");
+    expect(paintedOpen("newest/changed")).toBe("false");
+    press("Escape");
+    expect(paintedCursor()).toBe("newest");
+    expect(paintedOpen("newest/changed")).toBe("false");
   });
 
   it("puts the instruction above the chips with a dynamic number range", () => {

@@ -6,6 +6,7 @@ const KEY_BAR: [string, Action, string][] = [
   ["j", "next-row", "Next row"],
   ["K", "previous-lane", "Previous lane"],
   ["J", "next-lane", "Next lane"],
+  ["Space / Enter", "toggle", "Open / close"],
   ["c", "compose", "Chat here"],
   ["f", "hints", "Jump to a row"],
   ["E", "expand-all", "Expand all"],

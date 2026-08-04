@@ -20,6 +20,10 @@ interface ChatReveal {
   layout: Map<string, boolean | undefined>;
   pathIds: ReadonlySet<string>;
 }
+interface SelectOptions {
+  scroll?: boolean;
+  dropFilter?: boolean;
+}
 export interface Navigation {
   visible: Accessor<Row[]>;
   painted: Accessor<Row[]>;
@@ -31,9 +35,10 @@ export interface Navigation {
   currentId: () => string | null;
   isCursor: (id: string) => boolean;
   pointAt: (id: string) => void;
-  select: (id: string, options?: { scroll?: boolean; dropFilter?: boolean }) => void;
+  select: (id: string, options?: SelectOptions) => void;
   move: (kind: RowKind | "row", delta: number) => void;
   jump: (edge: Edge) => void;
+  retreat: () => void;
   toOpenChat: () => void;
   toLatestUpdateAttention: () => void;
   isFresh: (id: string) => boolean;
@@ -104,6 +109,11 @@ export function createNavigation(
     );
   });
   const ancestors = (id: string): string[] => ancestorRowIds(rows(), id);
+  const blurActiveControl = (): void => {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+  };
   const visit = (row: Row): void => {
     if (
       row.kind === "thread"
@@ -116,7 +126,7 @@ export function createNavigation(
   };
   const select = (
     id: string,
-    options?: { scroll?: boolean; dropFilter?: boolean },
+    options?: SelectOptions,
   ): void => {
     const row = index.row(id);
     if (row === undefined) {
@@ -176,6 +186,22 @@ export function createNavigation(
       const next = edgeRow(painted(), edge);
       if (next !== null) {
         select(next);
+      }
+    },
+    retreat: () => {
+      const current = cursorId();
+      if (current === null) {
+        return;
+      }
+      blurActiveControl();
+      if (baseOpen(current)) {
+        human.choose(current, false);
+        explicitSelectionTookOver();
+        return;
+      }
+      const parent = index.row(current)?.parentId;
+      if (parent !== null && parent !== undefined) {
+        select(parent);
       }
     },
     toOpenChat: () => {

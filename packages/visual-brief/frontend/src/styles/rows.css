@@ -94,6 +94,14 @@
   color: var(--color-text);
 }
 
+.row[data-cursor="true"],
+.row-item[data-owning-item="true"] {
+  background: var(--color-context-wash);
+  border-radius: var(--radius-control);
+  outline: var(--border-emphasis) solid var(--color-context);
+  outline-offset: var(--border-thin);
+}
+
 .row[data-cursor="true"] > .row-head .row-fold,
 .row[data-cursor="true"] > .row-head .row-count {
   color: var(--color-current-strong);
@@ -211,13 +219,6 @@
 .row-item {
   margin-top: var(--space-1);
   position: relative;
-}
-
-.row-item[data-owning-item="true"] {
-  background: var(--color-context-wash);
-  border-radius: var(--radius-control);
-  outline: var(--border-emphasis) solid var(--color-context);
-  outline-offset: var(--border-thin);
 }
 
 .row-item > .row-head {

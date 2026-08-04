@@ -103,7 +103,7 @@ export const KEY_HELP: [string, string][] = [
   ["/", "Search items"],
   ["g / G", "Top / bottom"],
   ["?", "Show this key list"],
-  ["Escape", "Close, or leave a text box"],
+  ["Escape", "Collapse the selected row, or move to its parent"],
 ];
 export function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) {

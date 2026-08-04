@@ -828,6 +828,10 @@ describe("live document derivations", () => {
       ),
     ).toMatchObject({ "q-answered": "2:answered" });
 
+    press("Escape");
+    expect(paintedCursor()).toBe(ANSWERED);
+    expect(paintedOpen(ANSWERED)).toBe("false");
+
     attention?.click();
 
     expect(paintedCursor()).toBe(`${BETA}#q-open`);

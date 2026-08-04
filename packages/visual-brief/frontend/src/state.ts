@@ -161,7 +161,7 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
   });
   const hints = createHints({
     rows: nav.painted,
-    select: (id) => nav.select(id),
+    select: nav.select,
   });
   const composeAt = (row: Row): void => {
     const target: ComposeTarget = {
@@ -198,6 +198,8 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
       nav.closeOverlay();
     } else if (composer.target() !== null) {
       composer.escape();
+    } else {
+      nav.retreat();
     }
   };
   const showOverlay = (overlay: Exclude<Overlay, "none">): void => {
