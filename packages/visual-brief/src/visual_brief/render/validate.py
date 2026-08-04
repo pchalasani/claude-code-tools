@@ -11,6 +11,7 @@ from visual_brief import MAX_THREAD_ID_LENGTH
 from visual_brief.render.note_names import note_name, require_distinct_note_names
 from visual_brief.schema import (
     CURRENT_STATE_ROOT,
+    LEGACY_ANCHOR_ALIASES_FIELD,
     MAX_SUGGESTIONS,
     MAX_SUGGESTION_LABEL_LENGTH,
     MAX_SUGGESTION_MESSAGE_LENGTH,
@@ -603,11 +604,16 @@ def _validate_update(update: Any, location: str) -> list[str]:
     require_text(update.get("timestamp"), f"{location}.timestamp")
     require_text(update.get("headline"), f"{location}.headline")
     require_text(update.get("summary"), f"{location}.summary")
+    update_id = update["id"]
+    thread_ids = _validate_questions(
+        update.get("questions"),
+        f"{location}.questions",
+        update_id,
+    )
     lanes = update.get("lanes")
     if not isinstance(lanes, list):
         raise ValueError(f"{location}.lanes must be a list")
     _validate_unique_ids(lanes, f"{location}.lanes")
-    thread_ids: list[str] = []
     for index, lane in enumerate(lanes):
         thread_ids.extend(
             _validate_lane(
@@ -617,6 +623,41 @@ def _validate_update(update: Any, location: str) -> list[str]:
             )
         )
     return thread_ids
+
+
+def validate_publish_briefing(
+    value: Any,
+    location: str = "briefing",
+) -> None:
+    """Validate the stricter agent-authored briefing contract.
+
+    Args:
+        value: Candidate direct publish payload.
+        location: JSON path used in validation errors.
+
+    Raises:
+        ValueError: If the briefing is malformed, cryptic, or outside the
+            one-to-six lane range.
+    """
+    if not isinstance(value, dict):
+        raise ValueError(f"{location} must be an object")
+    _validate_state_prose(
+        value.get("headline"),
+        f"{location}.headline",
+        limit=200,
+        sentence=False,
+    )
+    _validate_state_prose(
+        value.get("summary"),
+        f"{location}.summary",
+        limit=480,
+    )
+    lanes = value.get("lanes")
+    if not isinstance(lanes, list):
+        raise ValueError(f"{location}.lanes must be a list")
+    if not 1 <= len(lanes) <= 6:
+        raise ValueError(f"{location}.lanes must contain 1 to 6 lanes")
+    _validate_update(value, location)
 
 
 def validate_document(data: Any) -> dict[str, Any]:
@@ -635,6 +676,9 @@ def validate_document(data: Any) -> dict[str, Any]:
         raise ValueError("top-level JSON value must be an object")
     require_text(data.get("title"), "title")
     require_text(data.get("summary"), "summary")
+    _validate_legacy_anchor_aliases(
+        data.get(LEGACY_ANCHOR_ALIASES_FIELD),
+    )
     thread_ids: list[str] = []
     if "current_state" in data:
         validate_current_state(data["current_state"])
@@ -662,3 +706,22 @@ def validate_document(data: Any) -> dict[str, Any]:
     if len(thread_ids) != len(set(thread_ids)):
         raise ValueError("question thread ids must be unique")
     return data
+
+
+def _validate_legacy_anchor_aliases(value: Any) -> None:
+    """Validate optional retired-current-state anchor mappings."""
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"{LEGACY_ANCHOR_ALIASES_FIELD} must be an object"
+        )
+    for source, target in value.items():
+        if not isinstance(source, str) or not source:
+            raise ValueError(
+                f"{LEGACY_ANCHOR_ALIASES_FIELD} keys must be non-empty text"
+            )
+        require_text(
+            target,
+            f"{LEGACY_ANCHOR_ALIASES_FIELD}[{source!r}]",
+        )

@@ -69,6 +69,12 @@ export function conversations(brief: BriefDocument): Located[] {
     }
   }
   for (const update of brief.updates ?? []) {
+    for (const thread of update.questions ?? []) {
+      found.push({
+        id: threadRowId(update.id, thread),
+        turns: thread.turns,
+      });
+    }
     for (const lane of update.lanes ?? []) {
       const lanePath = laneRowId(update.id, lane);
       for (const thread of lane.questions ?? []) {
@@ -131,9 +137,11 @@ export function locateSubmissions(
   const claimed = new Set<string>();
   return records.map((record) => {
     if (record.failed === true) return null;
+    const anchorId = brief.legacy_anchor_aliases?.[record.anchorId]
+      ?? record.anchorId;
     let earlier = record.at === "" ? record.after ?? 0 : 0;
     for (const thread of found) {
-      if (!thread.id.startsWith(`${record.anchorId}#`)) continue;
+      if (!thread.id.startsWith(`${anchorId}#`)) continue;
       const position = thread.turns.findIndex((turn, index) => {
         if (turn.author !== "human" || turn.text !== record.text) return false;
         if (record.at !== "" && turn.at !== record.at) return false;

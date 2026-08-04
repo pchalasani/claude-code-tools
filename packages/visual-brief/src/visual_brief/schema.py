@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import NotRequired, TypedDict
 
-# Authored update ids cannot contain '/', so no dated path can use this root.
+# Authored briefing ids cannot contain '/', so no ordinary path can use this root.
 CURRENT_STATE_ROOT = "//current-state"
+LEGACY_ANCHOR_ALIASES_FIELD = "legacy_anchor_aliases"
 MAX_SUGGESTIONS = 3
 MAX_SUGGESTION_LABEL_LENGTH = 40
 MAX_SUGGESTION_MESSAGE_LENGTH = 20_000
@@ -19,6 +20,20 @@ def current_state_lane_path(lane_id: str) -> str:
 def current_state_item_path(item_id: str) -> str:
     """Return the lane-independent anchor for one current-state item."""
     return f"{CURRENT_STATE_ROOT}/items/{item_id}"
+
+
+def legacy_anchor_aliases(document: object) -> dict[str, str]:
+    """Return the stored aliases for anchors retired during migration."""
+    if not isinstance(document, dict):
+        return {}
+    aliases = document.get(LEGACY_ANCHOR_ALIASES_FIELD)
+    if not isinstance(aliases, dict):
+        return {}
+    return {
+        source: target
+        for source, target in aliases.items()
+        if isinstance(source, str) and isinstance(target, str)
+    }
 
 
 class Turn(TypedDict):
@@ -69,7 +84,7 @@ class SuggestedReply(TypedDict):
 
 
 class Item(TypedDict):
-    """Visible item content shared by state and dated updates."""
+    """Visible item content in a briefing or legacy current state."""
 
     id: str
     glance: str
@@ -82,7 +97,7 @@ class Item(TypedDict):
 
 
 class Lane(TypedDict):
-    """Visible lane content shared by state and dated updates."""
+    """Visible lane content in a briefing or legacy current state."""
 
     id: str
     name: str
@@ -91,18 +106,24 @@ class Lane(TypedDict):
     questions: NotRequired[list[Thread]]
 
 
-class PublishState(TypedDict):
-    """Replaceable structured state supplied by a normal publish."""
+class Update(TypedDict):
+    """One stored briefing in the append-only ledger."""
 
+    id: str
+    timestamp: str
     headline: str
     summary: str
     lanes: list[Lane]
+    questions: NotRequired[list[Thread]]
 
 
-class StructuredCurrentState(PublishState):
-    """Stored structured state, including tool-owned root conversations."""
+class StructuredCurrentState(TypedDict):
+    """Legacy structured state kept for read compatibility."""
 
     updated_at: str
+    headline: str
+    summary: str
+    lanes: list[Lane]
     questions: NotRequired[list[Thread]]
 
 
@@ -119,17 +140,11 @@ class LegacyCurrentState(TypedDict):
 CurrentState = StructuredCurrentState | LegacyCurrentState
 
 
-class PublishEnvelope(TypedDict):
-    """The two values one atomic publish carries."""
-
-    current_state: PublishState
-    changes: dict[str, object]
-
-
 class BriefDocument(TypedDict):
     """The top-level stored and delivered document shape."""
 
     title: str
     summary: str
     current_state: NotRequired[CurrentState]
-    updates: list[dict[str, object]]
+    legacy_anchor_aliases: NotRequired[dict[str, str]]
+    updates: list[Update]

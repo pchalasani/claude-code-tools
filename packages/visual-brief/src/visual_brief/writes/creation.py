@@ -126,21 +126,14 @@ def _initial_content(label: str, timestamp: str) -> BriefDocument:
     return {
         "title": label,
         "summary": "This visual brief is ready for content.",
-        "current_state": {
-            "updated_at": timestamp,
-            "headline": "The visual brief is ready for its first report",
-            "summary": (
-                "Publish a detailed current snapshot and its matching dated "
-                "change together."
-            ),
-            "lanes": [],
-        },
         "updates": [
             {
                 "id": "created",
-                "timestamp": "Created",
+                "timestamp": timestamp,
                 "headline": "The visual brief run is ready",
-                "summary": "Publish state and changes with visual-brief publish.",
+                "summary": (
+                    "Publish one direct briefing with visual-brief publish."
+                ),
                 "lanes": [],
             }
         ],

@@ -91,7 +91,7 @@ export const KEY_HELP: [string, string][] = [
   ["J / K  or  ⇧↓ / ⇧↑", "Next / previous lane"],
   ["Space / Enter", "Open or close the selected row"],
   ["E / C", "Expand everything / collapse back to lanes"],
-  ["f", "Label every row, then type a label to jump there"],
+  ["f", "Jump to a row: show its number, then type that number"],
   [
     "c",
     "Chat wherever the cursor is — update, lane, item or conversation",

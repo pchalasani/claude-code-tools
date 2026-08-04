@@ -74,6 +74,7 @@ def settle_legacy_pairs(
     run_dir: Path,
     document: Any,
     legacy: LegacyPairs,
+    keep_converted: set[str] | None = None,
 ) -> None:
     """Undo every conversion the verb did not need, in place.
 
@@ -81,9 +82,11 @@ def settle_legacy_pairs(
         run_dir: The run directory, whose queue dates a converted pair.
         document: The normalized document the verb has finished changing.
         legacy: The pairs the normalization rewrote.
+        keep_converted: Thread ids that must retain their normalized shape.
     """
     if not legacy.sources:
         return
+    converted_ids = keep_converted or set()
     records: list[QueueRecord] | None = None
     claimed: set[int] = set()
     for _, questions in question_lists(document):
@@ -94,13 +97,16 @@ def settle_legacy_pairs(
             pair = legacy.sources.get(thread_id)
             if pair is None:
                 continue
-            if entry.get("turns") == legacy_pair_turns(pair):
+            if (
+                entry.get("turns") == legacy_pair_turns(pair)
+                and thread_id not in converted_ids
+            ):
                 questions[index] = pair
                 continue
             if thread_id not in legacy.undated:
                 continue
             if records is None:
-                records = queue_records(run_dir)
+                records = queue_records(run_dir, document)
             _adopt_queue_instant(entry, records, claimed)
 
 

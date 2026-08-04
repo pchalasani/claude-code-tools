@@ -59,15 +59,23 @@ export function App(props: { brief: BriefDocument }): JSX.Element {
             />
           )}
         </Show>
-        <section class="history-ledger" aria-labelledby="history-heading">
-          <header class="history-heading">
-            <p class="history-kicker">Dated changes</p>
-            <h2 id="history-heading">Change ledger</h2>
-            <p>What changed, newest first.</p>
-          </header>
-          <div class="history-entries">
-            <For each={ordered()}>
-              {(update) => (
+        <div class="briefing-list">
+          <For each={ordered()}>
+            {(update, index) => (
+              <section
+                classList={{
+                  "briefing-entry": true,
+                  "latest-briefing": index() === 0,
+                  "ledger-briefing": index() > 0,
+                }}
+              >
+                <Show when={index() === 1}>
+                  <header class="history-heading" id="briefing-ledger">
+                    <p class="history-kicker">Earlier briefings</p>
+                    <h2>Briefing ledger</h2>
+                    <p>Previous briefings, newest first.</p>
+                  </header>
+                </Show>
                 <VisibleRow state={state} id={update.id}>
                   {(row) => (
                     <UpdateView
@@ -75,13 +83,14 @@ export function App(props: { brief: BriefDocument }): JSX.Element {
                       row={row}
                       update={update}
                       now={now()}
+                      latest={index() === 0}
                     />
                   )}
                 </VisibleRow>
-              )}
-            </For>
-          </div>
-        </section>
+              </section>
+            )}
+          </For>
+        </div>
       </main>
       <SearchOverlay state={state} />
       <HelpOverlay state={state} />
@@ -89,31 +98,36 @@ export function App(props: { brief: BriefDocument }): JSX.Element {
   );
 }
 function Masthead(props: { state: BriefState }): JSX.Element {
-  const attention = () => props.state.nav.latestUpdateOutstandingCount();
+  const attention = () => props.state.nav.latestBriefingAttentionCount();
   return (
     <header class="masthead">
-      <p class="eyebrow">Session briefing</p>
-      <h1 class="brief-title">{props.state.brief.title}</h1>
-      <div class="brief-summary">
-        <Markdown text={props.state.brief.summary} />
-      </div>
-      <Show when={attention() > 0}>
-        <div class="meta">
-          <button
-            type="button"
-            class="meta-attention"
-            data-attention-count={attention()}
-            onClick={(event) => {
-              event.currentTarget.blur();
-              props.state.nav.toLatestUpdateAttention();
-            }}
-          >
-            <b>{attention()}</b>{" "}
-            {attention() === 1 ? "needs" : "need"} attention in latest update
-          </button>
+      <div class="masthead-main">
+        <div class="masthead-copy">
+          <p class="eyebrow">Session briefing</p>
+          <h1 class="brief-title">{props.state.brief.title}</h1>
+          <div class="brief-summary">
+            <Markdown text={props.state.brief.summary} />
+          </div>
+          <Show when={attention() > 0}>
+            <div class="meta">
+              <button
+                type="button"
+                class="meta-attention"
+                data-attention-count={attention()}
+                onClick={(event) => {
+                  event.currentTarget.blur();
+                  props.state.nav.toLatestBriefingAttention();
+                }}
+              >
+                <b>{attention()}</b>{" "}
+                {attention() === 1 ? "needs" : "need"}{" "}
+                attention in latest briefing
+              </button>
+            </div>
+          </Show>
         </div>
-      </Show>
-      <KeyBar state={props.state} />
+        <KeyBar state={props.state} />
+      </div>
       <div class="legend">
         <span class="legend-label">Trust</span>
         <For each={TRUST_ORDER}>

@@ -123,10 +123,10 @@ describe("item feedback controls", () => {
     const toggle = document.querySelector('[data-action="toggle"]');
     expect(toggle?.querySelector("kbd")?.textContent).toBe("Space / Enter");
     expect(toggle?.textContent).toContain("Open / close");
-    expect(document.querySelector(".key-guide kbd")?.textContent).toBe("1–9");
-    expect(document.querySelector(".key-guide")?.textContent).toContain(
-      "Numbered choice",
+    const numbered = [...document.querySelectorAll(".key-control")].find(
+      (control) => control.querySelector("kbd")?.textContent === "1–9",
     );
+    expect(numbered?.textContent).toContain("Jump to item");
   });
 
   it("reuses 1–9 at each open level and paints the active number tags", () => {
@@ -143,7 +143,8 @@ describe("item feedback controls", () => {
     press(" ");
     expect(
       [...rowNode("newest")?.querySelectorAll(
-        ":scope > .row-body > .row-lane > .row-head .row-shortcut",
+        ":scope > .row-body > .update-lanes > .row-lane "
+          + "> .row-head .row-shortcut",
       ) ?? []].map((tag) => tag.textContent),
     ).toEqual(["1", "2"]);
 

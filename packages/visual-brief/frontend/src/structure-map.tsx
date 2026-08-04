@@ -83,7 +83,7 @@ export function StructureMap(props: { state: BriefState }): JSX.Element {
         class="map-trigger"
         aria-controls="brief-structure-map"
         aria-expanded={open()}
-        aria-label="Open updates log"
+        aria-label="Open briefing ledger"
         onClick={openNow}
         onFocus={() => {
           if (!suppressFocusOpen) {
@@ -99,23 +99,23 @@ export function StructureMap(props: { state: BriefState }): JSX.Element {
         onPointerLeave={cancelHover}
       >
         <span class="map-trigger-mark" aria-hidden="true">›</span>
-        <span class="map-trigger-label">Updates log</span>
+        <span class="map-trigger-label">Briefing ledger</span>
       </button>
       <aside
         ref={drawer}
         id="brief-structure-map"
         class="map"
-        aria-label="Updates log"
+        aria-label="Briefing ledger"
         aria-hidden={!open()}
         data-open={open() ? "true" : "false"}
         inert={!open()}
       >
         <header class="map-header">
-          <p class="map-title">Updates log</p>
+          <p class="map-title">Briefing ledger</p>
           <button
             type="button"
             class="map-close"
-            aria-label="Close updates log"
+            aria-label="Close briefing ledger"
             onClick={close}
           >
             <span aria-hidden="true">×</span>
@@ -152,8 +152,11 @@ export function StructureMap(props: { state: BriefState }): JSX.Element {
           )}
         </Show>
         <For each={orderedUpdates(props.state.brief)}>
-          {(update) => (
-            <section class="map-update">
+          {(update, index) => (
+            <section
+              class="map-update"
+              data-latest={index() === 0 ? "true" : "false"}
+            >
               <button
                 type="button"
                 class="map-update-head"
@@ -162,6 +165,9 @@ export function StructureMap(props: { state: BriefState }): JSX.Element {
                   { dropFilter: true },
                 )}
               >
+                <Show when={index() === 0}>
+                  <span>Latest briefing · </span>
+                </Show>
                 <time dateTime={update.timestamp}>
                   {formatTimestamp(update.timestamp)}
                 </time>

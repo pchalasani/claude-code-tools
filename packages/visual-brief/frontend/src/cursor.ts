@@ -85,13 +85,7 @@ export function composeRow(
   if (row.kind === "evidence") {
     return rows.find((candidate) => candidate.id === row.anchorId) ?? null;
   }
-  if (row.kind !== "update") {
-    return row;
-  }
-  return rows.find(
-    (candidate) =>
-      candidate.kind === "lane" && candidate.parentId === row.id,
-  ) ?? null;
+  return row;
 }
 function indexOf(rows: Row[], id: string | null): number {
   return id === null ? -1 : rows.findIndex((row) => row.id === id);

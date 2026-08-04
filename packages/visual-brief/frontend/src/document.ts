@@ -83,6 +83,7 @@ export interface Update {
   headline: string;
   summary: string;
   lanes: Lane[];
+  questions?: Thread[];
 }
 
 export interface LegacyCurrentState {
@@ -152,7 +153,20 @@ export interface BriefDocument {
   title: string;
   summary: string;
   current_state?: CurrentState;
+  legacy_anchor_aliases?: Record<string, string>;
   updates: Update[];
+}
+
+/** Report whether a value is a retired-anchor mapping from the backend. */
+function isLegacyAnchorAliases(
+  value: unknown,
+): value is Record<string, string> {
+  return value !== null
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && Object.entries(value).every(([source, target]) =>
+      source.length > 0 && typeof target === "string" && target.length > 0
+    );
 }
 
 /** Human-readable name of each trust level. */
@@ -233,6 +247,12 @@ export function readEmbeddedDocument(
   ) {
     throw new Error("embedded brief document has invalid current state");
   }
+  if (
+    Object.hasOwn(brief, "legacy_anchor_aliases")
+    && !isLegacyAnchorAliases(brief.legacy_anchor_aliases)
+  ) {
+    throw new Error("embedded brief document has invalid legacy anchor aliases");
+  }
   return parsed as BriefDocument;
 }
 
@@ -258,6 +278,7 @@ export function describeShape(brief: BriefDocument): DocumentShape {
   }
   for (const update of brief.updates ?? []) {
     shape.updates += 1;
+    shape.threads += (update.questions ?? []).length;
     for (const lane of update.lanes ?? []) {
       shape.lanes += 1;
       shape.threads += (lane.questions ?? []).length;

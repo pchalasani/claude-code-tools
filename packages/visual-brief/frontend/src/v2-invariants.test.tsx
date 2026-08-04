@@ -519,12 +519,14 @@ describe("updates log drawer", () => {
     const close = document.querySelector<HTMLButtonElement>(".map-close");
 
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
-    expect(trigger?.getAttribute("aria-label")).toBe("Open updates log");
-    expect(trigger?.textContent).toContain("Updates log");
+    expect(trigger?.getAttribute("aria-label")).toBe("Open briefing ledger");
+    expect(trigger?.textContent).toContain("Briefing ledger");
     expect(map?.getAttribute("data-open")).toBe("false");
     expect(map?.getAttribute("aria-hidden")).toBe("true");
-    expect(map?.getAttribute("aria-label")).toBe("Updates log");
-    expect(close?.getAttribute("aria-label")).toBe("Close updates log");
+    expect(map?.getAttribute("aria-label")).toBe("Briefing ledger");
+    expect(close?.getAttribute("aria-label")).toBe(
+      "Close briefing ledger",
+    );
   });
 
   it("waits for mouse intent and cancels on leave and cleanup", () => {
@@ -788,7 +790,8 @@ describe("live document derivations", () => {
     ids.forEach((id, index) => expect(rowNode(id)).toBe(before[index]));
   });
 
-  it("scopes masthead attention to the latest update and cycles its chats", () => {
+  it("scopes masthead attention to the latest briefing and cycles its chats",
+    () => {
     const brief = sampleBrief();
     const older = laneOf(brief, "older", "history").items[0];
     if (older === undefined) {
@@ -810,7 +813,7 @@ describe("live document derivations", () => {
 
     expect(attention?.dataset.attentionCount).toBe("2");
     expect(attention?.textContent).toBe(
-      "2 need attention in latest update",
+      "2 need attention in latest briefing",
     );
     expect(document.querySelector("[data-count]")).toBeNull();
     expect(document.querySelector("[data-awaiting-count]")).toBeNull();
@@ -820,7 +823,7 @@ describe("live document derivations", () => {
     expect(paintedCursor()).toBe(ANSWERED);
     expect(attention?.dataset.attentionCount).toBe("1");
     expect(attention?.textContent).toBe(
-      "1 needs attention in latest update",
+      "1 needs attention in latest briefing",
     );
     expect(
       JSON.parse(
@@ -875,6 +878,14 @@ describe("live document derivations", () => {
 
     expect(controls.length).toBeGreaterThan(0);
     expect(labels.every((label) => label.length > 0)).toBe(true);
+    expect(document.querySelector(".keybar-title")?.textContent).toBe(
+      "Shortcuts",
+    );
+    expect(controls[0]?.textContent).toContain("↑↓ · j/kRows");
+    expect(controls[1]?.textContent).toContain("⇧↑↓ · J/KLanes");
+    expect(document.querySelector(".keybar")?.textContent).toContain(
+      "fJump to row",
+    );
   });
 
   it("restores surviving folds across a patch and defaults new rows", () => {

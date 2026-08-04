@@ -1,218 +1,137 @@
-# Brief v2: Detailed Current State and Changes
+# Visual Brief One-Briefing Publish Specification
 
-This specification defines the current Visual Brief publishing contract. It
-replaces the earlier four-claim current-state design while retaining read
-compatibility for documents that already use that design.
+Status: current. This specification replaces the earlier two-object contract
+that this file once described. The historical filename remains to preserve
+existing references.
 
 ## Purpose
 
-Each normal publish carries two related records:
+A normal publish represents one substantial report. The report is one durable
+record that starts as the latest briefing and later moves into the earlier
+briefing ledger. The model does not maintain a second current-state portrait.
 
-- `current_state` replaces the detailed account of where the work stands.
-- `changes` appends one dated, immutable update about what changed.
+Visual briefs serve substantial implementation, investigation, review, and
+design reports. Trivial updates remain in ordinary conversation.
 
-The command writes both records atomically. The page never shows one without
-the other.
+Before a long work block, the agent sends a short visible acknowledgment. A
+substantial request from a page thread receives the same immediate response.
 
-## Publish Payload
+## Publish Contract
 
-`visual-brief publish` accepts `--file F` or `-`, plus the optional existing
-`--run RUN` selector. Its payload has exactly two top-level fields:
+`visual-brief publish` accepts one JSON object with exactly:
 
-```json
-{
-  "current_state": {
-    "headline": "The detailed publishing contract is active",
-    "summary": "Every important detail is individually addressable.",
-    "lanes": [
-      {
-        "id": "structured-publishing",
-        "name": "Structured publishing",
-        "items": [
-          {
-            "id": "structured-state",
-            "glance": "The current snapshot uses lanes and items.",
-            "explanation": "It uses the same visible schema as dated updates.",
-            "trust": "verified-by-me"
-          }
-        ]
-      }
-    ]
-  },
-  "changes": {
-    "id": "detailed-state-contract",
-    "timestamp": "2026-08-01T12:00:00Z",
-    "headline": "Publishing gained a detailed current snapshot",
-    "summary": "The snapshot changed while this update entered history.",
-    "lanes": []
-  }
-}
-```
+- `id`
+- `timestamp`
+- `headline`
+- `summary`
+- `lanes`
 
-The publish-side `current_state` object has exactly `headline`, `summary`, and
-`lanes`. The command copies `changes.timestamp` into stored state as
-`updated_at`; callers do not submit it.
+The object contains one to six lanes. Lane names and count fit the report.
+Recent changes may have their own section when useful, but no recurring section
+set is required.
 
-Current state contains one to six lanes chosen for the actual work. There is no
-mandatory recurring set of headings. Each name must plainly describe its
-section; familiar names such as "What works now" remain available when they
-fit, but they are not a template to fill mechanically.
+The headline and summary use plain prose. They avoid arrows, status chains,
+unexplained abbreviations, and internal process metrics. The payload contains
+no `questions` field at any depth.
 
-Lanes and items use the same visible content schema as dated-update lanes and
-items. A lane has `id`, `name`, and `items`, plus the existing optional `open`
-preference. An item has `id`, `glance`, `explanation`, and `trust`, plus
-optional `forensics` and `tables`.
+The retired `{current_state, changes}` envelope fails with a direct migration
+message. No compatibility branch accepts it.
 
-Agents never submit `questions` anywhere inside `current_state`. The queue,
-fold, and answer commands own stored conversations.
+## Storage and Presentation
 
-## Plain-Language Rules
+The command appends the validated object to `updates`. Append order is
+chronological, so `updates[-1]` is the latest briefing. The page reverses that
+list for display.
 
-The state headline and summary must use ordinary language that a reader can
-understand without internal codenames, unexplained abbreviations, bare file
-names, or compressed status notation. Detailed content belongs in lanes and
-items rather than in a compressed root summary.
+The latest briefing uses the existing prominent card tokens. A second or later
+record appears below an earlier-briefing heading with quiet ledger styling.
+Zero updates show no briefing card or ledger heading. One update shows only the
+latest card.
 
-The command rejects mechanical forms that reliably indicate cryptic prose:
-lists, headings, tables, code fences, arrows, and status chains. The headline
-is one line of at least four words and at most 200 characters. The summary is
-one punctuated sentence of at least four words and at most 480 characters.
-Software cannot determine whether otherwise valid prose is understandable;
-the writing contract supplies that semantic rule.
+The front end renders all updates through one keyed list. A live publish moves
+the former latest into second position without replacing its DOM row. Fold
+choices, drafts, cursor state, fresh-answer state, and pending submissions stay
+bound to stable row ids.
 
-Items retain the existing mechanical lint rules. Enumerations belong in
-separate items, tables, or forensic notes instead of a `glance`, an
-`explanation`, or a conversation turn.
+A normal live publish patches document data into the open page. It does not
+reload the page.
 
-## Stored Document and Compatibility
+## Conversations
 
-New stored state has this shape:
+The briefing root, lanes, and items are all chat-addressable. Root questions
+participate in:
 
-```json
-{
-  "updated_at": "2026-08-01T12:00:00Z",
-  "headline": "The detailed publishing contract is active",
-  "summary": "Every important detail is individually addressable.",
-  "lanes": [],
-  "questions": []
-}
-```
+- thread normalization and validation
+- safe projection into the embedded page document
+- linting and queue views
+- unanswered counting, folding, and answering
+- frontend pending-state reconciliation
+- rendering, search, and keyboard navigation
 
-`questions` is optional at the root, on lanes, and on items. It appears only
-when the tool has stored conversations there.
+The masthead attention control counts outstanding chats only within
+`updates[-1]`. It includes root, lane, and item threads. Global next-chat
+navigation still walks outstanding threads in older briefings.
 
-Documents without `current_state` remain valid. Their first normal publish
-adds detailed state. The already-shipped legacy object also remains valid:
+## Legacy Migration
 
-```json
-{
-  "updated_at": "2026-08-01T10:00:00Z",
-  "goal": "Keep the existing brief readable.",
-  "focus": "The compatibility view remains active.",
-  "blocker": null,
-  "next": "Replace it with a structured publish."
-}
-```
+Legacy documents render before migration. The first direct publish performs
+one migration in memory before writing any file:
 
-Legacy state may render in its prior read-only card. The next normal publish
-replaces it with structured state. New runs start with structured state.
-Their initial placeholder may have no lanes until the first report; every
-agent-authored publish must supply one to six.
+1. Normalize legacy conversation pairs.
+2. Merge valid queued messages against the legacy current-state anchors.
+3. Convert `current_state` into one ordinary update with a generated stable id.
+4. Rewrite stored root, lane, and item thread anchors to the archived paths.
+5. Save persistent aliases from retired anchors to archived anchors.
+6. Remove `current_state` and append the new briefing.
 
-`add-update` remains available for imports and compatibility. It appends
-history without changing state and warns that normal reports use `publish`.
+The persistent aliases cover `//current-state`, each state lane path, and each
+state item path. They preserve queue entries submitted before migration and
+late submissions from a stale open page. Counting, folding, legacy-pair
+settlement, and linting resolve queue records through these aliases. The queue
+file remains append-only.
 
-## Stable Identity Namespace
+The shipped four-claim state becomes one ordinary archived briefing. A second
+direct publish finds no `current_state`, so it cannot archive the same legacy
+state twice.
 
-Current-state rows and chat anchors occupy a namespace that dated updates
-cannot spell. Authored identifiers cannot contain `/`, so every state identity
-starts with two slashes:
+## Atomicity
 
-| Owner | Row and anchor identity |
-| --- | --- |
-| State root | `//current-state` |
-| Lane `L` | `//current-state/lanes/L` |
-| Item `I` | `//current-state/items/I` |
+Payload validation occurs before run resolution or mutation. Duplicate update
+ids fail before legacy migration begins. The writer validates and renders the
+complete candidate before replacing run files.
 
-Lane identity depends only on the lane id. Item identity depends only on the
-item id, not its containing lane. State item ids must therefore be unique
-across every state lane. Moving item `I` between lanes keeps its row, evidence,
-draft, cursor, and chat anchor identities.
+`content.json`, `index.html`, and `meta.json` use the existing rollback guard.
+Malformed payloads, duplicate ids, candidate validation failures, render
+failures, and partial write failures leave the original run bytes intact.
 
-Conversation rows append `#<thread-id>` to their owner's anchor. Evidence uses
-the existing `#~evidence` suffix and stable named-note suffixes. Dated update
-paths retain their existing `update/lane/item` semantics.
+## Compatibility Commands
 
-## Conversation Preservation
+`add-update` remains for compatibility imports. It warns that normal briefings
+use `publish`. It does not define the normal-model contract.
 
-Before installing replacement state, `publish` indexes existing structured
-state by root, lane id, and globally unique item id. It copies each existing
-conversation list onto the matching replacement owner. The agent payload does
-not repeat those conversations.
-
-Moving an item with the same id preserves its conversations because the item
-anchor does not include a lane id. If replacement state removes a lane or item
-that directly owns any conversation, the command rejects the complete publish
-with a clear error. No state or history byte changes.
-
-Removing an empty owner remains valid. Removing a lane whose child item moved
-elsewhere also remains valid unless the lane itself owns a conversation.
-
-The dated `changes` object follows every existing update rule. A duplicate
-update id rejects the complete publish. Existing dated updates retain their
-content and paths; later `fold` and `answer` writes may still add conversation
-turns through the established commands.
-
-## Shared Backend Ownership
-
-Structured state participates in the same owner and thread indexes as dated
-updates. These indexes drive:
-
-- queue folding and stale-anchor reporting;
-- answer lookup and reply-target validation;
-- unanswered and run-list counts;
-- duplicate-thread detection;
-- legacy thread normalization;
-- mechanical linting;
-- schema validation; and
-- safe embedded-document projection.
-
-The root, every state lane, and every state item are valid queue anchors. A
-folded state question uses the same thread shape, timestamp ordering, pending
-matching, and answer lifecycle as an update question.
-
-## Shared Frontend Interaction
-
-Detailed current state appears before dated history in a calm, compact visual
-container. Its root, lanes, items, conversations, and evidence all enter the
-same Solid row outline used by updates. State rows therefore support Chat,
-keyboard selection, row and lane movement, folds, drafts, search, jump labels,
-`m` reveal and restore, pending and working signs, new-answer state, map
-navigation, and document counts.
-
-The legacy four-claim card remains outside the outline and stays read-only.
-
-## Live-Patch Invariants
-
-A publish patches the running Solid document rather than replacing the page.
-Stable row ids and keyed reconciliation preserve unchanged state and history
-DOM nodes. Human-owned state remains untouched: folds, drafts, cursor, the
-`m` snapshot, search, overlays, scroll, pending submissions, working signs,
-and seen-answer records.
-
-An item move may change its visual parent, but its row id, anchor, draft,
-cursor, conversation identity, and evidence identity remain stable. Composer
-cleanup rechecks an apparently absent row after reconciliation settles, so a
-transient move cannot discard a draft.
+`render`, `fold`, `answer`, and `lint` continue to support legacy documents.
 
 ## Verification
 
-Focused tests cover atomic replacement, exact payload fields, plain-language
-rejection, legacy compatibility, global state item identity, conversation
-carry-forward, item moves, owner-removal rejection, backend chat lifecycle,
-row interaction, live DOM preservation, and human-state preservation.
+Backend regression coverage includes:
 
-Release verification includes all non-browser Python tests, all frontend
-tests, TypeScript checking, a production frontend build, the bundle stamp
-check, and `git diff --check`. Browser automation is outside this feature's
-verification scope.
+- direct five-field payload validation
+- one-to-six lane boundaries
+- rejection of authored questions and old envelopes
+- append-only identity across successive publishes
+- root, lane, and item fold, count, project, lint, and answer paths
+- structured and four-claim migration
+- queued old-anchor migration and late stale-page submissions
+- malformed, duplicate, validation, render, and write atomicity failures
+
+Frontend regression coverage includes:
+
+- zero, one, legacy-plus-update, and multi-update layout
+- prominent latest styling and quiet ledger placement
+- root, lane, and item latest-attention scope
+- older-briefing global navigation
+- DOM node, fold, and draft preservation during latest-to-ledger handoff
+- full Vitest coverage without a browser
+
+The committed frontend bundle and source stamp are rebuilt after source tests
+pass. Final real-browser verification belongs to the parent workflow.

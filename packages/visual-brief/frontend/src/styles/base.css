@@ -86,6 +86,17 @@ kbd {
   padding: 0 var(--space-1) var(--space-5);
 }
 
+.masthead-main {
+  align-items: start;
+  display: grid;
+  gap: var(--space-6);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.masthead-copy {
+  min-width: 0;
+}
+
 .eyebrow,
 .history-kicker {
   color: var(--color-current);
@@ -146,49 +157,57 @@ kbd {
   background: var(--color-surface-quiet);
   border: var(--border-thin) solid var(--color-border);
   border-radius: var(--radius-surface);
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-  margin-bottom: var(--space-3);
-  padding: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3);
+}
+
+.keybar-title {
+  color: var(--color-text-faint);
+  font-size: var(--font-size-xs);
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  margin: 0 0 var(--space-2);
+  text-transform: uppercase;
+}
+
+.keybar-grid {
+  display: grid;
+  gap: var(--space-1) var(--space-3);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 0;
 }
 
 .key-control {
   align-items: center;
   background: transparent;
-  border: var(--border-thin) solid transparent;
-  border-radius: var(--radius-control);
-  cursor: pointer;
+  border: 0;
   display: inline-flex;
-  font-size: var(--font-size-sm);
-  gap: var(--space-2);
-  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-xs);
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-1) 0;
   text-align: left;
 }
 
 .key-control kbd {
-  font-size: var(--font-size-base);
-  min-width: 1.7em;
+  flex: none;
+  font-size: var(--font-size-xs);
   text-align: center;
-}
-
-.key-control:hover,
-.key-control[aria-pressed="true"] {
-  background: var(--color-surface);
-  border-color: var(--color-border);
 }
 
 .key-control span {
   color: var(--color-text-muted);
+  min-width: 0;
 }
 
-.key-guide {
-  cursor: default;
+button.key-control {
+  border-radius: var(--radius-control);
+  cursor: pointer;
 }
 
-.key-guide:hover {
-  background: transparent;
-  border-color: transparent;
+button.key-control:hover,
+button.key-control[aria-pressed="true"] {
+  background: var(--color-surface);
 }
 
 .chip {
@@ -459,6 +478,10 @@ kbd {
   .stream {
     padding: var(--space-5) var(--space-4) var(--space-page-bottom);
   }
+
+  .masthead-main {
+    gap: var(--space-4);
+  }
 }
 
 @media (width <= 34rem) {
@@ -466,13 +489,15 @@ kbd {
     padding-inline: var(--space-3);
   }
 
-  .key-control {
-    flex: 1 1 9rem;
-    min-height: var(--height-control-min);
+  .masthead-main {
+    grid-template-columns: 1fr;
+  }
+
+  .keybar-grid {
+    grid-template-columns: 1fr;
   }
 
   .key-control span {
-    min-width: 0;
     white-space: normal;
   }
 }

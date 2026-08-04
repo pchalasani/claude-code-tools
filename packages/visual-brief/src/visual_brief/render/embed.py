@@ -64,6 +64,10 @@ def project_document(data: dict[str, Any]) -> dict[str, Any]:
         "summary": data["summary"],
         "updates": [_project_update(update) for update in data["updates"]],
     }
+    if "legacy_anchor_aliases" in data:
+        projected["legacy_anchor_aliases"] = dict(
+            data["legacy_anchor_aliases"]
+        )
     if "current_state" in data:
         projected["current_state"] = _project_current_state(
             data["current_state"]
@@ -93,13 +97,15 @@ def _project_current_state(state: dict[str, Any]) -> dict[str, Any]:
 
 def _project_update(update: dict[str, Any]) -> dict[str, Any]:
     """Return one timeline update's schema fields."""
-    return {
+    projected: dict[str, Any] = {
         "id": update["id"],
         "timestamp": update["timestamp"],
         "headline": update["headline"],
         "summary": update["summary"],
         "lanes": [_project_lane(lane) for lane in update["lanes"]],
     }
+    _attach_questions(projected, update)
+    return projected
 
 
 def _project_lane(lane: dict[str, Any]) -> dict[str, Any]:

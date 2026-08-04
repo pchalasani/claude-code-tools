@@ -285,8 +285,8 @@ def test_concurrent_add_updates_preserve_every_publish(
     results = [process.communicate(timeout=30) for process in processes]
 
     warning = (
-        "warning: add-update does not change current state; "
-        "normal reports must use publish\n"
+        "warning: add-update is for compatibility imports; "
+        "normal briefings use publish\n"
     )
     assert [
         (process.returncode, stdout, stderr)
@@ -339,7 +339,7 @@ def test_add_update_warns_that_normal_reports_use_publish(
 
     assert add_update_command(root, None, copy.deepcopy(UPDATE)) == 0
 
-    assert "normal reports must use publish" in capsys.readouterr().err
+    assert "normal briefings use publish" in capsys.readouterr().err
 
 
 def test_add_update_requires_an_object(tmp_path: Path) -> None:

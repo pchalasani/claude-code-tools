@@ -197,7 +197,7 @@ def _describe_unfolded(
     view = document_view(document, legacy_unknown_ids)
     return [
         (record, _unfolded_reason(record, view))
-        for record in queue_records(run_dir)
+        for record in queue_records(run_dir, document)
         if not is_folded(record, view)
     ]
 

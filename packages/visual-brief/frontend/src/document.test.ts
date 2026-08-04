@@ -124,6 +124,23 @@ describe("readEmbeddedDocument", () => {
       .toBeUndefined();
   });
 
+  it("parses legacy anchor aliases", () => {
+    const aliases = { "//current-state/items/old": "u1/l1/i1" };
+    const withAliases = { ...BRIEF, legacy_anchor_aliases: aliases };
+
+    expect(
+      readEmbeddedDocument(pageWith(JSON.stringify(withAliases)))
+        .legacy_anchor_aliases,
+    ).toEqual(aliases);
+  });
+
+  it("refuses malformed legacy anchor aliases", () => {
+    const candidate = { ...BRIEF, legacy_anchor_aliases: { old: 3 } };
+
+    expect(() => readEmbeddedDocument(pageWith(JSON.stringify(candidate))))
+      .toThrow(/invalid legacy anchor aliases/);
+  });
+
   it.each([[], null])("refuses current state shaped as %j", (currentState) => {
     const candidate = { ...BRIEF, current_state: currentState };
 

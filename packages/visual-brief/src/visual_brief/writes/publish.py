@@ -1,26 +1,33 @@
-"""Publish replaceable current state and one immutable update together."""
+"""Append one direct briefing and retire legacy current state safely."""
 
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 from pathlib import Path
 from typing import Any, cast
 
-from visual_brief.render.validate import validate_current_state
+from visual_brief.render.validate import (
+    validate_current_state,
+    validate_publish_briefing,
+)
 from visual_brief.schema import (
-    PublishState,
-    StructuredCurrentState,
+    CURRENT_STATE_ROOT,
+    LEGACY_ANCHOR_ALIASES_FIELD,
+    Update,
     current_state_item_path,
     current_state_lane_path,
+    legacy_anchor_aliases,
 )
-from visual_brief.writes.legacy import read_for_write, settle_legacy_pairs
+from visual_brief.server.counting import merge_pending_followups
+from visual_brief.writes.legacy import (
+    LegacyPairs,
+    read_for_write,
+    settle_legacy_pairs,
+)
 from visual_brief.writes.lint import report_lint
-from visual_brief.writes.panels import _updates
-from visual_brief.writes.queue_view import (
-    document_view,
-    is_folded,
-    queue_records,
-)
+from visual_brief.writes.panels import _updates, append_update
 from visual_brief.writes.runfiles import (
     CliError,
     resolve_run,
@@ -28,10 +35,8 @@ from visual_brief.writes.runfiles import (
     write_transaction,
 )
 
-_PAYLOAD_FIELDS = {"current_state", "changes"}
-_INPUT_STATE_FIELDS = {"headline", "summary", "lanes"}
-_MIN_STATE_LANES = 1
-_MAX_STATE_LANES = 6
+_BRIEFING_FIELDS = {"id", "timestamp", "headline", "summary", "lanes"}
+_OLD_ENVELOPE_FIELDS = {"current_state", "changes"}
 
 
 def publish_command(
@@ -39,201 +44,247 @@ def publish_command(
     run_id: str | None,
     payload: Any,
 ) -> int:
-    """Replace current state and append its matching dated update atomically.
+    """Append one direct briefing, archiving legacy state on first use.
 
     Args:
         runs_root: Directory holding every run.
         run_id: Explicit run identifier, or ``None`` for the only run.
-        payload: Exact ``current_state`` and ``changes`` publish envelope.
+        payload: One briefing with id, timestamp, headline, summary, and lanes.
 
     Returns:
         The process exit status.
 
     Raises:
-        CliError: If the envelope, state, update, or resulting document is
-            invalid, or the update id already exists.
+        CliError: If the briefing or resulting document is invalid, or its id
+            already exists.
     """
-    state, changes = _validate_envelope(payload)
+    briefing = _validate_payload(payload)
     _, run_dir = resolve_run(runs_root, run_id)
-    update_id = changes.get("id")
-    if not isinstance(update_id, str) or not update_id.strip():
-        raise CliError("changes must carry a non-empty id")
-    timestamp = changes.get("timestamp")
-    if not isinstance(timestamp, str) or not timestamp.strip():
-        raise CliError("changes must carry a timestamp")
-    stored_state: StructuredCurrentState = {
-        "updated_at": timestamp,
-        **copy.deepcopy(state),
-    }
+    briefing_id = briefing["id"]
 
     with write_transaction(run_dir):
         document, legacy = read_for_write(run_dir)
-        updates = _updates(document)
-        if any(
-            isinstance(existing, dict) and existing.get("id") == update_id
-            for existing in updates
-        ):
-            raise CliError(
-                f"update {update_id!r} already exists; updates are appended, "
-                "never rewritten"
-            )
-        _carry_state_conversations(document.get("current_state"), stored_state)
-        _reject_unfolded_owner_removal(
+        _require_available_id(document, briefing_id)
+        merged_legacy = LegacyPairs()
+        merged = merge_pending_followups(
             run_dir,
-            document,
-            stored_state,
-            legacy.undated,
+            merged_legacy.undated,
+            merged_legacy.sources,
         )
-        try:
-            validate_current_state(stored_state)
-        except ValueError as error:
-            raise CliError(str(error)) from error
-        document["current_state"] = stored_state
-        updates.append(changes)
-        settle_legacy_pairs(run_dir, document, legacy)
+        if merged is not None:
+            document = merged
+            legacy = merged_legacy
+        migrated_threads = _archive_current_state(
+            document,
+            reserved_id=briefing_id,
+        )
+        append_update(document, briefing)
+        settle_legacy_pairs(run_dir, document, legacy, migrated_threads)
         index_path = save_document(run_dir, document)
-    print(f"publish: updated state and appended {update_id}; rendered {index_path}")
+    print(f"publish: appended {briefing_id}; rendered {index_path}")
     report_lint(run_dir, document)
     return 0
 
 
-def _validate_envelope(
-    payload: Any,
-) -> tuple[PublishState, dict[str, Any]]:
-    """Validate and return the two exact publish-envelope objects."""
+def _validate_payload(payload: Any) -> Update:
+    """Validate and copy one exact agent-authored briefing object."""
     if not isinstance(payload, dict):
-        raise CliError("publish payload must be a JSON object")
-    _require_exact_fields(payload, _PAYLOAD_FIELDS, "publish payload")
-    state = payload.get("current_state")
-    if not isinstance(state, dict):
-        raise CliError("current_state must be an object")
-    _reject_agent_questions(state)
-    _require_exact_fields(state, _INPUT_STATE_FIELDS, "current_state")
-    lanes = state.get("lanes")
-    if not isinstance(lanes, list):
-        raise CliError("current_state.lanes must be a list")
-    if not _MIN_STATE_LANES <= len(lanes) <= _MAX_STATE_LANES:
-        raise CliError("current_state.lanes must contain 1 to 6 sections")
-    changes = payload.get("changes")
-    if not isinstance(changes, dict):
-        raise CliError("changes must be a JSON object")
-    return cast(PublishState, copy.deepcopy(state)), changes
+        raise CliError("publish payload must be one briefing JSON object")
+    if _OLD_ENVELOPE_FIELDS <= set(payload):
+        raise CliError(
+            "publish no longer accepts the current_state plus changes "
+            "envelope; pass one briefing object directly with exactly id, "
+            "timestamp, headline, summary, and lanes"
+        )
+    _reject_agent_questions(payload)
+    _require_exact_fields(payload, _BRIEFING_FIELDS, "briefing")
+    candidate = copy.deepcopy(payload)
+    try:
+        validate_publish_briefing(candidate)
+    except ValueError as error:
+        raise CliError(str(error)) from error
+    return cast(Update, candidate)
 
 
-def _reject_agent_questions(state: dict[str, Any]) -> None:
-    """Reject conversations in agent-authored replacement state."""
+def _reject_agent_questions(briefing: dict[str, Any]) -> None:
+    """Reject conversations anywhere in an agent-authored briefing."""
     def walk(value: Any, location: str) -> None:
         if isinstance(value, dict):
             for key, child in value.items():
                 child_location = f"{location}.{key}"
                 if key == "questions":
                     raise CliError(
-                        f"{child_location} is tool-owned; publish "
-                        "current_state without conversations"
+                        f"{child_location} is tool-owned; publish the "
+                        "briefing without conversations"
                     )
                 walk(child, child_location)
         elif isinstance(value, list):
             for index, child in enumerate(value):
                 walk(child, f"{location}[{index}]")
 
-    walk(state, "current_state")
+    walk(briefing, "briefing")
 
 
-def _carry_state_conversations(
-    previous: Any,
-    replacement: StructuredCurrentState,
-) -> None:
-    """Carry chats by stable state identity or reject their removal."""
-    old = _state_owners(previous)
-    if old is None:
-        return
-    new = _state_owners(replacement)
-    if new is None:
-        return
-    for kind, old_owners, new_owners in (
-        ("lane", old[0], new[0]),
-        ("item", old[1], new[1]),
-    ):
-        for owner_id, old_owner in old_owners.items():
-            questions = _owned_questions(old_owner)
-            if not questions:
-                continue
-            new_owner = new_owners.get(owner_id)
-            if new_owner is None:
-                raise CliError(
-                    "publish would remove current-state "
-                    f"{kind} {owner_id!r}, which owns conversations; "
-                    f"keep the same {kind} id"
-                )
-            new_owner["questions"] = copy.deepcopy(questions)
-    root_questions = _owned_questions(previous)
-    if root_questions:
-        replacement["questions"] = copy.deepcopy(root_questions)
-
-
-def _reject_unfolded_owner_removal(
-    run_dir: Path,
+def _archive_current_state(
     document: dict[str, Any],
-    replacement: StructuredCurrentState,
-    legacy_unknown_ids: set[str],
-) -> None:
-    """Reject removing a state owner targeted by an unmatched queue line."""
-    old = _state_owners(document.get("current_state"))
-    new = _state_owners(replacement)
-    if old is None or new is None:
-        return
-    removed: dict[str, tuple[str, str]] = {}
-    for kind, old_owners, new_owners, owner_path in (
-        ("lane", old[0], new[0], current_state_lane_path),
-        ("item", old[1], new[1], current_state_item_path),
-    ):
-        for owner_id in old_owners.keys() - new_owners.keys():
-            removed[owner_path(owner_id)] = (kind, owner_id)
-    if not removed:
-        return
-    view = document_view(document, legacy_unknown_ids)
-    for record in queue_records(run_dir):
-        owner = removed.get(record.anchor_id)
-        if owner is None or is_folded(record, view):
-            continue
-        if (
-            record.parent_id is not None
-            and view.thread_anchors.get(record.parent_id) != record.anchor_id
-        ):
-            continue
-        kind, owner_id = owner
-        raise CliError(
-            "publish would remove current-state "
-            f"{kind} {owner_id!r}, which has an unmatched queued question; "
-            f"keep the same {kind} id"
+    *,
+    reserved_id: str,
+) -> set[str]:
+    """Move a legacy current-state object into the older briefing ledger."""
+    state = document.get("current_state")
+    if not isinstance(state, dict):
+        return set()
+    try:
+        validate_current_state(state)
+    except ValueError as error:
+        raise CliError(str(error)) from error
+    archive_id = _archive_id(state, _taken_ids(document) | {reserved_id})
+    if isinstance(state.get("lanes"), list):
+        archive, thread_ids, aliases = _archive_structured_state(
+            state,
+            archive_id,
         )
+        stored_aliases = legacy_anchor_aliases(document)
+        stored_aliases.update(aliases)
+        document[LEGACY_ANCHOR_ALIASES_FIELD] = stored_aliases
+    else:
+        archive = _archive_four_claim_state(state, archive_id)
+        thread_ids = set()
+    _updates(document).append(archive)
+    del document["current_state"]
+    return thread_ids
 
 
-def _state_owners(
-    state: Any,
-) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]] | None:
-    """Index structured state lanes and globally identified items."""
-    if not isinstance(state, dict) or not isinstance(state.get("lanes"), list):
-        return None
-    lanes: dict[str, dict[str, Any]] = {}
-    items: dict[str, dict[str, Any]] = {}
-    for lane in state["lanes"]:
+def _archive_structured_state(
+    state: dict[str, Any],
+    archive_id: str,
+) -> tuple[dict[str, Any], set[str], dict[str, str]]:
+    """Build an ordinary update while retaining all structured state data."""
+    archive: dict[str, Any] = {
+        "id": archive_id,
+        "timestamp": copy.deepcopy(state.get("updated_at")),
+        "headline": copy.deepcopy(state.get("headline")),
+        "summary": copy.deepcopy(state.get("summary")),
+        "lanes": copy.deepcopy(state.get("lanes")),
+    }
+    if "questions" in state:
+        archive["questions"] = copy.deepcopy(state["questions"])
+    aliases = {CURRENT_STATE_ROOT: archive_id}
+    thread_ids = _rewrite_questions(archive, archive_id)
+    lanes = archive.get("lanes")
+    if not isinstance(lanes, list):
+        return archive, thread_ids, aliases
+    for lane in lanes:
         if not isinstance(lane, dict) or not isinstance(lane.get("id"), str):
             continue
-        lanes[lane["id"]] = lane
-        lane_items = lane.get("items")
-        if not isinstance(lane_items, list):
+        lane_path = f"{archive_id}/{lane['id']}"
+        aliases[current_state_lane_path(lane["id"])] = lane_path
+        thread_ids.update(_rewrite_questions(lane, lane_path))
+        items = lane.get("items")
+        if not isinstance(items, list):
             continue
-        for item in lane_items:
-            if isinstance(item, dict) and isinstance(item.get("id"), str):
-                items[item["id"]] = item
-    return lanes, items
+        for item in items:
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                continue
+            item_path = f"{lane_path}/{item['id']}"
+            aliases[current_state_item_path(item["id"])] = item_path
+            thread_ids.update(
+                _rewrite_questions(item, item_path)
+            )
+    return archive, thread_ids, aliases
 
 
-def _owned_questions(owner: Any) -> list[Any]:
-    """Return one owner's non-empty conversation list."""
-    questions = owner.get("questions") if isinstance(owner, dict) else None
-    return questions if isinstance(questions, list) and questions else []
+def _archive_four_claim_state(
+    state: dict[str, Any],
+    archive_id: str,
+) -> dict[str, Any]:
+    """Preserve the shipped four claims in one small ordinary briefing."""
+    claims = (
+        ("goal", "Goal"),
+        ("focus", "Working then"),
+        ("blocker", "Blocker"),
+        ("next", "Next step"),
+    )
+    items = [
+        {
+            "id": field,
+            "glance": copy.deepcopy(state.get(field)),
+            "explanation": f"This was the recorded {label.lower()} claim.",
+            "trust": "reported-by-agent",
+        }
+        for field, label in claims
+        if state.get(field) is not None
+    ]
+    return {
+        "id": archive_id,
+        "timestamp": copy.deepcopy(state.get("updated_at")),
+        "headline": "Archived legacy current state",
+        "summary": (
+            "This briefing preserves the earlier four-part current-state "
+            "record."
+        ),
+        "lanes": [
+            {
+                "id": "legacy-current-state",
+                "name": "Legacy current state",
+                "items": items,
+            }
+        ],
+    }
+
+
+def _rewrite_questions(owner: dict[str, Any], path: str) -> set[str]:
+    """Rewrite one archived owner's thread anchors and return their ids."""
+    migrated: set[str] = set()
+    questions = owner.get("questions")
+    if not isinstance(questions, list):
+        return migrated
+    for thread in questions:
+        if not isinstance(thread, dict):
+            continue
+        thread_id = thread.get("id")
+        if isinstance(thread_id, str):
+            migrated.add(thread_id)
+        anchor = thread.get("anchor")
+        if isinstance(anchor, dict):
+            anchor["path"] = path
+    return migrated
+
+
+def _archive_id(state: dict[str, Any], taken: set[str]) -> str:
+    """Return a deterministic valid id that does not collide in this run."""
+    encoded = json.dumps(
+        state,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8", errors="surrogatepass")
+    digest = hashlib.sha256(encoded).hexdigest()[:12]
+    base = f"archived-current-state-{digest}"
+    candidate = base
+    suffix = 2
+    while candidate in taken:
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+    return candidate
+
+
+def _taken_ids(document: dict[str, Any]) -> set[str]:
+    """Return every valid update id already stored in a document."""
+    return {
+        update["id"]
+        for update in _updates(document)
+        if isinstance(update, dict) and isinstance(update.get("id"), str)
+    }
+
+
+def _require_available_id(document: dict[str, Any], update_id: str) -> None:
+    """Reject a briefing id that immutable history already owns."""
+    if update_id in _taken_ids(document):
+        raise CliError(
+            f"update {update_id!r} already exists; updates are appended, "
+            "never rewritten"
+        )
 
 
 def _require_exact_fields(

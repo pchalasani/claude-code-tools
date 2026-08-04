@@ -265,6 +265,27 @@ describe("finding what a sent message became", () => {
     ]);
   });
 
+  it("resolves a retired current-state anchor after migration", () => {
+    const legacyAnchor = "//current-state/items/legacy-item";
+    const record: SentRecord = {
+      rowId: legacyAnchor,
+      anchorId: legacyAnchor,
+      text: "Did this survive migration?",
+      at: SENT_AT,
+    };
+    const brief = briefWith([
+      ["q-migrated", [asked("Did this survive migration?")]],
+    ]);
+    brief.legacy_anchor_aliases = { [legacyAnchor]: ITEM };
+    saveSentRecords([record]);
+
+    expect(locateSubmissions(brief, [record])).toEqual([
+      `${ITEM}#q-migrated`,
+    ]);
+    pendingFor(() => brief);
+    expect(readSentRecords()).toEqual([]);
+  });
+
   it("refuses a match whose timestamp is somebody else's", () => {
     const brief = briefWith([
       ["q-other", [asked("Why this way?", "2026-07-27T08:00:00.000Z")]],
@@ -391,6 +412,31 @@ describe("a submission that keeps not appearing", () => {
 });
 
 describe("a submission that arrives without a page load", () => {
+  it("retires a pending briefing-root question after it is folded", () => {
+    const rootRecord: SentRecord = {
+      rowId: "u",
+      anchorId: "u",
+      text: "What is the overall risk?",
+      at: SENT_AT,
+    };
+    saveSentRecords([rootRecord]);
+    const [brief, publish] = createSignal<BriefDocument>(briefWith([]));
+    const pending = pendingFor(brief);
+    expect(pending.at("u")).toHaveLength(1);
+
+    const folded = briefWith([]);
+    folded.updates[0]!.questions = [{
+      id: "q-root",
+      anchor: { kind: "element", path: "u" },
+      turns: [asked("What is the overall risk?")],
+    }];
+    publish(folded);
+
+    expect(locateSubmissions(folded, [rootRecord])).toEqual(["u#q-root"]);
+    expect(pending.at("u")).toHaveLength(0);
+    expect(readSentRecords()).toHaveLength(0);
+  });
+
   it("does not mistake an older identical turn for the new submission", () => {
     const old = ["q-old", [asked("Same words")]] as [string, Turn[]];
     const [brief, publish] = createSignal<BriefDocument>(briefWith([old]));

@@ -107,6 +107,7 @@ export function outline(brief: BriefDocument): Row[] {
       `${update.headline} ${update.summary}`.toLowerCase(),
     );
     rows.push(updateRow);
+    appendThreads(rows, updateRow, update.questions);
     for (const lane of update.lanes ?? []) {
       const lanePath = laneRowId(update.id, lane);
       const laneRow = appendLane(

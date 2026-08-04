@@ -40,7 +40,7 @@ export interface Navigation {
   jump: (edge: Edge) => void;
   retreat: () => void;
   toOpenChat: () => void;
-  toLatestUpdateAttention: () => void;
+  toLatestBriefingAttention: () => void;
   isFresh: (id: string) => boolean;
   isOpen: (id: string) => boolean;
   toggle: (id: string) => void;
@@ -56,7 +56,7 @@ export interface Navigation {
   overlay: Accessor<Overlay>;
   openOverlay: (overlay: Overlay) => void;
   closeOverlay: () => void;
-  latestUpdateOutstandingCount: Accessor<number>;
+  latestBriefingAttentionCount: Accessor<number>;
 }
 export function createNavigation(
   brief: Accessor<BriefDocument>,
@@ -99,13 +99,15 @@ export function createNavigation(
       ?? edgeRow(painted(), "top"),
   );
   const outstanding = createMemo(() => openness.outstanding(rows()));
-  const latestUpdateOutstanding = createMemo(() => {
-    const latestUpdateId = brief().updates.at(-1)?.id;
-    if (latestUpdateId === undefined) {
+  const latestBriefingAttention = createMemo(() => {
+    const latestBriefingId = brief().updates.at(-1)?.id;
+    if (latestBriefingId === undefined) {
       return [];
     }
-    return outstanding().filter(
-      (row) => ancestorRowIds(rows(), row.id).includes(latestUpdateId),
+    return rows().filter(
+      (row) => row.kind === "thread"
+        && openness.isOutstanding(row, rows())
+        && ancestorRowIds(rows(), row.id).includes(latestBriefingId),
     );
   });
   const ancestors = (id: string): string[] => ancestorRowIds(rows(), id);
@@ -211,8 +213,8 @@ export function createNavigation(
         select(next, { dropFilter: true });
       }
     },
-    toLatestUpdateAttention: () => {
-      const next = cycleAfter(latestUpdateOutstanding(), cursorId());
+    toLatestBriefingAttention: () => {
+      const next = cycleAfter(latestBriefingAttention(), cursorId());
       if (next !== null) {
         human.choose(next, true);
         select(next, { dropFilter: true });
@@ -301,8 +303,8 @@ export function createNavigation(
     overlay,
     openOverlay: setOverlay,
     closeOverlay: () => setOverlay("none"),
-    latestUpdateOutstandingCount: createMemo(
-      () => latestUpdateOutstanding().length,
+    latestBriefingAttentionCount: createMemo(
+      () => latestBriefingAttention().length,
     ),
   };
 }

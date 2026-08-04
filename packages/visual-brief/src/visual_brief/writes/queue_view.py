@@ -25,6 +25,7 @@ from visual_brief.schema import (
     CURRENT_STATE_ROOT,
     current_state_item_path,
     current_state_lane_path,
+    legacy_anchor_aliases,
 )
 
 
@@ -57,11 +58,16 @@ class DocumentView:
     ]
 
 
-def queue_records(run_dir: Path) -> list[QueueRecord]:
+def queue_records(
+    run_dir: Path,
+    document: Any = None,
+) -> list[QueueRecord]:
     """Read every well-formed question line from a run's queue.
 
     Args:
         run_dir: The run directory.
+        document: Optional document whose migration aliases retire old
+            current-state anchors.
 
     Returns:
         The queue's question records in arrival order. Unreadable queues and
@@ -71,13 +77,24 @@ def queue_records(run_dir: Path) -> list[QueueRecord]:
     path = _contained_child(run_dir, "questions.jsonl")
     if path is None:
         return []
+    aliases = legacy_anchor_aliases(document)
     records: list[QueueRecord] = []
     try:
         with path.open("rb") as queue:
             for record in _question_records(queue):
                 parsed = _parse_record(record)
                 if parsed is not None:
-                    records.append(parsed)
+                    records.append(
+                        QueueRecord(
+                            anchor_id=aliases.get(
+                                parsed.anchor_id,
+                                parsed.anchor_id,
+                            ),
+                            text=parsed.text,
+                            timestamp=parsed.timestamp,
+                            parent_id=parsed.parent_id,
+                        )
+                    )
     except OSError:
         return []
     return records
@@ -125,9 +142,9 @@ def question_lists(document: Any) -> Iterator[tuple[str, list[Any]]]:
         document: A document, normalized or exactly as it was read.
 
     Yields:
-        The anchor path of each lane and item that carries conversations,
-        paired with the list itself, so a caller can read the entries or
-        replace them in place.
+        The anchor path of each root, lane, and item that carries
+        conversations, paired with the list itself, so a caller can read the
+        entries or replace them in place.
     """
     if not isinstance(document, dict):
         return
@@ -166,6 +183,7 @@ def question_lists(document: Any) -> Iterator[tuple[str, list[Any]]]:
         lanes = update.get("lanes")
         if not isinstance(update_id, str) or not isinstance(lanes, list):
             continue
+        yield from _owner_questions(update, update_id)
         for lane in lanes:
             if not isinstance(lane, dict):
                 continue
@@ -264,7 +282,7 @@ def _owner_questions(
     owner: dict[str, Any],
     path: str,
 ) -> Iterator[tuple[str, list[Any]]]:
-    """Yield one lane's or item's conversation list when it has one."""
+    """Yield one owner's conversation list when it has one."""
     questions = owner.get("questions")
     if isinstance(questions, list):
         yield path, questions

@@ -19,6 +19,7 @@ from visual_brief.schema import (
     CURRENT_STATE_ROOT,
     current_state_item_path,
     current_state_lane_path,
+    legacy_anchor_aliases,
 )
 
 FoldedKey = tuple[str | None, str, str, datetime | str | None]
@@ -119,6 +120,15 @@ def _collect_thread_state(
         lanes = update.get("lanes")
         if not isinstance(update_id, str) or not isinstance(lanes, list):
             continue
+        owners[update_id] = update
+        _collect_threads(
+            states,
+            folded,
+            threads,
+            update.get("questions"),
+            update_id,
+            legacy_ids,
+        )
         for lane in lanes:
             if not isinstance(lane, dict) or not isinstance(lane.get("id"), str):
                 continue
@@ -242,6 +252,7 @@ def reply_target_error(
     if parent_id is None:
         return None
     normalized, _, _ = _merge_pending_content(run_dir)
+    anchor_id = legacy_anchor_aliases(normalized).get(anchor_id, anchor_id)
     states, _, _, _ = _collect_thread_state(normalized)
     state = states.get(parent_id)
     saved_anchor = state[0] if state is not None else None
@@ -292,6 +303,7 @@ def _merge_pending_content(
     normalized = normalize_document(
         content, legacy_unknown_ids, aliases, legacy_sources
     )
+    anchor_aliases = legacy_anchor_aliases(normalized)
     states, folded, threads, owners = _collect_thread_state(
         normalized, legacy_unknown_ids
     )
@@ -337,6 +349,8 @@ def _merge_pending_content(
                 ):
                     continue
                 text = text.strip()
+                anchor = anchor_aliases.get(anchor, anchor)
+                record = {**record, "anchor_id": anchor}
                 if isinstance(parent, str) and parent not in states:
                     if record.get("content_generation") == content_generation:
                         parent = aliases.get(parent, parent)

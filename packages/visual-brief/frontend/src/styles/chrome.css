@@ -360,6 +360,14 @@
 .help-row dt,
 .help-row dd {
   margin: 0;
+  min-width: 0;
+}
+
+.help-row dt kbd {
+  display: inline-block;
+  line-height: 1.4;
+  max-width: 100%;
+  white-space: normal;
 }
 
 .help-row dd {
@@ -435,6 +443,7 @@
   }
 
   .help-row {
-    grid-template-columns: var(--width-help-command-compact) minmax(0, 1fr);
+    gap: var(--space-1);
+    grid-template-columns: 1fr;
   }
 }

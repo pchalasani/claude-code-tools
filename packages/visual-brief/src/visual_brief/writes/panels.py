@@ -1,7 +1,8 @@
-"""Append immutable dated updates to a visual brief."""
+"""Append compatibility briefing records to a visual brief."""
 
 from __future__ import annotations
 
+import copy
 import sys
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,7 @@ from visual_brief.writes.runfiles import (
 
 
 def add_update_command(runs_root: Path, run_id: str | None, update: Any) -> int:
-    """Append one dated update without changing any update already saved.
+    """Append one briefing through the compatibility/import command.
 
     An update whose id is ``now`` is ordinary history. Keeping that existing
     id is the migration from the former pinned panel: conversation anchors
@@ -32,12 +33,12 @@ def add_update_command(runs_root: Path, run_id: str | None, update: Any) -> int:
         The process exit status.
 
     Raises:
-        CliError: If the update is not a dated, uniquely identified object,
-            or the resulting document would not validate.
+        CliError: If the update is not a timestamped, uniquely identified
+            object, or the resulting document would not validate.
     """
     print(
-        "warning: add-update does not change current state; "
-        "normal reports must use publish",
+        "warning: add-update is for compatibility imports; "
+        "normal briefings use publish",
         file=sys.stderr,
     )
     _, run_dir = resolve_run(runs_root, run_id)
@@ -48,25 +49,39 @@ def add_update_command(runs_root: Path, run_id: str | None, update: Any) -> int:
         raise CliError("the update must carry a non-empty id")
     stamp = update.get("timestamp")
     if not isinstance(stamp, str) or not stamp.strip():
-        raise CliError("a dated update must carry a timestamp")
+        raise CliError("an imported briefing must carry a timestamp")
 
     with write_transaction(run_dir):
         document, legacy = read_for_write(run_dir)
-        updates = _updates(document)
-        if any(
-            isinstance(existing, dict) and existing.get("id") == update_id
-            for existing in updates
-        ):
-            raise CliError(
-                f"update {update_id!r} already exists; updates are appended, "
-                "never rewritten"
-            )
-        updates.append(update)
+        append_update(document, update)
         settle_legacy_pairs(run_dir, document, legacy)
         index_path = save_document(run_dir, document)
     print(f"add-update: appended {update_id}; rendered {index_path}")
     report_lint(run_dir, document)
     return 0
+
+
+def append_update(document: Any, update: dict[str, Any]) -> None:
+    """Append an independent update after checking its stable identity.
+
+    Args:
+        document: Stored visual brief document being changed in memory.
+        update: Validated or compatibility update to append.
+
+    Raises:
+        CliError: If the document has no update list or the id already exists.
+    """
+    updates = _updates(document)
+    update_id = update.get("id")
+    if any(
+        isinstance(existing, dict) and existing.get("id") == update_id
+        for existing in updates
+    ):
+        raise CliError(
+            f"update {update_id!r} already exists; updates are appended, "
+            "never rewritten"
+        )
+    updates.append(copy.deepcopy(update))
 
 
 def _updates(document: Any) -> list[Any]:

@@ -63,6 +63,13 @@ def normalize_document(
         lanes = update.get("lanes")
         if not isinstance(update_id, str) or not isinstance(lanes, list):
             continue
+        _normalize_questions(
+            normalized_update,
+            update_id,
+            legacy_unknown_ids,
+            legacy_id_aliases,
+            legacy_sources,
+        )
         normalized_lanes = list(lanes)
         normalized_update["lanes"] = normalized_lanes
         for lane_index, lane in enumerate(lanes):

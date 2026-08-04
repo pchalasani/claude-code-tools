@@ -8,6 +8,59 @@
   position: relative;
 }
 
+.latest-briefing > .row-update {
+  background: var(--color-surface);
+  border: var(--border-thin) solid var(--color-border);
+  border-radius: var(--radius-surface);
+  box-shadow: var(--shadow-surface);
+  margin-bottom: var(--space-7);
+  margin-top: 0;
+  overflow: hidden;
+  padding-top: 0;
+  position: relative;
+}
+
+.latest-briefing > .row-update::before {
+  background: linear-gradient(
+    to bottom,
+    var(--color-current),
+    var(--color-active)
+  );
+  content: "";
+  inset: 0 auto 0 0;
+  position: absolute;
+  width: var(--signal-spine-width);
+  z-index: 1;
+}
+
+.latest-briefing > .row-update > .row-head {
+  background: var(--color-current-soft);
+  padding-left: var(--space-2);
+}
+
+.latest-briefing > .row-update > .row-head .row-toggle {
+  padding-block: var(--space-3);
+}
+
+.latest-briefing > .row-update > .row-body {
+  border-left: 0;
+  margin: 0;
+  padding: var(--space-4) var(--state-card-padding)
+    var(--state-card-padding)
+    calc(var(--state-card-padding) + var(--signal-spine-width));
+}
+
+.latest-briefing .update-title {
+  font-size: var(--font-size-lg);
+  letter-spacing: -0.015em;
+  line-height: var(--line-height-tight);
+}
+
+.latest-briefing .update-summary {
+  font-size: var(--font-size-md);
+  margin-top: 0;
+}
+
 .row-state::before {
   background: linear-gradient(
     to bottom,

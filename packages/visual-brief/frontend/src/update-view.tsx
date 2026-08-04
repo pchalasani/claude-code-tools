@@ -1,4 +1,4 @@
-import { For, type JSX } from "solid-js";
+import { For, Show, type JSX } from "solid-js";
 import { formatTimestamp, humanAge } from "./age";
 import {
   ComposeBox,
@@ -24,6 +24,7 @@ export function UpdateView(props: {
   row: Row;
   update: Update;
   now: number;
+  latest?: boolean;
 }): JSX.Element {
   return (
     <RowShell
@@ -31,6 +32,9 @@ export function UpdateView(props: {
       row={props.row}
       head={
         <>
+          <Show when={props.latest}>
+            <span class="current-state-label">Latest briefing</span>
+          </Show>
           <span class="update-title">{props.update.headline}</span>
           <span class="update-when">
             <time class="update-time" dateTime={props.update.timestamp}>
@@ -42,20 +46,49 @@ export function UpdateView(props: {
           </span>
         </>
       }
+      actions={
+        <ComposeButton
+          state={props.state}
+          row={props.row}
+          label="Chat about this briefing"
+        />
+      }
     >
       <div class="update-summary">
         <Markdown text={props.update.summary} />
       </div>
-      <For each={props.update.lanes ?? []}>
-        {(lane) => (
+      <For each={orderedThreads(props.update.questions)}>
+        {(thread) => (
           <VisibleRow
             state={props.state}
-            id={laneRowId(props.update.id, lane)}
+            id={threadRowId(props.row.id, thread)}
           >
-            {(row) => <LaneView state={props.state} row={row} lane={lane} />}
+            {(row) => (
+              <ThreadView state={props.state} row={row} thread={thread} />
+            )}
           </VisibleRow>
         )}
       </For>
+      <PendingNotes state={props.state} row={props.row} />
+      <WorkingSign state={props.state} row={props.row} />
+      <ComposeBox state={props.state} row={props.row} />
+      <div
+        classList={{
+          "update-lanes": true,
+          "current-state-lanes": props.latest === true,
+        }}
+      >
+        <For each={props.update.lanes ?? []}>
+          {(lane) => (
+            <VisibleRow
+              state={props.state}
+              id={laneRowId(props.update.id, lane)}
+            >
+              {(row) => <LaneView state={props.state} row={row} lane={lane} />}
+            </VisibleRow>
+          )}
+        </For>
+      </div>
     </RowShell>
   );
 }

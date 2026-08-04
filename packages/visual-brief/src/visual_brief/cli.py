@@ -96,7 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     update_parser = subparsers.add_parser(
         "add-update",
-        help="append one dated update",
+        help="append one briefing for compatibility imports",
     )
     _add_run_option(update_parser)
     update_parser.add_argument("--file", help="read the update from a file")
@@ -104,10 +104,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     publish_parser = subparsers.add_parser(
         "publish",
-        help="replace current state and append one dated update",
+        help="append one direct briefing",
     )
     _add_run_option(publish_parser)
-    publish_parser.add_argument("--file", help="read the publish from a file")
+    publish_parser.add_argument(
+        "--file",
+        help="read one briefing object from a file",
+    )
     _add_stdin_argument(publish_parser)
 
     lint_parser = subparsers.add_parser("lint", help="check one run's content")

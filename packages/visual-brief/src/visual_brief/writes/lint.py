@@ -78,6 +78,13 @@ def lint_document(
         lanes = update.get("lanes")
         if not isinstance(update_id, str) or not isinstance(lanes, list):
             continue
+        warnings.extend(
+            _lint_threads(
+                update.get("questions"),
+                update_id,
+                settled_pairs,
+            )
+        )
         for lane in lanes:
             warnings.extend(
                 _lint_lane(lane, False, settled_pairs, update_id)
@@ -287,7 +294,7 @@ def _settled_legacy_pairs(
     Returns:
         The anchor path and question text of every matched pair.
     """
-    records = queue_records(run_dir)
+    records = queue_records(run_dir, data)
     if not records:
         return frozenset()
     legacy_unknown_ids: set[str] = set()
@@ -314,7 +321,7 @@ def _settled_legacy_pairs(
 
 def _lint_queue(run_dir: Path, data: Any) -> list[str]:
     """Report queue lines that outlived the newest content write."""
-    records = queue_records(run_dir)
+    records = queue_records(run_dir, data)
     if not records:
         return []
     legacy_unknown_ids: set[str] = set()

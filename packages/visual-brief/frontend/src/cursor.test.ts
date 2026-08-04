@@ -61,8 +61,8 @@ describe("pure views", () => {
     ]);
   });
 
-  it("routes composition at evidence and update rows", () => {
-    expect(composeRow(rows, "newest")?.id).toBe("newest/changed");
+  it("routes composition at evidence and briefing root rows", () => {
+    expect(composeRow(rows, "newest")?.id).toBe("newest");
     expect(composeRow(rows, "newest/changed/alpha")?.id).toBe(
       "newest/changed/alpha",
     );

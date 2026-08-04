@@ -1,4 +1,4 @@
-"""Atomic detailed-current-state and dated-change publishing."""
+"""Direct briefing publishing and one-time legacy-state migration."""
 
 from __future__ import annotations
 
@@ -14,13 +14,16 @@ import pytest
 from page_document import embedded_document
 from write_support import make_run, queue_line, read_content_file, write_content
 from visual_brief.cli import main, new_command
+from visual_brief.render.embed import project_document
 from visual_brief.schema import (
     CURRENT_STATE_ROOT,
     current_state_item_path,
     current_state_lane_path,
 )
-from visual_brief.server.counting import count_unanswered_questions
-from visual_brief.server.queue import MAX_QUESTION_LENGTH
+from visual_brief.server.counting import (
+    count_unanswered_questions,
+    reply_target_error,
+)
 from visual_brief.writes import (
     CliError,
     answer_command,
@@ -30,30 +33,24 @@ from visual_brief.writes import (
 )
 from visual_brief.writes import runfiles
 
-CHANGE = {
-    "id": "detailed-state-contract",
-    "timestamp": "2026-08-01T12:00:00Z",
-    "headline": "Publishing now carries detailed state and changes together",
-    "summary": "The structured snapshot changes while history remains.",
-    "lanes": [],
-}
-
-STATE = {
-    "headline": "The detailed publishing contract is active",
-    "summary": "The current position is organized into addressable details.",
+BRIEFING = {
+    "id": "one-briefing-contract",
+    "timestamp": "2026-08-04T12:00:00Z",
+    "headline": "Publishing now accepts one complete briefing",
+    "summary": "The latest report and its durable history are one record.",
     "lanes": [
         {
             "id": "delivery",
             "name": "What works now",
             "items": [
                 {
-                    "id": "parser",
-                    "glance": "The structured state parser is working.",
+                    "id": "publisher",
+                    "glance": "The direct publisher is working.",
                     "explanation": (
-                        "It validates the same visible content as dated items."
+                        "It validates and appends one complete briefing."
                     ),
                     "trust": "verified-by-me",
-                    "forensics": ["focused parser check: passed"],
+                    "forensics": ["focused publisher check: passed"],
                 }
             ],
         },
@@ -64,7 +61,7 @@ STATE = {
                 {
                     "id": "review",
                     "glance": "The final review is still pending.",
-                    "explanation": "A cold reviewer must inspect the final tree.",
+                    "explanation": "A reviewer must inspect the final tree.",
                     "trust": "reported-by-agent",
                 }
             ],
@@ -72,35 +69,36 @@ STATE = {
     ],
 }
 
-_STATE_LANE_NAMES = (
-    "Delivered behavior",
-    "Remaining risks",
-    "Decisions needed",
-    "User-visible effects",
-    "Evidence worth opening",
-    "Next verification",
-    "Deferred work",
-)
-
-
-def payload() -> dict[str, Any]:
-    """Return an independent valid publish envelope."""
-    return {
-        "current_state": copy.deepcopy(STATE),
-        "changes": copy.deepcopy(CHANGE),
-    }
-
-
-def state_lanes(count: int) -> list[dict[str, Any]]:
-    """Return a valid set of context-specific state lanes."""
-    return [
+LEGACY_STATE = {
+    "updated_at": "2026-08-04T11:00:00Z",
+    "headline": "The earlier current state remains readable",
+    "summary": "Its conversations will move into an ordinary briefing.",
+    "lanes": [
         {
-            "id": f"section-{index + 1}",
-            "name": _STATE_LANE_NAMES[index],
-            "items": [],
+            "id": "legacy-lane",
+            "name": "Earlier work",
+            "items": [
+                {
+                    "id": "legacy-item",
+                    "glance": "The earlier item remains intact.",
+                    "explanation": "It keeps its evidence and conversation.",
+                    "trust": "reported-by-agent",
+                }
+            ],
         }
-        for index in range(count)
-    ]
+    ],
+}
+
+
+def briefing(
+    update_id: str = "one-briefing-contract",
+    timestamp: str = "2026-08-04T12:00:00Z",
+) -> dict[str, Any]:
+    """Return an independent valid direct briefing."""
+    value = copy.deepcopy(BRIEFING)
+    value["id"] = update_id
+    value["timestamp"] = timestamp
+    return value
 
 
 def run_bytes(run_dir: Path) -> dict[str, bytes]:
@@ -116,76 +114,570 @@ def run_bytes(run_dir: Path) -> dict[str, bytes]:
     }
 
 
-def state_owner(document: dict[str, Any], owner_id: str) -> dict[str, Any]:
-    """Return one structured-state root, lane, or globally identified item."""
-    state = document["current_state"]
-    if owner_id == "root":
-        return state
-    for lane in state["lanes"]:
-        if lane["id"] == owner_id:
+def update_owner(
+    document: dict[str, Any],
+    update_id: str,
+    owner: str,
+) -> dict[str, Any]:
+    """Return an update root, lane, or item by id."""
+    update = next(
+        entry for entry in document["updates"] if entry["id"] == update_id
+    )
+    if owner == "root":
+        return update
+    for lane in update["lanes"]:
+        if lane["id"] == owner:
             return lane
         for item in lane["items"]:
-            if item["id"] == owner_id:
+            if item["id"] == owner:
                 return item
-    raise AssertionError(f"missing state owner {owner_id}")
+    raise AssertionError(f"missing owner {owner!r}")
 
 
-def only_thread(document: dict[str, Any], owner_id: str) -> dict[str, Any]:
-    """Return the only tool-owned conversation at one state owner."""
-    questions = state_owner(document, owner_id)["questions"]
+def only_thread(
+    document: dict[str, Any],
+    update_id: str,
+    owner: str,
+) -> dict[str, Any]:
+    """Return the only conversation on one update owner."""
+    questions = update_owner(document, update_id, owner)["questions"]
     assert len(questions) == 1
     return questions[0]
 
 
-def test_publish_replaces_detailed_state_and_appends_matching_change(
+def legacy_document() -> dict[str, Any]:
+    """Return a valid document with the structured legacy current state."""
+    document = {
+        "title": "Legacy migration",
+        "summary": "A document created before direct briefing publishing.",
+        "current_state": copy.deepcopy(LEGACY_STATE),
+        "updates": [],
+    }
+    return document
+
+
+def thread(thread_id: str, anchor: str, text: str) -> dict[str, Any]:
+    """Build one saved human-authored conversation."""
+    return {
+        "id": thread_id,
+        "anchor": {"kind": "element", "path": anchor},
+        "turns": [
+            {
+                "author": "human",
+                "text": text,
+                "at": "2026-08-04T11:05:00Z",
+            }
+        ],
+    }
+
+
+def test_publish_appends_one_direct_briefing_and_keeps_history(
     tmp_path: Path,
 ) -> None:
-    """One transaction saves the snapshot and immutable dated change."""
+    """The same stable record moves from latest position into the ledger."""
     root = tmp_path / "runs"
     run_dir = make_run(root)
-    old_updates = copy.deepcopy(read_content_file(run_dir)["updates"])
+    original = copy.deepcopy(read_content_file(run_dir)["updates"])
 
-    assert publish_command(root, None, payload()) == 0
+    assert publish_command(root, None, briefing()) == 0
 
     saved = read_content_file(run_dir)
-    assert saved["current_state"] == {
-        "updated_at": CHANGE["timestamp"],
-        **STATE,
-    }
-    assert saved["updates"][:-1] == old_updates
-    assert saved["updates"][-1] == CHANGE
+    assert "current_state" not in saved
+    assert saved["updates"][:-1] == original
+    assert saved["updates"][-1] == BRIEFING
     delivered = embedded_document(
         (run_dir / "index.html").read_text(encoding="utf-8")
     )
-    assert delivered["current_state"] == saved["current_state"]
     assert delivered["updates"] == saved["updates"]
 
-    later = payload()
-    later["current_state"]["headline"] = (
-        "The detailed publishing contract is verified"
+    for owner, anchor in (
+        ("root", BRIEFING["id"]),
+        ("delivery", f"{BRIEFING['id']}/delivery"),
+        ("publisher", f"{BRIEFING['id']}/delivery/publisher"),
+    ):
+        queue_line(run_dir, f"Question for {owner}", anchor_id=anchor)
+    assert fold_command(root, None) == 0
+    before = read_content_file(run_dir)["updates"][-1]
+
+    assert publish_command(
+        root,
+        None,
+        briefing("second-briefing", "2026-08-04T13:00:00Z"),
+    ) == 0
+
+    later = read_content_file(run_dir)
+    assert later["updates"][-2] == before
+    assert later["updates"][-2]["id"] == BRIEFING["id"]
+    assert later["updates"][-1]["id"] == "second-briefing"
+    assert count_unanswered_questions(run_dir) == 3
+
+
+@pytest.mark.parametrize("count", [1, 6])
+def test_publish_accepts_one_to_six_flexible_sections(
+    tmp_path: Path,
+    count: int,
+) -> None:
+    """Both supported section-count boundaries are accepted."""
+    root = tmp_path / "runs"
+    run_dir = make_run(root)
+    candidate = briefing()
+    candidate["lanes"] = [
+        {"id": f"section-{index}", "name": f"Section {index}", "items": []}
+        for index in range(count)
+    ]
+
+    assert publish_command(root, None, candidate) == 0
+    assert len(read_content_file(run_dir)["updates"][-1]["lanes"]) == count
+
+
+@pytest.mark.parametrize("count", [0, 7])
+def test_publish_rejects_section_counts_outside_range(
+    tmp_path: Path,
+    count: int,
+) -> None:
+    """An invalid section count changes no run bytes."""
+    root = tmp_path / "runs"
+    run_dir = make_run(root)
+    before = run_bytes(run_dir)
+    candidate = briefing()
+    candidate["lanes"] = [
+        {"id": f"section-{index}", "name": f"Section {index}", "items": []}
+        for index in range(count)
+    ]
+
+    with pytest.raises(CliError, match="lanes must contain 1 to 6 lanes"):
+        publish_command(root, None, candidate)
+
+    assert run_bytes(run_dir) == before
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda value: value.update(extra={}), "must have exactly"),
+        (lambda value: value.pop("summary"), "missing summary"),
+        (
+            lambda value: value.update(headline="Build -> test -> ship"),
+            "must not contain arrows",
+        ),
+        (
+            lambda value: value.update(summary="Too short."),
+            "at least four words",
+        ),
+    ],
+)
+def test_malformed_publish_payload_is_atomic(
+    tmp_path: Path,
+    mutate: Callable[[dict[str, Any]], object],
+    message: str,
+) -> None:
+    """Payload validation finishes before any run file is touched."""
+    root = tmp_path / "runs"
+    run_dir = make_run(root)
+    before = run_bytes(run_dir)
+    candidate = briefing()
+    mutate(candidate)
+
+    with pytest.raises(CliError, match=message):
+        publish_command(root, None, candidate)
+
+    assert run_bytes(run_dir) == before
+
+
+def test_old_two_part_envelope_is_rejected_clearly(tmp_path: Path) -> None:
+    """The removed current-state and changes contract is not accepted."""
+    root = tmp_path / "runs"
+    run_dir = make_run(root)
+    before = run_bytes(run_dir)
+
+    with pytest.raises(
+        CliError,
+        match="no longer accepts the current_state plus changes envelope",
+    ):
+        publish_command(
+            root,
+            None,
+            {"current_state": {}, "changes": {}},
+        )
+
+    assert run_bytes(run_dir) == before
+
+
+@pytest.mark.parametrize("level", ["root", "lane", "item", "nested"])
+def test_agent_cannot_author_questions(tmp_path: Path, level: str) -> None:
+    """Conversations remain tool-owned at every possible payload depth."""
+    root = tmp_path / "runs"
+    run_dir = make_run(root)
+    before = run_bytes(run_dir)
+    candidate = briefing()
+    owner: dict[str, Any] = candidate
+    if level == "lane":
+        owner = candidate["lanes"][0]
+    elif level == "item":
+        owner = candidate["lanes"][0]["items"][0]
+    elif level == "nested":
+        item = candidate["lanes"][0]["items"][0]
+        item["forensics"] = [
+            {
+                "title": "Nested evidence",
+                "body": "This note otherwise has valid content.",
+                "questions": [],
+            }
+        ]
+        owner = item["forensics"][0]
+    owner["questions"] = []
+
+    with pytest.raises(CliError, match="questions is tool-owned"):
+        publish_command(root, None, candidate)
+
+    assert run_bytes(run_dir) == before
+
+
+def test_update_root_lane_and_item_chats_use_full_backend_lifecycle(
+    tmp_path: Path,
+) -> None:
+    """Every briefing level folds, counts, projects, answers, and lints."""
+    root = tmp_path / "runs"
+    run_dir = make_run(root)
+    assert publish_command(root, None, briefing()) == 0
+    anchors = {
+        "root": BRIEFING["id"],
+        "delivery": f"{BRIEFING['id']}/delivery",
+        "publisher": f"{BRIEFING['id']}/delivery/publisher",
+    }
+    for owner, anchor in anchors.items():
+        queue_line(run_dir, f"Question for {owner}", anchor_id=anchor)
+
+    assert count_unanswered_questions(run_dir) == 3
+    assert fold_command(root, None) == 0
+    saved = read_content_file(run_dir)
+    projected = project_document(saved)
+    projected_update = projected["updates"][-1]
+    assert len(projected_update["questions"]) == 1
+    assert len(projected_update["lanes"][0]["questions"]) == 1
+    assert len(projected_update["lanes"][0]["items"][0]["questions"]) == 1
+
+    for owner in anchors:
+        saved = read_content_file(run_dir)
+        thread_id = only_thread(saved, BRIEFING["id"], owner)["id"]
+        assert answer_command(root, None, thread_id, f"Answer for {owner}.") == 0
+
+    assert count_unanswered_questions(run_dir) == 0
+    assert lint_document(read_content_file(run_dir)) == []
+
+
+def test_structured_current_state_archives_all_conversations(
+    tmp_path: Path,
+) -> None:
+    """Root, lane, and item threads move to rewritten archived paths."""
+    root = tmp_path / "runs"
+    document = legacy_document()
+    state = document["current_state"]
+    owners = (
+        (state, "legacy-root", CURRENT_STATE_ROOT),
+        (
+            state["lanes"][0],
+            "legacy-lane-thread",
+            current_state_lane_path("legacy-lane"),
+        ),
+        (
+            state["lanes"][0]["items"][0],
+            "legacy-item-thread",
+            current_state_item_path("legacy-item"),
+        ),
     )
-    later["changes"]["id"] = "contract-verified"
-    later["changes"]["timestamp"] = "2026-08-01T13:00:00Z"
+    for owner, thread_id, anchor in owners:
+        owner["questions"] = [thread(thread_id, anchor, f"Chat at {anchor}")]
+    run_dir = make_run(root, document=document)
 
-    assert publish_command(root, None, later) == 0
+    assert publish_command(root, None, briefing()) == 0
 
-    replaced = read_content_file(run_dir)
-    assert replaced["current_state"]["headline"] == (
-        later["current_state"]["headline"]
+    saved = read_content_file(run_dir)
+    assert "current_state" not in saved
+    archived = saved["updates"][-2]
+    archive_id = archived["id"]
+    expected = {
+        "root": archive_id,
+        "legacy-lane": f"{archive_id}/legacy-lane",
+        "legacy-item": f"{archive_id}/legacy-lane/legacy-item",
+    }
+    for owner, path in expected.items():
+        assert only_thread(saved, archive_id, owner)["anchor"]["path"] == path
+    assert saved["legacy_anchor_aliases"] == {
+        CURRENT_STATE_ROOT: archive_id,
+        current_state_lane_path("legacy-lane"): expected["legacy-lane"],
+        current_state_item_path("legacy-item"): expected["legacy-item"],
+    }
+    projected = project_document(saved)
+    assert projected["legacy_anchor_aliases"] == saved[
+        "legacy_anchor_aliases"
+    ]
+
+    for owner in expected:
+        thread_id = only_thread(saved, archive_id, owner)["id"]
+        assert answer_command(root, None, thread_id, "The archive still works.") == 0
+    assert count_unanswered_questions(run_dir) == 0
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected_count"),
+    [("", 1), ("Answered before migration.", 0)],
+)
+def test_undated_legacy_pair_keeps_matching_queue_record_after_migration(
+    tmp_path: Path,
+    answer: str,
+    expected_count: int,
+) -> None:
+    """Archiving cannot duplicate or resurrect an undated legacy pair."""
+    root = tmp_path / "runs"
+    question = "Does this legacy root chat survive migration?"
+    document = legacy_document()
+    document["current_state"]["questions"] = [
+        {"question": question, "answer": answer}
+    ]
+    run_dir = make_run(root, document=document)
+    record = queue_line(
+        run_dir,
+        question,
+        anchor_id=CURRENT_STATE_ROOT,
+        timestamp="2026-08-04T11:30:00Z",
     )
-    assert replaced["current_state"]["updated_at"] == (
-        "2026-08-01T13:00:00Z"
+
+    assert publish_command(root, None, briefing()) == 0
+
+    saved = read_content_file(run_dir)
+    archive_id = saved["updates"][-2]["id"]
+    migrated = only_thread(saved, archive_id, "root")
+    assert migrated["turns"][0]["at"] == record["timestamp"]
+    assert count_unanswered_questions(run_dir) == expected_count
+
+    assert fold_command(root, None) == 0
+    folded = read_content_file(run_dir)
+    assert only_thread(folded, archive_id, "root") == migrated
+    assert count_unanswered_questions(run_dir) == expected_count
+
+
+@pytest.mark.parametrize(
+    "old_anchor",
+    [
+        CURRENT_STATE_ROOT,
+        current_state_lane_path("legacy-lane"),
+        current_state_item_path("legacy-item"),
+    ],
+)
+def test_unfolded_current_state_question_survives_migration(
+    tmp_path: Path,
+    old_anchor: str,
+) -> None:
+    """A queued question is merged and never targets a vanished anchor."""
+    root = tmp_path / "runs"
+    run_dir = make_run(root, document=legacy_document())
+    record = queue_line(
+        run_dir,
+        "Please preserve this queued question.",
+        anchor_id=old_anchor,
+        timestamp="2026-08-04T11:30:00Z",
     )
-    assert replaced["updates"][:-1] == saved["updates"]
+    queue_before = (run_dir / "questions.jsonl").read_bytes()
+
+    assert publish_command(root, None, briefing()) == 0
+
+    saved = read_content_file(run_dir)
+    archive_id = saved["updates"][-2]["id"]
+    aliases = saved["legacy_anchor_aliases"]
+    new_anchor = aliases[old_anchor]
+    owner = "root"
+    if old_anchor.endswith("/legacy-lane"):
+        owner = "legacy-lane"
+    elif old_anchor.endswith("/legacy-item"):
+        owner = "legacy-item"
+    migrated = only_thread(saved, archive_id, owner)
+    assert migrated["anchor"]["path"] == new_anchor
+    assert migrated["turns"][0]["text"] == record["text"]
+    assert (run_dir / "questions.jsonl").read_bytes() == queue_before
+    assert count_unanswered_questions(run_dir) == 1
+
+    assert fold_command(root, None) == 0
+    folded = read_content_file(run_dir)
+    assert only_thread(folded, archive_id, owner) == migrated
+    assert count_unanswered_questions(run_dir) == 1
+    assert answer_command(
+        root,
+        None,
+        migrated["id"],
+        "This queued question survived migration.",
+    ) == 0
+    assert count_unanswered_questions(run_dir) == 0
 
 
-def test_publish_rolls_back_when_second_atomic_write_fails(
+def test_late_old_anchor_submission_uses_persistent_alias(tmp_path: Path) -> None:
+    """A stale open page can submit after the atomic migration write."""
+    root = tmp_path / "runs"
+    run_dir = make_run(root, document=legacy_document())
+    assert publish_command(root, None, briefing()) == 0
+    saved = read_content_file(run_dir)
+    archive_id = saved["updates"][-2]["id"]
+    old_anchor = current_state_item_path("legacy-item")
+    new_anchor = saved["legacy_anchor_aliases"][old_anchor]
+
+    queue_line(
+        run_dir,
+        "This came from a stale page.",
+        anchor_id=old_anchor,
+        timestamp="2026-08-04T12:30:00Z",
+    )
+    assert count_unanswered_questions(run_dir) == 1
+    assert fold_command(root, None) == 0
+
+    folded = read_content_file(run_dir)
+    migrated = only_thread(folded, archive_id, "legacy-item")
+    assert migrated["anchor"]["path"] == new_anchor
+    assert migrated["turns"][0]["text"] == "This came from a stale page."
+
+
+def test_stale_follow_up_target_uses_persistent_alias(tmp_path: Path) -> None:
+    """A stale page can reply to an archived thread through its old anchor."""
+    root = tmp_path / "runs"
+    old_anchor = current_state_item_path("legacy-item")
+    document = legacy_document()
+    item = document["current_state"]["lanes"][0]["items"][0]
+    item["questions"] = [
+        thread("q-legacy-item", old_anchor, "Can this thread move?")
+    ]
+    run_dir = make_run(root, document=document)
+    assert publish_command(root, None, briefing()) == 0
+
+    assert reply_target_error(run_dir, "q-legacy-item", old_anchor) is None
+
+
+def test_four_claim_current_state_archives_once(tmp_path: Path) -> None:
+    """The oldest shipped state shape becomes one ordinary briefing."""
+    root = tmp_path / "runs"
+    document = {
+        "title": "Four claims",
+        "summary": "A legacy document remains readable before migration.",
+        "current_state": {
+            "updated_at": "2026-08-04T10:00:00Z",
+            "goal": "Keep the old document readable.",
+            "focus": "Move it into ordinary history now.",
+            "blocker": None,
+            "next": "Publish the next complete briefing.",
+        },
+        "updates": [],
+    }
+    run_dir = make_run(root, document=document)
+
+    assert publish_command(root, None, briefing()) == 0
+    saved = read_content_file(run_dir)
+
+    assert "current_state" not in saved
+    assert [update["headline"] for update in saved["updates"]] == [
+        "Archived legacy current state",
+        BRIEFING["headline"],
+    ]
+    assert {
+        item["id"] for item in saved["updates"][0]["lanes"][0]["items"]
+    } == {"goal", "focus", "next"}
+
+    assert publish_command(
+        root,
+        None,
+        briefing("after-migration", "2026-08-04T13:00:00Z"),
+    ) == 0
+    later = read_content_file(run_dir)
+    assert sum(
+        update["headline"] == "Archived legacy current state"
+        for update in later["updates"]
+    ) == 1
+
+
+def test_duplicate_id_does_not_start_legacy_migration(tmp_path: Path) -> None:
+    """Identity rejection leaves current state and every run byte unchanged."""
+    root = tmp_path / "runs"
+    document = legacy_document()
+    document["updates"].append(copy.deepcopy(BRIEFING))
+    run_dir = make_run(root, document=document)
+    before = run_bytes(run_dir)
+
+    with pytest.raises(CliError, match="already exists"):
+        publish_command(root, None, briefing())
+
+    assert run_bytes(run_dir) == before
+
+
+def test_candidate_document_validation_failure_is_atomic(
+    tmp_path: Path,
+) -> None:
+    """A malformed saved legacy state is never partially archived."""
+    root = tmp_path / "runs"
+    document = legacy_document()
+    document["current_state"]["lanes"][0]["items"][0]["trust"] = "invalid"
+    run_dir = make_run(root)
+    content = json.dumps(document, ensure_ascii=False, indent=2) + "\n"
+    (run_dir / "content.json").write_text(content, encoding="utf-8")
+    before = run_bytes(run_dir)
+
+    with pytest.raises(CliError, match="not a recognized trust chip"):
+        publish_command(root, None, briefing())
+
+    assert run_bytes(run_dir) == before
+
+
+@pytest.mark.parametrize("malformation", ["missing", "not-list"])
+def test_malformed_structured_state_is_not_archived_as_four_claims(
+    tmp_path: Path,
+    malformation: str,
+) -> None:
+    """A damaged structured state fails without changing any run bytes."""
+    root = tmp_path / "runs"
+    document = legacy_document()
+    if malformation == "missing":
+        del document["current_state"]["lanes"]
+    else:
+        document["current_state"]["lanes"] = {}
+    run_dir = make_run(root)
+    content = json.dumps(document, ensure_ascii=False, indent=2) + "\n"
+    (run_dir / "content.json").write_text(content, encoding="utf-8")
+    before = run_bytes(run_dir)
+
+    with pytest.raises(CliError, match="current_state"):
+        publish_command(root, None, briefing())
+
+    assert run_bytes(run_dir) == before
+
+
+def test_render_failure_during_migration_is_atomic(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A page replacement failure leaves the run retryable and unchanged."""
+    """A renderer exception leaves legacy state and its queue untouched."""
     root = tmp_path / "runs"
-    run_dir = make_run(root)
+    run_dir = make_run(root, document=legacy_document())
+    queue_line(
+        run_dir,
+        "Keep this while rendering fails.",
+        anchor_id=CURRENT_STATE_ROOT,
+        timestamp="2026-08-04T11:30:00Z",
+    )
+    before = run_bytes(run_dir)
+
+    def fail_render(run_dir: Path, data: Any) -> str:
+        raise CliError("injected render failure")
+
+    monkeypatch.setattr(runfiles, "render_html", fail_render)
+    with pytest.raises(CliError, match="injected render failure"):
+        publish_command(root, None, briefing())
+
+    assert run_bytes(run_dir) == before
+
+
+def test_write_failure_during_migration_is_atomic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A partial replacement is rolled back byte for byte."""
+    root = tmp_path / "runs"
+    run_dir = make_run(root, document=legacy_document())
     before = run_bytes(run_dir)
     real_write = runfiles.write_text_atomic
     writes: list[str] = []
@@ -197,523 +689,41 @@ def test_publish_rolls_back_when_second_atomic_write_fails(
         real_write(path, content)
 
     monkeypatch.setattr(runfiles, "write_text_atomic", fail_second_write)
-
     with pytest.raises(CliError, match="cannot write run"):
-        publish_command(root, None, payload())
+        publish_command(root, None, briefing())
 
     assert writes == ["content.json", "index.html"]
     assert run_bytes(run_dir) == before
 
-    monkeypatch.setattr(runfiles, "write_text_atomic", real_write)
-    assert publish_command(root, None, payload()) == 0
-    assert read_content_file(run_dir)["updates"][-1] == CHANGE
 
-
-@pytest.mark.parametrize(
-    ("mutate", "message"),
-    [
-        (lambda value: value.update(extra={}), "publish payload must have"),
-        (
-            lambda value: value["current_state"].update(extra="No extras."),
-            "current_state must have exactly",
-        ),
-        (
-            lambda value: value["current_state"].update(
-                headline="Build -> test -> ship"
-            ),
-            "must not contain arrows",
-        ),
-        (
-            lambda value: value["current_state"].update(
-                summary="Build/test/ship."
-            ),
-            "must not contain a status chain",
-        ),
-        (
-            lambda value: value["current_state"].update(summary="Too short."),
-            "at least four words",
-        ),
-        (
-            lambda value: value["current_state"].update(
-                summary="This summary has enough words"
-            ),
-            "sentence punctuation",
-        ),
-    ],
-)
-def test_malformed_or_cryptic_state_changes_no_run_byte(
-    tmp_path: Path,
-    mutate: Callable[[dict[str, Any]], None],
-    message: str,
-) -> None:
-    """Mechanical state failures are rejected before any file is replaced."""
-    root = tmp_path / "runs"
-    run_dir = make_run(root)
-    before = run_bytes(run_dir)
-    candidate = payload()
-    mutate(candidate)
-
-    with pytest.raises(CliError, match=message):
-        publish_command(root, None, candidate)
-
-    assert run_bytes(run_dir) == before
-
-
-@pytest.mark.parametrize("count", [1, 6])
-def test_publish_accepts_one_to_six_state_sections(
-    tmp_path: Path,
-    count: int,
-) -> None:
-    """The publish boundary accepts both ends of the section range."""
-    root = tmp_path / "runs"
-    run_dir = make_run(root)
-    candidate = payload()
-    candidate["current_state"]["lanes"] = state_lanes(count)
-
-    assert publish_command(root, None, candidate) == 0
-    assert len(read_content_file(run_dir)["current_state"]["lanes"]) == count
-
-
-@pytest.mark.parametrize("count", [0, 7])
-def test_publish_rejects_state_section_counts_outside_range(
-    tmp_path: Path,
-    count: int,
-) -> None:
-    """A rejected section count leaves every run file unchanged."""
-    root = tmp_path / "runs"
-    run_dir = make_run(root)
-    before = run_bytes(run_dir)
-    candidate = payload()
-    candidate["current_state"]["lanes"] = state_lanes(count)
-
-    with pytest.raises(
-        CliError,
-        match="current_state.lanes must contain 1 to 6 sections",
-    ):
-        publish_command(root, None, candidate)
-
-    assert run_bytes(run_dir) == before
-
-
-@pytest.mark.parametrize("level", ["root", "lane", "item"])
-def test_agent_cannot_submit_state_conversations(
-    tmp_path: Path,
-    level: str,
-) -> None:
-    """Every state conversation is added by queue folding, never payload JSON."""
-    root = tmp_path / "runs"
-    run_dir = make_run(root)
-    before = run_bytes(run_dir)
-    candidate = payload()
-    owner = candidate["current_state"]
-    if level == "lane":
-        owner = owner["lanes"][0]
-    elif level == "item":
-        owner = owner["lanes"][0]["items"][0]
-    owner["questions"] = []
-
-    with pytest.raises(CliError, match="questions is tool-owned"):
-        publish_command(root, None, candidate)
-
-    assert run_bytes(run_dir) == before
-
-
-def test_agent_cannot_hide_questions_in_nested_forensic_note(
-    tmp_path: Path,
-) -> None:
-    """Agent-authored conversations are forbidden throughout current state."""
-    root = tmp_path / "runs"
-    run_dir = make_run(root)
-    before = run_bytes(run_dir)
-    candidate = payload()
-    item = candidate["current_state"]["lanes"][0]["items"][0]
-    item["forensics"] = [
-        {
-            "title": "Outer evidence",
-            "body": "The outer forensic note is valid.",
-            "children": [
-                {
-                    "title": "Hidden conversation",
-                    "body": "The nested forensic note is otherwise valid.",
-                    "questions": [],
-                }
-            ],
-        }
-    ]
-
-    with pytest.raises(
-        CliError,
-        match=r"current_state\.lanes\[0\]\.items\[0\]\.forensics\[0\]"
-        r"\.children\[0\]\.questions is tool-owned",
-    ):
-        publish_command(root, None, candidate)
-
-    assert run_bytes(run_dir) == before
-
-
-def test_moving_state_item_keeps_its_anchor_and_conversation(
-    tmp_path: Path,
-) -> None:
-    """An item id, rather than its lane slot, owns its row and chat identity."""
-    root = tmp_path / "runs"
-    run_dir = make_run(root)
-    assert publish_command(root, None, payload()) == 0
-    anchor = current_state_item_path("parser")
-    queue_line(run_dir, "Does the parser move safely?", anchor_id=anchor)
-    assert fold_command(root, None) == 0
-    before_thread = copy.deepcopy(only_thread(read_content_file(run_dir), "parser"))
-
-    moved = payload()
-    parser = moved["current_state"]["lanes"][0]["items"].pop()
-    moved["current_state"]["lanes"][1]["items"].append(parser)
-    moved["changes"]["id"] = "parser-moved"
-    moved["changes"]["timestamp"] = "2026-08-01T13:00:00Z"
-    assert publish_command(root, None, moved) == 0
-
-    saved = read_content_file(run_dir)
-    parser_owner = state_owner(saved, "parser")
-    assert parser_owner["questions"] == [before_thread]
-    assert only_thread(saved, "parser")["anchor"]["path"] == anchor
-
-
-@pytest.mark.parametrize(
-    ("owner_id", "anchor", "remove"),
-    [
-        (
-            "delivery",
-            current_state_lane_path("delivery"),
-            lambda state: state["lanes"].pop(0),
-        ),
-        (
-            "parser",
-            current_state_item_path("parser"),
-            lambda state: state["lanes"][0]["items"].pop(0),
-        ),
-    ],
-)
-def test_publish_rejects_removing_a_state_owner_with_conversations(
-    tmp_path: Path,
-    owner_id: str,
-    anchor: str,
-    remove: Callable[[dict[str, Any]], object],
-) -> None:
-    """A replacement cannot silently discard a lane or item's chat."""
-    root = tmp_path / "runs"
-    run_dir = make_run(root)
-    assert publish_command(root, None, payload()) == 0
-    queue_line(run_dir, f"Question at {owner_id}", anchor_id=anchor)
-    assert fold_command(root, None) == 0
-    before = run_bytes(run_dir)
-    candidate = payload()
-    remove(candidate["current_state"])
-    candidate["changes"]["id"] = f"remove-{owner_id}"
-
-    with pytest.raises(CliError, match="owns conversations"):
-        publish_command(root, None, candidate)
-
-    assert run_bytes(run_dir) == before
-
-
-@pytest.mark.parametrize(
-    ("owner_id", "anchor", "remove_or_rename"),
-    [
-        (
-            "delivery",
-            current_state_lane_path("delivery"),
-            lambda state: state["lanes"].pop(0),
-        ),
-        (
-            "parser",
-            current_state_item_path("parser"),
-            lambda state: state["lanes"][0]["items"][0].update(
-                id="renamed-parser"
-            ),
-        ),
-    ],
-)
-def test_publish_rejects_orphaning_an_unfolded_state_question(
-    tmp_path: Path,
-    owner_id: str,
-    anchor: str,
-    remove_or_rename: Callable[[dict[str, Any]], object],
-) -> None:
-    """A queued question prevents removal before any run file changes."""
-    root = tmp_path / "runs"
-    run_dir = make_run(root)
-    assert publish_command(root, None, payload()) == 0
-    queue_line(run_dir, f"Queued question at {owner_id}", anchor_id=anchor)
-    before = run_bytes(run_dir)
-    candidate = payload()
-    remove_or_rename(candidate["current_state"])
-    candidate["changes"]["id"] = f"orphan-{owner_id}"
-
-    with pytest.raises(CliError, match="unmatched queued question"):
-        publish_command(root, None, candidate)
-
-    assert run_bytes(run_dir) == before
-
-
-@pytest.mark.parametrize(
-    ("parent_case", "expected_count"),
-    [("missing", 0), ("wrong-anchor", 1)],
-)
-def test_invalid_queued_reply_does_not_block_state_owner_removal(
-    tmp_path: Path,
-    parent_case: str,
-    expected_count: int,
-) -> None:
-    """Ignore replies whose parent is absent or belongs to another anchor."""
-    root = tmp_path / "runs"
-    run_dir = make_run(root)
-    assert publish_command(root, None, payload()) == 0
-    if parent_case == "missing":
-        parent_id = "q-does-not-exist"
-    else:
-        other_anchor = current_state_item_path("review")
-        queue_line(run_dir, "Question for review", anchor_id=other_anchor)
-        assert fold_command(root, None) == 0
-        parent_id = only_thread(
-            read_content_file(run_dir), "review"
-        )["id"]
-    queue_line(
-        run_dir,
-        "Invalid reply for parser",
-        anchor_id=current_state_item_path("parser"),
-        parent_id=parent_id,
-    )
-    assert count_unanswered_questions(run_dir) == expected_count
-    candidate = payload()
-    candidate["current_state"]["lanes"][0]["items"].pop(0)
-    candidate["changes"]["id"] = f"remove-parser-with-{parent_case}-reply"
-
-    assert publish_command(root, None, candidate) == 0
-
-
-def test_overlong_queued_question_does_not_block_state_owner_removal(
-    tmp_path: Path,
-) -> None:
-    """Ignore queue text that the server counting path rejects."""
-    root = tmp_path / "runs"
-    run_dir = make_run(root)
-    assert publish_command(root, None, payload()) == 0
-    record = {
-        "type": "question",
-        "anchor_id": current_state_item_path("parser"),
-        "text": "x" * (MAX_QUESTION_LENGTH + 1),
-    }
-    (run_dir / "questions.jsonl").write_text(
-        f"{json.dumps(record)}\n",
-        encoding="utf-8",
-    )
-    candidate = payload()
-    candidate["current_state"]["lanes"][0]["items"].pop(0)
-    candidate["changes"]["id"] = "remove-parser-with-invalid-queue-text"
-
-    assert publish_command(root, None, candidate) == 0
-
-
-@pytest.mark.parametrize(
-    "anchor",
-    ["now/state/tests", current_state_item_path("already-absent")],
-)
-def test_other_unfolded_queue_anchors_do_not_block_state_owner_removal(
-    tmp_path: Path,
-    anchor: str,
-) -> None:
-    """Update and already-stale anchors do not constrain current state."""
-    root = tmp_path / "runs"
-    run_dir = make_run(root)
-    assert publish_command(root, None, payload()) == 0
-    queue_line(run_dir, "This question has another owner.", anchor_id=anchor)
-    candidate = payload()
-    candidate["current_state"]["lanes"][0]["items"].pop(0)
-    candidate["changes"]["id"] = "remove-unrelated-parser"
-
-    assert publish_command(root, None, candidate) == 0
-
-    saved = read_content_file(run_dir)
-    assert all(
-        item["id"] != "parser"
-        for lane in saved["current_state"]["lanes"]
-        for item in lane["items"]
-    )
-
-
-def test_root_lane_and_item_conversations_are_carried_forward(
-    tmp_path: Path,
-) -> None:
-    """All three stable state owner levels keep their tool-owned chats."""
-    root = tmp_path / "runs"
-    run_dir = make_run(root)
-    assert publish_command(root, None, payload()) == 0
-    for owner, anchor in (
-        ("root", CURRENT_STATE_ROOT),
-        ("delivery", current_state_lane_path("delivery")),
-        ("parser", current_state_item_path("parser")),
-    ):
-        queue_line(run_dir, f"Question for {owner}", anchor_id=anchor)
-    assert fold_command(root, None) == 0
-    old = read_content_file(run_dir)
-    expected = {
-        owner: copy.deepcopy(state_owner(old, owner)["questions"])
-        for owner in ("root", "delivery", "parser")
-    }
-
-    later = payload()
-    later["changes"]["id"] = "state-refreshed"
-    later["changes"]["timestamp"] = "2026-08-01T13:00:00Z"
-    assert publish_command(root, None, later) == 0
-
-    saved = read_content_file(run_dir)
-    for owner, questions in expected.items():
-        assert state_owner(saved, owner)["questions"] == questions
-
-
-def test_state_conversations_fold_answer_count_and_lint_normally(
-    tmp_path: Path,
-) -> None:
-    """State chat uses the same backend lifecycle as dated-update chat."""
-    root = tmp_path / "runs"
-    run_dir = make_run(root)
-    assert publish_command(root, None, payload()) == 0
-    anchor = current_state_item_path("parser")
-    queue_line(run_dir, "What is still uncertain?", anchor_id=anchor)
-    assert count_unanswered_questions(run_dir) == 1
-    assert fold_command(root, None) == 0
-    thread_id = only_thread(read_content_file(run_dir), "parser")["id"]
-    assert answer_command(root, None, thread_id, "Only final review remains.") == 0
-    assert count_unanswered_questions(run_dir) == 0
-
-    document = read_content_file(run_dir)
-    state_owner(document, "parser")["explanation"] = (
-        "Three checks remain: 1. types, 2. tests, 3. review."
-    )
-    warnings = lint_document(document)
-    assert any(anchor in warning and "enumeration" in warning for warning in warnings)
-
-
-def test_duplicate_thread_check_includes_current_state(tmp_path: Path) -> None:
-    """One thread id cannot name both a state chat and an update chat."""
-    root = tmp_path / "runs"
-    run_dir = make_run(root)
-    assert publish_command(root, None, payload()) == 0
-    anchor = current_state_item_path("parser")
-    queue_line(run_dir, "Can this thread collide?", anchor_id=anchor)
-    assert fold_command(root, None) == 0
-    thread = copy.deepcopy(only_thread(read_content_file(run_dir), "parser"))
-    before = run_bytes(run_dir)
-    candidate = payload()
-    candidate["changes"]["id"] = "duplicate-chat"
-    thread["anchor"]["path"] = "duplicate-chat/changed/copy"
-    candidate["changes"]["lanes"] = [
-        {
-            "id": "changed",
-            "name": "What changed",
-            "items": [
-                {
-                    "id": "copy",
-                    "glance": "This duplicate must be rejected.",
-                    "explanation": "A thread id has exactly one owner.",
-                    "trust": "known-limitation",
-                    "questions": [thread],
-                }
-            ],
-        }
-    ]
-
-    with pytest.raises(CliError, match="two conversations carry the id"):
-        publish_command(root, None, candidate)
-
-    assert run_bytes(run_dir) == before
-
-
-def test_duplicate_change_does_not_replace_existing_state(
-    tmp_path: Path,
-) -> None:
-    """History identity is checked before candidate state is installed."""
-    root = tmp_path / "runs"
-    run_dir = make_run(root)
-    assert publish_command(root, None, payload()) == 0
-    before = run_bytes(run_dir)
-    duplicate = payload()
-    duplicate["current_state"]["headline"] = (
-        "This replacement must never reach storage"
-    )
-
-    with pytest.raises(CliError, match="already exists"):
-        publish_command(root, None, duplicate)
-
-    assert run_bytes(run_dir) == before
-
-
-def test_state_item_ids_are_unique_across_all_lanes(tmp_path: Path) -> None:
-    """Global item identity prevents move-stable anchors from colliding."""
-    root = tmp_path / "runs"
-    run_dir = make_run(root)
-    before = run_bytes(run_dir)
-    candidate = payload()
-    duplicate = copy.deepcopy(candidate["current_state"]["lanes"][0]["items"][0])
-    candidate["current_state"]["lanes"][1]["items"].append(duplicate)
-
-    with pytest.raises(CliError, match="unique across every state lane"):
-        publish_command(root, None, candidate)
-
-    assert run_bytes(run_dir) == before
-
-
-def test_document_without_state_gains_structured_state_on_first_publish(
+def test_cli_reads_one_direct_object_from_stdin(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A document without current state remains compatible."""
+    """The public CLI accepts the direct contract without an envelope."""
     root = tmp_path / "runs"
     run_dir = make_run(root)
-    assert "current_state" not in read_content_file(run_dir)
     monkeypatch.setenv("VISUAL_BRIEF_HOME", str(root))
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload())))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(briefing())))
 
     assert main(["publish", "-"]) == 0
-
-    assert read_content_file(run_dir)["current_state"]["headline"] == (
-        STATE["headline"]
-    )
+    assert read_content_file(run_dir)["updates"][-1] == BRIEFING
 
 
-def test_legacy_four_claim_state_is_replaced_by_structured_publish(
-    tmp_path: Path,
-) -> None:
-    """The shipped legacy state remains readable until normal replacement."""
+def test_new_run_starts_with_a_coherent_normal_document(tmp_path: Path) -> None:
+    """Creation uses updates only and never invents a second model object."""
     root = tmp_path / "runs"
-    run_dir = make_run(root)
-    legacy = read_content_file(run_dir)
-    legacy["current_state"] = {
-        "updated_at": "2026-08-01T10:00:00Z",
-        "goal": "Keep the existing legacy state readable.",
-        "focus": "The compatibility path remains active now.",
-        "blocker": None,
-        "next": "Replace it with one structured publish.",
+
+    assert new_command(root, "Initial briefing", "initial-briefing") == 0
+
+    content = read_content_file(root / "initial-briefing")
+    assert "current_state" not in content
+    assert set(content) == {"title", "summary", "updates"}
+    assert set(content["updates"][0]) == {
+        "id",
+        "timestamp",
+        "headline",
+        "summary",
+        "lanes",
     }
-    write_content(run_dir, legacy)
-
-    assert publish_command(root, None, payload()) == 0
-
-    saved = read_content_file(run_dir)["current_state"]
-    assert saved["headline"] == STATE["headline"]
-    assert "goal" not in saved
-
-
-def test_new_run_has_a_valid_structured_initial_state(tmp_path: Path) -> None:
-    """New runs start with detailed-state schema and no invented chat."""
-    root = tmp_path / "runs"
-
-    assert new_command(root, "Initial state", "initial-state") == 0
-
-    run_dir = root / "initial-state"
-    content = read_content_file(run_dir)
-    metadata = json.loads(
-        (run_dir / "meta.json").read_text(encoding="utf-8")
-    )
-    state = content["current_state"]
-    assert state["updated_at"] == metadata["created_at"]
-    assert set(state) == {"updated_at", "headline", "summary", "lanes"}
     assert "visual-brief publish" in content["updates"][0]["summary"]
