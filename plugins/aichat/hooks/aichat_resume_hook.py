@@ -18,6 +18,8 @@ import json
 import math
 import os
 import re
+import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -49,6 +51,23 @@ TRIM_PENDING_FUTURE_SLACK_SECS = 60
 AICHAT_BIN = os.environ.get("AICHAT_BIN", "aichat")
 
 TRIM_DEFAULT_THRESHOLD = 500
+
+# Time budget for one `aichat trim-in-place` run. The work is roughly
+# linear in transcript size (a 20 MB session previews in ~1s warm), so
+# the budget starts generous and grows with the file instead of being a
+# single fixed number that silently ran out on big sessions.
+TRIM_TIMEOUT_BASE_SECS = 25.0
+TRIM_TIMEOUT_PER_MB_SECS = 1.0
+TRIM_TIMEOUT_MAX_SECS = 60.0
+
+# Escape hatch (seconds) for pathological transcripts or slow machines.
+TRIM_TIMEOUT_ENV = "AICHAT_TRIM_TIMEOUT"
+
+# Ceiling on ANY child budget, override included. Claude Code gives the
+# whole hook the timeout in hooks.json (90s) and kills it without mercy
+# afterwards, so every budget must leave room for the hook to actually
+# report the timeout it just hit.
+TRIM_TIMEOUT_HARD_CAP_SECS = 75.0
 
 # ANSI colors
 BLUE = "\033[94m"
@@ -521,6 +540,134 @@ def _is_valid_trim_result(data) -> bool:
     return True
 
 
+def _file_size(path: str) -> Optional[int]:
+    """Size of ``path`` in bytes, or None if it cannot be stat'ed.
+
+    ``ValueError`` is caught alongside ``OSError``: the path comes from
+    stdin, and an embedded NUL makes ``os.path.getsize`` raise it.
+    """
+    try:
+        return os.path.getsize(path)
+    except (OSError, ValueError):
+        return None
+
+
+def _trim_timeout_secs(transcript_path: str) -> float:
+    """Seconds to allow one trim CLI run, scaled by transcript size.
+
+    ``AICHAT_TRIM_TIMEOUT`` overrides the computed budget when it parses
+    to a positive, finite number of seconds; anything else (unset,
+    garbage, zero, NaN) falls back to the size-scaled default. Every
+    result is clamped to ``TRIM_TIMEOUT_HARD_CAP_SECS`` so the hook
+    always outlives its child and can report what happened.
+    """
+    override = os.environ.get(TRIM_TIMEOUT_ENV, "").strip()
+    if override:
+        try:
+            seconds = float(override)
+        except ValueError:
+            seconds = 0.0
+        if math.isfinite(seconds) and seconds > 0:
+            return min(seconds, TRIM_TIMEOUT_HARD_CAP_SECS)
+    size = _file_size(transcript_path) or 0
+    size_mb = size / (1024 * 1024)
+    return min(
+        TRIM_TIMEOUT_MAX_SECS,
+        TRIM_TIMEOUT_HARD_CAP_SECS,
+        TRIM_TIMEOUT_BASE_SECS + size_mb * TRIM_TIMEOUT_PER_MB_SECS,
+    )
+
+
+def _resolved_aichat() -> str:
+    """Where PATH resolves ``AICHAT_BIN`` to, for error messages.
+
+    A stale or shadowed CLI is a plausible cause of a failing trim, and
+    the hook's own PATH is not the interactive shell's - so the message
+    names the binary that actually ran.
+    """
+    try:
+        found = shutil.which(AICHAT_BIN)
+    except OSError:
+        found = None
+    return found or f"{AICHAT_BIN} (not found on PATH)"
+
+
+def _quoted_cmd(cmd: list) -> str:
+    """Shell-quoted form of an argv list, safe to paste into a shell.
+
+    Session paths routinely contain spaces, and every element here came
+    from stdin or the environment, so the printed command is quoted
+    rather than joined - a copied line must run the command that ran,
+    not something the shell re-splits or expands.
+    """
+    return " ".join(shlex.quote(str(arg)) for arg in cmd)
+
+
+def _decoded(stream) -> str:
+    """Best-effort text for a subprocess stream that may be bytes."""
+    if isinstance(stream, bytes):
+        return stream.decode("utf-8", "replace")
+    return stream if isinstance(stream, str) else ""
+
+
+def _fmt_secs(value: float) -> str:
+    """A duration as written: '25', '1.5' - never rounded into a lie."""
+    return f"{value:.4g}"
+
+
+def _timeout_error_message(
+    cmd: list,
+    transcript_path: str,
+    timeout: float,
+    dry_run: bool,
+    exc: subprocess.TimeoutExpired,
+) -> str:
+    """Explain a trim-CLI timeout in terms the user can act on.
+
+    The old catch-all ("timeout or error") left no way to tell a slow
+    trim from a wedged process, so this names the budget that ran out,
+    the transcript and binary involved, and the exact command to run by
+    hand (shell-quoted, so paths with spaces reproduce faithfully).
+
+    A killed APPLY may or may not have swapped the trimmed file in
+    before it died, so only a preview may promise that nothing changed.
+    """
+    size = _file_size(transcript_path)
+    lines = [
+        f"The trim CLI did not finish within {_fmt_secs(timeout)}s, so "
+        f"it was stopped."
+    ]
+    if dry_run:
+        lines.append("This was only a preview, so nothing was changed.")
+    else:
+        lines.append(
+            "It was applying the trim, so whether the file was rewritten "
+            "is UNKNOWN. Check the transcript and any "
+            "*.pre-trim-*.jsonl.bak backup beside it before retrying."
+        )
+    lines += [
+        f"  transcript: {transcript_path} "
+        f"({_fmt_size(size) if size is not None else 'size unknown'})",
+        f"  binary:     {_resolved_aichat()}",
+        "",
+        "Run the same command yourself to see the real failure:",
+        f"  {_quoted_cmd(cmd)}",
+        "",
+        "If that returns quickly, the trim was starved rather than slow "
+        "- just retry >trim.",
+        f"To allow more time, set {TRIM_TIMEOUT_ENV} (seconds, up to "
+        f"{_fmt_secs(TRIM_TIMEOUT_HARD_CAP_SECS)}) before starting "
+        f"Claude.",
+    ]
+    # Both streams, labelled: whichever one the CLI got a word out on
+    # is the only clue to where it wedged.
+    for label, stream in (("stderr", exc.stderr), ("stdout", exc.stdout)):
+        printed = _decoded(stream).strip()
+        if printed:
+            lines += ["", f"It had printed on {label}: {printed[:300]}"]
+    return "\n".join(lines)
+
+
 def run_trim_cli(transcript_path: str, opts: dict, dry_run: bool):
     """Run `aichat trim-in-place` and parse its JSON result.
 
@@ -547,9 +694,10 @@ def run_trim_cli(transcript_path: str, opts: dict, dry_run: bool):
     if dry_run:
         cmd.append("--dry-run")
 
+    timeout = _trim_timeout_secs(transcript_path)
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=25
+            cmd, capture_output=True, text=True, timeout=timeout
         )
     except FileNotFoundError:
         return None, (
@@ -564,8 +712,22 @@ def run_trim_cli(transcript_path: str, opts: dict, dry_run: bool):
             f"Check the aichat CLI installation:\n"
             f"  uv tool install --force claude-code-tools"
         )
-    except subprocess.SubprocessError:
-        return None, "Trim command failed to run (timeout or error)."
+    except ValueError as e:
+        # E.g. a transcript path carrying an embedded NUL (stdin is
+        # hostile): subprocess rejects such argv before spawning.
+        return None, f"Cannot run the trim command ({e})."
+    except subprocess.TimeoutExpired as e:
+        # A timeout is the one failure with no output to explain it, so
+        # it gets the detailed treatment.
+        return None, _timeout_error_message(
+            cmd, transcript_path, timeout, dry_run, e
+        )
+    except subprocess.SubprocessError as e:
+        return None, (
+            f"Trim command failed to run "
+            f"({type(e).__name__}: {str(e) or 'no detail'}).\n"
+            f"Binary: {_resolved_aichat()}"
+        )
 
     lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
     payload = None
@@ -590,7 +752,8 @@ def run_trim_cli(transcript_path: str, opts: dict, dry_run: bool):
     detail = proc.stderr.strip() or proc.stdout.strip()
     detail = detail[:400] if detail else f"exit code {proc.returncode}"
     return None, (
-        f"aichat trim-in-place failed: {detail}\n\n"
+        f"aichat trim-in-place failed: {detail}\n"
+        f"Binary: {_resolved_aichat()}\n\n"
         f"If your aichat CLI predates this feature, update it with:\n"
         f"  uv tool install --force claude-code-tools"
     )
