@@ -226,9 +226,15 @@ def main(ctx, claude_home, codex_home):
     # 'port' is also skipped: its contract requires the detected
     # direction line to be the FIRST output, so the indexer's progress
     # bar must never print before it.
+    # 'trim-in-place' is skipped because it never queries the index
+    # (it resolves a path directly) and it runs under the >trim hook's
+    # time budget: indexing ~13.6k session files took 2-30s depending
+    # on the backlog, against a ~0.3s trim, which is what made >trim
+    # time out. Trimming also rewrites the file, so indexing its
+    # pre-trim content first is wasted work twice over.
     skip_auto_index_cmds = ['build-index', 'clear-index', 'index-stats']
     should_skip = (
-        ctx.invoked_subcommand in ('port', 'resolve')
+        ctx.invoked_subcommand in ('port', 'resolve', 'trim-in-place')
         or ctx.invoked_subcommand in skip_auto_index_cmds
         or any(cmd in sys.argv for cmd in skip_auto_index_cmds)
     )
