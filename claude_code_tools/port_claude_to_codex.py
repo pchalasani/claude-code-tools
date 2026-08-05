@@ -485,13 +485,54 @@ def _make_codex_item(
     }
 
 
+def _make_codex_event(
+    role: str, text: str, timestamp: str
+) -> dict[str, Any]:
+    """Build the UI event matching one synthesized response item.
+
+    Args:
+        role: Message role, either ``user`` or ``assistant``.
+        text: The exact flattened text used by the response item.
+        timestamp: The exact timestamp used by the response item.
+
+    Returns:
+        A Codex ``event_msg`` record for TUI transcript replay.
+    """
+    payload: dict[str, Any]
+    if role == "user":
+        payload = {
+            "type": "user_message",
+            "message": text,
+            "images": [],
+            "local_images": [],
+            "audio": [],
+            "local_audio": [],
+            "text_elements": [],
+        }
+    else:
+        # `phase` mirrors the response item this event pairs with, and
+        # `memory_citation` is always present (usually null) on real
+        # agent_message events; both are omitted by older rollouts.
+        payload = {
+            "type": "agent_message",
+            "message": text,
+            "phase": _ASSISTANT_PHASE,
+            "memory_citation": None,
+        }
+    return {
+        "timestamp": timestamp,
+        "type": "event_msg",
+        "payload": payload,
+    }
+
+
 def _iter_rollout_lines(
     messages: Iterator[dict[str, Any]],
     *,
     session_meta_line: dict[str, Any],
     fallback_timestamp: str,
 ) -> Iterator[dict[str, Any]]:
-    """Yield the session_meta line, then every response_item line.
+    """Yield session metadata and paired model/UI message records.
 
     Every item carries the UUIDv7 turn-id passthrough real rollouts
     have: a fresh turn id is minted whenever a user message starts a
@@ -516,7 +557,11 @@ def _iter_rollout_lines(
         ):
             turn_id = _new_codex_session_id()
         prev_role = msg["role"]
-        yield _make_codex_item(msg, fallback_timestamp, turn_id)
+        item = _make_codex_item(msg, fallback_timestamp, turn_id)
+        yield item
+        yield _make_codex_event(
+            msg["role"], msg["text"], item["timestamp"]
+        )
 
 
 def _rollback_history_append(

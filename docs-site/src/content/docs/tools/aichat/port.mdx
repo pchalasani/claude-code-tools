@@ -135,6 +135,12 @@ metadata for `aichat` tooling.
 - The ported transcript is a **faithful flattening**, not a byte-level
   replay: the target agent sees every turn's text and all tool activity as
   labeled text, which is what matters for continuing the work.
+- **Rewind works in the ported session.** A Codex rollout carries two
+  streams: the conversation the model reads, and a UI event log the TUI
+  replays to rebuild your scrollback. Porting writes both, so a ported
+  session lets you step back through the sequence of user messages exactly
+  as a native one does. Porting the other way preserves the same ability in
+  Claude Code, which walks the transcript's own message chain.
 - Very long sessions port fine (conversion is streaming), but resuming a huge
   transcript consumes context in the target agent -- consider
   [trimming](./resume/) first.
