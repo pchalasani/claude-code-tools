@@ -126,8 +126,13 @@ docs. Click a card below to jump to a feature, or
 </tr>
 <tr>
 <td align="center">
+<a href="https://pchalasani.github.io/claude-code-tools/tools/aichat/port/">
+<img src="assets/card-session-port.svg" alt="session porting" width="200"/>
+</a>
+</td>
+<td align="center">
 <a href="https://pchalasani.github.io/claude-code-tools/guides/claude-to-codex/">
-<img src="assets/card-claude-to-codex.svg" alt="Claude to Codex" width="200"/>
+<img src="assets/card-claude-to-codex.svg" alt="Codex dynamic workflows" width="200"/>
 </a>
 </td>
 </tr>
