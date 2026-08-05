@@ -119,9 +119,10 @@ def _tiered_match(
     """Pick candidates by tiered matching; first non-empty tier wins.
 
     Tiers: exact session id, exact name, id prefix, id substring,
-    name substring (case-insensitive). An exact name outranks an id
-    prefix so a short name can never silently select a session whose
-    UUID happens to start with the same characters.
+    name substring. All comparisons are case-insensitive, so a pasted
+    uppercase UUID still resolves. An exact name outranks an id prefix
+    so a short name can never silently select a session whose UUID
+    happens to start with the same characters.
 
     Args:
         candidates: All sessions in the searched home.
@@ -131,19 +132,19 @@ def _tiered_match(
         Matching candidates; empty if nothing matched.
     """
     tiers: List[List[SessionCandidate]] = [[], [], [], [], []]
-    query_lower = query.lower()
+    query_cf = query.casefold()
     for cand in candidates:
-        sid = cand.session_id
-        title = cand.title
-        if sid == query:
+        sid = cand.session_id.casefold()
+        title = cand.title.casefold()
+        if sid == query_cf:
             tiers[0].append(cand)
-        elif title == query:
+        elif title == query_cf:
             tiers[1].append(cand)
-        elif sid.startswith(query):
+        elif sid.startswith(query_cf):
             tiers[2].append(cand)
-        elif query in sid:
+        elif query_cf in sid:
             tiers[3].append(cand)
-        elif title and query_lower in title.lower():
+        elif title and query_cf in title:
             tiers[4].append(cand)
     for tier in tiers:
         if tier:

@@ -458,3 +458,23 @@ def test_resume_command_quotes_paths_with_spaces(tmp_path):
     )
     cmd = resume_command(result, tmp_path)
     assert "cd '/Users/me/My Project' &&" in cmd
+
+def test_matching_is_case_insensitive(tmp_path):
+    """Uppercase UUID fragments and differently cased names resolve."""
+    src = tmp_path / "claude-src"
+    _write_session(src, UUID_A, title="My-Session")
+    got = find_sessions_in_home(src, UUID_A.upper())
+    assert [c.session_id for c in got] == [UUID_A]
+    got = find_sessions_in_home(src, "AAAA1111")
+    assert [c.session_id for c in got] == [UUID_A]
+    got = find_sessions_in_home(src, "my-session")
+    assert [c.session_id for c in got] == [UUID_A]
+
+
+def test_cased_exact_name_still_beats_uuid_prefix(tmp_path):
+    """Exact-name tier holds even when the query casing differs."""
+    src = tmp_path / "claude-src"
+    _write_session(src, UUID_A)  # UUID starts with "aaaa"
+    _write_session(src, UUID_B, title="AAAA")
+    got = find_sessions_in_home(src, "aaaa")
+    assert [c.session_id for c in got] == [UUID_B]
