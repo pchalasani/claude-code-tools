@@ -4,7 +4,7 @@ title: "Rollover Details"
 
 This page is a deep dive into how the **rollover**
 resume strategy works. For a higher-level overview,
-see the [Resume](./resume/) page.
+see the [Resume](../resume/) page.
 
 :::note[Installation]
 Part of the `claude-code-tools` package.
