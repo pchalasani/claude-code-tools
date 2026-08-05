@@ -8,6 +8,7 @@ so it works the same from a source checkout, a wheel and a zipped install.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from functools import lru_cache
 from importlib import resources
@@ -15,6 +16,19 @@ from importlib import resources
 STATIC_DIRECTORY = "static"
 SCRIPT_NAME = "visual-brief.js"
 STYLE_NAME = "visual-brief.css"
+BOOTSTRAP_NAME = "visual-brief-theme-bootstrap.js"
+DEFAULT_DESIGN = "catppuccin-mocha"
+_DESIGN_ATTRIBUTES = {
+    "north-window": ("north-window", "light", False),
+    "blue-margin": ("blue-margin", "light", True),
+    "dusk-margin": ("blue-margin", "dark", True),
+    "solarized-paper": ("blue-margin", "light", True),
+    "solarized-slate": ("blue-margin", "dark", True),
+    "catppuccin-latte": ("blue-margin", "light", True),
+    "catppuccin-mocha": ("blue-margin", "dark", True),
+    "dusk-ledger": ("dusk-ledger", "dark", False),
+    "night-ledger": ("night-ledger", "dark", False),
+}
 _REBUILD_HINT = "run `make visual-brief-frontend` and commit the result"
 _ABSOLUTE_URL = re.compile(r"https?://")
 _CLOSING_ELEMENT = re.compile(r"</(script|style)", re.IGNORECASE)
@@ -122,18 +136,48 @@ def bundle_style() -> str:
     return _require_inlinable(STYLE_NAME, _read(STYLE_NAME))
 
 
-def stamp_bundle(script: str, style: str) -> str:
-    """Return an identity for one pair of inlined front-end artifacts.
+@lru_cache(maxsize=1)
+def bundle_bootstrap() -> str:
+    """Return the tiny script that selects a theme before first paint.
+
+    Returns:
+        JavaScript safe to inline before the front-end stylesheet.
+    """
+    variants = json.dumps(_DESIGN_ATTRIBUTES, separators=(",", ":"))
+    default = json.dumps(DEFAULT_DESIGN)
+    script = (
+        f"(()=>{{const v={variants},r=document.documentElement,"
+        "q=new URLSearchParams(location.search).get('design'),"
+        f"d=Object.hasOwn(v,q)?q:{default},m=v[d];"
+        "r.dataset.design=d;r.dataset.designFamily=m[0];"
+        "r.dataset.designMode=m[1];r.dataset.designPaired=String(m[2])}})();"
+    )
+    return _require_inlinable(BOOTSTRAP_NAME, script)
+
+
+def stamp_bundle(
+    script: str,
+    style: str,
+    bootstrap: str | None = None,
+) -> str:
+    """Return an identity for the inlined front-end artifacts.
 
     Args:
         script: The JavaScript bundle.
         style: The stylesheet.
+        bootstrap: The first-paint theme script, or the packaged one by default.
 
     Returns:
-        The SHA-256 of the two, as hex.
+        The SHA-256 of all three artifacts, as hex.
     """
     digest = hashlib.sha256()
-    for name, text in ((SCRIPT_NAME, script), (STYLE_NAME, style)):
+    initial = bundle_bootstrap() if bootstrap is None else bootstrap
+    artifacts = (
+        (BOOTSTRAP_NAME, initial),
+        (SCRIPT_NAME, script),
+        (STYLE_NAME, style),
+    )
+    for name, text in artifacts:
         # Both the name and the length are part of the stamp, so no pair of
         # artifacts can be rearranged into the same byte stream as another.
         digest.update(f"{name}:{len(text)}:".encode("utf-8"))
@@ -145,12 +189,13 @@ def stamp_bundle(script: str, style: str) -> str:
 def bundle_stamp() -> str:
     """Return the identity of the front-end bundle a page inlines.
 
-    It is derived from the script and the stylesheet and from nothing else, so
-    it changes when the code changes and stays put when the document changes.
-    That distinction is the whole point: an open page can tell a new document
-    it may patch into itself from new code, which only a reload can load.
+    It is derived from the bootstrap, script, and stylesheet and from nothing
+    else, so it changes when the code changes and stays put when the document
+    changes. That distinction is the whole point: an open page can tell a new
+    document it may patch into itself from new code, which only a reload can
+    load.
 
     Returns:
-        The SHA-256 of the two inlined artifacts, as hex.
+        The SHA-256 of the three inlined artifacts, as hex.
     """
     return stamp_bundle(bundle_script(), bundle_style())

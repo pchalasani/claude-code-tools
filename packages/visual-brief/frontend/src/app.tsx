@@ -10,6 +10,19 @@ import {
 } from "solid-js";
 import { CurrentStateView } from "./current-state";
 import {
+  DEFAULT_DESIGN_VARIANT,
+  DESIGN_THEMES,
+  activeDesignVariant,
+  designThemeForVariant,
+  designVariantForTheme,
+  designVariantMode,
+  pairedDesignVariant,
+  pairedVariantSwitchLabel,
+  searchWithDesignVariant,
+  setDesignVariant,
+  type DesignVariant,
+} from "./design-variant";
+import {
   TRUST_LABELS,
   TRUST_ORDER,
   type BriefDocument,
@@ -25,6 +38,9 @@ import { StructureMap } from "./structure-map";
 import { UpdateView } from "./update-view";
 export function App(props: { brief: BriefDocument }): JSX.Element {
   const state = createBriefState(() => props.brief);
+  const [design, setDesign] = createSignal<DesignVariant>(
+    activeDesignVariant(document.documentElement) ?? DEFAULT_DESIGN_VARIANT,
+  );
   const [now, setNow] = createSignal(Date.now());
   const onKey = (event: KeyboardEvent): void => state.handleKey(event);
   let stopWatching: (() => void) | null = null;
@@ -45,11 +61,38 @@ export function App(props: { brief: BriefDocument }): JSX.Element {
     }
   });
   const ordered = createMemo(() => orderedUpdates(props.brief));
+  const applyDesign = (next: DesignVariant): void => {
+    setDesignVariant(next, document.documentElement);
+    const nextSearch = searchWithDesignVariant(window.location.search, next);
+    const nextUrl = `${window.location.pathname}${nextSearch}${
+      window.location.hash
+    }`;
+    window.history.replaceState(window.history.state, "", nextUrl);
+    setDesign(next);
+  };
+  const toggleDesign = (): void => {
+    const current = design();
+    const next = pairedDesignVariant(current);
+    if (next !== null) {
+      applyDesign(next);
+    }
+  };
+  const chooseTheme = (value: string): void => {
+    const next = designVariantForTheme(value, designVariantMode(design()));
+    if (next !== null) {
+      applyDesign(next);
+    }
+  };
   return (
     <div class="shell" data-mounted="true">
       <StructureMap state={state} />
       <main class="stream" onClick={(event) => selectFromClick(state, event)}>
-        <Masthead state={state} />
+        <Masthead
+          state={state}
+          design={design()}
+          onChooseTheme={chooseTheme}
+          onToggleDesign={toggleDesign}
+        />
         <Show when={props.brief.current_state}>
           {(current) => (
             <CurrentStateView
@@ -97,10 +140,67 @@ export function App(props: { brief: BriefDocument }): JSX.Element {
     </div>
   );
 }
-function Masthead(props: { state: BriefState }): JSX.Element {
+function Masthead(props: {
+  state: BriefState;
+  design: DesignVariant;
+  onChooseTheme: (value: string) => void;
+  onToggleDesign: () => void;
+}): JSX.Element {
   const attention = () => props.state.nav.latestBriefingAttentionCount();
+  const paired = () => pairedDesignVariant(props.design);
+  const switchLabel = () => {
+    const current = props.design;
+    const next = paired();
+    if (next === null) {
+      return "";
+    }
+    return pairedVariantSwitchLabel(current, next);
+  };
   return (
     <header class="masthead">
+      <div class="design-controls">
+        <label class="design-picker">
+          <span>Themes</span>
+          <select
+            aria-label="Theme"
+            value={designThemeForVariant(props.design).id}
+            onChange={(event) => {
+              props.onChooseTheme(event.currentTarget.value);
+              event.currentTarget.blur();
+            }}
+          >
+            <optgroup label="Paired themes">
+              <For each={DESIGN_THEMES.slice(0, 3)}>
+                {(theme) => (
+                  <option value={theme.id}>{theme.label}</option>
+                )}
+              </For>
+            </optgroup>
+            <optgroup label="Single-mode studies">
+              <For each={DESIGN_THEMES.slice(3)}>
+                {(theme) => (
+                  <option value={theme.id}>{theme.label}</option>
+                )}
+              </For>
+            </optgroup>
+          </select>
+        </label>
+        <Show when={paired()}>
+          {(next) => (
+            <button
+              type="button"
+              class="design-pair-toggle"
+              aria-label={switchLabel()}
+              title={switchLabel()}
+              onClick={props.onToggleDesign}
+            >
+              <span class="design-pair-toggle-icon" aria-hidden="true">
+                {designVariantMode(next()) === "dark" ? "☾" : "☀"}
+              </span>
+            </button>
+          )}
+        </Show>
+      </div>
       <div class="masthead-main">
         <div class="masthead-copy">
           <p class="eyebrow">Session briefing</p>

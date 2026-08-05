@@ -31,6 +31,9 @@ CODEX_HELPER_BUILD_INPUTS = (
     "tsconfig.json",
 )
 STATIC_DIR = PACKAGE_ROOT / "src" / "visual_brief" / "static"
+BOOTSTRAP_SOURCE = (
+    PACKAGE_ROOT / "src" / "visual_brief" / "render" / "assets.py"
+)
 # The stamp lives outside the Vite output directory so it is not confused with
 # shipped browser artifacts or affected by changes to Vite's cleanup policy.
 STAMP_PATH = PACKAGE_ROOT / "tools" / "bundle-stamp.json"
@@ -307,6 +310,27 @@ def output_fingerprints(static_dir: Path = STATIC_DIR) -> dict[str, str]:
     return fingerprints
 
 
+def bootstrap_source_fingerprint(
+    bootstrap_source: Path = BOOTSTRAP_SOURCE,
+) -> str:
+    """Fingerprint the source that generates the first-paint theme script.
+
+    Args:
+        bootstrap_source: Python source containing ``bundle_bootstrap``.
+
+    Returns:
+        The source file's SHA-256 digest.
+
+    Raises:
+        StaleBundleError: If the source file is missing.
+    """
+    if not bootstrap_source.is_file():
+        raise StaleBundleError(
+            f"missing theme bootstrap source {bootstrap_source}; {REBUILD_HINT}"
+        )
+    return _hash_file(bootstrap_source)
+
+
 def write_stamp(
     frontend_dir: Path = FRONTEND_DIR,
     static_dir: Path = STATIC_DIR,
@@ -314,6 +338,7 @@ def write_stamp(
     *,
     helper_metadata_path: Path,
     helper_dir: Path = CODEX_HELPER_DIR,
+    bootstrap_source: Path = BOOTSTRAP_SOURCE,
 ) -> dict[str, Any]:
     """Record the fingerprints of the sources and the built bundle.
 
@@ -328,6 +353,7 @@ def write_stamp(
         stamp_path: File the fingerprints are recorded in.
         helper_metadata_path: Esbuild metadata emitted with the helper bundle.
         helper_dir: Root of the helper project.
+        bootstrap_source: Source that generates the first-paint theme script.
 
     Returns:
         The stamp that was written.
@@ -348,6 +374,9 @@ def write_stamp(
         | set(CODEX_HELPER_BUILD_INPUTS)
     )
     stamp: dict[str, Any] = {
+        "theme_bootstrap_source": bootstrap_source_fingerprint(
+            bootstrap_source
+        ),
         "helper_inputs": helper_input_fingerprints(
             helper_inputs,
             helper_dir,
@@ -390,6 +419,7 @@ def check_stamp(
     static_dir: Path = STATIC_DIR,
     stamp_path: Path = STAMP_PATH,
     helper_dir: Path = CODEX_HELPER_DIR,
+    bootstrap_source: Path = BOOTSTRAP_SOURCE,
 ) -> None:
     """Fail when the committed bundle is stale.
 
@@ -398,6 +428,7 @@ def check_stamp(
         static_dir: Directory holding the built bundle.
         stamp_path: File the fingerprints were recorded in.
         helper_dir: Root of the helper project.
+        bootstrap_source: Source that generates the first-paint theme script.
 
     Raises:
         StaleBundleError: If sources or artifacts differ from the stamp.
@@ -408,6 +439,12 @@ def check_stamp(
         raise StaleBundleError(
             "the committed visual-brief bundle is stale: front-end sources "
             f"changed since it was built; {REBUILD_HINT}"
+        )
+    expected_bootstrap = bootstrap_source_fingerprint(bootstrap_source)
+    if stamp.get("theme_bootstrap_source") != expected_bootstrap:
+        raise StaleBundleError(
+            "the committed visual-brief bundle is stale: the first-paint "
+            f"theme bootstrap changed since it was built; {REBUILD_HINT}"
         )
     recorded_helper_inputs = stamp.get("helper_inputs")
     if (

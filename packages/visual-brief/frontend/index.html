@@ -4,6 +4,31 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>visual brief — dev harness</title>
+    <script>
+      (() => {
+        const variants = {
+          "north-window": ["north-window", "light", false],
+          "blue-margin": ["blue-margin", "light", true],
+          "dusk-margin": ["blue-margin", "dark", true],
+          "solarized-paper": ["blue-margin", "light", true],
+          "solarized-slate": ["blue-margin", "dark", true],
+          "catppuccin-latte": ["blue-margin", "light", true],
+          "catppuccin-mocha": ["blue-margin", "dark", true],
+          "dusk-ledger": ["dusk-ledger", "dark", false],
+          "night-ledger": ["night-ledger", "dark", false],
+        };
+        const root = document.documentElement;
+        const requested = new URLSearchParams(location.search).get("design");
+        const design = Object.hasOwn(variants, requested)
+          ? requested
+          : "catppuccin-mocha";
+        const [family, mode, paired] = variants[design];
+        root.dataset.design = design;
+        root.dataset.designFamily = family;
+        root.dataset.designMode = mode;
+        root.dataset.designPaired = String(paired);
+      })();
+    </script>
   </head>
   <body>
     <!--

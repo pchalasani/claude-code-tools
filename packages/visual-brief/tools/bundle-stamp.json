@@ -11,8 +11,9 @@
   },
   "outputs": {
     "visual-brief-codex.mjs": "6c70f8accd699b587605b508456c7f608fab7b2ba95ad39d11c8a4a0ebe5f0d5",
-    "visual-brief.css": "267bfc34aa26606e4fe1f0b60aa307fc720dce373fb6d9971285365541a34b55",
-    "visual-brief.js": "0fa3ca0904da42d1e47c2177fae2faaf09e4a63d4c8ef0668631ee5055041aae"
+    "visual-brief.css": "1c5edfdfe2cac7e73f645d7a7d6fe6d6137fe03723206669a45cb0106275ba31",
+    "visual-brief.js": "16e3822b8ce136d96ab617cc950fe2ed5fe8f1473144f9ccc6ce6018a6c44acb"
   },
-  "sources": "724e672402d1911a90eedcc1fa3fe69752c99faf8f54a2579659cb7382f32d55"
+  "sources": "cc7ffe7949130087a8a3531bd432f02d9cf23062d3dc912413e68f8659756e1b",
+  "theme_bootstrap_source": "bb8392e3275222a6f46e65bfda2306fe2d4492622aa016fd0add724dbeec76df"
 }

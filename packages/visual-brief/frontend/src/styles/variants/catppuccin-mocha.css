@@ -1,0 +1,33 @@
+html[data-design="catppuccin-mocha"] {
+  color-scheme: dark;
+
+  --color-page: #1b2028;
+  --color-surface: #222832;
+  --color-surface-quiet: #2a313d;
+  --color-surface-raised: #20262f;
+  --color-text: #e6e3ea;
+  --color-text-muted: #bbb7c5;
+  --color-text-faint: #928f9d;
+  --color-agent-text: #e6e3ea;
+  --color-agent-text-muted: #c4c0ce;
+  --color-human-text: #8fb6ff;
+  --color-border: #3d4553;
+  --color-border-strong: #707989;
+  --color-current: #7b9ce0;
+  --color-current-strong: #abc7ff;
+  --color-current-soft: #293347;
+  --color-active: #7bb5a1;
+  --color-active-soft: #1f3b34;
+  --color-warning: #d7b16e;
+  --color-warning-soft: #41311d;
+  --color-context: #ddb975;
+  --color-context-wash: rgb(221 185 117 / 10%);
+  --color-limitation: #f0a0b3;
+  --color-limitation-soft: #442836;
+  --color-working-base: #b7c0d0;
+  --color-working-wave-leading: #84c2ae;
+  --color-working-wave-crest: #f2eff8;
+  --color-working-wave-trailing: #9ab8ff;
+  --color-scrim: rgb(7 10 15 / 82%);
+  --shadow-overlay: 0 24px 74px rgb(0 0 0 / 48%);
+}

@@ -217,6 +217,50 @@ def test_a_codex_helper_configuration_change_declares_the_stamp_stale(
         stamp_tool.check_stamp(frontend, static, stamp_path, helper)
 
 
+def test_a_theme_bootstrap_change_declares_the_stamp_stale(
+    tmp_path: Path,
+) -> None:
+    """Track the Python-generated script that runs before the stylesheet."""
+    stamp_tool = _load_stamp_tool()
+    frontend = tmp_path / "frontend"
+    _write_frontend(frontend)
+    static = tmp_path / "static"
+    static.mkdir()
+    for name in stamp_tool.BUNDLE_NAMES:
+        (static / name).write_text("built\n")
+    metadata = tmp_path / "helper-meta.json"
+    helper = _write_helper_metadata(tmp_path, metadata)
+    bootstrap = tmp_path / "assets.py"
+    bootstrap.write_text("DEFAULT_DESIGN = 'catppuccin-mocha'\n")
+    stamp_path = tmp_path / "stamp.json"
+    stamp_tool.write_stamp(
+        frontend,
+        static,
+        stamp_path,
+        helper_metadata_path=metadata,
+        helper_dir=helper,
+        bootstrap_source=bootstrap,
+    )
+    stamp_tool.check_stamp(
+        frontend,
+        static,
+        stamp_path,
+        helper,
+        bootstrap,
+    )
+
+    bootstrap.write_text("DEFAULT_DESIGN = 'blue-margin'\n")
+
+    with pytest.raises(stamp_tool.StaleBundleError, match="theme bootstrap"):
+        stamp_tool.check_stamp(
+            frontend,
+            static,
+            stamp_path,
+            helper,
+            bootstrap,
+        )
+
+
 def test_standard_frontend_target_rebuilds_the_codex_helper(
     tmp_path: Path,
 ) -> None:

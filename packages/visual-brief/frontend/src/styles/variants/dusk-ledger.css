@@ -1,0 +1,438 @@
+html[data-design="dusk-ledger"] {
+  color-scheme: dark;
+
+  --color-page: #111820;
+  --color-surface: #18222c;
+  --color-surface-quiet: #1d2935;
+  --color-surface-raised: #151f29;
+  --color-text: #e7edf2;
+  --color-text-muted: #b7c2cc;
+  --color-text-faint: #8f9eab;
+  --color-agent-text: #e7edf2;
+  --color-agent-text-muted: #bdc7d0;
+  --color-human-text: #91b9f8;
+  --color-border: #334353;
+  --color-border-strong: #718293;
+  --color-current: #7ea9ed;
+  --color-current-strong: #a6c7fa;
+  --color-current-soft: #1b2a3d;
+  --color-active: #8fb8d8;
+  --color-active-soft: #1c3342;
+  --color-warning: #e8c36d;
+  --color-warning-soft: #3a301d;
+  --color-context: #efbe55;
+  --color-context-wash: rgb(239 190 85 / 11%);
+  --color-limitation: #f09aa6;
+  --color-limitation-soft: #41262e;
+  --color-working-base: #aab9c6;
+  --color-working-wave-leading: #aab9c6;
+  --color-working-wave-crest: #e7edf2;
+  --color-working-wave-trailing: #91b9f8;
+  --color-scrim: rgb(7 11 16 / 82%);
+
+  --font-display: "Atkinson Hyperlegible Next Variable",
+    "Atkinson Hyperlegible", system-ui, sans-serif;
+  --font-brief: "Atkinson Hyperlegible Next Variable",
+    "Atkinson Hyperlegible", system-ui, sans-serif;
+  --dusk-font-utility: SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas,
+    "Liberation Mono", monospace;
+  --font-size-adjustment: 0rem;
+  --font-size-xs: 0.8125rem;
+  --font-size-sm: 0.9375rem;
+  --font-size-base: 1.0625rem;
+  --font-size-md: 1.125rem;
+  --font-size-lg: 1.375rem;
+  --font-size-xl: clamp(2rem, 1.55rem + 1.7vw, 2.8rem);
+  --line-height-reading: 1.68;
+  --line-height-tight: 1.18;
+
+  --width-content: 64rem;
+  --width-reading: 68ch;
+  --width-summary: 62ch;
+  --state-card-min-width: 100%;
+  --state-card-gap: 0.5rem;
+  --state-card-padding: 1rem;
+  --row-padding-block: 0.48rem;
+  --row-padding-inline: 0.7rem;
+  --row-indent: 0.9rem;
+  --row-density-gap: 0.55rem;
+  --radius-control: 0.25rem;
+  --radius-surface: 0.35rem;
+  --row-rail-width: 3px;
+  --signal-spine-width: 3px;
+  --shadow-surface: none;
+  --shadow-overlay: 0 24px 72px rgb(0 0 0 / 52%);
+}
+
+html[data-design="dusk-ledger"] body {
+  font-size: var(--font-size-base);
+}
+
+html[data-design="dusk-ledger"] kbd,
+html[data-design="dusk-ledger"] .eyebrow,
+html[data-design="dusk-ledger"] .history-kicker,
+html[data-design="dusk-ledger"] .keybar-title,
+html[data-design="dusk-ledger"] .legend-label,
+html[data-design="dusk-ledger"] .map-title,
+html[data-design="dusk-ledger"] .map-trigger-label,
+html[data-design="dusk-ledger"] .map-update-head,
+html[data-design="dusk-ledger"] .row-shortcut,
+html[data-design="dusk-ledger"] .row-count,
+html[data-design="dusk-ledger"] .update-when,
+html[data-design="dusk-ledger"] .lane-name,
+html[data-design="dusk-ledger"] .turn-meta,
+html[data-design="dusk-ledger"] .evidence,
+html[data-design="dusk-ledger"] .composer-label,
+html[data-design="dusk-ledger"] .working,
+html[data-design="dusk-ledger"] .signals-label,
+html[data-design="dusk-ledger"] .search label,
+html[data-design="dusk-ledger"] .match-count,
+html[data-design="dusk-ledger"] .current-state-label,
+html[data-design="dusk-ledger"] .current-state-when,
+html[data-design="dusk-ledger"] .current-state-head time,
+html[data-design="dusk-ledger"] .current-state-claim dt,
+html[data-design="dusk-ledger"] .md-code,
+html[data-design="dusk-ledger"] .md-code-block,
+html[data-design="dusk-ledger"] caption {
+  font-family: var(--dusk-font-utility);
+}
+
+html[data-design="dusk-ledger"] .stream {
+  padding-top: var(--space-7);
+}
+
+html[data-design="dusk-ledger"] .masthead {
+  border-bottom-color: var(--color-border-strong);
+  margin-bottom: var(--space-7);
+  padding-bottom: var(--space-6);
+}
+
+html[data-design="dusk-ledger"] .masthead-main {
+  gap: var(--space-5);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+html[data-design="dusk-ledger"] .brief-title {
+  font-weight: 620;
+  letter-spacing: -0.018em;
+}
+
+html[data-design="dusk-ledger"] .brief-summary,
+html[data-design="dusk-ledger"] .update-summary,
+html[data-design="dusk-ledger"] .current-state-summary,
+html[data-design="dusk-ledger"] .explanation,
+html[data-design="dusk-ledger"] .note-body {
+  color: var(--color-text-muted);
+}
+
+html[data-design="dusk-ledger"] .keybar {
+  background: transparent;
+  border: 0;
+  border-top: var(--border-thin) solid var(--color-border);
+  border-radius: 0;
+  padding: var(--space-3) 0 0;
+}
+
+html[data-design="dusk-ledger"] .keybar-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+html[data-design="dusk-ledger"] .key-control {
+  font-family: var(--dusk-font-utility);
+}
+
+html[data-design="dusk-ledger"] .chip {
+  border-radius: var(--radius-control);
+}
+
+html[data-design="dusk-ledger"] .map {
+  background: var(--color-surface-raised);
+  border-right-color: var(--color-border-strong);
+}
+
+html[data-design="dusk-ledger"] .map-trigger {
+  background: var(--color-surface-raised);
+  border-color: var(--color-border-strong);
+  box-shadow: none;
+}
+
+html[data-design="dusk-ledger"] .row-state,
+html[data-design="dusk-ledger"] .latest-briefing > .row-update,
+html[data-design="dusk-ledger"] .current-state-legacy {
+  background: transparent;
+  border: 0;
+  border-left: var(--signal-spine-width) solid var(--color-current);
+  border-radius: 0;
+  box-shadow: none;
+  overflow: visible;
+}
+
+html[data-design="dusk-ledger"] .row-state,
+html[data-design="dusk-ledger"] .latest-briefing > .row-update {
+  border-bottom: var(--border-thin) solid var(--color-border-strong);
+}
+
+html[data-design="dusk-ledger"] .row-state::before,
+html[data-design="dusk-ledger"] .latest-briefing > .row-update::before {
+  background: var(--color-current);
+  width: var(--signal-spine-width);
+}
+
+html[data-design="dusk-ledger"] .row-state > .row-head,
+html[data-design="dusk-ledger"] .latest-briefing > .row-update > .row-head,
+html[data-design="dusk-ledger"] .current-state-lanes > .row-lane > .row-head,
+html[data-design="dusk-ledger"] .row-update > .row-head,
+html[data-design="dusk-ledger"] .row-item > .row-head,
+html[data-design="dusk-ledger"] .row-thread > .row-head {
+  background: transparent;
+}
+
+html[data-design="dusk-ledger"] .row-state > .row-body,
+html[data-design="dusk-ledger"] .latest-briefing > .row-update > .row-body {
+  border-left: 0;
+  margin: 0;
+  padding: var(--space-4) var(--state-card-padding)
+    var(--state-card-padding);
+}
+
+html[data-design="dusk-ledger"] .current-state-lanes {
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+html[data-design="dusk-ledger"] .current-state-lanes > .row-lane {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: visible;
+}
+
+html[data-design="dusk-ledger"]
+  .current-state-lanes
+  > .row-lane
+  > .row-body {
+  border-left: var(--border-thin) solid var(--color-border);
+  margin-left: calc(var(--row-rail-width) + var(--row-indent));
+  padding: 0 0 0 var(--row-indent);
+}
+
+html[data-design="dusk-ledger"] .history-heading {
+  border-top-color: var(--color-border-strong);
+}
+
+html[data-design="dusk-ledger"] .row-update {
+  border-top-color: var(--color-border);
+}
+
+html[data-design="dusk-ledger"] .row-head {
+  border-left-color: transparent;
+}
+
+html[data-design="dusk-ledger"] .row-body {
+  border-left-color: #36526e;
+}
+
+html[data-design="dusk-ledger"] .row-lane {
+  margin-top: var(--space-3);
+}
+
+html[data-design="dusk-ledger"] .lane-name {
+  color: #a9c5df;
+  letter-spacing: 0.12em;
+}
+
+html[data-design="dusk-ledger"] .row-item,
+html[data-design="dusk-ledger"] .row-thread {
+  margin-top: var(--space-2);
+}
+
+html[data-design="dusk-ledger"] .row-thread > .row-head {
+  border-bottom: var(--border-thin) solid #2f465d;
+}
+
+html[data-design="dusk-ledger"] .thread-title,
+html[data-design="dusk-ledger"] .turn-human .turn-text,
+html[data-design="dusk-ledger"] .composer-text {
+  color: var(--color-human-text);
+}
+
+html[data-design="dusk-ledger"] .glance,
+html[data-design="dusk-ledger"] .turn-agent .turn-text {
+  color: var(--color-agent-text);
+}
+
+html[data-design="dusk-ledger"] .explanation {
+  font-size: var(--font-size-base);
+}
+
+html[data-design="dusk-ledger"] .turn {
+  border-left-color: #4b5a68;
+}
+
+html[data-design="dusk-ledger"] .turn-human {
+  border-left-color: #6f9ddb;
+}
+
+html[data-design="dusk-ledger"] .turn-agent {
+  border-left-color: #667584;
+}
+
+html[data-design="dusk-ledger"] .row[data-cursor="true"],
+html[data-design="dusk-ledger"] .row-item[data-owning-item="true"] {
+  background: var(--color-context-wash);
+  border-radius: var(--radius-control);
+  outline: var(--border-emphasis) solid var(--color-context);
+  outline-offset: var(--border-thin);
+}
+
+html[data-design="dusk-ledger"] .row[data-cursor="true"] > .row-head {
+  background: var(--color-current-soft);
+  border-left-color: var(--color-current);
+  box-shadow: inset 0 0 0 var(--border-thin)
+    color-mix(in srgb, var(--color-current) 42%, transparent);
+}
+
+html[data-design="dusk-ledger"] .row[data-fresh="true"] > .row-head {
+  border-left-color: var(--color-active);
+}
+
+html[data-design="dusk-ledger"] .chat-button {
+  border-color: #587ca6;
+  color: var(--color-current-strong);
+  font-family: var(--dusk-font-utility);
+  font-weight: 650;
+}
+
+html[data-design="dusk-ledger"] .chat-button:hover,
+html[data-design="dusk-ledger"] .chat-button[aria-expanded="true"] {
+  background: var(--color-current-soft);
+  border-color: var(--color-current);
+}
+
+html[data-design="dusk-ledger"] .composer {
+  background: var(--color-surface-raised);
+  border-color: var(--color-border-strong);
+  box-shadow: none;
+}
+
+html[data-design="dusk-ledger"] .composer-text,
+html[data-design="dusk-ledger"] .search input {
+  background: #10171f;
+  border-color: var(--color-border-strong);
+}
+
+html[data-design="dusk-ledger"] .submit {
+  background: #6f9ddb;
+  border-color: #8ab2e8;
+  color: #0d1620;
+}
+
+html[data-design="dusk-ledger"] .signal {
+  border-radius: var(--radius-control);
+}
+
+html[data-design="dusk-ledger"] .working-mark {
+  color: #9bc7e8;
+}
+
+html[data-design="dusk-ledger"] .evidence,
+html[data-design="dusk-ledger"] .md-code-block,
+html[data-design="dusk-ledger"] .md-code {
+  background: #0e151c;
+  border-color: #526374;
+}
+
+html[data-design="dusk-ledger"] .evidence {
+  border-left: var(--border-emphasis) solid #7896b3;
+}
+
+html[data-design="dusk-ledger"] table {
+  background: #121b24;
+  border: var(--border-thin) solid var(--color-border-strong);
+}
+
+html[data-design="dusk-ledger"] th,
+html[data-design="dusk-ledger"] td {
+  border-color: #4a5c6e;
+}
+
+html[data-design="dusk-ledger"] th {
+  background: #1c2935;
+}
+
+html[data-design="dusk-ledger"] .search {
+  background: var(--color-surface-raised);
+  border-top-color: var(--color-border-strong);
+}
+
+html[data-design="dusk-ledger"] .help {
+  background: var(--color-surface-raised);
+  border-color: var(--color-border-strong);
+}
+
+html[data-design="dusk-ledger"] :focus-visible {
+  outline-color: #a9c9ff;
+}
+
+@media (width <= 46rem) {
+  html[data-design="dusk-ledger"] .keybar-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  html[data-design="dusk-ledger"] .stream {
+    padding-inline: var(--space-4);
+    padding-top: var(--space-5);
+  }
+}
+
+@media (width <= 34rem) {
+  html[data-design="dusk-ledger"] .keybar-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  html[data-design="dusk-ledger"] .stream {
+    padding-inline: var(--space-3);
+  }
+
+  html[data-design="dusk-ledger"] .map-trigger {
+    bottom: var(--space-3);
+    flex-direction: row;
+    height: 2.75rem;
+    justify-content: center;
+    left: var(--space-3);
+    padding: 0;
+    top: auto;
+    width: 2.75rem;
+  }
+
+  html[data-design="dusk-ledger"] .map-trigger-label {
+    display: none;
+  }
+
+  html[data-design="dusk-ledger"] .row-body,
+  html[data-design="dusk-ledger"]
+    .current-state-lanes
+    > .row-lane
+    > .row-body {
+    margin-left: var(--row-rail-width);
+    padding-left: var(--space-2);
+  }
+
+  html[data-design="dusk-ledger"] .row-actions {
+    padding-right: var(--space-1);
+  }
+
+  html[data-design="dusk-ledger"] .chat-button {
+    min-height: var(--height-control-min);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-design="dusk-ledger"] .working-mark {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}

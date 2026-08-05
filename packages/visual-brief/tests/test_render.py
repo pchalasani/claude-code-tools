@@ -70,9 +70,20 @@ def test_bundled_example_renders_without_external_requests() -> None:
     assert "http://" not in rendered
     assert "https://" not in rendered
     assert '<div id="visual-brief-root"></div>' in rendered
-    assert rendered.count("<script") == 2
+    assert rendered.count("<script") == 3
     assert rendered.count("<style>") == 1
     assert "<link" not in rendered.replace('<link rel="icon" href="data:,">', "")
+
+
+def test_theme_is_selected_before_the_stylesheet_can_paint() -> None:
+    """Apply the requested palette before any scoped theme CSS can paint."""
+    rendered = render_content(_example())
+
+    script = rendered.index("new URLSearchParams(location.search)")
+    style = rendered.index("<style>")
+
+    assert script < style
+    assert "catppuccin-mocha" in rendered[script:style]
 
 
 def test_bundled_example_renders_the_bytes_that_were_built() -> None:

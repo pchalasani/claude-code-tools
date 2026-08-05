@@ -67,6 +67,15 @@ def test_a_different_front_end_is_a_different_stamp() -> None:
 
     assert stamp_bundle("const app = 2;", ".row { color: red }") != base
     assert stamp_bundle("const app = 1;", ".row { color: blue }") != base
+    assert stamp_bundle(
+        "const app = 1;",
+        ".row { color: red }",
+        "const theme = 2;",
+    ) != stamp_bundle(
+        "const app = 1;",
+        ".row { color: red }",
+        "const theme = 1;",
+    )
     # Nor can the two be run together into one another's contents.
     assert stamp_bundle("ab", "c") != stamp_bundle("a", "bc")
 

@@ -1,0 +1,39 @@
+html[data-design="blue-margin"] {
+  color-scheme: light;
+
+  --palette-fog: #f6f8fb;
+  --palette-paper: #fcfdff;
+  --palette-mist: #edf2f7;
+  --palette-ink: #202a35;
+  --palette-cobalt: #246bd2;
+  --palette-teal: #3f7869;
+  --palette-coral: #a33b4b;
+  --palette-amber: #805b10;
+  --color-page: #f6f8fb;
+  --color-surface: #fcfdff;
+  --color-surface-quiet: #edf2f7;
+  --color-surface-raised: #f9fbfd;
+  --color-text: #202a35;
+  --color-text-muted: #4d5b69;
+  --color-text-faint: #667483;
+  --color-agent-text: #202a35;
+  --color-agent-text-muted: #465462;
+  --color-human-text: #175dbb;
+  --color-border: #d7dfe8;
+  --color-border-strong: #8795a4;
+  --color-current: #246bd2;
+  --color-current-strong: #1558b0;
+  --color-current-soft: #e9f1fc;
+  --color-active: #3f7869;
+  --color-active-soft: #e9f3ef;
+  --color-warning: #805b10;
+  --color-warning-soft: #fff4cf;
+  --color-context: #b47b09;
+  --color-context-wash: rgb(255 207 76 / 10%);
+  --color-working-base: #456c62;
+  --color-working-wave-leading: #3f7869;
+  --color-working-wave-crest: #215a4c;
+  --color-working-wave-trailing: #5f8b7f;
+  --color-scrim: rgb(31 42 53 / 52%);
+  --shadow-overlay: 0 20px 55px rgb(31 42 53 / 22%);
+}

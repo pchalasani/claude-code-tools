@@ -1,0 +1,33 @@
+html[data-design="catppuccin-latte"] {
+  color-scheme: light;
+
+  --color-page: #f4ede8;
+  --color-surface: #fcf7f2;
+  --color-surface-quiet: #ede4de;
+  --color-surface-raised: #f8f1eb;
+  --color-text: #4f4f5d;
+  --color-text-muted: #6a6b7b;
+  --color-text-faint: #7c7f8d;
+  --color-agent-text: #4f4f5d;
+  --color-agent-text-muted: #626473;
+  --color-human-text: #285eb2;
+  --color-border: #d8cfc9;
+  --color-border-strong: #9d958f;
+  --color-current: #6382cc;
+  --color-current-strong: #2f5ea8;
+  --color-current-soft: #e7ebf7;
+  --color-active: #5a8b7a;
+  --color-active-soft: #e4efe9;
+  --color-warning: #8a6518;
+  --color-warning-soft: #fcefcc;
+  --color-context: #b5841e;
+  --color-context-wash: rgb(181 132 30 / 10%);
+  --color-limitation: #ad5468;
+  --color-limitation-soft: #f4e3e8;
+  --color-working-base: #5d7c77;
+  --color-working-wave-leading: #5a8b7a;
+  --color-working-wave-crest: #364d6d;
+  --color-working-wave-trailing: #7f9ee4;
+  --color-scrim: rgb(53 53 67 / 46%);
+  --shadow-overlay: 0 22px 56px rgb(53 53 67 / 18%);
+}

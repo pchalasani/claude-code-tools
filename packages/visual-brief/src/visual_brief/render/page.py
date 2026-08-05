@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from .assets import bundle_script, bundle_stamp, bundle_style
+from .assets import bundle_bootstrap, bundle_script, bundle_stamp, bundle_style
 from .embed import DOCUMENT_ELEMENT_ID, ROOT_ELEMENT_ID, embed_document, escape
 
 _GENERATION_PLACEHOLDER = "0" * 64
@@ -47,6 +47,7 @@ def render_page(data: dict[str, Any]) -> str:
         f'<meta name="visual-brief-poll-ms" content="{POLL_INTERVAL_MS}">'
         '<link rel="icon" href="data:,">'
         f"<title>{escape(data['title'])}</title>"
+        f"<script>{bundle_bootstrap()}</script>"
         f"<style>{bundle_style()}</style></head>"
         f'<body><div id="{ROOT_ELEMENT_ID}"></div>'
         f"<noscript>{escape(_NOSCRIPT)}</noscript>"

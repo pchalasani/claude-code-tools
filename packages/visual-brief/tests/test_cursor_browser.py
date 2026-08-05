@@ -188,13 +188,14 @@ def test_moving_the_cursor_repaints_it_rather_than_moving_focus(
     browser: Browser,
 ) -> None:
     """Prove the mark travels while the browser's own focus stays put."""
+    cursor_before = browser.cursor_row()
     before = browser.evaluate("document.activeElement.tagName")
 
     browser.press("j")
     browser.press("j")
     browser.run("wait", "200")
 
-    assert browser.cursor_row() != FIRST_ITEM
+    assert browser.cursor_row() != cursor_before
     assert browser.evaluate("document.activeElement.tagName") == before
 
 
