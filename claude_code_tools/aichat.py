@@ -1645,6 +1645,47 @@ def move_session(
         console.print(f"  [cyan]{resume_cmd}[/cyan]")
 
 
+@main.command("move-account")
+@click.argument("session", required=True)
+@click.option("--to", "to_home", required=True,
+              help="Target config dir (account), e.g. ~/.claude or ~/.codex")
+@click.option("--from", "from_home", default=None,
+              help="Source config dir (default: search all local homes — "
+                   "env-var home, ~/.claude / ~/.codex, and "
+                   "~/.claude-* / ~/.codex-* siblings)")
+@click.option("--agent",
+              type=click.Choice(["claude", "codex"], case_sensitive=False),
+              default=None,
+              help="Agent type (auto-detected from the config dirs "
+                   "if not specified)")
+@click.option("--keep", is_flag=True,
+              help="Copy instead of move (leave source account untouched)")
+def move_account(session, to_home, from_home, agent, keep):
+    """Move a session to a different account (config dir).
+
+    Accounts are config dirs like ~/.claude vs ~/.claude-rja (or
+    ~/.codex vs ~/.codex-rja), normally selected via CLAUDE_CONFIG_DIR
+    / CODEX_HOME. The session stays in the same project. Claude moves
+    relocate the transcript and its sidecar dir (subagents,
+    tool-results, workflows); Codex moves relocate the rollout file
+    and its thread-name entries in session_index.jsonl.
+
+    SESSION may be a session UUID (full or partial), a Claude session
+    name assigned with /rename, or a Codex thread name.
+
+    \b
+    Examples:
+        aichat move-account cowrite-fable-21jul2026 \\
+            --from ~/.claude-rja --to ~/.claude
+        aichat move-account af574e84 --to ~/.claude-rja --keep
+        aichat move-account my-codex-thread \\
+            --from ~/.codex-rja --to ~/.codex
+    """
+    from claude_code_tools.move_account import run_move_account
+
+    run_move_account(session, to_home, from_home, keep, agent)
+
+
 def _protect_surrogateescape_bytes(
     line: str,
     *,

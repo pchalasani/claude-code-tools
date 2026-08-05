@@ -55,6 +55,10 @@ export default defineConfig({
                   slug: "tools/aichat/port",
                 },
                 {
+                  label: "Move Account",
+                  slug: "tools/aichat/move-account",
+                },
+                {
                   label: "Search",
                   slug: "tools/aichat/search",
                 },
