@@ -16,6 +16,7 @@ Nothing inside the transcript needs rewriting: the jsonl carries no
 account identity, only the cwd, which is unchanged by an account move.
 """
 
+import os
 import shutil
 import sys
 from dataclasses import dataclass
@@ -117,8 +118,10 @@ def _tiered_match(
 ) -> List[SessionCandidate]:
     """Pick candidates by tiered matching; first non-empty tier wins.
 
-    Tiers: exact session id, id prefix, exact name, id substring,
-    name substring (case-insensitive).
+    Tiers: exact session id, exact name, id prefix, id substring,
+    name substring (case-insensitive). An exact name outranks an id
+    prefix so a short name can never silently select a session whose
+    UUID happens to start with the same characters.
 
     Args:
         candidates: All sessions in the searched home.
@@ -134,9 +137,9 @@ def _tiered_match(
         title = cand.title
         if sid == query:
             tiers[0].append(cand)
-        elif sid.startswith(query):
-            tiers[1].append(cand)
         elif title == query:
+            tiers[1].append(cand)
+        elif sid.startswith(query):
             tiers[2].append(cand)
         elif query in sid:
             tiers[3].append(cand)
@@ -278,11 +281,17 @@ def move_session_between_homes(
         )
 
     dest_file.parent.mkdir(parents=True, exist_ok=True)
+    size_before = session_file.stat().st_size
     shutil.copy2(session_file, dest_file)
-    if dest_file.stat().st_size != session_file.stat().st_size:
+    if (
+        dest_file.stat().st_size != size_before
+        or session_file.stat().st_size != size_before
+    ):
         dest_file.unlink()
         raise ValueError(
-            f"Copy verification failed for {dest_file}; source untouched"
+            f"Copy verification failed for {dest_file} — the source "
+            "changed during the copy (session still running?); "
+            "source untouched"
         )
 
     sidecar_moved = False
@@ -350,10 +359,21 @@ def _transfer_index_entries(
     if not matched:
         return False
     dest_index = to_home / "session_index.jsonl"
+    # Guard against a target index whose last record lacks a trailing
+    # newline: appending directly would concatenate two JSON records.
+    needs_newline = False
+    if dest_index.is_file() and dest_index.stat().st_size > 0:
+        with dest_index.open("rb") as raw:
+            raw.seek(-1, 2)
+            needs_newline = raw.read(1) != b"\n"
     with dest_index.open("a", encoding="utf-8") as handle:
+        if needs_newline:
+            handle.write("\n")
         handle.writelines(matched)
     if not keep:
-        src_index.write_text("".join(remaining), encoding="utf-8")
+        tmp = src_index.with_name(src_index.name + ".tmp")
+        tmp.write_text("".join(remaining), encoding="utf-8")
+        os.replace(tmp, src_index)
     return True
 
 
@@ -408,11 +428,17 @@ def move_codex_session_between_homes(
         )
 
     dest_file.parent.mkdir(parents=True, exist_ok=True)
+    size_before = session_file.stat().st_size
     shutil.copy2(session_file, dest_file)
-    if dest_file.stat().st_size != session_file.stat().st_size:
+    if (
+        dest_file.stat().st_size != size_before
+        or session_file.stat().st_size != size_before
+    ):
         dest_file.unlink()
         raise ValueError(
-            f"Copy verification failed for {dest_file}; source untouched"
+            f"Copy verification failed for {dest_file} — the source "
+            "changed during the copy (session still running?); "
+            "source untouched"
         )
 
     index_moved = _transfer_index_entries(
@@ -445,18 +471,21 @@ def resume_command(result: MoveResult, to_home: Path) -> str:
     Returns:
         A one-line shell command the user can paste.
     """
+    import shlex
+
     to_home = to_home.expanduser().resolve()
-    cd_part = f"cd {result.cwd} && " if result.cwd else ""
+    cd_part = f"cd {shlex.quote(result.cwd)} && " if result.cwd else ""
+    home_quoted = shlex.quote(str(to_home))
     # Always name the config dir explicitly, even for the default
     # home: the pasted command then works regardless of any
     # CLAUDE_CONFIG_DIR / CODEX_HOME lingering in the user's shell.
     if result.agent == "codex":
         return (
-            f"{cd_part}CODEX_HOME={to_home} "
+            f"{cd_part}CODEX_HOME={home_quoted} "
             f"codex resume {result.session_id}"
         )
     return (
-        f"{cd_part}CLAUDE_CONFIG_DIR={to_home} "
+        f"{cd_part}CLAUDE_CONFIG_DIR={home_quoted} "
         f"claude --resume {result.session_id}"
     )
 
@@ -522,8 +551,6 @@ def candidate_source_homes(agent: str, to_home: Path) -> List[Path]:
     Returns:
         Deduplicated, existing source-home candidates.
     """
-    import os
-
     if agent == "codex":
         env_var, prefix, required = "CODEX_HOME", ".codex", "sessions"
     else:

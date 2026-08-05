@@ -416,3 +416,45 @@ def test_cli_registered():
     res = runner.invoke(main, ["move-account", "--help"])
     assert res.exit_code == 0
     assert "different account" in res.output
+
+def test_exact_name_beats_uuid_prefix(tmp_path):
+    """A session named like another session's UUID prefix wins."""
+    src = tmp_path / "claude-src"
+    _write_session(src, UUID_A)  # UUID starts with "aaaa"
+    _write_session(src, UUID_B, title="aaaa")
+    got = find_sessions_in_home(src, "aaaa")
+    assert [c.session_id for c in got] == [UUID_B]
+
+
+def test_codex_index_append_repairs_missing_newline(codex_homes):
+    """Appending to a target index lacking a trailing newline must not
+    concatenate two JSON records onto one line."""
+    src, dst = codex_homes
+    existing = {"id": "0" * 36, "thread_name": "pre-existing"}
+    (dst / "session_index.jsonl").write_text(
+        json.dumps(existing)  # no trailing newline
+    )
+    session = (
+        src / "sessions" / "2026" / "06" / "10" / f"{CODEX_STEM}.jsonl"
+    )
+    move_codex_session_between_homes(session, src, dst)
+    lines = (dst / "session_index.jsonl").read_text().splitlines()
+    parsed = [json.loads(line) for line in lines if line.strip()]
+    assert {e["thread_name"] for e in parsed} == {
+        "pre-existing", "my-codex-thread"
+    }
+
+
+def test_resume_command_quotes_paths_with_spaces(tmp_path):
+    from claude_code_tools.move_account import MoveResult
+
+    result = MoveResult(
+        source_file=tmp_path / "a.jsonl",
+        dest_file=tmp_path / "b.jsonl",
+        sidecar_moved=False,
+        session_id=UUID_A,
+        cwd="/Users/me/My Project",
+        kept_source=False,
+    )
+    cmd = resume_command(result, tmp_path)
+    assert "cd '/Users/me/My Project' &&" in cmd
