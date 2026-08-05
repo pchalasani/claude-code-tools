@@ -39,7 +39,7 @@ help:
 	@echo "  make voxtype-all-patch / -minor / -major - Bump that part, push, GitHub release, build (then: make voxtype-publish)"
 	@echo "  make voxtype-publish - Publish dist/voxtype-* to PyPI"
 	@echo "  make voxtype-all [BUMP=...] - voxtype-release + voxtype-publish in one shot"
-	@echo "  make visual-brief-frontend - Build the visual-brief Solid bundle (needs Node)"
+	@echo "  make visual-brief-frontend - Build visual-brief browser/helper bundles (needs Node)"
 	@echo "  make visual-brief-test    - Run the visual-brief test suite"
 	@echo "  make visual-brief-install - Install visual-brief in editable mode"
 	@echo "  make visual-brief-build   - Build visual-brief wheel and sdist"
@@ -416,18 +416,27 @@ endef
 export VISUAL_BRIEF_BUMP_PY
 
 VISUAL_BRIEF_FRONTEND := $(VISUAL_BRIEF_DIR)/frontend
+VISUAL_BRIEF_CODEX := plugins/dynamic-workflow
 VISUAL_BRIEF_STAMP := $(VISUAL_BRIEF_DIR)/tools/frontend_stamp.py
 
-# Rebuild the committed Solid bundle. Needs Node; installing the tool does not.
+# Rebuild the committed browser and Codex helper bundles. Installing needs no Node.
 visual-brief-frontend:
 	@command -v npm >/dev/null 2>&1 || { \
 		echo "Error: npm is required to build the visual-brief front end" >&2; \
 		echo "       (Vite needs Node >= 20.19; installing the tool needs none)" >&2; \
 		exit 1; \
 	}
-	cd $(VISUAL_BRIEF_FRONTEND) && npm ci --ignore-scripts --no-audit --no-fund
-	cd $(VISUAL_BRIEF_FRONTEND) && npm run typecheck && npm test && npm run build
-	python3 $(VISUAL_BRIEF_STAMP) write
+	@HELPER_META=$$(mktemp); \
+	trap 'rm -f "$$HELPER_META"' EXIT; \
+	set -e; \
+	(cd $(VISUAL_BRIEF_CODEX) && \
+		npm ci --ignore-scripts --no-audit --no-fund); \
+	(cd $(VISUAL_BRIEF_FRONTEND) && \
+		npm ci --ignore-scripts --no-audit --no-fund && \
+		npm run typecheck && npm test && npm run build); \
+	(cd $(VISUAL_BRIEF_CODEX) && npm run build:visual-brief -- \
+		--metafile="$$HELPER_META"); \
+	python3 $(VISUAL_BRIEF_STAMP) write --helper-metadata "$$HELPER_META"
 	@echo "Built bundle is committed package data: git add \
 $(VISUAL_BRIEF_DIR)/src/visual_brief/static \
 $(VISUAL_BRIEF_DIR)/tools/bundle-stamp.json"

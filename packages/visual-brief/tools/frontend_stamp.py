@@ -1,9 +1,9 @@
-"""Detect a committed front-end bundle that no longer matches its sources.
+"""Detect committed Visual Brief bundles that no longer match their sources.
 
 The built bundle is committed so ``uv tool install visual-brief`` needs no
 Node. That only stays honest if a stale bundle is impossible to miss, so the
-build records a fingerprint of every front-end source next to the artifacts and
-the test target refuses to run when the two disagree.
+build records fingerprints of the browser sources and Codex helper inputs next
+to the artifacts, and the test target refuses to run when they disagree.
 
 ``write`` fingerprints whatever is on disk, so it declares fresh whatever it
 is pointed at: it must only ever run immediately after a build. ``make
@@ -22,12 +22,23 @@ from pathlib import Path
 from typing import Any
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = PACKAGE_ROOT.parents[1]
 FRONTEND_DIR = PACKAGE_ROOT / "frontend"
+CODEX_HELPER_DIR = REPOSITORY_ROOT / "plugins" / "dynamic-workflow"
+CODEX_HELPER_BUILD_INPUTS = (
+    "package.json",
+    "package-lock.json",
+    "tsconfig.json",
+)
 STATIC_DIR = PACKAGE_ROOT / "src" / "visual_brief" / "static"
-# The stamp lives outside the Vite output directory, which the build empties:
-# a bare `npm run build` must not be able to delete it.
+# The stamp lives outside the Vite output directory so it is not confused with
+# shipped browser artifacts or affected by changes to Vite's cleanup policy.
 STAMP_PATH = PACKAGE_ROOT / "tools" / "bundle-stamp.json"
-BUNDLE_NAMES = ("visual-brief.js", "visual-brief.css")
+BUNDLE_NAMES = (
+    "visual-brief.js",
+    "visual-brief.css",
+    "visual-brief-codex.mjs",
+)
 SKIPPED_DIRECTORIES = frozenset({"node_modules", "dist", "coverage"})
 # Editor and platform droppings that git ignores. They are invisible to
 # `git status`, so fingerprinting them would report a stale bundle that no
@@ -201,6 +212,71 @@ def source_fingerprint(frontend_dir: Path = FRONTEND_DIR) -> str:
     return digest.hexdigest()
 
 
+def _helper_source_names(metadata_path: Path) -> list[str]:
+    """Read the helper inputs reported by esbuild.
+
+    Args:
+        metadata_path: Esbuild metadata emitted with the helper bundle.
+
+    Returns:
+        Sorted source paths, relative to the helper project.
+
+    Raises:
+        StaleBundleError: If the metadata is missing or malformed.
+    """
+    try:
+        metadata: Any = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise StaleBundleError(
+            f"cannot read Codex helper metadata at {metadata_path}"
+        ) from error
+    if not isinstance(metadata, dict) or not isinstance(
+        metadata.get("inputs"),
+        dict,
+    ):
+        raise StaleBundleError(
+            f"malformed Codex helper metadata at {metadata_path}"
+        )
+    names = metadata["inputs"]
+    if not names or not all(isinstance(name, str) for name in names):
+        raise StaleBundleError(
+            f"Codex helper metadata has no source inputs at {metadata_path}"
+        )
+    return sorted(names)
+
+
+def helper_input_fingerprints(
+    input_names: list[str],
+    helper_dir: Path = CODEX_HELPER_DIR,
+) -> dict[str, str]:
+    """Fingerprint the source and configuration used to build the helper.
+
+    Args:
+        input_names: Build input paths, relative to the helper project.
+        helper_dir: Root of the helper project.
+
+    Returns:
+        A mapping of source path to SHA-256 digest.
+
+    Raises:
+        StaleBundleError: If a source is missing or outside the helper project.
+    """
+    root = helper_dir.resolve()
+    fingerprints: dict[str, str] = {}
+    for name in input_names:
+        path = (helper_dir / name).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError as error:
+            raise StaleBundleError(
+                f"Codex helper input is outside its project: {name}"
+            ) from error
+        if not path.is_file():
+            raise StaleBundleError(f"missing Codex helper input {path}")
+        fingerprints[name] = _hash_file(path)
+    return fingerprints
+
+
 def output_fingerprints(static_dir: Path = STATIC_DIR) -> dict[str, str]:
     """Fingerprint the committed bundle artifacts.
 
@@ -211,8 +287,17 @@ def output_fingerprints(static_dir: Path = STATIC_DIR) -> dict[str, str]:
         A mapping of artifact name to hex digest.
 
     Raises:
-        StaleBundleError: If an artifact is missing.
+        StaleBundleError: If an artifact is missing or obsolete output remains.
     """
+    unexpected = sorted(
+        path.name for path in static_dir.iterdir() if path.name not in BUNDLE_NAMES
+    )
+    if unexpected:
+        names = ", ".join(unexpected)
+        raise StaleBundleError(
+            f"unexpected built bundle artifacts: {names}; remove them and "
+            f"{REBUILD_HINT}"
+        )
     fingerprints: dict[str, str] = {}
     for name in BUNDLE_NAMES:
         path = static_dir / name
@@ -226,6 +311,9 @@ def write_stamp(
     frontend_dir: Path = FRONTEND_DIR,
     static_dir: Path = STATIC_DIR,
     stamp_path: Path = STAMP_PATH,
+    *,
+    helper_metadata_path: Path,
+    helper_dir: Path = CODEX_HELPER_DIR,
 ) -> dict[str, Any]:
     """Record the fingerprints of the sources and the built bundle.
 
@@ -238,6 +326,8 @@ def write_stamp(
         frontend_dir: Root of the front-end project.
         static_dir: Directory holding the built bundle.
         stamp_path: File the fingerprints are recorded in.
+        helper_metadata_path: Esbuild metadata emitted with the helper bundle.
+        helper_dir: Root of the helper project.
 
     Returns:
         The stamp that was written.
@@ -253,7 +343,15 @@ def write_stamp(
             "stale",
             file=sys.stderr,
         )
+    helper_inputs = sorted(
+        set(_helper_source_names(helper_metadata_path))
+        | set(CODEX_HELPER_BUILD_INPUTS)
+    )
     stamp: dict[str, Any] = {
+        "helper_inputs": helper_input_fingerprints(
+            helper_inputs,
+            helper_dir,
+        ),
         "sources": source_fingerprint(frontend_dir),
         "outputs": output_fingerprints(static_dir),
     }
@@ -291,6 +389,7 @@ def check_stamp(
     frontend_dir: Path = FRONTEND_DIR,
     static_dir: Path = STATIC_DIR,
     stamp_path: Path = STAMP_PATH,
+    helper_dir: Path = CODEX_HELPER_DIR,
 ) -> None:
     """Fail when the committed bundle is stale.
 
@@ -298,6 +397,7 @@ def check_stamp(
         frontend_dir: Root of the front-end project.
         static_dir: Directory holding the built bundle.
         stamp_path: File the fingerprints were recorded in.
+        helper_dir: Root of the helper project.
 
     Raises:
         StaleBundleError: If sources or artifacts differ from the stamp.
@@ -308,6 +408,29 @@ def check_stamp(
         raise StaleBundleError(
             "the committed visual-brief bundle is stale: front-end sources "
             f"changed since it was built; {REBUILD_HINT}"
+        )
+    recorded_helper_inputs = stamp.get("helper_inputs")
+    if (
+        not isinstance(recorded_helper_inputs, dict)
+        or not recorded_helper_inputs
+        or not all(
+            isinstance(name, str) and isinstance(digest, str)
+            for name, digest in recorded_helper_inputs.items()
+        )
+        or not set(CODEX_HELPER_BUILD_INPUTS).issubset(recorded_helper_inputs)
+    ):
+        raise StaleBundleError(
+            "the committed visual-brief bundle stamp has no valid Codex "
+            f"helper build inputs; {REBUILD_HINT}"
+        )
+    expected_helper_inputs = helper_input_fingerprints(
+        sorted(recorded_helper_inputs),
+        helper_dir,
+    )
+    if recorded_helper_inputs != expected_helper_inputs:
+        raise StaleBundleError(
+            "the committed visual-brief bundle is stale: Codex helper "
+            f"build inputs changed since it was built; {REBUILD_HINT}"
         )
     expected_outputs = output_fingerprints(static_dir)
     if stamp.get("outputs") != expected_outputs:
@@ -328,14 +451,19 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("write", "check"))
+    parser.add_argument("--helper-metadata", type=Path)
     arguments = parser.parse_args(argv)
     try:
         if arguments.command == "write":
-            stamp = write_stamp()
+            if arguments.helper_metadata is None:
+                parser.error("write requires --helper-metadata")
+            stamp = write_stamp(
+                helper_metadata_path=arguments.helper_metadata,
+            )
             print(f"bundle stamp written: sources {stamp['sources'][:12]}")
         else:
             check_stamp()
-            print("bundle stamp matches the front-end sources")
+            print("bundle stamp matches its source inputs")
     except StaleBundleError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

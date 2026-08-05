@@ -18,6 +18,7 @@ from typing import NoReturn
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
+from visual_brief.bridge import watch_command
 from visual_brief.server.daemon import DEFAULT_PORT, create_server
 from visual_brief.server.registry import discover_runs
 from visual_brief.writes import (
@@ -76,6 +77,19 @@ def build_parser() -> argparse.ArgumentParser:
     render_parser.add_argument("run_id")
 
     subparsers.add_parser("list", help="list runs")
+
+    watch_parser = subparsers.add_parser(
+        "watch",
+        help="watch questions and wake the owning agent",
+    )
+    watch_parser.add_argument(
+        "--agent",
+        choices=["claude", "codex"],
+        required=True,
+    )
+    _add_run_option(watch_parser)
+    watch_parser.add_argument("--thread-id")
+    watch_parser.add_argument("--endpoint")
 
     fold_parser = subparsers.add_parser(
         "fold",
@@ -170,6 +184,15 @@ def _dispatch(args: argparse.Namespace) -> int:
         return new_command(runs_root, args.label, args.run_id, args.port)
     if args.command == "render":
         return render_command(runs_root, args.run_id)
+    if args.command == "watch":
+        run_id, run_dir = resolve_run(runs_root, args.run)
+        return watch_command(
+            run_id,
+            run_dir,
+            args.agent,
+            args.thread_id,
+            args.endpoint,
+        )
     if args.command == "fold":
         return fold_command(runs_root, args.run)
     if args.command == "answer":

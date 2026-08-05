@@ -6,6 +6,7 @@ import errno
 import hashlib
 import json
 import os
+import re
 import stat
 import tomllib
 from dataclasses import dataclass
@@ -39,6 +40,13 @@ _PLUGIN_PATH_RACE_ERRNOS = {
     errno.ENOTDIR,
     errno.ESTALE,
 }
+_REMOTE_PLUGIN_INSTALL_METADATA = ".codex-remote-plugin-install.json"
+_CODEX_ATOMIC_WRITE_TEMP = re.compile(r"\.tmp[A-Za-z0-9]{6}\Z", re.ASCII)
+_REMOTE_PLUGIN_CATALOG = Path("cache/remote_plugin_catalog")
+_FETCHED_AT_LINE = re.compile(
+    br'^  "fetched_at": "[^"\r\n]*",$',
+    re.MULTILINE,
+)
 
 
 @dataclass(frozen=True)
@@ -277,7 +285,6 @@ def _hash_directory(
         raise CodexServerError(
             f"Codex plugin cache path is not a directory: {relative!r}"
         )
-    _update_entry(digest, generation, b"directory", relative, initial_info)
     with os.scandir(directory_fd) as stream:
         names: list[str] = []
         for child in stream:
@@ -288,6 +295,22 @@ def _hash_directory(
                 )
             names.append(child.name)
     names.sort(key=os.fsencode)
+    stable_install_directory = _has_remote_plugin_install_metadata(
+        directory_fd,
+        relative,
+        names,
+    )
+    stable_catalog_directory = relative == _REMOTE_PLUGIN_CATALOG
+    if stable_install_directory or stable_catalog_directory:
+        names = [name for name in names if not _is_codex_atomic_write_temp(name)]
+    _update_entry(
+        digest,
+        generation,
+        b"directory",
+        relative,
+        initial_info,
+        stable_identity=stable_install_directory or stable_catalog_directory,
+    )
     for name in names:
         child_relative = relative / name
         info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
@@ -481,16 +504,32 @@ def _hash_regular_descriptor(
     budget[1] += initial_info.st_size
     if budget[1] > PLUGIN_TREE_MAX_BYTES:
         raise CodexServerError("Codex plugin cache exceeds the safe content size limit")
-    _update_entry(digest, generation, b"file", relative, initial_info)
+    stable_catalog_file = _is_remote_plugin_catalog_file(relative)
+    _update_entry(
+        digest,
+        generation,
+        b"file",
+        relative,
+        initial_info,
+        stable_identity=(
+            _is_remote_plugin_install_metadata(relative) or stable_catalog_file
+        ),
+        stable_size=not stable_catalog_file,
+    )
     remaining = initial_info.st_size
+    first_chunk = True
     while remaining:
         chunk = os.read(fd, min(65_536, remaining))
         if not chunk:
             raise PluginSnapshotChangedError(
                 f"Codex plugin artifact changed while being read: {relative!r}"
             )
+        bytes_read = len(chunk)
+        if first_chunk and stable_catalog_file:
+            chunk = _normalize_remote_catalog_chunk(chunk)
         digest.update(chunk)
-        remaining -= len(chunk)
+        remaining -= bytes_read
+        first_chunk = False
     digest.update(b"\0")
     if os.read(fd, 1):
         raise PluginSnapshotChangedError(
@@ -508,18 +547,91 @@ def _update_entry(
     kind: bytes,
     relative: Path,
     info: os.stat_result,
+    *,
+    stable_identity: bool = False,
+    stable_size: bool = True,
 ) -> None:
     """Add a typed pathname and its observed generation to both digests."""
+    entry_generation = (
+        _stable_entry_generation(
+            info,
+            include_size=kind != b"directory" and stable_size,
+        )
+        if stable_identity
+        else _stat_generation(info)
+    )
     record = (
         kind
         + b":"
         + os.fsencode(str(relative))
         + b"\0"
-        + _stat_generation(info).encode()
+        + entry_generation.encode()
         + b"\0"
     )
     digest.update(record)
     generation.update(record)
+
+
+def _has_remote_plugin_install_metadata(
+    directory_fd: int,
+    relative: Path,
+    names: Sequence[str],
+) -> bool:
+    """Return whether a directory contains regular remote-install metadata."""
+    metadata = relative / _REMOTE_PLUGIN_INSTALL_METADATA
+    if (
+        _REMOTE_PLUGIN_INSTALL_METADATA not in names
+        or not _is_remote_plugin_install_metadata(metadata)
+    ):
+        return False
+    info = os.stat(
+        _REMOTE_PLUGIN_INSTALL_METADATA,
+        dir_fd=directory_fd,
+        follow_symlinks=False,
+    )
+    return stat.S_ISREG(info.st_mode)
+
+
+def _is_remote_plugin_install_metadata(relative: Path) -> bool:
+    """Return whether a path is remote-install metadata in the plugin tree."""
+    return (
+        relative.parts[:1] == ("plugins",)
+        and relative.name == _REMOTE_PLUGIN_INSTALL_METADATA
+    )
+
+
+def _is_remote_plugin_catalog_file(relative: Path) -> bool:
+    """Return whether a path is a direct JSON catalog snapshot."""
+    return relative.parent == _REMOTE_PLUGIN_CATALOG and relative.suffix == ".json"
+
+
+def _normalize_remote_catalog_chunk(chunk: bytes) -> bytes:
+    """Normalize only an exact pretty-printed top-level freshness line."""
+    return _FETCHED_AT_LINE.sub(
+        b'  "fetched_at": "<normalized>",',
+        chunk,
+        count=1,
+    )
+
+
+def _is_codex_atomic_write_temp(name: str) -> bool:
+    """Return whether a name has Codex's exact atomic-write temporary form."""
+    return _CODEX_ATOMIC_WRITE_TEMP.fullmatch(name) is not None
+
+
+def _stable_entry_generation(
+    info: os.stat_result,
+    *,
+    include_size: bool,
+) -> str:
+    """Identify metadata entries without volatile inode and timestamp fields."""
+    values = (info.st_dev, info.st_mode)
+    if include_size:
+        values += (info.st_size,)
+    return ":".join(
+        str(value)
+        for value in values
+    )
 
 
 def _require_unchanged_path(

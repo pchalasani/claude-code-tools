@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +36,7 @@ def build_question_record(
                 f"{MAX_THREAD_ID_LENGTH} characters"
             )
     return {
+        "message_id": secrets.token_hex(16),
         "timestamp": _timestamp(),
         "type": "question",
         "anchor_id": _required_text(
@@ -52,6 +54,7 @@ def build_signal_record(data: dict[str, Any]) -> dict[str, str | None]:
     anchor = _required_text(data, "anchor_id", MAX_ANCHOR_LENGTH)
     if "label" in data or "text" in data:
         return {
+            "message_id": secrets.token_hex(16),
             "timestamp": _timestamp(),
             "type": "question",
             "anchor_id": anchor,

@@ -570,13 +570,22 @@ def _helper_restart_reason(
 
 
 def _require_unchanged_plugin_snapshot(
-    paths: ServerPaths,
-    expected: _PluginSnapshot,
-    operation: str,
+    paths: ServerPaths, expected: _PluginSnapshot, operation: str,
     codex_options: Sequence[str] = (),
 ) -> None:
     """Reject a lifecycle decision made across a plugin input change."""
-    if _plugin_configuration_snapshot(paths, codex_options) != expected:
+    current: _PluginSnapshot
+    for attempt in range(codex_server_retry.PLUGIN_SNAPSHOT_ATTEMPTS):
+        try:
+            current = _plugin_configuration_snapshot(paths, codex_options)
+            break
+        except codex_server_retry.PluginSnapshotChangedError as exc:
+            if attempt + 1 >= codex_server_retry.PLUGIN_SNAPSHOT_ATTEMPTS:
+                raise CodexServerError(
+                    "Codex plugin updates did not settle during configuration scan"
+                ) from exc
+            time.sleep(codex_server_retry.PLUGIN_SNAPSHOT_BACKOFF_SECONDS[attempt])
+    if current != expected:
         raise codex_server_retry.PluginSnapshotChangedError(
             "the Codex plugin or marketplace snapshot changed during "
             f"{operation}; retry after plugin updates finish"
@@ -594,10 +603,7 @@ def _certify_helper_boundary(
 ) -> tuple[OwnedServer, ServerProbe]:
     """Fail closed unless the helper is fully certified at return time."""
     _require_unchanged_plugin_snapshot(
-        paths,
-        plugin_snapshot,
-        operation,
-        codex_options,
+        paths, plugin_snapshot, operation, codex_options
     )
     current = _read_state(paths)
     if current is None or not _same_server_launch(expected, current):
@@ -869,10 +875,7 @@ def ensure_server(
                     "app-server socket is not owned by its supervised worker"
                 )
             _require_unchanged_plugin_snapshot(
-                paths,
-                plugin_snapshot,
-                "app-server startup",
-                codex_options,
+                paths, plugin_snapshot, "app-server startup", codex_options
             )
             if not _wait_for_listener_ownership(current, paths):
                 raise CodexServerError(

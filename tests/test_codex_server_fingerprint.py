@@ -103,6 +103,211 @@ def test_plugin_regular_file_content_is_hashed_when_metadata_matches(
     assert _plugin_configuration_snapshot(paths).fingerprint != before.fingerprint
 
 
+def test_same_content_remote_install_metadata_replacement_is_stable(
+    tmp_path: Path,
+) -> None:
+    """Volatile metadata identity does not change a completed snapshot."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    metadata = (
+        paths.codex_home
+        / "plugins/example/.codex-remote-plugin-install.json"
+    )
+    replacement = tmp_path / "replacement.json"
+    metadata.parent.mkdir(parents=True)
+    content = '{"version":1}\n'
+    metadata.write_text(content, encoding="utf-8")
+    replacement.write_text(content, encoding="utf-8")
+    before = _plugin_configuration_snapshot(paths)
+    replacement.replace(metadata)
+
+    assert _plugin_configuration_snapshot(paths) == before
+
+
+def test_remote_install_metadata_content_change_updates_fingerprint(
+    tmp_path: Path,
+) -> None:
+    """Remote-install metadata content remains a fingerprint input."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    metadata = (
+        paths.codex_home
+        / "plugins/example/.codex-remote-plugin-install.json"
+    )
+    replacement = tmp_path / "replacement.json"
+    metadata.parent.mkdir(parents=True)
+    metadata.write_text('{"version":1}\n', encoding="utf-8")
+    replacement.write_text('{"version":2}\n', encoding="utf-8")
+    before = _plugin_configuration_snapshot(paths)
+    replacement.replace(metadata)
+
+    assert _plugin_configuration_snapshot(paths).fingerprint != before.fingerprint
+
+
+def test_same_content_ordinary_plugin_replacement_remains_detectable(
+    tmp_path: Path,
+) -> None:
+    """Ordinary plugin files retain replacement-sensitive snapshot identity."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    artifact = paths.codex_home / "plugins/example/plugin.txt"
+    replacement = tmp_path / "replacement.txt"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("same content\n", encoding="utf-8")
+    replacement.write_text("same content\n", encoding="utf-8")
+    before = _plugin_configuration_snapshot(paths)
+    replacement.replace(artifact)
+
+    after = _plugin_configuration_snapshot(paths)
+
+    assert after.fingerprint != before.fingerprint
+    assert after.generation != before.generation
+
+
+def test_codex_temp_file_in_metadata_directory_is_ignored(
+    tmp_path: Path,
+) -> None:
+    """A Codex atomic-write temporary does not change a completed snapshot."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    plugin = paths.codex_home / "plugins/example"
+    plugin.mkdir(parents=True)
+    plugin.joinpath(".codex-remote-plugin-install.json").write_text(
+        '{"version":1}\n',
+        encoding="utf-8",
+    )
+    before = _plugin_configuration_snapshot(paths)
+    plugin.joinpath(".tmpF3miTg").write_text("transient\n", encoding="utf-8")
+
+    assert _plugin_configuration_snapshot(paths) == before
+
+
+def test_codex_temp_file_outside_metadata_directory_is_detectable(
+    tmp_path: Path,
+) -> None:
+    """A matching name remains an input outside an install metadata directory."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    plugin = paths.codex_home / "plugins/example"
+    plugin.mkdir(parents=True)
+    before = _plugin_configuration_snapshot(paths)
+    plugin.joinpath(".tmp26kciG").write_text("ordinary\n", encoding="utf-8")
+
+    after = _plugin_configuration_snapshot(paths)
+
+    assert after.fingerprint != before.fingerprint
+    assert after.generation != before.generation
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        ".tmpF3miT",
+        ".tmpF3miTg7",
+        ".tmpF3miT-",
+        ".TmpF3miTg",
+    ],
+)
+def test_codex_temp_near_miss_in_metadata_directory_is_detectable(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    """Only the exact Codex temporary filename form is omitted."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    plugin = paths.codex_home / "plugins/example"
+    plugin.mkdir(parents=True)
+    plugin.joinpath(".codex-remote-plugin-install.json").write_text(
+        '{}\n',
+        encoding="utf-8",
+    )
+    before = _plugin_configuration_snapshot(paths)
+    plugin.joinpath(name).write_text("ordinary\n", encoding="utf-8")
+
+    after = _plugin_configuration_snapshot(paths)
+
+    assert after.fingerprint != before.fingerprint
+    assert after.generation != before.generation
+
+
+def _write_remote_catalog(
+    path: Path,
+    fetched_at: str,
+    plugin_name: str = "example",
+) -> None:
+    """Write a representative pretty-printed remote plugin catalog."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "{\n"
+        '  "schema_version": 1,\n'
+        f'  "fetched_at": "{fetched_at}",\n'
+        '  "plugins": [\n'
+        f'    {{"name": "{plugin_name}"}}\n'
+        "  ]\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+
+def test_remote_catalog_timestamp_only_atomic_rewrite_is_stable(
+    tmp_path: Path,
+) -> None:
+    """Catalog freshness and replacement identity do not change a snapshot."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    catalog = paths.codex_home / "cache/remote_plugin_catalog/catalog.json"
+    replacement = tmp_path / "replacement.json"
+    _write_remote_catalog(catalog, "2026-08-05T00:58:19.363913Z")
+    _write_remote_catalog(replacement, "2026-08-05T00:58:33Z")
+    before = _plugin_configuration_snapshot(paths)
+    replacement.replace(catalog)
+
+    assert _plugin_configuration_snapshot(paths) == before
+
+
+def test_remote_catalog_plugin_change_updates_fingerprint(tmp_path: Path) -> None:
+    """Real catalog plugin content remains a fingerprint input."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    catalog = paths.codex_home / "cache/remote_plugin_catalog/catalog.json"
+    replacement = tmp_path / "replacement.json"
+    _write_remote_catalog(catalog, "2026-08-05T00:58:19Z")
+    _write_remote_catalog(replacement, "2026-08-05T00:58:33Z", "changed")
+    before = _plugin_configuration_snapshot(paths)
+    replacement.replace(catalog)
+
+    assert _plugin_configuration_snapshot(paths).fingerprint != before.fingerprint
+
+
+def test_codex_temp_file_in_remote_catalog_is_ignored(tmp_path: Path) -> None:
+    """An exact Codex temporary name is omitted in the catalog directory."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    catalog_dir = paths.codex_home / "cache/remote_plugin_catalog"
+    _write_remote_catalog(catalog_dir / "catalog.json", "2026-08-05T00:58:19Z")
+    before = _plugin_configuration_snapshot(paths)
+    catalog_dir.joinpath(".tmpzjtMQ2").write_text("partial", encoding="utf-8")
+
+    assert _plugin_configuration_snapshot(paths) == before
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        Path(".tmpzjtMQ"),
+        Path("nested/.tmpzjtMQ2"),
+    ],
+)
+def test_catalog_temp_near_or_outside_scope_is_detectable(
+    tmp_path: Path,
+    relative: Path,
+) -> None:
+    """Near-miss and nested temporary names retain ordinary semantics."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    catalog_dir = paths.codex_home / "cache/remote_plugin_catalog"
+    _write_remote_catalog(catalog_dir / "catalog.json", "2026-08-05T00:58:19Z")
+    before = _plugin_configuration_snapshot(paths)
+    artifact = catalog_dir / relative
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text("ordinary", encoding="utf-8")
+
+    after = _plugin_configuration_snapshot(paths)
+
+    assert after.fingerprint != before.fingerprint
+    assert after.generation != before.generation
+
+
 def test_atomic_configuration_replacement_is_a_retryable_race(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

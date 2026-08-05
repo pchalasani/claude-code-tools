@@ -1,7 +1,18 @@
 {
+  "helper_inputs": {
+    "package-lock.json": "b3c7e8d18686a3b2bf8dcd00dbb4b27ca1b31d732df899fb07fbf2648b829443",
+    "package.json": "9e7e79a9b060a57947784e3e632afbebde8610ba56ca9a9fd16e546bcd626e02",
+    "src/app-server-client.ts": "2f2e7ffd9d765ac481ccb890dea7771f3df61e0258a6245b510eecd1887974a9",
+    "src/message-envelope.ts": "eb0965fdb2ee88e2d4549c66d09dfe29a5905fce8467b6da753a3fdcdcf8b069",
+    "src/thread-message-delivery.ts": "926cabfcd619ec808826946bd454384591acb60770fbf9c7e5374198025b0148",
+    "src/utils.ts": "4fb1f1ca19d90a0c12d8373bbe5dd9c19e4e81e50218f67ee6bd39ca181161f5",
+    "src/visual-brief-codex.ts": "2951046b1018493a948f52114905436bc6b0fc3f05675e1c572335a5267a8a6e",
+    "tsconfig.json": "0a78663a218ed8f9fe3cf5810a62a0d68e008721b47f2ebdaa1bf7a58d87bf05"
+  },
   "outputs": {
+    "visual-brief-codex.mjs": "6c70f8accd699b587605b508456c7f608fab7b2ba95ad39d11c8a4a0ebe5f0d5",
     "visual-brief.css": "267bfc34aa26606e4fe1f0b60aa307fc720dce373fb6d9971285365541a34b55",
     "visual-brief.js": "0fa3ca0904da42d1e47c2177fae2faaf09e4a63d4c8ef0668631ee5055041aae"
   },
-  "sources": "307b3d400436e3e59f14efc230624091d3e8f9fdd0d11a62088ab3c696649a35"
+  "sources": "724e672402d1911a90eedcc1fa3fe69752c99faf8f54a2579659cb7382f32d55"
 }

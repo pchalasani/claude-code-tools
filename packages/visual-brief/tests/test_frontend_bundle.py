@@ -8,6 +8,8 @@ suite loudly rather than quietly reaching the human's browser.
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import re
 import shutil
 import subprocess
@@ -32,7 +34,9 @@ from visual_brief.render.assets import (
 )
 
 PACKAGE_ROOT = Path(__file__).parents[1]
+REPOSITORY_ROOT = PACKAGE_ROOT.parents[1]
 STAMP_TOOL = PACKAGE_ROOT / "tools" / "frontend_stamp.py"
+VITE_CONFIG = PACKAGE_ROOT / "frontend" / "vite.config.ts"
 STATIC_DIR = PACKAGE_ROOT / "src" / "visual_brief" / "static"
 FONT_LICENSE = (
     PACKAGE_ROOT
@@ -68,13 +72,13 @@ def test_committed_bundle_matches_the_front_end_sources() -> None:
         pytest.fail(str(error))
 
 
-def test_bundle_is_two_files_with_stable_names() -> None:
-    """Keep exactly one script and one stylesheet, both unhashed."""
+def test_bundled_assets_have_stable_names() -> None:
+    """Keep the browser assets and Codex helper unhashed and explicit."""
     emitted = sorted(
         path.name for path in STATIC_DIR.iterdir() if path.is_file()
     )
 
-    assert emitted == [STYLE_NAME, SCRIPT_NAME]
+    assert emitted == ["visual-brief-codex.mjs", STYLE_NAME, SCRIPT_NAME]
 
 
 def test_the_local_display_font_is_inlined_and_carries_its_license() -> None:
@@ -108,8 +112,157 @@ def test_the_shipped_typography_has_one_deliberate_scale() -> None:
     assert "--font-utility:" not in style
 
 
-def test_the_stamp_survives_a_bare_vite_build() -> None:
-    """Keep the staleness gate outside the directory the build empties."""
+def test_vite_preserves_non_frontend_static_artifacts() -> None:
+    """Keep a front-end rebuild from deleting the separately built bridge."""
+    config = VITE_CONFIG.read_text(encoding="utf-8")
+
+    assert re.search(r"\bemptyOutDir:\s*false\b", config)
+
+
+def test_the_stamp_fingerprints_and_requires_the_codex_bridge(
+    tmp_path: Path,
+) -> None:
+    """Make an altered or missing Codex bridge fail the bundle gate."""
+    stamp_tool = _load_stamp_tool()
+    static = tmp_path / "static"
+    static.mkdir()
+    for name in stamp_tool.BUNDLE_NAMES:
+        (static / name).write_text("built\n")
+    original = stamp_tool.output_fingerprints(static)
+
+    assert "visual-brief-codex.mjs" in stamp_tool.BUNDLE_NAMES
+    helper = static / "visual-brief-codex.mjs"
+    helper.write_text("altered\n")
+    assert stamp_tool.output_fingerprints(static) != original
+
+    helper.unlink()
+    with pytest.raises(stamp_tool.StaleBundleError, match="visual-brief-codex"):
+        stamp_tool.output_fingerprints(static)
+
+
+def test_the_stamp_rejects_an_obsolete_static_artifact(tmp_path: Path) -> None:
+    """Do not let a preserved old build output enter the package unnoticed."""
+    stamp_tool = _load_stamp_tool()
+    static = tmp_path / "static"
+    static.mkdir()
+    for name in stamp_tool.BUNDLE_NAMES:
+        (static / name).write_text("built\n")
+    (static / "obsolete-chunk.js").write_text("old output\n")
+
+    with pytest.raises(stamp_tool.StaleBundleError, match="obsolete-chunk.js"):
+        stamp_tool.output_fingerprints(static)
+
+
+def test_a_codex_helper_source_change_declares_the_stamp_stale(
+    tmp_path: Path,
+) -> None:
+    """Fingerprint the TypeScript inputs that produced the Codex helper."""
+    stamp_tool = _load_stamp_tool()
+    frontend = tmp_path / "frontend"
+    _write_frontend(frontend)
+    static = tmp_path / "static"
+    static.mkdir()
+    for name in stamp_tool.BUNDLE_NAMES:
+        (static / name).write_text("built\n")
+    metadata = tmp_path / "helper-meta.json"
+    helper = _write_helper_metadata(tmp_path, metadata)
+    source = helper / "src" / "visual-brief-codex.ts"
+    stamp_path = tmp_path / "stamp.json"
+    stamp_tool.write_stamp(
+        frontend,
+        static,
+        stamp_path,
+        helper_metadata_path=metadata,
+        helper_dir=helper,
+    )
+    stamp_tool.check_stamp(frontend, static, stamp_path, helper)
+
+    source.write_text("export const helper = 2;\n")
+
+    with pytest.raises(stamp_tool.StaleBundleError, match="helper build inputs"):
+        stamp_tool.check_stamp(frontend, static, stamp_path, helper)
+
+
+@pytest.mark.parametrize(
+    "build_input",
+    ("package.json", "package-lock.json", "tsconfig.json"),
+)
+def test_a_codex_helper_configuration_change_declares_the_stamp_stale(
+    tmp_path: Path,
+    build_input: str,
+) -> None:
+    """Fingerprint helper configuration that can alter emitted bytes."""
+    stamp_tool = _load_stamp_tool()
+    frontend = tmp_path / "frontend"
+    _write_frontend(frontend)
+    static = tmp_path / "static"
+    static.mkdir()
+    for name in stamp_tool.BUNDLE_NAMES:
+        (static / name).write_text("built\n")
+    metadata = tmp_path / "helper-meta.json"
+    helper = _write_helper_metadata(tmp_path, metadata)
+    stamp_path = tmp_path / "stamp.json"
+    stamp_tool.write_stamp(
+        frontend,
+        static,
+        stamp_path,
+        helper_metadata_path=metadata,
+        helper_dir=helper,
+    )
+    stamp_tool.check_stamp(frontend, static, stamp_path, helper)
+
+    (helper / build_input).write_text(f"changed {build_input}\n")
+
+    with pytest.raises(stamp_tool.StaleBundleError, match="helper build inputs"):
+        stamp_tool.check_stamp(frontend, static, stamp_path, helper)
+
+
+def test_standard_frontend_target_rebuilds_the_codex_helper(
+    tmp_path: Path,
+) -> None:
+    """Exercise the Make target and observe its helper build invocation."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    npm_log = tmp_path / "npm.log"
+    npm = bin_dir / "npm"
+    npm.write_text(
+        '#!/bin/sh\nprintf \'%s\\t%s\\n\' "$PWD" "$*" >> "$NPM_LOG"\n',
+    )
+    npm.chmod(0o755)
+    stamp = tmp_path / "stamp.py"
+    stamp.write_text("raise SystemExit(0)\n")
+    environment = os.environ.copy()
+    environment["NPM_LOG"] = str(npm_log)
+    environment["PATH"] = f"{bin_dir}{os.pathsep}{environment['PATH']}"
+
+    subprocess.run(
+        [
+            "make",
+            "visual-brief-frontend",
+            f"VISUAL_BRIEF_STAMP={stamp}",
+        ],
+        cwd=REPOSITORY_ROOT,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    invocations = [
+        line.split("\t", 1) for line in npm_log.read_text().splitlines()
+    ]
+    helper_dir = REPOSITORY_ROOT / "plugins" / "dynamic-workflow"
+    helper_commands = [
+        args for cwd, args in invocations if Path(cwd) == helper_dir
+    ]
+    assert any(
+        args.startswith("run build:visual-brief -- --metafile=")
+        for args in helper_commands
+    )
+
+
+def test_the_stamp_is_not_a_shipped_browser_artifact() -> None:
+    """Keep build metadata outside the directory packaged for the browser."""
     stamp_tool = _load_stamp_tool()
 
     assert stamp_tool.STAMP_PATH.is_file()
@@ -127,6 +280,29 @@ def _write_frontend(root: Path) -> None:
     (root / "src" / "main.tsx").write_text("export const main = 1;\n")
     (root / "package.json").write_text('{"name": "sample"}\n')
     (root / ".gitignore").write_text(".DS_Store\nnode_modules/\n")
+
+
+def _write_helper_metadata(root: Path, metadata: Path) -> Path:
+    """Lay out a minimal helper source and matching esbuild metadata.
+
+    Args:
+        root: Directory in which to create the helper project.
+        metadata: File in which to write the dependency metadata.
+
+    Returns:
+        The helper project root.
+    """
+    helper = root / "helper"
+    source = helper / "src" / "visual-brief-codex.ts"
+    source.parent.mkdir(parents=True)
+    source.write_text("export const helper = 1;\n")
+    (helper / "package.json").write_text('{"scripts": {"build": "esbuild"}}\n')
+    (helper / "package-lock.json").write_text('{"lockfileVersion": 3}\n')
+    (helper / "tsconfig.json").write_text('{"compilerOptions": {}}\n')
+    metadata.write_text(
+        json.dumps({"inputs": {"src/visual-brief-codex.ts": {}}}),
+    )
+    return helper
 
 
 @needs_git
@@ -202,8 +378,16 @@ def test_writing_a_stamp_names_the_sources_git_has_never_seen(
     for name in stamp_tool.BUNDLE_NAMES:
         (static / name).write_text("built\n")
     (frontend / "src" / "scratch.ts").write_text("export const scratch = 1;\n")
+    metadata = tmp_path / "helper-meta.json"
+    helper = _write_helper_metadata(tmp_path, metadata)
 
-    stamp_tool.write_stamp(frontend, static, tmp_path / "stamp.json")
+    stamp_tool.write_stamp(
+        frontend,
+        static,
+        tmp_path / "stamp.json",
+        helper_metadata_path=metadata,
+        helper_dir=helper,
+    )
 
     warning = capsys.readouterr().err
     assert "src/scratch.ts" in warning

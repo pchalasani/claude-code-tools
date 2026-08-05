@@ -152,15 +152,20 @@ message while no agent is listening.
 
 ```text
 Monitor(
-  command: "cd <RUN_DIR> && touch questions.jsonl && tail -n 0 -F questions.jsonl",
+  command: "visual-brief watch --agent claude --run <RUN>",
   description: "questions from the visual-brief page",
   persistent: true,
 )
 ```
 
-Use `persistent: true` and `tail -n 0`. Re-arm after a session boundary. Stop
-an existing watcher before starting another one, so two watchers do not report
-the same line.
+For a Codex session launched through `codex-dynamic`, use `--agent codex`
+instead. The bridge reads `CODEX_THREAD_ID` and
+`CCTOOLS_CODEX_CALLBACK_ENDPOINT`; explicit `--thread-id` and `--endpoint`
+options support manual local setups. The default Codex sandbox cannot access
+the local App Server socket, so obtain explicit approval to run only this
+trusted watcher outside the sandbox; this does not change worker sandboxes.
+Re-arm after a session boundary. Stop an existing watcher before starting
+another one, so two watchers do not report the same line.
 
 Fold and answer through the CLI:
 

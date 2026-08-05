@@ -80,6 +80,18 @@ export interface ThreadResumeResult {
   thread: AppServerThread;
 }
 
+export interface AppServerClientInfo {
+  name: string;
+  title: string;
+  version: string;
+}
+
+const DEFAULT_CLIENT_INFO: AppServerClientInfo = {
+  name: "cctools_dynamic_workflow",
+  title: "Dynamic Workflow Callback",
+  version: "0.2.0",
+};
+
 export class AppServerClient {
   private readonly connection: UnixWebSocketConnection;
   private readonly notifications: QueuedNotification[] = [];
@@ -104,6 +116,7 @@ export class AppServerClient {
   static async connect(
     endpoint: string,
     timeoutMs = REQUEST_TIMEOUT_MS,
+    clientInfo: AppServerClientInfo = DEFAULT_CLIENT_INFO,
   ): Promise<AppServerClient> {
     const deadline = Date.now() + timeoutMs;
     const socketPath = socketPathFromEndpoint(endpoint);
@@ -128,11 +141,7 @@ export class AppServerClient {
               "turn/plan/updated",
             ],
           },
-          clientInfo: {
-            name: "cctools_dynamic_workflow",
-            title: "Dynamic Workflow Callback",
-            version: "0.2.0",
-          },
+          clientInfo,
         },
         Math.max(1, deadline - Date.now()),
       );
@@ -378,8 +387,8 @@ function sandboxSocketError(socketDirectory: string): Error {
   return new Error(
     "The default Codex sandbox blocks the App Server callback socket. " +
       "Obtain explicit approval to run only the trusted dynamic-workflow " +
-      "launcher and notifier outside the sandbox, then retry. Workers keep " +
-      `their declared Codex sandboxes. Blocked socket: ${socketDirectory}`,
+      "launcher, notifier, or Visual Brief watcher outside the sandbox, then " +
+      `retry. Worker sandboxes remain unchanged. Blocked socket: ${socketDirectory}`,
   );
 }
 
