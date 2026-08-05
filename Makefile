@@ -1,4 +1,4 @@
-.PHONY: install release patch minor major dev-install help clean publish all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply update-homebrew docs-dev docs-build docs-preview
+.PHONY: install install-gdocs node-ui-deps release patch minor major dev-install help clean publish all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply update-homebrew docs-dev docs-build docs-preview voxtype-version voxtype-test voxtype-install voxtype-build voxtype-release voxtype-publish voxtype-all voxtype-all-patch voxtype-all-minor voxtype-all-major
 
 GIT_PRIMARY_WORKTREE := $(realpath $(shell git rev-parse \
 	--path-format=absolute --git-common-dir)/..)
@@ -8,6 +8,7 @@ help:
 	@echo "Available commands:"
 	@echo "  make install      - Install in editable mode (for development)"
 	@echo "  make dev-install  - Install with dev dependencies (includes commitizen)"
+	@echo "  make node-ui-deps - Install node_ui/ npm deps (needed by aichat menus)"
 	@echo "  make release      - Bump patch version and install globally"
 	@echo "  make patch        - Bump patch version (0.0.X) and install"
 	@echo "  make minor        - Bump minor version (0.X.0) and install"
@@ -32,16 +33,34 @@ help:
 	@echo "  make fix-session-metadata-apply - Actually fix sessionId mismatches"
 	@echo "  make delete-helper-sessions       - Find helper sessions to delete (dry-run)"
 	@echo "  make delete-helper-sessions-apply - Actually delete helper sessions"
+	@echo "  make voxtype-test    - Run the voxtype test suite"
+	@echo "  make voxtype-install - Install voxtype tool in editable mode"
+	@echo "  make voxtype-build   - Build voxtype wheel + sdist into dist/"
+	@echo "  make voxtype-release [BUMP=patch|minor|major] - Bump, tag voxtype-vX.Y.Z, push, GitHub release, build"
+	@echo "  make voxtype-all-patch / -minor / -major - Bump that part, push, GitHub release, build (then: make voxtype-publish)"
+	@echo "  make voxtype-publish - Publish dist/voxtype-* to PyPI"
+	@echo "  make voxtype-all [BUMP=...] - voxtype-release + voxtype-publish in one shot"
 
-install:
+node-ui-deps:
+	@if command -v npm >/dev/null 2>&1; then \
+		echo "[node-ui] Installing Node UI dependencies into node_ui/node_modules..."; \
+		npm ci --prefix node_ui --omit=dev --no-audit --no-fund || \
+			npm install --prefix node_ui --omit=dev --no-audit --no-fund; \
+	else \
+		echo "⚠️  [node-ui] npm not found - aichat's interactive menus will not run."; \
+		echo "   Install Node.js/npm, then run: make node-ui-deps"; \
+	fi
+
+install: node-ui-deps
 	uv tool install --force -e .
-	@echo "[node-ui] Note: Node-based alt UI uses node_ui/menu.js (no build step)."
-	@echo "[node-ui] If you haven't yet: cd node_ui && npm install"
+	@echo "[node-ui] Node-based UI runs from node_ui/menu.js (no build step)."
 	@if command -v cargo >/dev/null 2>&1; then \
 		echo "Building and installing lmsh..."; \
 		cd lmsh && cargo build --release; \
 		mkdir -p ~/.cargo/bin; \
-		cp target/release/lmsh ~/.cargo/bin/; \
+		cp target/release/lmsh ~/.cargo/bin/.lmsh.new; \
+		chmod 755 ~/.cargo/bin/.lmsh.new; \
+		mv -f ~/.cargo/bin/.lmsh.new ~/.cargo/bin/lmsh; \
 		echo "lmsh installed to ~/.cargo/bin/lmsh"; \
 		if ! echo "$$PATH" | grep -q ".cargo/bin"; then \
 			echo "⚠️  Add ~/.cargo/bin to your PATH if not already there"; \
@@ -51,10 +70,10 @@ install:
 		echo "To install lmsh later, run: make lmsh-install"; \
 	fi
 
-install-gdocs:
+install-gdocs: node-ui-deps
 	uv tool install --force -e ".[gdocs]"
 
-dev-install:
+dev-install: node-ui-deps
 	uv pip install -e ".[dev]"
 
 release: patch
@@ -160,7 +179,10 @@ lmsh:
 lmsh-install: lmsh
 	@echo "Installing lmsh to ~/.cargo/bin..."
 	@mkdir -p ~/.cargo/bin
-	@cp lmsh/target/release/lmsh ~/.cargo/bin/
+	@# Same atomic replace as aichat-search: see the note there.
+	@cp lmsh/target/release/lmsh ~/.cargo/bin/.lmsh.new
+	@chmod 755 ~/.cargo/bin/.lmsh.new
+	@mv -f ~/.cargo/bin/.lmsh.new ~/.cargo/bin/lmsh
 	@echo "lmsh installed to ~/.cargo/bin/lmsh"
 	@if ! echo "$$PATH" | grep -q ".cargo/bin"; then \
 		echo "⚠️  Add ~/.cargo/bin to your PATH if not already there"; \
@@ -185,7 +207,12 @@ aichat-search:
 aichat-search-install: aichat-search
 	@echo "Installing aichat-search to ~/.cargo/bin..."
 	@mkdir -p ~/.cargo/bin
-	@cp rust-search-ui/target/release/aichat-search ~/.cargo/bin/
+	@# Replace via a temp file + mv, not cp: overwriting a Mach-O binary in
+	@# place leaves macOS holding a stale code signature for that inode, and
+	@# the next exec is SIGKILLed ("killed: 9"). mv swaps in a fresh inode.
+	@cp rust-search-ui/target/release/aichat-search ~/.cargo/bin/.aichat-search.new
+	@chmod 755 ~/.cargo/bin/.aichat-search.new
+	@mv -f ~/.cargo/bin/.aichat-search.new ~/.cargo/bin/aichat-search
 	@echo "aichat-search installed to ~/.cargo/bin/aichat-search"
 	@if ! echo "$$PATH" | grep -q ".cargo/bin"; then \
 		echo "⚠️  Add ~/.cargo/bin to your PATH if not already there"; \
@@ -269,3 +296,97 @@ docs-build:
 docs-preview:
 	@echo "Previewing docs..."
 	@cd docs-site && npm run preview
+
+# ---------------------------------------------------------------------------
+# voxtype (packages/voxtype) — standalone voice-dictation package
+# ---------------------------------------------------------------------------
+
+VOXTYPE_DIR := packages/voxtype
+VOXTYPE_PYPROJECT := $(VOXTYPE_DIR)/pyproject.toml
+
+define VOXTYPE_BUMP_PY
+import pathlib, re, sys
+
+part = sys.argv[1]
+path = pathlib.Path("packages/voxtype/pyproject.toml")
+text = path.read_text()
+m = re.search(r'^version = "(\d+)\.(\d+)\.(\d+)"', text, re.M)
+major, minor, patch = map(int, m.groups())
+if part == "major":
+    major, minor, patch = major + 1, 0, 0
+elif part == "minor":
+    minor, patch = minor + 1, 0
+else:
+    patch += 1
+new = f"{major}.{minor}.{patch}"
+path.write_text(text[: m.start()] + f'version = "{new}"' + text[m.end():])
+print(new)
+endef
+export VOXTYPE_BUMP_PY
+
+voxtype-version:
+	@grep '^version' $(VOXTYPE_PYPROJECT) | head -1 | cut -d'"' -f2
+
+voxtype-test:
+	uv run --package voxtype pytest $(VOXTYPE_DIR)/tests -q
+
+voxtype-install:
+	uv tool install --force -e $(VOXTYPE_DIR)
+
+voxtype-build:
+	@echo "Cleaning old voxtype builds..."
+	rm -f dist/voxtype-*
+	@echo "Building voxtype..."
+	uv build --package voxtype
+	@echo "Build complete! Ready for: make voxtype-publish"
+
+# Bump (BUMP=patch|minor|major, default patch), commit, tag voxtype-vX.Y.Z,
+# push, create GitHub release, build. Then: make voxtype-publish
+voxtype-release: voxtype-test
+	@BUMP_TYPE=$${BUMP:-patch}; \
+	OLD=$$(grep '^version' $(VOXTYPE_PYPROJECT) | head -1 | cut -d'"' -f2); \
+	NEW=$$(python3 -c "$$VOXTYPE_BUMP_PY" $$BUMP_TYPE); \
+	echo "Bumping voxtype $$OLD -> $$NEW ($$BUMP_TYPE)..."; \
+	uv lock; \
+	git add $(VOXTYPE_PYPROJECT) uv.lock; \
+	git commit -m "bump: voxtype $$OLD → $$NEW"; \
+	git tag "voxtype-v$$NEW"; \
+	echo "Pushing to GitHub..."; \
+	git push && git push --tags; \
+	echo "Creating GitHub release..."; \
+	gh release create "voxtype-v$$NEW" --title "voxtype v$$NEW" \
+		--notes "voxtype $$NEW — install with: uv tool install voxtype" \
+		|| echo "Release voxtype-v$$NEW already exists"
+	$(MAKE) voxtype-build
+
+voxtype-publish:
+	@if ! ls dist/voxtype-*.whl dist/voxtype-*.tar.gz >/dev/null 2>&1; then \
+		echo "Error: dist/ must contain voxtype wheel and sdist (run make voxtype-build)" >&2; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(PYPI_ENV_FILE)" ]; then \
+		echo "Error: PyPI environment file not found: $(PYPI_ENV_FILE)" >&2; \
+		exit 1; \
+	fi
+	@uv run --no-sync --env-file "$(PYPI_ENV_FILE)" -- sh -eu -c '\
+		if [ -z "$${PYPI_TOKEN:-}" ]; then \
+			echo "Error: PYPI_TOKEN is not defined in $(PYPI_ENV_FILE)" >&2; \
+			exit 1; \
+		fi; \
+		UV_PUBLISH_TOKEN="$$PYPI_TOKEN" uv publish dist/voxtype-*'
+
+# One-shot: bump + tag + push + GitHub release + build + publish to PyPI
+voxtype-all: voxtype-release voxtype-publish
+	@echo "voxtype released and published!"
+
+# Named bump aliases mirroring the umbrella's all-patch/minor/major:
+# bump that version part, tag, push, GitHub release, build — then run
+# `make voxtype-publish` to upload (matches `make all-patch && make publish`).
+voxtype-all-patch:
+	@$(MAKE) voxtype-release BUMP=patch
+
+voxtype-all-minor:
+	@$(MAKE) voxtype-release BUMP=minor
+
+voxtype-all-major:
+	@$(MAKE) voxtype-release BUMP=major

@@ -76,6 +76,11 @@ from claude_code_tools.session_utils import (
 # rollout's provenance is visible in the file itself.
 PORT_ORIGINATOR = "aichat_port"
 
+# Codex persists the selected model provider in every native rollout.  The
+# built-in OpenAI provider is also Codex's documented default, and unlike a
+# custom provider it is available without depending on the user's config.
+CODEX_MODEL_PROVIDER = "openai"
+
 # Claude assistant content block types that are dropped entirely.
 _THINKING_BLOCK_TYPES = frozenset({"thinking", "redacted_thinking"})
 
@@ -701,6 +706,7 @@ def port_claude_session_to_codex(
         "cwd": cwd,
         "originator": PORT_ORIGINATOR,
         "cli_version": "aichat-port",
+        "model_provider": CODEX_MODEL_PROVIDER,
     }
     if meta["branch"]:
         payload["git"] = {"branch": meta["branch"]}

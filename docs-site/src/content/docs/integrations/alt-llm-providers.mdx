@@ -3,7 +3,7 @@ title: "Alternative LLM Providers"
 description: >
   Use Claude Code with open-weight LLMs via
   Anthropic-compatible API providers like Kimi K2,
-  GLM-4.5, DeepSeek, and MiniMax M2.1.
+  GLM-4.5, DeepSeek, and MiniMax M3.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
@@ -122,9 +122,9 @@ dseek -p "explain X"   # one-shot prompt
 ```
 
 </TabItem>
-<TabItem label="MiniMax M2.1">
+<TabItem label="MiniMax M3">
 
-[MiniMax M2.1](https://platform.minimax.io/docs/guides/text-ai-coding-tools)
+[MiniMax M3](https://platform.minimax.io/docs/token-plan/claude-code.md)
 from MiniMax.
 
 ```bash
@@ -132,23 +132,19 @@ ccmm() {
     (
         export ANTHROPIC_BASE_URL=https://api.minimax.io/anthropic
         export ANTHROPIC_AUTH_TOKEN=$MINIMAX_API_KEY
-        export API_TIMEOUT_MS=3000000
-        export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-        export ANTHROPIC_MODEL=MiniMax-M2.1
-        export ANTHROPIC_SMALL_FAST_MODEL=MiniMax-M2.1
-        export ANTHROPIC_DEFAULT_SONNET_MODEL=MiniMax-M2.1
-        export ANTHROPIC_DEFAULT_OPUS_MODEL=MiniMax-M2.1
-        export ANTHROPIC_DEFAULT_HAIKU_MODEL=MiniMax-M2.1
+        export CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000
+        export ANTHROPIC_MODEL='MiniMax-M3[1m]'
+        export ANTHROPIC_DEFAULT_SONNET_MODEL='MiniMax-M3[1m]'
+        export ANTHROPIC_DEFAULT_OPUS_MODEL='MiniMax-M3[1m]'
+        export ANTHROPIC_DEFAULT_HAIKU_MODEL='MiniMax-M3[1m]'
         claude "$@"
     )
 }
 ```
 
-MiniMax requires mapping all model slots to
-`MiniMax-M2.1` and setting a longer timeout
-(`API_TIMEOUT_MS`) since responses can take longer.
-Non-essential traffic is disabled to avoid
-unnecessary requests.
+MiniMax maps the main, Sonnet, Opus, and Haiku model
+slots to `MiniMax-M3[1m]`. The auto-compact threshold
+matches the model's one-million-token context window.
 
 **Usage:**
 

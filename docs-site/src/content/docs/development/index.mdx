@@ -76,13 +76,12 @@ New or modified session
 
    ```bash
    uv sync
-   cd node_ui && npm install && cd ..
    ```
 
 4. **Install in editable mode:**
 
    ```bash
-   make install              # Python (editable)
+   make install              # Python (editable) + node_ui deps
    make install-gdocs        # with Google Docs/Sheets extras
    make aichat-search-install  # Rust binary
    ```
@@ -93,6 +92,15 @@ After setup, Python changes apply immediately
 (editable mode). For Rust changes, re-run
 `make aichat-search-install`. Node.js runs directly
 from `node_ui/` -- no build step needed.
+
+Because `make install` is an *editable* install, the
+`aichat` on your PATH runs from this checkout and uses
+this checkout's `node_ui/node_modules`. A fresh clone or
+git worktree therefore needs its own copy of those npm
+packages; `make install` installs them, and
+`make node-ui-deps` installs them on their own. Without
+them, `aichat` reports which packages are missing and
+where it expected to find them instead of starting a menu.
 
 ## Starlight Docs
 

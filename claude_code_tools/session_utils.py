@@ -1485,7 +1485,12 @@ def count_user_messages(session_file: Path, agent: str) -> int:
     user_count = 0
 
     try:
-        with open(session_file, "r", encoding="utf-8") as f:
+        with open(
+            session_file,
+            "r",
+            encoding="utf-8",
+            errors="replace",
+        ) as f:
             for line in f:
                 line = line.strip()
                 if not line:

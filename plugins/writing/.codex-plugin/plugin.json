@@ -1,0 +1,22 @@
+{
+  "name": "writing",
+  "version": "1.0.0",
+  "description": "Prose-quality skills: agent-style (21 literature-backed rules for formal technical prose) and remove-ai-patterns (de-AI text using the avoid-ai-writing catalog plus a deterministic detector)",
+  "author": {
+    "name": "Prasad Chalasani"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "writing",
+    "shortDescription": "Prose-quality skills: agent-style and remove-ai-patterns",
+    "longDescription": "Two explicit-trigger skills for improving prose quality: agent-style applies 21 literature-backed rules for formal technical prose (papers, design docs, READMEs), and remove-ai-patterns removes AI-writing patterns at any register using the avoid-ai-writing catalog, voice profiles, and a deterministic Node.js detector.",
+    "developerName": "Prasad Chalasani",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Apply agent-style rules to formal technical prose",
+      "Remove AI-writing patterns with voice profiles",
+      "Deterministic AI-pattern detection (JSON audit)"
+    ],
+    "defaultPrompt": "Use $writing to de-AI this text with remove-ai-patterns, or apply agent-style rules to formal prose."
+  }
+}

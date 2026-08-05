@@ -4,6 +4,7 @@ import time
 
 import pytest
 
+from claude_code_tools import tmux_execution_helpers
 from claude_code_tools.tmux_cli_controller import TmuxCLIController
 
 
@@ -130,6 +131,19 @@ class TestCreatePane:
 class TestExecute:
     """Tests for execute method."""
 
+    @pytest.fixture(autouse=True)
+    def fixed_markers(self, monkeypatch):
+        """Pin the per-execution markers so captured-output fixtures match.
+
+        execute() generates a unique marker pair for every call, so a test
+        fixture cannot hardcode them without pinning the generator.
+        """
+        monkeypatch.setattr(
+            tmux_execution_helpers,
+            "generate_execution_markers",
+            lambda: ("__TMUX_EXEC_START_12345__", "__TMUX_EXEC_END_12345__"),
+        )
+
     @patch.object(TmuxCLIController, 'capture_pane')
     @patch.object(TmuxCLIController, 'send_keys')
     def test_execute_successful_command(self, mock_send, mock_capture):
@@ -187,3 +201,44 @@ partial output..."""
 
         with pytest.raises(ValueError, match="No target pane specified"):
             controller.execute("pwd")
+
+
+class TestListPanes:
+    """Tests for list_panes output parsing."""
+
+    @patch.object(TmuxCLIController, '_run_tmux_command')
+    @patch.object(TmuxCLIController, 'get_current_window_id')
+    def test_malformed_line_is_skipped(self, mock_window, mock_run):
+        """A line without the expected fields is skipped, not indexed into."""
+        mock_window.return_value = "@1"
+        mock_run.return_value = ("invalid", 0)
+
+        panes = TmuxCLIController().list_panes()
+
+        assert panes == []
+
+    @patch.object(TmuxCLIController, '_run_tmux_command')
+    @patch.object(TmuxCLIController, 'get_current_window_id')
+    def test_well_formed_lines_are_parsed(self, mock_window, mock_run):
+        """Complete tmux output is parsed into pane dicts."""
+        mock_window.return_value = "@1"
+        mock_run.return_value = (
+            "%1|0|title-a|1|80x24|zsh\n%2|1|title-b|0|80x24|vim", 0
+        )
+
+        panes = TmuxCLIController().list_panes()
+
+        assert [p['id'] for p in panes] == ["%1", "%2"]
+        assert panes[0]['active'] is True
+        assert panes[1]['command'] == "vim"
+
+    @patch.object(TmuxCLIController, '_run_tmux_command')
+    @patch.object(TmuxCLIController, 'get_current_window_id')
+    def test_malformed_line_does_not_drop_valid_ones(self, mock_window, mock_run):
+        """One bad line does not discard the panes around it."""
+        mock_window.return_value = "@1"
+        mock_run.return_value = ("garbage\n%2|1|title-b|0|80x24|vim", 0)
+
+        panes = TmuxCLIController().list_panes()
+
+        assert [p['id'] for p in panes] == ["%2"]

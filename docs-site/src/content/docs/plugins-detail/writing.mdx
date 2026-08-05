@@ -1,0 +1,238 @@
+---
+title: "Writing Plugin"
+description: >
+  Prose-quality skills for Claude Code and Codex:
+  agent-style rules for formal technical prose, and
+  remove-ai-patterns for de-AI-ing text with a
+  deterministic detector.
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
+<style>{`
+  table td:first-child,
+  table th:first-child {
+    white-space: nowrap;
+  }
+`}</style>
+
+The `writing` plugin bundles two skills for improving prose quality, and
+works in **both Claude Code and Codex** (this repo hosts a marketplace
+for each). Both skills are **explicit-trigger only**: they never fire on
+ordinary writing or documentation tasks, so they add no noise to normal
+sessions. You invoke them by name when you want a dedicated editing
+pass.
+
+## Skills
+
+| Skill | What It Does |
+|-------|--------------|
+| `agent-style` | 21 literature-backed rules for formal technical prose (papers, design docs, proposals, READMEs, commit messages) |
+| `remove-ai-patterns` | Remove AI-writing patterns ("AI-isms") from text at any register, with voice profiles and a deterministic detector |
+
+## Installation
+
+The plugin is published in two marketplaces in the same repo: Claude
+Code reads `.claude-plugin/marketplace.json` (marketplace name
+`cctools-plugins`), Codex reads `.agents/plugins/marketplace.json`
+(marketplace name `cctools-codex-plugins`). Add the marketplace once,
+then install:
+
+<Tabs>
+<TabItem label="Claude Code">
+
+```bash
+claude plugin marketplace add pchalasani/claude-code-tools
+claude plugin marketplace update cctools-plugins   # refresh if already added
+claude plugin install writing@cctools-plugins
+```
+
+Or run `/plugin` inside a session for the interactive browser.
+
+</TabItem>
+<TabItem label="Codex">
+
+```bash
+codex plugin marketplace add pchalasani/claude-code-tools
+codex plugin marketplace upgrade cctools-codex-plugins  # refresh if already added
+codex plugin add writing@cctools-codex-plugins
+```
+
+If you added the marketplace before this plugin was published, the
+`upgrade` step is what refreshes the cached snapshot so the plugin
+shows up.
+
+</TabItem>
+</Tabs>
+
+No further setup: the skills are self-contained. The detector only
+needs a `node` binary on PATH (no `npm install`).
+
+## Two lanes, not one
+
+The skills are complementary and deliberately kept apart:
+
+- **agent-style** is a clarity and composition ruleset for *formal*
+  technical prose: passive voice, needless words, claim calibration,
+  parallel structure, stress position, and a set of field-observed rules
+  about LLM habits (bullet overuse, dash overuse, summary closers, and so
+  on). It is based on
+  [The Elements of Agent Style](https://github.com/yzhao062/agent-style)
+  (CC BY 4.0).
+- **remove-ai-patterns** de-AIs text of *any* voice: it applies the
+  [avoid-ai-writing](https://github.com/conorbronsdon/avoid-ai-writing)
+  catalog (MIT, by Conor Bronsdon) of AI-writing tells, supports voice
+  profiles (casual / professional / technical / warm / blunt), and ships
+  a self-contained Node.js detector for machine-checkable audits.
+
+Pick one as the final gate on a given document; interleaving passes of
+both tends to churn the same sentences back and forth.
+
+## How to Use
+
+Usage is the same in Claude Code and Codex: ask for a pass by name, in
+natural language.
+
+> "Apply agent-style to this design doc."
+
+> "De-AI this blog post with remove-ai-patterns, technical voice, and
+> iterate until the detector is clean."
+
+> "Run a detect-only audit of README.md."
+
+remove-ai-patterns supports three modes (defined in its vendored
+catalog): **detect-only** (report findings, change nothing),
+**edit-in-place** (minimal rewrites at flagged spans, meaning
+preserved), and **iterate-to-convergence** (revise, re-detect, repeat
+until clean). agent-style keeps its 21 compact rules in the SKILL.md
+itself and the full rule bodies (BAD/GOOD pairs, rationale) in a
+vendored `references/RULES.md`.
+
+### As an acceptance gate in a workflow
+
+A skill is most useful as the **acceptance criterion** of a larger task:
+the agent keeps editing until the prose gate passes. Pick ONE skill as
+the final gate (interleaving both on the same document churns the same
+sentences, per the two-lanes note above); if you want both to weigh in,
+run one as a single up-front pass and the other as the looping gate.
+Paired with the
+[dynamic-workflow](/claude-code-tools/plugins-detail/dynamic-workflow/)
+plugin, the gate becomes an automatic loop. Just describe it:
+
+:::tip[Tell Claude Code]
+"Set up a dynamic workflow to draft this blog post. Do one agent-style
+pass first, then loop on remove-ai-patterns as the acceptance gate:
+re-run the detector after each revision and stop when it returns a
+scored result (not UNSCORED) with no issues, or you have completed 2
+passes (the skill's own iterate cap)."
+:::
+
+Simpler, without a workflow, you can name the gate inline on any writing
+task:
+
+:::tip[Tell Claude Code]
+"Write the release notes from this changelog, then de-AI them with
+remove-ai-patterns: iterate until the detector returns a scored result
+with no issues, or you have completed 2 passes."
+:::
+
+The deterministic detector (below) is what lets such a loop terminate on
+its own. Its convergence rule, matching the upstream skill, is to repeat
+until a scored result has no issues or the cap of 2 passes is reached (a
+rewrite plus one corrective pass). A finding that cannot be removed
+without changing intended content simply survives to the cap, so the loop
+still ends; it does not use a separate "score stopped improving"
+criterion, which could stop before that corrective pass.
+
+### The deterministic detector
+
+remove-ai-patterns includes a JSON-emitting detector that needs only a
+`node` binary. Resolve it by the skill's absolute path (the command runs
+from your working directory, so a bare relative path fails). Set that
+directory once, then reuse it:
+
+<Tabs>
+<TabItem label="Claude Code">
+
+```bash
+SKILL_DIR="${CLAUDE_PLUGIN_ROOT}/skills/remove-ai-patterns"
+node "$SKILL_DIR/scripts/detect.js" FILE
+
+# technical documentation: skip the title-case-header check (see below)
+node "$SKILL_DIR/scripts/detect.js" FILE technical
+```
+
+</TabItem>
+<TabItem label="Codex">
+
+`${CLAUDE_PLUGIN_ROOT}` is unset under Codex, so use the absolute path of
+the installed skill directory. The agent already knows it from loading
+the skill; it lives under the Codex plugin cache and ends in
+`skills/remove-ai-patterns` (the plugin root is the `writing` plugin, so
+there is no extra `plugins/writing` segment). Discover it if unsure:
+
+```bash
+SKILL_DIR="$(dirname "$(find "$HOME/.codex" -path '*/skills/remove-ai-patterns/scripts/detect.js' | head -1)")/.."
+node "$SKILL_DIR/scripts/detect.js" FILE
+node "$SKILL_DIR/scripts/detect.js" FILE technical
+```
+
+</TabItem>
+</Tabs>
+
+The optional second argument is the context mode (`general` (default),
+`technical`, `marketing`, `personal`). In this detector, `technical` has
+one concrete effect: it skips the `title-case-header` check, because Title
+Case section headings are legitimate in technical docs. It does not
+broadly relax vocabulary checks; the wider technical-prose exceptions
+(words like `robust` or `leverage`) live in the upstream skill's prose
+rules that the agent applies when rewriting, not in the detector.
+
+The detector reports an overall score, a label, a
+`document_classification`, and per-issue findings with severities and
+suggestions. For "iterate until clean" requests the agent repeats
+revise → detect using the same convergence rule as above: stop when a
+scored result has no issues, or at the 2-pass cap. One caveat: on empty,
+very short (< ~10 words), or very long (> 10,000 words) input the detector
+returns `document_classification: "UNSCORED"` with no issues, which is a
+refused scan rather than a clean document, so the loop must require a
+scored result and split or trim over-long files.
+
+## Updating the vendored catalogs
+
+Both skills derive from third-party GitHub repos, and the plugin vendors
+a **pinned snapshot** of each (rule bodies, pattern catalog, detector)
+rather than fetching at install or run time. That makes the skills work
+offline and behave identically on every machine. The exact upstream
+commit is recorded next to the vendored content:
+
+- `plugins/writing/skills/agent-style/references/UPSTREAM-PIN`
+- `plugins/writing/skills/remove-ai-patterns/upstream/UPSTREAM-PIN`
+
+**As a user**, you never touch upstream directly; you pick up refreshed
+catalogs by updating the marketplace and reinstalling the plugin:
+
+```bash
+# Claude Code
+claude plugin marketplace update cctools-plugins
+claude plugin install writing@cctools-plugins
+
+# Codex
+codex plugin marketplace upgrade cctools-codex-plugins
+codex plugin add writing@cctools-codex-plugins
+```
+
+**As a maintainer** (or in your own fork), refresh the snapshots from
+the upstream repos with:
+
+```bash
+plugins/writing/scripts/update-upstream.sh
+```
+
+The script shallow-clones both upstreams, copies the vendored files,
+and rewrites the `UPSTREAM-PIN` files. It commits nothing: review the
+diff before committing, because freshly fetched rule text is
+third-party input (check that the changes are writing-rule content, not
+new tool invocations or scope changes). Upstream licenses (CC BY 4.0
+and MIT) ship alongside the vendored files, with attribution in
+`references/NOTICE.md`.

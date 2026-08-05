@@ -47,8 +47,12 @@ session:
 
 - **Claude:** the `custom-title` recorded in the
   transcript — not the auto-generated `ai-title`.
-- **Codex:** the `title` column in the Codex
-  `threads` database.
+- **Codex:** the `thread_name` recorded in the
+  home-level `session_index.jsonl`. When a thread has
+  no explicit name, the `title` column of the Codex
+  `threads` database is used instead — that one is
+  auto-captured from your first message, not chosen
+  by you.
 
 ## Match precedence
 
@@ -117,6 +121,83 @@ and exits `0`:
 | `matched_by` | `id`, `partial-id`, `id-substring`, `name`, or `filename` |
 | `modified` | Session file mtime (ISO-8601) |
 | `archived` | Codex archived flag (`false` for Claude) |
+
+## The same lookup in other commands
+
+You rarely need to call `resolve` by hand first. The
+ordinary session commands — `info`, `export`, `copy`,
+`move`, `query`, `clone`, `rollover`, `lineage`,
+`smart-trim`, `trim`, and `resume` — accept the same
+queries directly:
+
+```bash
+# All of these name one session
+aichat move session-finder ~/Git/other-repo
+aichat info a15f9ced
+aichat lineage 88e9-43d7
+```
+
+Those commands search **both** agent homes and detect
+the agent themselves, so `--agent` there narrows the
+search rather than selecting a home. It may come
+before or after the session argument, and
+`--agent=codex` works as well as `--agent codex`.
+
+Pass a session file path and no home is searched at
+all: the agent comes from the file's own content, and
+`--agent` then requires the file to be that agent's.
+A file that sits inside an agent home but does not
+read as a session is rejected, rather than trusted
+because of where it lives.
+
+An ambiguous query fails with the candidate list
+instead of acting on an arbitrary match. `delete` and
+`menu` still use the older id-or-path lookup.
+
+### Home overrides
+
+`--claude-home` and `--codex-home` before the
+subcommand apply to any of these commands, and carry
+through the interactive menus into whatever action
+you pick:
+
+```bash
+aichat --claude-home ~/.claude-work info my-session
+```
+
+`resume` also takes both flags itself; `trim` and
+`smart-trim` take their own `--claude-home`. A
+command-local flag wins over the root-level one.
+
+### Speed
+
+The lookup avoids the resolver's full scan whenever
+it safely can, because that scan reads every
+transcript in both homes — on a home with a few
+thousand sessions it costs on the order of ten
+seconds.
+
+- A **unique full id** normally answers in well under
+  a second. It is the top match tier, so no weaker
+  tier can outrank it and nothing else has to be
+  read.
+- A **partial id** costs a second or two: before
+  trusting a filename match, the lookup rules out a
+  session whose exact *name* is that same string,
+  since an exact name outranks a partial id.
+- A **name**, or anything else, goes through the full
+  scan.
+
+None of this changes which session you get — it only
+changes how much work is done to be sure of it.
+
+[`port`](../port/) takes the same query forms but
+resolves them on its own path: no `--agent` (use
+`--claude-home` / `--codex-home`), and a query that
+matches in **both** agents is ambiguous there even
+when one side matched on a stronger tier — the
+precedence table above is applied per agent, not
+across the two.
 
 ## Exit codes
 

@@ -36,6 +36,11 @@
       "description": "Audio feedback when Claude Code agent completes tasks using pocket-tts"
     },
     {
+      "name": "voxtype",
+      "source": "./plugins/voxtype",
+      "description": "Install and set up voxtype \u2014 local on-device voice dictation for macOS"
+    },
+    {
       "name": "msg",
       "source": "./plugins/msg",
       "description": "Inter-agent communication for Claude Code and Codex CLI sessions via threads and messages"
@@ -44,6 +49,11 @@
       "name": "agent-tunnel",
       "source": "./plugins/agent-tunnel",
       "description": "Publish the current Claude session via >share so teammates can ask it questions through the agent-tunnel Discord bot (read-only forks)"
+    },
+    {
+      "name": "writing",
+      "source": "./plugins/writing",
+      "description": "Prose-quality skills: agent-style (21 literature-backed rules for formal technical prose) and remove-ai-patterns (de-AI text using the avoid-ai-writing catalog plus a deterministic detector)"
     }
   ]
 }

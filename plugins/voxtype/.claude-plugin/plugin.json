@@ -1,0 +1,8 @@
+{
+  "name": "voxtype",
+  "version": "0.1.0",
+  "description": "Install and set up voxtype — local, on-device voice dictation for macOS (speech-to-text that types wherever your cursor is)",
+  "author": {
+    "name": "pchalasani"
+  }
+}

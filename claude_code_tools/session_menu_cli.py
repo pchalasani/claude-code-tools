@@ -123,7 +123,11 @@ def execute_action(
         if agent == "claude":
             from claude_code_tools.find_claude_session import clone_session
             clone_session(
-                session_id, project_path, shell_mode=False, claude_home=claude_home
+                session_id,
+                project_path,
+                shell_mode=False,
+                claude_home=claude_home,
+                source_path=session_file,
             )
         else:
             from claude_code_tools.find_codex_session import clone_session

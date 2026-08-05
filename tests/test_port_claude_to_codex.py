@@ -418,6 +418,7 @@ class TestConverter:
             "cwd",
             "originator",
             "cli_version",
+            "model_provider",
         }
         assert payload["id"] == new_id
         # a ported session is a fresh (non-forked) root thread
@@ -426,6 +427,7 @@ class TestConverter:
         assert payload["cwd"] == json.loads(
             session.read_text().splitlines()[-1]
         ).get("cwd")
+        assert payload["model_provider"] == "openai"
         assert payload["git"] == {"branch": "feat/x"}
         cm = first["continue_metadata"]
         assert cm["ported_from"] == "claude"
