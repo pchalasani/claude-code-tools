@@ -7,6 +7,7 @@ export interface ComposeTarget {
   rowId: string;
   anchorId: string;
   parentId?: string;
+  keepOpenAfterSubmit?: boolean;
 }
 export interface PostReply {
   ok: boolean;
@@ -18,6 +19,7 @@ export interface Composer {
   target: Accessor<ComposeTarget | null>;
   isOpenAt: (rowId: string) => boolean;
   toggleAt: (target: ComposeTarget) => void;
+  retarget: (target: ComposeTarget) => void;
   close: () => void;
   escape: () => void;
   discard: () => void;
@@ -157,7 +159,12 @@ export function createComposer(
       displayAt: new Date().toISOString(),
     });
     setSendingRow(current.rowId);
-    clearActive();
+    if (current.keepOpenAfterSubmit === true) {
+      setStatus("");
+      setDiscardArmed(null);
+    } else {
+      clearActive();
+    }
     release(current.rowId, true);
     try {
       const reply = await post("ask", payload);
@@ -186,6 +193,11 @@ export function createComposer(
           release(current.rowId, false);
         }
         openAt(wanted);
+      }
+    },
+    retarget: (wanted) => {
+      if (target()?.rowId === wanted.rowId) {
+        setTarget(wanted);
       }
     },
     close,

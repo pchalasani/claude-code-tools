@@ -3,7 +3,12 @@ import { createStore } from "solid-js/store";
 export type ChosenMap = Record<string, boolean>;
 export type DraftMap = Record<string, string>;
 export type SeenMap = Record<string, string>;
-export type HumanStoragePart = "chosen" | "cursor" | "drafts" | "seen";
+export type HumanStoragePart =
+  | "chosen"
+  | "cursor"
+  | "drafts"
+  | "seen"
+  | "latest-briefing";
 type MaybeDoc = Document | undefined;
 // `<run>.localhost` and `/r/<run>` are different origins. Browser storage
 // cannot share these keys between the two serving modes.
@@ -13,6 +18,7 @@ export interface HumanState {
   readonly cursor: Accessor<string | null>;
   readonly drafts: DraftMap;
   readonly seen: SeenMap;
+  readonly latestBriefing: Accessor<string | null>;
   readonly draftWarning: Accessor<string>;
   choose: (rowId: string, open: boolean) => void;
   chooseAll: (rowIds: Iterable<string>, open: boolean) => void;
@@ -23,6 +29,7 @@ export interface HumanState {
   writeDraft: (rowId: string, text: string) => void;
   discardDraft: (rowId: string) => void;
   visit: (threadId: string, answerState: string) => void;
+  visitBriefing: (briefingId: string) => void;
 }
 export function runIdFromLocation(): string {
   if (typeof window === "undefined") {
@@ -50,6 +57,7 @@ export function createHumanState(runId = runIdFromLocation()): HumanState {
   const cursorKey = humanStorageKey("cursor", runId);
   const draftsKey = humanStorageKey("drafts", runId);
   const seenKey = humanStorageKey("seen", runId);
+  const latestBriefingKey = humanStorageKey("latest-briefing", runId);
   const [chosen, setChosen] = createStore<ChosenMap>(
     readRecord(sessionStore(), chosenKey, isBoolean),
   );
@@ -61,6 +69,9 @@ export function createHumanState(runId = runIdFromLocation()): HumanState {
   );
   const [seen, setSeen] = createStore<SeenMap>(
     readRecord(sessionStore(), seenKey, isString),
+  );
+  const [latestBriefing, setLatestBriefing] = createSignal<string | null>(
+    readCursor(sessionStore(), latestBriefingKey),
   );
   const [draftWarning, setDraftWarning] = createSignal("");
   const saveDrafts = (): void => {
@@ -78,6 +89,7 @@ export function createHumanState(runId = runIdFromLocation()): HumanState {
     cursor,
     drafts,
     seen,
+    latestBriefing,
     draftWarning,
     choose: (rowId, open) => {
       setChosen(rowId, open);
@@ -117,6 +129,10 @@ export function createHumanState(runId = runIdFromLocation()): HumanState {
     visit: (threadId, answerState) => {
       setSeen(threadId, answerState);
       write(sessionStore(), seenKey, JSON.stringify({ ...seen }));
+    },
+    visitBriefing: (briefingId) => {
+      setLatestBriefing(briefingId);
+      write(sessionStore(), latestBriefingKey, JSON.stringify(briefingId));
     },
   };
 }

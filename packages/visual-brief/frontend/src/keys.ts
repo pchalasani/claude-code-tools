@@ -7,6 +7,7 @@ export type Action =
   | "expand-all"
   | "collapse-all"
   | "compose"
+  | "compose-global"
   | "next-awaiting"
   | "reveal-chats"
   | "hints"
@@ -63,7 +64,7 @@ export const BINDINGS: Record<string, Action> = {
   E: "expand-all",
   C: "collapse-all",
   c: "compose",
-  a: "compose",
+  a: "compose-global",
   n: "next-awaiting",
   m: "reveal-chats",
   f: "hints",
@@ -96,6 +97,7 @@ export const KEY_HELP: [string, string][] = [
     "c",
     "Chat wherever the cursor is — update, lane, item or conversation",
   ],
+  ["a", "Message the agent without choosing a section"],
   [SEND_CHORD_LABEL, "Send what you have written"],
   ["1–9", "Jump to a numbered row or choose a numbered reply"],
   ["n", "Jump to your next open chat"],

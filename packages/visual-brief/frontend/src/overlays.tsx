@@ -16,6 +16,7 @@ const KEY_BAR: KeyEntry[] = [
   { keys: "1–9", label: "Jump to item" },
   { keys: "f", label: "Jump to row", action: "hints" },
   { keys: "c", label: "Chat here", action: "compose" },
+  { keys: "a", label: "Message agent", action: "compose-global" },
   { keys: "n", label: "Next open chat", action: "next-awaiting" },
   { keys: "m", label: "Chats / restore", action: "reveal-chats" },
   { keys: "/", label: "Search", action: "search" },

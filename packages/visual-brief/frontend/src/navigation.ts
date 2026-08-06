@@ -23,6 +23,7 @@ interface ChatReveal {
 interface SelectOptions {
   scroll?: boolean;
   dropFilter?: boolean;
+  visit?: boolean;
 }
 export interface Navigation {
   visible: Accessor<Row[]>;
@@ -57,6 +58,7 @@ export interface Navigation {
   openOverlay: (overlay: Overlay) => void;
   closeOverlay: () => void;
   latestBriefingAttentionCount: Accessor<number>;
+  latestBriefingFresh: Accessor<boolean>;
 }
 export function createNavigation(
   brief: Accessor<BriefDocument>,
@@ -72,6 +74,13 @@ export function createNavigation(
   const [query, setQuery] = createSignal("");
   const [overlay, setOverlay] = createSignal<Overlay>("none");
   const [chatReveal, setChatReveal] = createSignal<ChatReveal | null>(null);
+  const initialLatestBriefing = brief().updates.at(-1)?.id;
+  if (
+    initialLatestBriefing !== undefined
+    && human.latestBriefing() === null
+  ) {
+    human.visitBriefing(initialLatestBriefing);
+  }
   const filterActive = (): boolean => query().trim().length > 0;
   const visible = createMemo(() => filterRows(rows(), query()));
   const visibleIds = createMemo(
@@ -110,6 +119,10 @@ export function createNavigation(
         && ancestorRowIds(rows(), row.id).includes(latestBriefingId),
     );
   });
+  const latestBriefingFresh = createMemo(() => {
+    const latest = brief().updates.at(-1)?.id;
+    return latest !== undefined && human.latestBriefing() !== latest;
+  });
   const ancestors = (id: string): string[] => ancestorRowIds(rows(), id);
   const blurActiveControl = (): void => {
     if (document.activeElement instanceof HTMLElement) {
@@ -117,6 +130,13 @@ export function createNavigation(
     }
   };
   const visit = (row: Row): void => {
+    const latest = brief().updates.at(-1)?.id;
+    if (
+      latest !== undefined
+      && (row.id === latest || ancestors(row.id).includes(latest))
+    ) {
+      human.visitBriefing(latest);
+    }
     if (
       row.kind === "thread"
       && !row.awaiting
@@ -143,7 +163,9 @@ export function createNavigation(
     }
     explicitSelectionTookOver();
     human.select(id);
-    visit(row);
+    if (options?.visit !== false) {
+      visit(row);
+    }
     if (options?.scroll !== false) {
       queueMicrotask(() => scrollRowIntoView(id));
     }
@@ -169,6 +191,7 @@ export function createNavigation(
     if (row === undefined) {
       return;
     }
+    visit(row);
     human.choose(id, !baseOpen(id));
   };
   return {
@@ -182,7 +205,7 @@ export function createNavigation(
     currentId: cursorId,
     isCursor: (id) => cursorId() === id,
     select,
-    pointAt: (id) => select(id, { scroll: false }),
+    pointAt: (id) => select(id, { scroll: false, visit: false }),
     move: step,
     jump: (edge) => {
       const next = edgeRow(painted(), edge);
@@ -306,6 +329,7 @@ export function createNavigation(
     latestBriefingAttentionCount: createMemo(
       () => latestBriefingAttention().length,
     ),
+    latestBriefingFresh,
   };
 }
 function cycleAfter(rows: Row[], currentId: string | null): string | null {

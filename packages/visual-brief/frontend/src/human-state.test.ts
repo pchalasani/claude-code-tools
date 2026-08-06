@@ -36,7 +36,7 @@ function memoryStorage(): Storage {
 }
 
 describe("v2 human state", () => {
-  it("uses one run namespace for all four records", () => {
+  it("uses one run namespace for all human state records", () => {
     expect(humanStorageKey("chosen", RUN)).toBe(
       "visual-brief-v2:run-42:chosen",
     );
@@ -48,6 +48,9 @@ describe("v2 human state", () => {
     );
     expect(humanStorageKey("seen", RUN)).toBe(
       "visual-brief-v2:run-42:seen",
+    );
+    expect(humanStorageKey("latest-briefing", RUN)).toBe(
+      "visual-brief-v2:run-42:latest-briefing",
     );
   });
 
@@ -82,16 +85,19 @@ describe("v2 human state", () => {
     expect(state.cursor()).toBeNull();
     expect({ ...state.drafts }).toEqual({});
     expect({ ...state.seen }).toEqual({});
+    expect(state.latestBriefing()).toBeNull();
 
     state.choose("u/l/i", false);
     state.select("u/l/i");
     state.writeDraft("u/l/i", "Keep these words");
     state.visit("q", "2:answered");
+    state.visitBriefing("newest");
 
     expect(state.chosen["u/l/i"]).toBe(false);
     expect(state.cursor()).toBe("u/l/i");
     expect(state.drafts["u/l/i"]).toBe("Keep these words");
     expect(state.seen.q).toBe("2:answered");
+    expect(state.latestBriefing()).toBe("newest");
   });
 
   it("restores all records and mirrors drafts to local storage", () => {
@@ -100,6 +106,7 @@ describe("v2 human state", () => {
     first.select("u/l");
     first.writeDraft("u/l", "Restart-safe");
     first.visit("q", "4:answered");
+    first.visitBriefing("newest");
 
     expect(
       window.localStorage.getItem(humanStorageKey("drafts", RUN)),
@@ -110,6 +117,17 @@ describe("v2 human state", () => {
     expect(restored.cursor()).toBe("u/l");
     expect(restored.drafts["u/l"]).toBe("Restart-safe");
     expect(restored.seen.q).toBe("4:answered");
+    expect(restored.latestBriefing()).toBe("newest");
+  });
+
+  it("keeps a thread id separate from the latest briefing marker", () => {
+    const first = createHumanState(RUN);
+    first.visit("//latest-briefing", "2:answered");
+    first.visitBriefing("newest");
+
+    const restored = createHumanState(RUN);
+    expect(restored.seen["//latest-briefing"]).toBe("2:answered");
+    expect(restored.latestBriefing()).toBe("newest");
   });
 
   it("uses the local draft only when the session copy is absent", () => {

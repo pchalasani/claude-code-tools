@@ -6,7 +6,10 @@ import {
   type ComposeTarget,
 } from "./composer";
 import { composeRow } from "./cursor";
-import type { BriefDocument } from "./document";
+import {
+  isStructuredCurrentState,
+  type BriefDocument,
+} from "./document";
 import { createHints, type Hints } from "./hints";
 import { createHumanState, type HumanState } from "./human-state";
 import { isTypingTarget, resolveAction, type Action } from "./keys";
@@ -15,7 +18,7 @@ import {
   type Navigation,
   type Overlay,
 } from "./navigation";
-import type { Row } from "./outline";
+import { CURRENT_STATE_ROOT_ID, type Row } from "./outline";
 import {
   createPending,
   suggestedReplyAnswered,
@@ -32,12 +35,15 @@ export interface BriefState {
   pending: Pending;
   owningItem: Accessor<Row | null>;
   feedbackItem: Accessor<Row | null>;
+  globalMessageRow: Accessor<Row | null>;
   rowShortcutNumber: (rowId: string) => number | null;
   suggestionShortcutNumber: (rowId: string, index: number) => number | null;
   composeAt: (row: Row) => void;
+  composeGlobally: () => void;
   run: (action: Action) => void;
   handleKey: (event: KeyboardEvent) => void;
 }
+export const GLOBAL_MESSAGE_ROW_ID = "//message-agent";
 export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
   const human = createHumanState();
   const pending = createPending(brief);
@@ -55,6 +61,27 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
     human,
     signalWork,
   );
+  const globalMessageRow = createMemo<Row | null>(() => {
+    const latest = brief().updates.at(-1);
+    const current = brief().current_state;
+    const anchorId = latest?.id
+      ?? (current !== undefined && isStructuredCurrentState(current)
+        ? CURRENT_STATE_ROOT_ID
+        : undefined);
+    if (anchorId === undefined) {
+      return null;
+    }
+    return {
+      id: GLOBAL_MESSAGE_ROW_ID,
+      kind: "update",
+      anchorId,
+      parentId: null,
+      label: "Message agent",
+      search: "",
+      awaiting: false,
+      human: true,
+    };
+  });
   const owningItem = createMemo(() => {
     const selected = nav.currentId();
     if (selected === null) {
@@ -125,8 +152,26 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
         nav.openMovedAncestor(ancestor);
       }
     }
-    const id = composer.target()?.rowId;
-    const row = id === undefined ? undefined : nav.row(id);
+    const target = composer.target();
+    const id = target?.rowId;
+    const global = id === GLOBAL_MESSAGE_ROW_ID;
+    const globalRow = global ? globalMessageRow() : null;
+    if (
+      global
+      && target !== null
+      && globalRow !== null
+      && target.anchorId !== globalRow.anchorId
+      && pending.failureAt(target.rowId) === null
+    ) {
+      composer.retarget({
+        rowId: globalRow.id,
+        anchorId: globalRow.anchorId,
+        keepOpenAfterSubmit: true,
+      });
+    }
+    const row = id === undefined
+      ? undefined
+      : global ? globalRow ?? undefined : nav.row(id);
     const ancestors = id === undefined ? [] : nav.ancestors(id);
     const previous = previousTarget;
     const moved = row !== undefined
@@ -144,14 +189,24 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
         nav.openMovedAncestor(ancestor);
       }
     }
-    const absent = id !== undefined && row === undefined;
+    const absent = id !== undefined && (
+      row === undefined
+      || (global && target !== null && nav.row(target.anchorId) === undefined)
+    );
     const folded = id !== undefined && nav.query() === ""
+      && !global
       && !nav.painted().some((row) => row.id === id);
     if (id !== undefined && (absent || folded)) {
       queueMicrotask(() => {
         const current = composer.target()?.rowId;
-        const stillAbsent = nav.row(id) === undefined;
+        const stillGlobal = id === GLOBAL_MESSAGE_ROW_ID;
+        const stillTarget = composer.target();
+        const stillAbsent = stillGlobal
+          ? stillTarget === null
+            || nav.row(stillTarget.anchorId) === undefined
+          : nav.row(id) === undefined;
         const stillFolded = nav.query() === ""
+          && !stillGlobal
           && !nav.painted().some((row) => row.id === id);
         if (current === id && (stillAbsent || stillFolded)) {
           composer.close();
@@ -181,6 +236,20 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
     }
     nav.select(row.id, { scroll: false });
     if (composer.isOpenAt(row.id)) focusLater(".composer textarea");
+  };
+  const composeGlobally = (): void => {
+    const row = globalMessageRow();
+    if (row === null) {
+      return;
+    }
+    composer.toggleAt({
+      rowId: row.id,
+      anchorId: row.anchorId,
+      keepOpenAfterSubmit: true,
+    });
+    if (composer.isOpenAt(row.id)) {
+      focusLater(".global-message .composer textarea");
+    }
   };
   const composeAtCursor = (): void => {
     const selected = human.cursor();
@@ -236,6 +305,7 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
       "expand-all": nav.expandAll,
       "collapse-all": nav.collapseAll,
       compose: composeAtCursor,
+      "compose-global": composeGlobally,
       "next-awaiting": nav.toOpenChat,
       "reveal-chats": nav.toggleChatReveal,
       hints: () => {
@@ -274,9 +344,11 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
     pending,
     owningItem,
     feedbackItem,
+    globalMessageRow,
     rowShortcutNumber,
     suggestionShortcutNumber,
     composeAt,
+    composeGlobally,
     run,
     handleKey: (event) => {
       const chorded = event.ctrlKey || event.metaKey || event.altKey;

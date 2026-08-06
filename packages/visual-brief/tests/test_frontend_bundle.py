@@ -367,6 +367,24 @@ def test_an_ignored_dropping_cannot_declare_the_bundle_stale(
 
 
 @needs_git
+def test_proofshot_artifacts_cannot_declare_the_bundle_stale(
+    tmp_path: Path,
+) -> None:
+    """Keep browser-verification output out of the production fingerprint."""
+    stamp_tool = _load_stamp_tool()
+    frontend = tmp_path / "frontend"
+    _write_frontend(frontend)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    before = stamp_tool.source_fingerprint(frontend)
+    artifacts = frontend / "proofshot-artifacts" / "one-run"
+    artifacts.mkdir(parents=True)
+    (artifacts / "SUMMARY.md").write_text("verified\n")
+    (artifacts / "page.png").write_bytes(b"screenshot")
+
+    assert stamp_tool.source_fingerprint(frontend) == before
+
+
+@needs_git
 def test_editing_a_unit_test_does_not_declare_the_bundle_stale(
     tmp_path: Path,
 ) -> None:

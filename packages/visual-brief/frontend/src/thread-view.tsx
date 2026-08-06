@@ -1,4 +1,4 @@
-import { For, type JSX } from "solid-js";
+import { For, Show, type JSX } from "solid-js";
 import {
   ComposeBox,
   ComposeButton,
@@ -14,6 +14,7 @@ export function ThreadView(props: {
   state: BriefState;
   row: Row;
   thread: Thread;
+  showWorking?: boolean;
 }): JSX.Element {
   return (
     <RowShell
@@ -41,7 +42,9 @@ export function ThreadView(props: {
         {(turn) => <TurnView turn={turn} />}
       </For>
       <PendingNotes state={props.state} row={props.row} />
-      <WorkingSign state={props.state} row={props.row} />
+      <Show when={props.showWorking !== false}>
+        <WorkingSign state={props.state} row={props.row} />
+      </Show>
       <ComposeBox state={props.state} row={props.row} />
     </RowShell>
   );

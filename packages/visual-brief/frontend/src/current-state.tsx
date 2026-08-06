@@ -31,6 +31,7 @@ export function CurrentStateView(props: {
   state: BriefState;
   current: CurrentState;
   now: number;
+  showRootThreads?: boolean;
 }): JSX.Element {
   const structured = (): StructuredCurrentState | undefined =>
     isStructuredCurrentState(props.current) ? props.current : undefined;
@@ -75,22 +76,24 @@ export function CurrentStateView(props: {
               <div class="current-state-summary">
                 <Markdown text={current().summary} />
               </div>
-              <For each={orderedThreads(current().questions)}>
-                {(thread) => (
-                  <VisibleRow
-                    state={props.state}
-                    id={threadRowId(row.id, thread)}
-                  >
-                    {(threadRow) => (
-                      <ThreadView
-                        state={props.state}
-                        row={threadRow}
-                        thread={thread}
-                      />
-                    )}
-                  </VisibleRow>
-                )}
-              </For>
+              <Show when={props.showRootThreads !== false}>
+                <For each={orderedThreads(current().questions)}>
+                  {(thread) => (
+                    <VisibleRow
+                      state={props.state}
+                      id={threadRowId(row.id, thread)}
+                    >
+                      {(threadRow) => (
+                        <ThreadView
+                          state={props.state}
+                          row={threadRow}
+                          thread={thread}
+                        />
+                      )}
+                    </VisibleRow>
+                  )}
+                </For>
+              </Show>
               <PendingNotes state={props.state} row={row} />
               <WorkingSign state={props.state} row={row} />
               <ComposeBox state={props.state} row={row} />

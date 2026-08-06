@@ -27,6 +27,8 @@ export function ComposeButton(props: {
 export function ComposeBox(props: {
   state: BriefState;
   row: Row;
+  label?: string;
+  placeholder?: string;
 }): JSX.Element {
   const composer = props.state.composer;
   const isReply = () => composer.target()?.parentId !== undefined;
@@ -42,14 +44,17 @@ export function ComposeBox(props: {
         }}
       >
         <label class="composer-label" for="brief-compose">
-          {isReply() ? "Chat in this conversation" : "Chat about this section"}
+          {props.label
+            ?? (isReply()
+              ? "Chat in this conversation"
+              : "Chat about this section")}
         </label>
         <textarea
           id="brief-compose"
           class="composer-text"
           required
           rows="3"
-          placeholder="What would you like to say?"
+          placeholder={props.placeholder ?? "What would you like to say?"}
           value={composer.text()}
           onInput={(event) => composer.setText(event.currentTarget.value)}
           onKeyDown={(event) => {

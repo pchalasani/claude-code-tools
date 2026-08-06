@@ -18,6 +18,81 @@
   text-decoration: underline;
 }
 
+.global-message {
+  margin: 0 0 var(--space-6);
+}
+
+.global-message-button {
+  align-items: center;
+  background: var(--color-surface-quiet);
+  border: var(--border-thin) solid var(--color-border-strong);
+  border-radius: var(--radius-control);
+  color: var(--color-current-strong);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-weight: 600;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+}
+
+.global-message-button:hover,
+.global-message-button[aria-expanded="true"] {
+  background: var(--color-current-soft);
+  border-color: var(--color-current);
+}
+
+.global-message-button:focus-visible {
+  outline: var(--border-emphasis) solid var(--color-current);
+  outline-offset: var(--space-1);
+}
+
+.global-message-button kbd {
+  min-width: 1.7em;
+}
+
+.global-message > :where(.turn, .working, .stalled, .composer) {
+  margin-inline: 0;
+  max-width: var(--width-reading);
+}
+
+.global-message-threads {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  max-width: var(--width-reading);
+}
+
+.global-message > .composer {
+  margin-top: var(--space-3);
+}
+
+.briefing-entry[data-new-briefing="true"] {
+  animation: new-briefing-pulse 1.35s ease-in-out infinite;
+  border-radius: var(--radius-surface);
+  outline: var(--border-emphasis) solid var(--color-context);
+  outline-offset: var(--space-2);
+}
+
+@keyframes new-briefing-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(
+      in srgb,
+      var(--color-context) 14%,
+      transparent
+    );
+  }
+
+  50% {
+    box-shadow: 0 0 0 var(--space-2) color-mix(
+      in srgb,
+      var(--color-context) 30%,
+      transparent
+    );
+  }
+}
+
 .composer {
   background: var(--color-surface-quiet);
   border: var(--border-thin) solid var(--color-border-strong);
@@ -404,6 +479,10 @@
 
   .working-mark,
   .working-text-wave {
+    animation: none !important;
+  }
+
+  .briefing-entry[data-new-briefing="true"] {
     animation: none !important;
   }
 

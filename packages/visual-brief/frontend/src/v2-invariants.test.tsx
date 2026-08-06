@@ -723,16 +723,16 @@ describe("keyboard ownership", () => {
     fetchSpy.mockRestore();
   });
 
-  it.each(["c", "a"])(
-    "opens the composer with %s on a revealed nonmatching row",
-    (key) => {
+  it(
+    "opens the contextual composer with c on a revealed nonmatching row",
+    () => {
       mount();
       press("/");
       typeInto("#brief-search", "reader agrees");
       press("m");
       click(BETA);
 
-      press(key);
+      press("c");
 
       const composer = document.querySelector(".composer");
       expect(composer?.closest("[data-row-id]")?.getAttribute("data-row-id"))

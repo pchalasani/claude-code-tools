@@ -8,6 +8,11 @@ import {
   onMount,
   type JSX,
 } from "solid-js";
+import {
+  AgentWorking,
+  ComposeBox,
+  PendingNotes,
+} from "./compose-view";
 import { CurrentStateView } from "./current-state";
 import {
   DEFAULT_DESIGN_VARIANT,
@@ -23,19 +28,27 @@ import {
   type DesignVariant,
 } from "./design-variant";
 import {
+  isStructuredCurrentState,
+  threadIsAwaiting,
   TRUST_LABELS,
   TRUST_ORDER,
   type BriefDocument,
 } from "./document";
 import { TrustChip } from "./item-view";
-import { orderedUpdates } from "./outline";
+import {
+  orderedThreads,
+  orderedUpdates,
+  threadRowId,
+} from "./outline";
 import { HelpOverlay, KeyBar, SearchOverlay } from "./overlays";
 import { onPollCycle } from "./reload";
 import { VisibleRow } from "./row-shell";
 import { Markdown } from "./markdown-view";
 import { createBriefState, type BriefState } from "./state";
 import { StructureMap } from "./structure-map";
+import { ThreadView } from "./thread-view";
 import { UpdateView } from "./update-view";
+import { isWorking } from "./working";
 export function App(props: { brief: BriefDocument }): JSX.Element {
   const state = createBriefState(() => props.brief);
   const [design, setDesign] = createSignal<DesignVariant>(
@@ -93,12 +106,14 @@ export function App(props: { brief: BriefDocument }): JSX.Element {
           onChooseTheme={chooseTheme}
           onToggleDesign={toggleDesign}
         />
+        <GlobalAgentMessage state={state} />
         <Show when={props.brief.current_state}>
           {(current) => (
             <CurrentStateView
               state={state}
               current={current()}
               now={now()}
+              showRootThreads={props.brief.updates.length > 0}
             />
           )}
         </Show>
@@ -111,6 +126,11 @@ export function App(props: { brief: BriefDocument }): JSX.Element {
                   "latest-briefing": index() === 0,
                   "ledger-briefing": index() > 0,
                 }}
+                data-new-briefing={
+                  index() === 0 && state.nav.latestBriefingFresh()
+                    ? "true"
+                    : "false"
+                }
               >
                 <Show when={index() === 1}>
                   <header class="history-heading" id="briefing-ledger">
@@ -127,6 +147,7 @@ export function App(props: { brief: BriefDocument }): JSX.Element {
                       update={update}
                       now={now()}
                       latest={index() === 0}
+                      showRootThreads={index() !== 0}
                     />
                   )}
                 </VisibleRow>
@@ -138,6 +159,65 @@ export function App(props: { brief: BriefDocument }): JSX.Element {
       <SearchOverlay state={state} />
       <HelpOverlay state={state} />
     </div>
+  );
+}
+function GlobalAgentMessage(props: { state: BriefState }): JSX.Element {
+  const threads = () => {
+    const latest = props.state.brief.updates.at(-1);
+    if (latest !== undefined) {
+      return orderedThreads(latest.questions);
+    }
+    const current = props.state.brief.current_state;
+    return current !== undefined && isStructuredCurrentState(current)
+      ? orderedThreads(current.questions)
+      : [];
+  };
+  return (
+    <Show when={props.state.globalMessageRow()}>
+      {(row) => (
+        <section class="global-message">
+          <button
+            type="button"
+            class="global-message-button"
+            aria-keyshortcuts="a"
+            aria-expanded={props.state.composer.isOpenAt(row().id)}
+            onClick={() => props.state.composeGlobally()}
+          >
+            <kbd aria-hidden="true">a</kbd>
+            <span>Message agent</span>
+          </button>
+          <ComposeBox
+            state={props.state}
+            row={row()}
+            label="Message the agent"
+            placeholder="What would you like the agent to do?"
+          />
+          <PendingNotes state={props.state} row={row()} />
+          <Show when={
+            isWorking(props.state, row())
+            || threads().some(threadIsAwaiting)
+          }>
+            <AgentWorking />
+          </Show>
+          <div class="global-message-threads">
+            <For each={threads()}>
+              {(thread) => (
+                <Show when={props.state.nav.row(threadRowId(row().anchorId, thread))}>
+                  {(threadRow) => (
+                    <ThreadView
+                      state={props.state}
+                      row={threadRow()}
+                      thread={thread}
+                      showWorking={false}
+                    />
+                  )}
+                </Show>
+              )}
+            </For>
+          </div>
+        </section>
+      )}
+    </Show>
   );
 }
 function Masthead(props: {

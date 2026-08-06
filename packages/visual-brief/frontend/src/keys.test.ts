@@ -34,6 +34,7 @@ describe("every binding", () => {
     [" ", "toggle"],
     ["Enter", "toggle"],
     ["c", "compose"],
+    ["a", "compose-global"],
     ["n", "next-awaiting"],
     ["/", "search"],
     ["g", "top"],
@@ -129,10 +130,6 @@ describe("every binding", () => {
     const box = element("<textarea></textarea>");
 
     expect(resolveAction({ key: "Enter", target: box })).toBeNull();
-  });
-
-  it("keeps the old ask key working without documenting it", () => {
-    expect(resolveAction({ key: "a" })).toBe("compose");
   });
 
   it("keeps Space for the page even when a control holds focus", () => {

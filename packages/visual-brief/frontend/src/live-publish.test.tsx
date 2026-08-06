@@ -15,8 +15,10 @@ import {
   click,
   composeAt,
   mountLive,
+  paintedCursor,
   rowNode,
   typeInto,
+  unmount,
   useHarness,
 } from "../test/harness";
 import {
@@ -25,6 +27,7 @@ import {
   SAMPLE_SUGGESTIONS,
   sampleBrief,
 } from "../test/sample-brief";
+import { watchPointer } from "./pointer";
 
 const ALPHA = "newest/changed/alpha";
 const BETA = "newest/changed/beta";
@@ -126,6 +129,63 @@ describe("what a publish does to something half-written", () => {
 });
 
 describe("what a publish tells the human has changed", () => {
+  it("marks a new briefing until the human enters it", () => {
+    const { publish } = mountLive();
+    expect(document.querySelector(".latest-briefing")
+      ?.getAttribute("data-new-briefing")).toBe("false");
+
+    const appended = sampleBrief();
+    appended.updates.push({
+      id: "after-work",
+      timestamp: "2026-07-28T09:00:00Z",
+      headline: "The requested work is ready",
+      summary: "A new briefing arrived while the page stayed open.",
+      lanes: [],
+    });
+    publish(appended);
+
+    expect(document.querySelector(".latest-briefing")
+      ?.getAttribute("data-new-briefing")).toBe("true");
+    unmount();
+    mountLive(appended);
+    expect(document.querySelector(".latest-briefing")
+      ?.getAttribute("data-new-briefing")).toBe("true");
+
+    click("after-work");
+    expect(document.querySelector(".latest-briefing")
+      ?.getAttribute("data-new-briefing")).toBe("false");
+  });
+
+  it("does not dismiss a new briefing when the mouse only passes over it", () => {
+    const { publish } = mountLive();
+    const appended = sampleBrief();
+    appended.updates.push({
+      id: "after-hover",
+      timestamp: "2026-07-28T09:00:00Z",
+      headline: "A new briefing is waiting",
+      summary: "Hover alone must not mark it as read.",
+      lanes: [],
+    });
+    publish(appended);
+    const latest = rowNode("after-hover");
+    const stop = watchPointer(document);
+    const move = new Event("pointermove", { bubbles: true });
+    Object.defineProperties(move, {
+      pointerType: { value: "mouse" },
+      clientX: { value: 80 },
+      clientY: { value: 120 },
+    });
+
+    try {
+      latest?.dispatchEvent(move);
+      expect(paintedCursor()).toBe("after-hover");
+      expect(document.querySelector(".latest-briefing")
+        ?.getAttribute("data-new-briefing")).toBe("true");
+    } finally {
+      stop();
+    }
+  });
+
   it("does not attach pending feedback to an update appended later", async () => {
     let answer: ((response: Response) => void) | undefined;
     globalThis.fetch = (() => new Promise<Response>((resolve) => {

@@ -42,7 +42,9 @@ BUNDLE_NAMES = (
     "visual-brief.css",
     "visual-brief-codex.mjs",
 )
-SKIPPED_DIRECTORIES = frozenset({"node_modules", "dist", "coverage"})
+SKIPPED_DIRECTORIES = frozenset(
+    {"node_modules", "dist", "coverage", "proofshot-artifacts"}
+)
 # Editor and platform droppings that git ignores. They are invisible to
 # `git status`, so fingerprinting them would report a stale bundle that no
 # rebuild can clear and that no other checkout can reproduce.

@@ -25,6 +25,7 @@ export function UpdateView(props: {
   update: Update;
   now: number;
   latest?: boolean;
+  showRootThreads?: boolean;
 }): JSX.Element {
   return (
     <RowShell
@@ -57,18 +58,20 @@ export function UpdateView(props: {
       <div class="update-summary">
         <Markdown text={props.update.summary} />
       </div>
-      <For each={orderedThreads(props.update.questions)}>
-        {(thread) => (
-          <VisibleRow
-            state={props.state}
-            id={threadRowId(props.row.id, thread)}
-          >
-            {(row) => (
-              <ThreadView state={props.state} row={row} thread={thread} />
-            )}
-          </VisibleRow>
-        )}
-      </For>
+      <Show when={props.showRootThreads !== false}>
+        <For each={orderedThreads(props.update.questions)}>
+          {(thread) => (
+            <VisibleRow
+              state={props.state}
+              id={threadRowId(props.row.id, thread)}
+            >
+              {(row) => (
+                <ThreadView state={props.state} row={row} thread={thread} />
+              )}
+            </VisibleRow>
+          )}
+        </For>
+      </Show>
       <PendingNotes state={props.state} row={props.row} />
       <WorkingSign state={props.state} row={props.row} />
       <ComposeBox state={props.state} row={props.row} />
