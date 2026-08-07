@@ -10,7 +10,6 @@ from pathlib import Path
 from .models import (
     Agent,
     AgentKind,
-    Delivery,
     DeliveryState,
     Message,
     Thread,
@@ -42,6 +41,7 @@ CREATE TABLE IF NOT EXISTS agents (
     cwd TEXT,
     registered_at TEXT NOT NULL,
     last_seen TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
     UNIQUE(name, tmux_session, tmux_socket)
 );
 
@@ -115,11 +115,32 @@ class MsgStore:
         conn = self._get_conn()
         try:
             conn.executescript(SCHEMA_SQL)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(agents)")}
+            if "active" not in columns:
+                conn.execute(
+                    "ALTER TABLE agents ADD COLUMN active INTEGER NOT NULL DEFAULT 1"
+                )
             conn.commit()
         finally:
             conn.close()
 
     # --- Agent operations ---
+
+    @staticmethod
+    def _retire_agent(conn: sqlite3.Connection, session_id: str) -> bool:
+        changed = conn.execute(
+            "UPDATE agents SET active = 0, display_addr = NULL, last_seen = ? "
+            "WHERE session_id = ? AND active = 1",
+            (_now_iso(), session_id),
+        ).rowcount
+        if changed:
+            conn.execute(
+                """UPDATE deliveries SET state = ?, claimed_by = NULL,
+                    claim_expires_at = NULL
+                WHERE recipient_id = ? AND state != ?""",
+                (DeliveryState.RETIRED.value, session_id, DeliveryState.READ.value),
+            )
+        return changed == 1
 
     def register_agent(
         self,
@@ -147,13 +168,27 @@ class MsgStore:
                 (name, tmux_session, tmux_socket, tmux_socket),
             ).fetchone()
 
+            others = conn.execute(
+                """SELECT session_id FROM agents
+                WHERE active = 1 AND pane_id = ? AND tmux_session = ?
+                AND (tmux_socket IS ? OR tmux_socket = ?)
+                AND (? IS NULL OR session_id != ?)""",
+                (
+                    pane_id, tmux_session, tmux_socket, tmux_socket,
+                    existing["session_id"] if existing else None,
+                    existing["session_id"] if existing else None,
+                ),
+            ).fetchall()
+            for other in others:
+                self._retire_agent(conn, other["session_id"])
+
             if existing:
                 session_id = existing["session_id"]
                 conn.execute(
                     """UPDATE agents SET
                         pane_id = ?, display_addr = ?,
                         agent_kind = ?, pid = ?, cwd = ?,
-                        last_seen = ?, tmux_socket = ?
+                        last_seen = ?, tmux_socket = ?, active = 1
                     WHERE session_id = ?""",
                     (
                         pane_id, display_addr,
@@ -206,7 +241,7 @@ class MsgStore:
         try:
             row = conn.execute(
                 """SELECT * FROM agents
-                WHERE name = ? AND tmux_session = ?
+                WHERE active = 1 AND name = ? AND tmux_session = ?
                 AND (tmux_socket IS ? OR tmux_socket = ?)""",
                 (name, tmux_session, tmux_socket, tmux_socket),
             ).fetchone()
@@ -239,14 +274,24 @@ class MsgStore:
         try:
             if tmux_session:
                 rows = conn.execute(
-                    "SELECT * FROM agents WHERE tmux_session = ?",
+                    "SELECT * FROM agents WHERE active = 1 AND tmux_session = ?",
                     (tmux_session,),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM agents",
+                    "SELECT * FROM agents WHERE active = 1",
                 ).fetchall()
             return [self._row_to_agent(r) for r in rows]
+        finally:
+            conn.close()
+
+    def retire_agent(self, session_id: str) -> bool:
+        """Hide an agent from live routing while preserving its history."""
+        conn = self._get_conn()
+        try:
+            changed = self._retire_agent(conn, session_id)
+            conn.commit()
+            return changed
         finally:
             conn.close()
 
@@ -493,7 +538,7 @@ class MsgStore:
                     JOIN agents a
                         ON m.from_agent = a.session_id
                     WHERE d.recipient_id = ?
-                        AND d.state != 'read'
+                        AND d.state NOT IN ('read', 'retired')
                         AND m.thread_id = ?
                     ORDER BY m.created_at ASC""",
                     (agent_id, thread_id),
@@ -511,7 +556,7 @@ class MsgStore:
                     JOIN threads t
                         ON m.thread_id = t.id
                     WHERE d.recipient_id = ?
-                        AND d.state != 'read'
+                        AND d.state NOT IN ('read', 'retired')
                     ORDER BY m.created_at ASC""",
                     (agent_id,),
                 ).fetchall()
@@ -536,7 +581,7 @@ class MsgStore:
                     """UPDATE deliveries SET
                         state = 'read', read_at = ?
                     WHERE recipient_id = ?
-                        AND state != 'read'
+                        AND state NOT IN ('read', 'retired')
                         AND message_id IN (
                             SELECT id FROM messages
                             WHERE thread_id = ?
@@ -548,7 +593,7 @@ class MsgStore:
                     """UPDATE deliveries SET
                         state = 'read', read_at = ?
                     WHERE recipient_id = ?
-                        AND state != 'read'""",
+                        AND state NOT IN ('read', 'retired')""",
                     (now, agent_id),
                 )
             conn.commit()
@@ -585,9 +630,12 @@ class MsgStore:
                     claimed_by = ?,
                     claim_expires_at = ?,
                     notify_attempts = notify_attempts + 1
-                WHERE state = 'pending'
-                    OR (state = 'claimed'
-                        AND claim_expires_at < ?)""",
+                WHERE recipient_id IN (
+                    SELECT session_id FROM agents WHERE active = 1
+                ) AND (
+                    state = 'pending'
+                    OR (state = 'claimed' AND claim_expires_at < ?)
+                )""",
                 (claimer_id, expires_iso, now),
             )
             conn.commit()
@@ -609,10 +657,25 @@ class MsgStore:
                 JOIN agents r ON d.recipient_id = r.session_id
                 WHERE d.claimed_by = ?
                     AND d.state = 'claimed'
+                    AND r.active = 1
                 ORDER BY d.recipient_id, m.created_at""",
                 (claimer_id,),
             ).fetchall()
             return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def claim_is_current(self, delivery_id: str, claimer_id: str) -> bool:
+        """Return whether this watcher still owns a live recipient delivery."""
+        conn = self._get_conn()
+        try:
+            return conn.execute(
+                """SELECT 1 FROM deliveries d
+                JOIN agents a ON a.session_id = d.recipient_id
+                WHERE d.id = ? AND d.claimed_by = ?
+                    AND d.state = 'claimed' AND a.active = 1""",
+                (delivery_id, claimer_id),
+            ).fetchone() is not None
         finally:
             conn.close()
 
@@ -641,7 +704,7 @@ class MsgStore:
         try:
             row = conn.execute(
                 "SELECT notify_attempts FROM deliveries "
-                "WHERE id = ?",
+                "WHERE id = ? AND state = 'claimed'",
                 (delivery_id,),
             ).fetchone()
             if row and row["notify_attempts"] >= max_attempts:
@@ -654,7 +717,7 @@ class MsgStore:
                     state = ?, last_error = ?,
                     claimed_by = NULL,
                     claim_expires_at = NULL
-                WHERE id = ?""",
+                WHERE id = ? AND state = 'claimed'""",
                 (new_state, error, delivery_id),
             )
             conn.commit()

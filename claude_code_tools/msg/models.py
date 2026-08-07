@@ -22,6 +22,7 @@ class DeliveryState(str, Enum):
         pending -> claimed -> notified -> read
         pending -> claimed -> failed
         failed -> pending (retry)
+        pending|claimed|notified|failed -> retired
     """
 
     PENDING = "pending"
@@ -29,6 +30,7 @@ class DeliveryState(str, Enum):
     NOTIFIED = "notified"
     READ = "read"
     FAILED = "failed"
+    RETIRED = "retired"
 
 
 def _new_uuid() -> str:

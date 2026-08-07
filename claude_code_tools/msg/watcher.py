@@ -13,6 +13,7 @@ Delivery logic for headed agents:
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import logging
 import os
 import signal
@@ -136,6 +137,10 @@ class Watcher:
     ) -> None:
         """Deliver notifications to a single recipient."""
         try:
+            deliveries = [
+                item for item in deliveries
+                if self.store.claim_is_current(item["id"], self.watcher_id)
+            ]
             if not deliveries:
                 return
 
@@ -197,6 +202,12 @@ class Watcher:
                 recipient_name, target, notification,
             )
 
+            deliveries = [
+                item for item in deliveries
+                if self.store.claim_is_current(item["id"], self.watcher_id)
+            ]
+            if not deliveries:
+                return
             await self._tmux_send(target, notification)
 
             for d in deliveries:
@@ -290,5 +301,13 @@ def run_watcher(db_path: str = DEFAULT_DB_PATH) -> None:
         "%(message)s",
         datefmt="%H:%M:%S",
     )
-    watcher = Watcher(db_path=db_path)
-    asyncio.run(watcher.run())
+    lock = open(f"{db_path}.watcher.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock.close()
+        logger.info("Watcher already running for %s", db_path)
+        return
+    with lock:
+        watcher = Watcher(db_path=db_path)
+        asyncio.run(watcher.run())

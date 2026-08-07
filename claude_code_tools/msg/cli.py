@@ -340,6 +340,29 @@ def register(
     )
 
 
+@cli.command()
+@click.argument("name", required=False)
+@click.pass_context
+def unregister(ctx: click.Context, name: str | None) -> None:
+    """Retire a named agent, or this pane, without deleting message history."""
+    store: MsgStore = ctx.obj["store"]
+    if name:
+        session = _detect_tmux_session()
+        agent = store.get_agent_by_name(name, session, _detect_tmux_socket()) if session else None
+        if not agent:
+            click.echo(f"Agent '{name}' is already unregistered.")
+            return
+    else:
+        agent = _get_self_agent(store)
+    if not agent:
+        click.echo("Error: this pane is not registered.", err=True)
+        sys.exit(1)
+    if not store.retire_agent(agent.session_id):
+        click.echo(f"Error: agent '{agent.name}' is already retired.", err=True)
+        sys.exit(1)
+    click.echo(f"Unregistered '{agent.name}' (history preserved)")
+
+
 @cli.command("list")
 @click.pass_context
 def list_agents(ctx: click.Context) -> None:
@@ -511,7 +534,7 @@ def send(
         created_by=me.session_id,
     )
 
-    msg = store.send_message(
+    store.send_message(
         thread_id=thread.id,
         from_agent=me.session_id,
         body=body,

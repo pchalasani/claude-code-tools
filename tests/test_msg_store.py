@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
+import sqlite3
 
 import pytest
 
 from claude_code_tools.msg.models import (
     AgentKind,
-    DeliveryState,
 )
 from claude_code_tools.msg.store import MsgStore
 
@@ -119,6 +117,58 @@ class TestAgentRegistration:
         )
         agents = store.list_agents(tmux_session="test")
         assert len(agents) == 2
+
+    def test_retire_hides_routing_but_preserves_history_and_reactivates(self, store):
+        agent = store.register_agent(
+            name="builder",
+            pane_id="%1",
+            tmux_session="test",
+            agent_kind=AgentKind.CODEX,
+        )
+
+        assert store.retire_agent(agent.session_id)
+        assert store.get_agent_by_name("builder", "test") is None
+        assert store.list_agents(tmux_session="test") == []
+        assert store.get_agent_by_id(agent.session_id) is not None
+
+        revived = store.register_agent(
+            name="builder",
+            pane_id="%2",
+            tmux_session="test",
+            agent_kind=AgentKind.CODEX,
+        )
+        assert revived.session_id == agent.session_id
+        assert store.get_agent_by_name("builder", "test").pane_id == "%2"
+
+    def test_legacy_database_adds_active_without_losing_agents(self, tmp_path):
+        path = tmp_path / "legacy.db"
+        conn = sqlite3.connect(path)
+        conn.execute(
+            """CREATE TABLE agents (
+                session_id TEXT PRIMARY KEY, name TEXT, pane_id TEXT,
+                tmux_session TEXT, tmux_socket TEXT, display_addr TEXT,
+                agent_kind TEXT, pid INTEGER, cwd TEXT,
+                registered_at TEXT, last_seen TEXT,
+                UNIQUE(name, tmux_session, tmux_socket))"""
+        )
+        conn.execute(
+            "INSERT INTO agents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("old", "builder", "%1", "test", None, None, "codex", None, None, "a", "b"),
+        )
+        conn.commit()
+        conn.close()
+
+        migrated = MsgStore(str(path))
+
+        assert migrated.get_agent_by_name("builder", "test").session_id == "old"
+
+    def test_new_name_on_same_pane_retires_old_identity(self, store):
+        old = store.register_agent("old", "%1", "test", AgentKind.CODEX)
+        new = store.register_agent("new", "%1", "test", AgentKind.CODEX)
+
+        assert store.get_agent_by_name("old", "test") is None
+        assert [agent.session_id for agent in store.list_agents("test")] == [new.session_id]
+        assert store.get_agent_by_id(old.session_id) is not None
 
     def test_touch_agent(self, store, two_agents):
         a, _ = two_agents
@@ -313,6 +363,34 @@ class TestMessages:
 
 
 class TestDeliveryStateMachine:
+
+    def test_retired_recipient_is_not_claimed(self, store, two_agents):
+        a, b = two_agents
+        thread = store.create_thread(
+            title="Test",
+            created_by=a.session_id,
+            participant_ids=[a.session_id, b.session_id],
+        )
+        store.send_message(thread.id, a.session_id, "Keep for history")
+
+        store.retire_agent(b.session_id)
+
+        assert store.claim_pending_deliveries("watcher") == []
+
+    def test_retirement_wins_claim_and_reregister_races(self, store, two_agents):
+        a, b = two_agents
+        thread = store.create_thread("Test", a.session_id, [a.session_id, b.session_id])
+        store.send_message(thread.id, a.session_id, "Old work")
+        delivery = store.claim_pending_deliveries("watcher")[0]
+
+        store.retire_agent(b.session_id)
+        store.mark_delivery_failed(delivery["id"], "late watcher")
+        revived = store.register_agent("tester", "%3", "test", AgentKind.CODEX, "/tmp/tmux-test")
+
+        assert revived.session_id == b.session_id
+        assert not store.claim_is_current(delivery["id"], "watcher")
+        assert store.get_inbox(b.session_id) == []
+        assert store.claim_pending_deliveries("next-watcher") == []
 
     def test_claim_pending(self, store, two_agents):
         a, b = two_agents
