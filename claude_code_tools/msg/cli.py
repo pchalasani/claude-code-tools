@@ -342,11 +342,16 @@ def register(
 
 @cli.command()
 @click.argument("name", required=False)
+@click.option("--session-id", help="Retire one exact registration.")
 @click.pass_context
-def unregister(ctx: click.Context, name: str | None) -> None:
+def unregister(ctx: click.Context, name: str | None, session_id: str | None) -> None:
     """Retire a named agent, or this pane, without deleting message history."""
     store: MsgStore = ctx.obj["store"]
-    if name:
+    if name and session_id:
+        raise click.UsageError("use NAME or --session-id, not both")
+    if session_id:
+        agent = store.get_agent_by_id(session_id)
+    elif name:
         session = _detect_tmux_session()
         agent = store.get_agent_by_name(name, session, _detect_tmux_socket()) if session else None
         if not agent:
@@ -355,7 +360,7 @@ def unregister(ctx: click.Context, name: str | None) -> None:
     else:
         agent = _get_self_agent(store)
     if not agent:
-        click.echo("Error: this pane is not registered.", err=True)
+        click.echo("Error: registration not found.", err=True)
         sys.exit(1)
     if not store.retire_agent(agent.session_id):
         click.echo(f"Error: agent '{agent.name}' is already retired.", err=True)
