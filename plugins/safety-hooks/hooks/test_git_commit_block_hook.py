@@ -9,6 +9,8 @@ Tests cover:
     - Commands that merely mention "git commit" staying allowed
 """
 import os
+import json
+import subprocess
 import sys
 import unittest
 
@@ -257,6 +259,30 @@ class TestSessionAllowFlag(unittest.TestCase):
         decision, _ = check_git_commit_command(
             "git commit -m 'x'", session_id="no-such-session-" + str(os.getpid()))
         self.assertEqual(decision, "ask")
+
+    def test_standalone_entrypoint_forwards_session_id(self) -> None:
+        session_id = "standalone-commit-" + str(os.getpid())
+        flag = f"/tmp/claude/allow-git-commit.{session_id}"
+        os.makedirs(os.path.dirname(flag), exist_ok=True)
+        with open(flag, "w", encoding="utf-8") as handle:
+            handle.write(session_id)
+        self.addCleanup(lambda: os.path.exists(flag) and os.remove(flag))
+
+        payload = {
+            "tool_name": "Bash",
+            "session_id": session_id,
+            "tool_input": {"command": "git commit -m x"},
+        }
+        script = os.path.join(os.path.dirname(__file__), "git_commit_block_hook.py")
+        result = subprocess.run(
+            [sys.executable, script],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        self.assertEqual(json.loads(result.stdout), {"decision": "approve"})
 
 
 if __name__ == "__main__":
