@@ -17,9 +17,9 @@
   <rect width="200" height="100" rx="8" fill="url(#bg)"/>
   <rect x="1" y="1" width="198" height="98" rx="7" fill="none"
         stroke="#5eead4" stroke-opacity="0.32"/>
-  <text x="100" y="36" font-family="monospace" font-size="20"
+  <text x="100" y="36" font-family="monospace" font-size="15"
         font-weight="bold" fill="#f8fafc" text-anchor="middle"
-        filter="url(#glow)">Claude → Codex</text>
+        filter="url(#glow)">Codex Dyn Workflows</text>
   <text x="100" y="63" font-family="monospace" font-size="12"
         fill="#cbd5e1" text-anchor="middle">switch from Claude</text>
   <text x="100" y="80" font-family="monospace" font-size="12"
