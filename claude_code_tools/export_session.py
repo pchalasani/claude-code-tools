@@ -87,6 +87,14 @@ CODEX_WRAPPER_TEXT_PREFIXES: tuple = (
     "<apps_instructions>",
     "<plugins_instructions>",
     "<multi_agent_mode>",
+    # Two forms: the goal-context injection Codex re-injects as its
+    # own user message every turn carries attributes
+    # (<codex_internal_context source="goal">), so the attribute form
+    # ends at the space; a bare closing form is matched exactly.
+    # Never a bare "<codex_internal_context" prefix: that would also
+    # swallow genuine text starting with a longer tag name.
+    "<codex_internal_context ",
+    "<codex_internal_context>",
     "# AGENTS.md instructions",
 )
 
