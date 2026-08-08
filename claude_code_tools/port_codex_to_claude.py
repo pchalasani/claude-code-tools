@@ -436,7 +436,9 @@ def _is_compaction_boundary(data: dict[str, Any]) -> bool:
 
 def _scan_rollout(
     codex_session_file: Path,
-) -> tuple[Optional[int], Optional[tuple[int, Optional[int], str]]]:
+) -> tuple[
+    Optional[int], Optional[tuple[int, Optional[int], str]], int
+]:
     """Locate the compaction boundary and last goal context (one pass).
 
     Streaming pass over the parsed records. Compactions chain (each
@@ -450,22 +452,29 @@ def _scan_rollout(
         codex_session_file: Path to the Codex rollout JSONL file.
 
     Returns:
-        Tuple ``(boundary, goal)``. ``boundary`` is the index of the
-        last usable ``compacted`` record within the stream of parsed
-        records (None when the rollout has none). ``goal`` is
+        Tuple ``(boundary, goal, total)``. ``boundary`` is the index
+        of the last usable ``compacted`` record within the stream of
+        parsed records (None when the rollout has none). ``goal`` is
         ``(record_idx, item_idx, text)`` locating the last
         goal-context message -- ``item_idx`` is its position inside
         the boundary record's ``replacement_history``, or None when
         the goal context is an ordinary record -- or None when the
-        ported range holds no goal context. Indices are stable across
-        passes because both passes parse records with the same
-        tolerant reader.
+        ported range holds no goal context. ``total`` is the number
+        of parsed records this pass saw: the message pass must stop
+        there, so records a LIVE session appends between the two
+        passes (possibly including a new compaction that would make
+        this scan's boundary stale) are ignored rather than ported
+        inconsistently. Indices are stable across passes because the
+        log is append-only and both passes parse records with the
+        same tolerant reader.
     """
     boundary: Optional[int] = None
     goal: Optional[tuple[int, Optional[int], str]] = None
+    total = 0
     for idx, data in enumerate(
         _iter_rollout_records(codex_session_file)
     ):
+        total = idx + 1
         if _is_compaction_boundary(data):
             boundary = idx
             goal = None
@@ -485,7 +494,7 @@ def _scan_rollout(
             text = _goal_context_text(payload)
             if text:
                 goal = (idx, None, text)
-    return boundary, goal
+    return boundary, goal, total
 
 
 def _iter_compaction_messages(
@@ -584,10 +593,14 @@ def iter_flat_messages(
     Yields:
         Dicts with ``role``, ``text`` and ``timestamp`` keys.
     """
-    boundary, goal = _scan_rollout(codex_session_file)
+    boundary, goal, total = _scan_rollout(codex_session_file)
     for idx, data in enumerate(
         _iter_rollout_records(codex_session_file)
     ):
+        if idx >= total:
+            # Appended by a live session after the scan pass: porting
+            # these could straddle a compaction the scan never saw.
+            break
         if boundary is not None:
             if idx < boundary:
                 continue

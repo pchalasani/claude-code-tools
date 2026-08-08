@@ -18,9 +18,11 @@ from pathlib import Path
 import pytest
 
 from claude_code_tools.port_claude_to_codex import (
+    iter_flat_claude_messages,
     port_claude_session_to_codex,
 )
 from claude_code_tools.port_codex_to_claude import (
+    iter_flat_messages,
     port_codex_session_to_claude,
 )
 
@@ -235,6 +237,35 @@ class TestCodexToClaudeCompaction:
         joined = "\n".join(_port_codex(tmp_path, lines))
         assert "old question" in joined
         assert "new answer" in joined
+
+    def test_records_appended_mid_port_are_ignored(self, tmp_path):
+        # A LIVE session can append records (even a new compaction)
+        # between the scan pass and the message pass; porting them
+        # could straddle a boundary the scan never saw. The message
+        # pass must stop at the scan-time record count.
+        codex_home = tmp_path / "codex"
+        rollout = _write_rollout(
+            codex_home,
+            [
+                _session_meta(0, str(tmp_path / "proj")),
+                _resp(1, _msg("user", "q1")),
+                _resp(2, _msg("assistant", "a1")),
+            ],
+        )
+        gen = iter_flat_messages(rollout, None)
+        first = next(gen)  # scan pass done, message pass started
+        with open(rollout, "a", encoding="utf-8") as f:
+            f.write(
+                _compacted(3, history=[_msg("user", "appended kept")])
+                + "\n"
+            )
+            f.write(_resp(4, _msg("user", "appended question")) + "\n")
+        texts = [first["text"]] + [m["text"] for m in gen]
+        joined = "\n".join(texts)
+        assert "q1" in joined
+        assert "a1" in joined
+        assert "appended kept" not in joined
+        assert "appended question" not in joined
 
     def test_longer_tag_name_is_not_goal_context(self, tmp_path):
         # A genuine user message starting with a LONGER tag name must
@@ -473,6 +504,47 @@ class TestClaudeToCodexCompaction:
         rollout = _port_claude(tmp_path, lines)
         assert "q1" in rollout
         assert "a1" in rollout
+
+    def test_records_appended_mid_port_are_ignored(self, tmp_path):
+        # A LIVE session can append records (even a new compaction)
+        # between the scan pass and the message pass; porting them
+        # could straddle a boundary the scan never saw. The message
+        # pass must stop at the scan-time record count.
+        cwd = str(tmp_path / "proj")
+        session_file = tmp_path / f"{CLAUDE_UUID}.jsonl"
+        session_file.write_text(
+            "\n".join(
+                [
+                    _claude_line(1, "user", "q1", cwd),
+                    _claude_line(2, "assistant", "a1", cwd),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        gen = iter_flat_claude_messages(session_file, None)
+        first = next(gen)  # scan pass done, message pass started
+        with open(session_file, "a", encoding="utf-8") as f:
+            f.write(
+                _claude_line(
+                    3,
+                    "user",
+                    "appended summary",
+                    cwd,
+                    isCompactSummary=True,
+                )
+                + "\n"
+            )
+            f.write(
+                _claude_line(4, "user", "appended question", cwd)
+                + "\n"
+            )
+        texts = [first["text"]] + [m["text"] for m in gen]
+        joined = "\n".join(texts)
+        assert "q1" in joined
+        assert "a1" in joined
+        assert "appended summary" not in joined
+        assert "appended question" not in joined
 
     def test_empty_summary_line_is_not_a_boundary(self, tmp_path):
         # A marked summary line with no usable text must not truncate

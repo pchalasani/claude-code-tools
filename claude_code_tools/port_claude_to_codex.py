@@ -398,9 +398,9 @@ def _is_compact_summary_line(data: dict[str, Any]) -> bool:
     )
 
 
-def _find_last_compact_summary_index(
+def _scan_claude_session(
     claude_session_file: Path,
-) -> Optional[int]:
+) -> tuple[Optional[int], int]:
     """Locate the last compact-summary line of a Claude session.
 
     Streaming pass over the parsed records. Compactions chain (each
@@ -411,18 +411,26 @@ def _find_last_compact_summary_index(
         claude_session_file: Path to the Claude session JSONL file.
 
     Returns:
-        The index of the last compact-summary line within the stream
-        of parsed records, or None when the session was never
-        compacted. Indices are stable across passes because both
-        passes parse records with the same tolerant reader.
+        Tuple ``(boundary, total)``. ``boundary`` is the index of the
+        last usable compact-summary line within the stream of parsed
+        records, or None when the session was never compacted.
+        ``total`` is the number of parsed records this pass saw: the
+        message pass must stop there, so records a LIVE session
+        appends between the two passes (possibly including a new
+        compaction that would make this scan's boundary stale) are
+        ignored rather than ported inconsistently. Indices are stable
+        across passes because the log is append-only and both passes
+        parse records with the same tolerant reader.
     """
     last: Optional[int] = None
+    total = 0
     for idx, data in enumerate(
         _iter_claude_records(claude_session_file)
     ):
+        total = idx + 1
         if _is_compact_summary_line(data):
             last = idx
-    return last
+    return last, total
 
 
 def iter_flat_claude_messages(
@@ -448,10 +456,14 @@ def iter_flat_claude_messages(
         Dicts with ``role``, ``text`` and ``timestamp`` keys, in
         transcript order, with no empty texts.
     """
-    boundary = _find_last_compact_summary_index(claude_session_file)
+    boundary, total = _scan_claude_session(claude_session_file)
     for idx, data in enumerate(
         _iter_claude_records(claude_session_file)
     ):
+        if idx >= total:
+            # Appended by a live session after the scan pass: porting
+            # these could straddle a compaction the scan never saw.
+            break
         if boundary is not None and idx < boundary:
             continue
         pairs = _flatten_claude_line(data)
