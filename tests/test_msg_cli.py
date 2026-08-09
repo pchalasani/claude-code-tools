@@ -2,9 +2,29 @@
 
 from click.testing import CliRunner
 
-from claude_code_tools.msg.cli import cli
+from claude_code_tools.msg.cli import _ensure_watcher_running, cli
 from claude_code_tools.msg.models import AgentKind
 from claude_code_tools.msg.store import MsgStore
+
+
+def test_auto_started_watcher_uses_selected_database(monkeypatch, tmp_path):
+    path = tmp_path / "msg.db"
+    store = MsgStore(path)
+    monkeypatch.setattr(store, "is_watcher_alive", lambda: False)
+
+    for found, expected in (
+        ({"msg": "/bin/msg"}, ["/bin/msg", "--db", path, "watch"]),
+        (
+            {"uv": "/bin/uv"},
+            ["/bin/uv", "run", "msg", "--db", path, "watch"],
+        ),
+    ):
+        calls = []
+        with monkeypatch.context() as patch:
+            patch.setattr("shutil.which", lambda name: found.get(name))
+            patch.setattr("subprocess.Popen", lambda argv, **_kwargs: calls.append(argv))
+            _ensure_watcher_running(store)
+        assert calls == [expected]
 
 
 def test_unregister_exact_session(tmp_path):

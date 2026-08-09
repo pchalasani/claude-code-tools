@@ -146,13 +146,10 @@ class Watcher:
 
             recipient_name = deliveries[0]["recipient_name"]
             pane_id = deliveries[0]["recipient_pane_id"]
-            display_addr = (
-                deliveries[0]["recipient_display_addr"]
-            )
             agent_kind = deliveries[0].get(
                 "recipient_agent_kind", "claude",
             )
-            target = display_addr or pane_id
+            target = pane_id
 
             # Step 1: Quick idle check (non-blocking)
             is_idle = await self._check_idle(target)

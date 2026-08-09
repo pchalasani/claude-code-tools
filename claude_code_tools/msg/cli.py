@@ -202,6 +202,7 @@ def _ensure_watcher_running(store: MsgStore) -> None:
     """Auto-start the watcher if not already running."""
     if store.is_watcher_alive():
         return
+    watch_args = ["--db", store.db_path, "watch"]
     # Spawn watcher as a detached background process
     import shutil
     msg_bin = shutil.which("msg")
@@ -210,7 +211,7 @@ def _ensure_watcher_running(store: MsgStore) -> None:
         uv_bin = shutil.which("uv")
         if uv_bin:
             subprocess.Popen(
-                [uv_bin, "run", "msg", "watch"],
+                [uv_bin, "run", "msg", *watch_args],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
@@ -219,7 +220,7 @@ def _ensure_watcher_running(store: MsgStore) -> None:
             return
     if msg_bin:
         subprocess.Popen(
-            [msg_bin, "watch"],
+            [msg_bin, *watch_args],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,

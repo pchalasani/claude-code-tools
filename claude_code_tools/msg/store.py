@@ -680,7 +680,6 @@ class MsgStore:
                     r.name as recipient_name,
                     r.pane_id as recipient_pane_id,
                     r.tmux_session as recipient_tmux_session,
-                    r.display_addr as recipient_display_addr,
                     r.agent_kind as recipient_agent_kind
                 FROM deliveries d
                 JOIN messages m ON d.message_id = m.id
