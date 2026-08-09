@@ -267,11 +267,9 @@ CREATE TABLE watcher_heartbeat (
 ### Stale Agent Handling
 
 - `last_seen` updated on every `msg` CLI call
-- Liveness also validated by checking tmux pane existence
-  (is the pane_id still alive?) and pid
-- `msg list` shows stale agents as "(stale)"
-- `msg register` with existing name in same tmux session
-  re-registers (updates pane address, keeps session_id)
+- Register is idempotent while an agent is active; retarget preserves that session.
+- Reusing a retired name creates a fresh session so late task messages cannot reach
+  its replacement; the retired session keeps its history.
 
 ### Loop Prevention
 
@@ -358,9 +356,8 @@ plugins/msg/
 4. **No reply_visibility for v1** — all thread
    participants see all replies. Simplify first.
 
-5. **Notifications typed into pane** — safe for Claude
-   Code and Codex CLI because their input prompt always
-   accepts text, even while busy.
+5. **Notifications typed into pane** — only after the native tmux idle check and
+   an empty-prompt check; otherwise hooks deliver at the next agent boundary.
 
 6. **Tmux socket path in schema** — disambiguates
    across tmux servers.

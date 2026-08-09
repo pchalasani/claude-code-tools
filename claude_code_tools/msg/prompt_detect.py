@@ -45,6 +45,7 @@ PROMPT_WITH_TEXT_PATTERNS: dict[str, re.Pattern] = {
 def detect_prompt_state(
     pane_target: str,
     agent_kind: str = "claude",
+    tmux_socket: str | None = None,
 ) -> PromptState:
     """Check if a tmux pane's prompt is empty.
 
@@ -56,7 +57,7 @@ def detect_prompt_state(
     Returns:
         PromptState indicating the prompt state.
     """
-    lines = _capture_last_lines(pane_target)
+    lines = _capture_last_lines(pane_target, tmux_socket=tmux_socket)
     if not lines:
         return PromptState.UNKNOWN
 
@@ -87,15 +88,16 @@ def detect_prompt_state(
 def _capture_last_lines(
     pane_target: str,
     count: int = 15,
+    tmux_socket: str | None = None,
 ) -> list[str]:
     """Capture the last N lines from a tmux pane."""
     try:
+        cmd = ["tmux"]
+        if tmux_socket:
+            cmd += ["-S", tmux_socket]
+        cmd += ["capture-pane", "-t", pane_target, "-p"]
         result = subprocess.run(
-            [
-                "tmux", "capture-pane",
-                "-t", pane_target,
-                "-p",  # print to stdout
-            ],
+            cmd,
             capture_output=True,
             text=True,
             timeout=5,

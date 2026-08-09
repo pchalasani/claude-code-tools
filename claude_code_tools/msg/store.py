@@ -10,7 +10,6 @@ from pathlib import Path
 from .models import (
     Agent,
     AgentKind,
-    DeliveryState,
     Message,
     Thread,
     WatcherHeartbeat,
@@ -96,6 +95,12 @@ CREATE TABLE IF NOT EXISTS watcher_heartbeat (
 );
 """
 
+RELEASE_EXPIRED_SQL = """UPDATE deliveries SET
+    state = CASE WHEN state = 'read' THEN 'read' ELSE 'pending' END,
+    claimed_by = NULL, claim_expires_at = NULL
+WHERE claimed_by IS NOT NULL AND claim_expires_at < ?
+    AND (? IS NULL OR recipient_id = ?)"""
+
 
 class MsgStore:
     """SQLite-backed store for inter-agent messaging."""
@@ -120,27 +125,20 @@ class MsgStore:
                 conn.execute(
                     "ALTER TABLE agents ADD COLUMN active INTEGER NOT NULL DEFAULT 1"
                 )
+            if conn.execute("PRAGMA user_version").fetchone()[0] < 1:
+                conn.execute(
+                    """UPDATE deliveries SET state = 'pending', notify_attempts = 0,
+                        last_error = NULL, claimed_by = NULL, claim_expires_at = NULL
+                    WHERE state IN ('pending', 'failed') AND recipient_id IN (
+                        SELECT session_id FROM agents WHERE active = 1
+                    )"""
+                )
+                conn.execute("PRAGMA user_version = 1")
             conn.commit()
         finally:
             conn.close()
 
     # --- Agent operations ---
-
-    @staticmethod
-    def _retire_agent(conn: sqlite3.Connection, session_id: str) -> bool:
-        changed = conn.execute(
-            "UPDATE agents SET active = 0, display_addr = NULL, last_seen = ? "
-            "WHERE session_id = ? AND active = 1",
-            (_now_iso(), session_id),
-        ).rowcount
-        if changed:
-            conn.execute(
-                """UPDATE deliveries SET state = ?, claimed_by = NULL,
-                    claim_expires_at = NULL
-                WHERE recipient_id = ? AND state != ?""",
-                (DeliveryState.RETIRED.value, session_id, DeliveryState.READ.value),
-            )
-        return changed == 1
 
     def register_agent(
         self,
@@ -153,27 +151,33 @@ class MsgStore:
         pid: int | None = None,
         cwd: str | None = None,
     ) -> Agent:
-        """Register or re-register an agent session.
-
-        If an agent with the same name+tmux_session+tmux_socket
-        exists, updates its pane/pid info and keeps the session_id.
-        """
+        """Register an agent, preserving active-session idempotency."""
         now = _now_iso()
         conn = self._get_conn()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            existing = conn.execute(
+            existing_rows = conn.execute(
                 """SELECT session_id, active, pane_id FROM agents
                 WHERE name = ? AND tmux_session = ?
                 AND (tmux_socket IS ? OR tmux_socket = ?)""",
                 (name, tmux_session, tmux_socket, tmux_socket),
-            ).fetchone()
+            ).fetchall()
+            if len(existing_rows) > 1:
+                raise ValueError(f"agent '{name}' has ambiguous registrations")
+            existing = existing_rows[0] if existing_rows else None
 
             if existing and existing["active"] and existing["pane_id"] != pane_id:
                 raise ValueError(
                     f"agent '{name}' is already active at {existing['pane_id']}; "
                     "unregister it first"
                 )
+
+            if existing and not existing["active"]:
+                conn.execute(
+                    "UPDATE agents SET name = ? WHERE session_id = ?",
+                    (f"{name}@retired:{existing['session_id']}", existing["session_id"]),
+                )
+                existing = None
 
             others = conn.execute(
                 """SELECT session_id FROM agents
@@ -246,15 +250,13 @@ class MsgStore:
         """Look up an agent by name within a tmux session."""
         conn = self._get_conn()
         try:
-            row = conn.execute(
+            rows = conn.execute(
                 """SELECT * FROM agents
                 WHERE active = 1 AND name = ? AND tmux_session = ?
                 AND (tmux_socket IS ? OR tmux_socket = ?)""",
                 (name, tmux_session, tmux_socket, tmux_socket),
-            ).fetchone()
-            if not row:
-                return None
-            return self._row_to_agent(row)
+            ).fetchall()
+            return self._row_to_agent(rows[0]) if len(rows) == 1 else None
         finally:
             conn.close()
 
@@ -275,11 +277,18 @@ class MsgStore:
     def list_agents(
         self,
         tmux_session: str | None = None,
+        tmux_socket: str | None = None,
     ) -> list[Agent]:
         """List all registered agents, optionally filtered."""
         conn = self._get_conn()
         try:
-            if tmux_session:
+            if tmux_session and tmux_socket is not None:
+                rows = conn.execute(
+                    """SELECT * FROM agents WHERE active = 1 AND tmux_session = ?
+                    AND tmux_socket = ?""",
+                    (tmux_session, tmux_socket),
+                ).fetchall()
+            elif tmux_session:
                 rows = conn.execute(
                     "SELECT * FROM agents WHERE active = 1 AND tmux_session = ?",
                     (tmux_session,),
@@ -297,6 +306,8 @@ class MsgStore:
         conn = self._get_conn()
         try:
             conn.execute("BEGIN IMMEDIATE")
+            now = _now_iso()
+            conn.execute(RELEASE_EXPIRED_SQL, (now, session_id, session_id))
             unread = conn.execute(
                 "SELECT count(*) FROM deliveries WHERE recipient_id = ? "
                 "AND state NOT IN ('read', 'retired')",
@@ -306,9 +317,20 @@ class MsgStore:
                 raise ValueError(
                     f"agent has {unread} unread delivery; drain it before unregistering"
                 )
-            changed = self._retire_agent(conn, session_id)
+            in_flight = conn.execute(
+                "SELECT 1 FROM deliveries WHERE recipient_id = ? "
+                "AND claimed_by IS NOT NULL LIMIT 1",
+                (session_id,),
+            ).fetchone()
+            if in_flight:
+                raise ValueError("agent has a delivery in flight; retry unregister")
+            changed = conn.execute(
+                "UPDATE agents SET active = 0, display_addr = NULL, last_seen = ? "
+                "WHERE session_id = ? AND active = 1",
+                (now, session_id),
+            ).rowcount
             conn.commit()
-            return changed
+            return changed == 1
         finally:
             conn.close()
 
@@ -319,8 +341,6 @@ class MsgStore:
         tmux_session: str,
         tmux_socket: str | None = None,
         display_addr: str | None = None,
-        pid: int | None = None,
-        cwd: str | None = None,
     ) -> Agent:
         """Move one exact active agent within its existing tmux scope."""
         conn = self._get_conn()
@@ -337,6 +357,15 @@ class MsgStore:
                 or current["tmux_socket"] != tmux_socket
             ):
                 raise ValueError("registration is outside the requested tmux scope")
+            now = _now_iso()
+            conn.execute(RELEASE_EXPIRED_SQL, (now, session_id, session_id))
+            claimed = conn.execute(
+                "SELECT 1 FROM deliveries WHERE recipient_id = ? "
+                "AND claimed_by IS NOT NULL LIMIT 1",
+                (session_id,),
+            ).fetchone()
+            if claimed:
+                raise ValueError("agent has an actively claimed delivery")
             occupied = conn.execute(
                 """SELECT 1 FROM agents WHERE active = 1 AND pane_id = ?
                 AND tmux_session = ? AND (tmux_socket IS ? OR tmux_socket = ?)
@@ -346,9 +375,17 @@ class MsgStore:
             if occupied:
                 raise ValueError("target pane already has an active msg registration")
             conn.execute(
-                """UPDATE agents SET pane_id = ?, display_addr = ?, pid = ?, cwd = ?,
-                    last_seen = ? WHERE session_id = ? AND active = 1""",
-                (pane_id, display_addr, pid, cwd, _now_iso(), session_id),
+                """UPDATE agents SET pane_id = ?, display_addr = ?, last_seen = ?
+                WHERE session_id = ? AND active = 1""",
+                (pane_id, display_addr, _now_iso(), session_id),
+            )
+            conn.execute(
+                """UPDATE deliveries SET state = 'pending', claimed_by = NULL,
+                    claim_expires_at = NULL, notify_attempts = 0,
+                    last_error = NULL, notified_at = NULL
+                WHERE recipient_id = ? AND claimed_by IS NULL
+                    AND state NOT IN ('read', 'retired')""",
+                (session_id,),
             )
             moved = conn.execute(
                 "SELECT * FROM agents WHERE session_id = ?",
@@ -647,6 +684,7 @@ class MsgStore:
         self,
         agent_id: str,
         thread_id: str | None = None,
+        delivery_ids: list[str] | None = None,
     ) -> int:
         """Mark messages as read for an agent.
 
@@ -655,7 +693,19 @@ class MsgStore:
         now = _now_iso()
         conn = self._get_conn()
         try:
-            if thread_id:
+            if delivery_ids is not None:
+                if not delivery_ids:
+                    return 0
+                placeholders = ",".join("?" for _ in delivery_ids)
+                cur = conn.execute(
+                    f"""UPDATE deliveries SET
+                        state = 'read', read_at = ?
+                    WHERE recipient_id = ?
+                        AND state NOT IN ('read', 'retired')
+                        AND id IN ({placeholders})""",
+                    (now, agent_id, *delivery_ids),
+                )
+            elif thread_id:
                 cur = conn.execute(
                     """UPDATE deliveries SET
                         state = 'read', read_at = ?
@@ -686,6 +736,7 @@ class MsgStore:
         self,
         claimer_id: str,
         claim_duration_secs: int = 60,
+        recipient_id: str | None = None,
     ) -> list[dict]:
         """Claim pending deliveries for notification.
 
@@ -707,15 +758,14 @@ class MsgStore:
                 """UPDATE deliveries SET
                     state = 'claimed',
                     claimed_by = ?,
-                    claim_expires_at = ?,
-                    notify_attempts = notify_attempts + 1
+                    claim_expires_at = ?
                 WHERE recipient_id IN (
                     SELECT session_id FROM agents WHERE active = 1
-                ) AND (
+                ) AND (? IS NULL OR recipient_id = ?) AND (
                     state = 'pending'
                     OR (state = 'claimed' AND claim_expires_at < ?)
                 )""",
-                (claimer_id, expires_iso, now),
+                (claimer_id, expires_iso, recipient_id, recipient_id, now),
             )
             conn.commit()
 
@@ -726,7 +776,7 @@ class MsgStore:
                     a.name as from_name,
                     r.name as recipient_name,
                     r.pane_id as recipient_pane_id,
-                    r.tmux_session as recipient_tmux_session,
+                    r.tmux_socket as recipient_tmux_socket,
                     r.agent_kind as recipient_agent_kind
                 FROM deliveries d
                 JOIN messages m ON d.message_id = m.id
@@ -751,21 +801,23 @@ class MsgStore:
                 """SELECT 1 FROM deliveries d
                 JOIN agents a ON a.session_id = d.recipient_id
                 WHERE d.id = ? AND d.claimed_by = ?
-                    AND d.state = 'claimed' AND a.active = 1""",
-                (delivery_id, claimer_id),
+                    AND d.state = 'claimed' AND d.claim_expires_at >= ?
+                    AND a.active = 1""",
+                (delivery_id, claimer_id, _now_iso()),
             ).fetchone() is not None
         finally:
             conn.close()
 
-    def mark_notified(self, delivery_id: str) -> None:
+    def mark_notified(self, delivery_id: str, claimer_id: str) -> None:
         """Mark a delivery as notified (notification sent)."""
         conn = self._get_conn()
         try:
             conn.execute(
                 """UPDATE deliveries SET
-                    state = 'notified', notified_at = ?
-                WHERE id = ? AND state = 'claimed'""",
-                (_now_iso(), delivery_id),
+                    state = CASE WHEN state = 'read' THEN 'read' ELSE 'notified' END,
+                    notified_at = ?, claimed_by = NULL, claim_expires_at = NULL
+                WHERE id = ? AND state IN ('claimed', 'read') AND claimed_by = ?""",
+                (_now_iso(), delivery_id, claimer_id),
             )
             conn.commit()
         finally:
@@ -774,29 +826,39 @@ class MsgStore:
     def mark_delivery_failed(
         self,
         delivery_id: str,
+        claimer_id: str,
         error: str,
         max_attempts: int = 3,
     ) -> None:
-        """Mark a delivery as failed or reset to pending."""
+        """Charge an actual delivery failure and retry or give up."""
         conn = self._get_conn()
         try:
-            row = conn.execute(
-                "SELECT notify_attempts FROM deliveries "
-                "WHERE id = ? AND state = 'claimed'",
-                (delivery_id,),
-            ).fetchone()
-            if row and row["notify_attempts"] >= max_attempts:
-                new_state = DeliveryState.FAILED.value
-            else:
-                new_state = DeliveryState.PENDING.value
-
             conn.execute(
                 """UPDATE deliveries SET
-                    state = ?, last_error = ?,
+                    state = CASE WHEN state = 'read' THEN 'read'
+                        WHEN notify_attempts + 1 >= ? THEN 'failed' ELSE 'pending' END,
+                    notify_attempts = notify_attempts + (state != 'read'),
+                    last_error = CASE WHEN state = 'read' THEN last_error ELSE ? END,
                     claimed_by = NULL,
                     claim_expires_at = NULL
-                WHERE id = ? AND state = 'claimed'""",
-                (new_state, error, delivery_id),
+                WHERE id = ? AND state IN ('claimed', 'read') AND claimed_by = ?""",
+                (max_attempts, error, delivery_id, claimer_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def release_delivery(self, delivery_id: str, claimer_id: str) -> None:
+        """Release a normal busy/not-ready poll without charging a failure."""
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                """UPDATE deliveries SET
+                    state = CASE WHEN state = 'read' THEN 'read' ELSE 'pending' END,
+                    claimed_by = NULL,
+                    claim_expires_at = NULL
+                WHERE id = ? AND state IN ('claimed', 'read') AND claimed_by = ?""",
+                (delivery_id, claimer_id),
             )
             conn.commit()
         finally:
@@ -811,13 +873,8 @@ class MsgStore:
         conn = self._get_conn()
         try:
             cur = conn.execute(
-                """UPDATE deliveries SET
-                    state = 'pending',
-                    claimed_by = NULL,
-                    claim_expires_at = NULL
-                WHERE state = 'claimed'
-                    AND claim_expires_at < ?""",
-                (now,),
+                RELEASE_EXPIRED_SQL,
+                (now, None, None),
             )
             conn.commit()
             return cur.rowcount

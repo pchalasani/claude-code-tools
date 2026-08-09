@@ -62,11 +62,14 @@ def _detect_tmux_session(pane: str | None = None) -> str | None:
     """Auto-detect current tmux session name."""
     pane = pane or os.environ.get("TMUX_PANE")
     try:
-        cmd = ["tmux", "display-message", "-p",
-               "#{session_name}"]
+        cmd = ["tmux"]
+        tmux_socket = _detect_tmux_socket(pane)
+        if tmux_socket:
+            cmd += ["-S", tmux_socket]
+        cmd += ["display-message"]
         if pane:
-            cmd = ["tmux", "display-message",
-                   "-t", pane, "-p", "#{session_name}"]
+            cmd += ["-t", pane]
+        cmd += ["-p", "#{session_name}"]
         result = subprocess.run(
             cmd,
             capture_output=True, text=True, timeout=5,
@@ -78,7 +81,7 @@ def _detect_tmux_session(pane: str | None = None) -> str | None:
     return None
 
 
-def _detect_tmux_socket() -> str | None:
+def _detect_tmux_socket(pane: str | None = None) -> str | None:
     """Auto-detect tmux socket path."""
     tmux_env = os.environ.get("TMUX", "")
     if tmux_env:
@@ -86,6 +89,18 @@ def _detect_tmux_socket() -> str | None:
         parts = tmux_env.split(",")
         if parts:
             return parts[0]
+    try:
+        command = ["tmux", "display-message"]
+        if pane:
+            command += ["-t", pane]
+        result = subprocess.run(
+                [*command, "-p", "#{socket_path}"],
+                capture_output=True, text=True, timeout=5,
+            )
+        if result.returncode == 0:
+            return result.stdout.strip() or None
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
     return None
 
 
@@ -95,10 +110,14 @@ def _detect_display_addr(pane: str | None = None) -> str | None:
     try:
         fmt = ("#{session_name}:#{window_index}."
                "#{pane_index}")
-        cmd = ["tmux", "display-message", "-p", fmt]
+        cmd = ["tmux"]
+        tmux_socket = _detect_tmux_socket(pane)
+        if tmux_socket:
+            cmd += ["-S", tmux_socket]
+        cmd += ["display-message"]
         if pane:
-            cmd = ["tmux", "display-message",
-                   "-t", pane, "-p", fmt]
+            cmd += ["-t", pane]
+        cmd += ["-p", fmt]
         result = subprocess.run(
             cmd,
             capture_output=True, text=True, timeout=5,
@@ -171,11 +190,12 @@ def _get_self_agent(store: MsgStore) -> dict | None:
     tmux_session = _detect_tmux_session()
     if not tmux_session:
         return None
-    agents = store.list_agents(tmux_session=tmux_session)
-    for a in agents:
-        if a.pane_id == pane_id:
-            return a
-    return None
+    tmux_socket = _detect_tmux_socket(pane_id)
+    matches = [
+        agent for agent in store.list_agents(tmux_session, tmux_socket)
+        if agent.pane_id == pane_id and agent.tmux_socket == tmux_socket
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _relative_time(iso_str: str) -> str:
@@ -308,7 +328,7 @@ def register(
         )
         sys.exit(1)
 
-    tmux_session = _detect_tmux_session()
+    tmux_session = _detect_tmux_session(pane_id)
     if not tmux_session:
         click.echo(
             "Error: cannot detect tmux session.",
@@ -320,8 +340,10 @@ def register(
         AgentKind(agent) if agent
         else _detect_agent_kind()
     )
-    tmux_socket = _detect_tmux_socket()
-    display_addr = _detect_display_addr()
+    tmux_socket = _detect_tmux_socket(pane_id)
+    if not tmux_socket:
+        raise click.ClickException(f"cannot resolve tmux socket for pane {pane_id}")
+    display_addr = _detect_display_addr(pane_id)
 
     try:
         result = store.register_agent(
@@ -391,10 +413,8 @@ def retarget(ctx: click.Context, session_id: str, pane: str) -> None:
             session_id=session_id,
             pane_id=pane,
             tmux_session=tmux_session,
-            tmux_socket=_detect_tmux_socket(),
+            tmux_socket=_detect_tmux_socket(pane),
             display_addr=_detect_display_addr(pane),
-            pid=os.getpid(),
-            cwd=os.getcwd(),
         )
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
@@ -407,7 +427,7 @@ def list_agents(ctx: click.Context) -> None:
     """List registered agents."""
     store: MsgStore = ctx.obj["store"]
     tmux_session = _detect_tmux_session()
-    agents = store.list_agents(tmux_session=tmux_session)
+    agents = store.list_agents(tmux_session, _detect_tmux_socket())
 
     if not agents:
         click.echo("No agents registered.")
@@ -661,7 +681,8 @@ def inbox(
 
     # Mark as read
     count = store.mark_read(
-        me.session_id, thread_id=resolved_id,
+        me.session_id,
+        delivery_ids=[message["delivery_id"] for message in messages],
     )
     click.echo(f"\n({count} message(s) marked as read)")
 
@@ -688,7 +709,7 @@ def status(ctx: click.Context) -> None:
 
     # Agents
     tmux_session = _detect_tmux_session()
-    agents = store.list_agents(tmux_session=tmux_session)
+    agents = store.list_agents(tmux_session, _detect_tmux_socket())
     click.echo(f"\nAgents: {len(agents)} registered")
     for a in agents:
         seen = _relative_time(a.last_seen)

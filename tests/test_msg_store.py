@@ -37,6 +37,8 @@ def two_agents(store):
         agent_kind=AgentKind.CODEX,
         tmux_socket="/tmp/tmux-test",
         display_addr="test:1.2",
+        pid=222,
+        cwd="/original",
     )
     return a, b
 
@@ -68,8 +70,7 @@ class TestAgentRegistration:
             tmux_session="test",
             agent_kind=AgentKind.CLAUDE,
         )
-        # Same session_id, updated pane
-        assert a2.session_id == a1.session_id
+        assert a2.session_id != a1.session_id
         assert a2.pane_id == "%5"
 
     def test_same_name_different_session_ok(self, store):
@@ -138,7 +139,7 @@ class TestAgentRegistration:
             tmux_session="test",
             agent_kind=AgentKind.CODEX,
         )
-        assert revived.session_id == agent.session_id
+        assert revived.session_id != agent.session_id
         assert store.get_agent_by_name("builder", "test").pane_id == "%2"
 
     def test_retire_refuses_unread_delivery(self, store, two_agents):
@@ -154,6 +155,24 @@ class TestAgentRegistration:
         assert recipient.session_id in {
             agent.session_id for agent in store.list_agents(tmux_session="test")
         }
+
+    def test_retire_releases_an_expired_read_claim(self, store, two_agents):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "Test", sender.session_id, [sender.session_id, recipient.session_id]
+        )
+        store.send_message(thread.id, sender.session_id, "read before expiry")
+        store.claim_pending_deliveries("stale-watcher", claim_duration_secs=-1)
+        store.mark_read(recipient.session_id)
+
+        assert store.retire_agent(recipient.session_id)
+        assert store.get_agent_by_name(
+            recipient.name, recipient.tmux_session, recipient.tmux_socket,
+        ) is None
+        with sqlite3.connect(store.db_path) as conn:
+            assert conn.execute(
+                "SELECT state, claimed_by, claim_expires_at FROM deliveries"
+            ).fetchone() == ("read", None, None)
 
     def test_legacy_database_adds_active_without_losing_agents(self, tmp_path):
         path = tmp_path / "legacy.db"
@@ -176,6 +195,46 @@ class TestAgentRegistration:
         migrated = MsgStore(str(path))
 
         assert migrated.get_agent_by_name("builder", "test").session_id == "old"
+
+    def test_origin_shaped_delivery_rows_are_normalized_once(self, tmp_path):
+        path = tmp_path / "origin.db"
+        original = MsgStore(path)
+        sender = original.register_agent("sender", "%1", "test", AgentKind.CLAUDE)
+        recipient = original.register_agent("recipient", "%2", "test", AgentKind.CODEX)
+        thread = original.create_thread(
+            "work", sender.session_id, [sender.session_id, recipient.session_id]
+        )
+        original.send_message(thread.id, sender.session_id, "pending retry")
+        original.send_message(thread.id, sender.session_id, "failed retry")
+        delivery_ids = [
+            message["delivery_id"] for message in original.get_inbox(recipient.session_id)
+        ]
+        with sqlite3.connect(path) as conn:
+            conn.execute(
+                "UPDATE deliveries SET state = 'pending', notify_attempts = 2, "
+                "last_error = 'timeout' WHERE id = ?",
+                (delivery_ids[0],),
+            )
+            conn.execute(
+                "UPDATE deliveries SET state = 'failed', notify_attempts = 3, "
+                "last_error = 'gave up' WHERE id = ?",
+                (delivery_ids[1],),
+            )
+            conn.execute("PRAGMA user_version = 0")
+
+        MsgStore(path)
+
+        with sqlite3.connect(path) as conn:
+            rows = conn.execute(
+                "SELECT state, notify_attempts, last_error, claimed_by, "
+                "claim_expires_at FROM deliveries ORDER BY id"
+            ).fetchall()
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+        assert rows == [
+            ("pending", 0, None, None, None),
+            ("pending", 0, None, None, None),
+        ]
+        assert version == 1
 
     def test_new_name_on_same_pane_is_refused(self, store):
         old = store.register_agent("old", "%1", "test", AgentKind.CODEX)
@@ -203,13 +262,93 @@ class TestAgentRegistration:
 
         moved = store.retarget_agent(
             recipient.session_id, "%9", "test", "/tmp/tmux-test",
-            "test:1.9", 99, "/new",
+            "test:1.9",
         )
 
         assert (moved.session_id, moved.pane_id, moved.display_addr, moved.pid, moved.cwd) == (
-            recipient.session_id, "%9", "test:1.9", 99, "/new",
+            recipient.session_id, "%9", "test:1.9", 222, "/original",
         )
         assert store.get_inbox(recipient.session_id) == unread
+
+    def test_retarget_refuses_claim_then_succeeds_after_release(self, store, two_agents):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "Test", sender.session_id, [sender.session_id, recipient.session_id]
+        )
+        store.send_message(thread.id, sender.session_id, "in flight")
+        delivery = store.claim_pending_deliveries("watcher")[0]
+
+        with pytest.raises(ValueError, match="actively claimed delivery"):
+            store.retarget_agent(
+                recipient.session_id, "%9", "test", "/tmp/tmux-test"
+            )
+
+        assert store.get_agent_by_id(recipient.session_id).pane_id == "%2"
+        assert store.claim_is_current(delivery["id"], "watcher")
+        store.release_delivery(delivery["id"], "watcher")
+        moved = store.retarget_agent(
+            recipient.session_id, "%9", "test", "/tmp/tmux-test"
+        )
+        assert moved.pane_id == "%9"
+
+    def test_retarget_releases_expired_claim_in_same_transaction(
+        self, store, two_agents,
+    ):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "Test", sender.session_id, [sender.session_id, recipient.session_id]
+        )
+        store.send_message(thread.id, sender.session_id, "expired")
+        store.claim_pending_deliveries("old-watcher", claim_duration_secs=0)
+
+        moved = store.retarget_agent(
+            recipient.session_id, "%9", "test", "/tmp/tmux-test"
+        )
+
+        assert moved.pane_id == "%9"
+        recovered = store.claim_pending_deliveries("new-watcher")
+        assert [item["body"] for item in recovered] == ["expired"]
+
+    def test_retarget_requeues_notified_and_failed_deliveries(self, store, two_agents):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "Test", sender.session_id, [sender.session_id, recipient.session_id]
+        )
+        store.send_message(thread.id, sender.session_id, "notified")
+        delivery = store.claim_pending_deliveries("watcher")[0]
+        store.mark_notified(delivery["id"], "watcher")
+
+        store.send_message(thread.id, sender.session_id, "failed")
+        for _ in range(3):
+            delivery = store.claim_pending_deliveries("watcher")[0]
+            store.mark_delivery_failed(delivery["id"], "watcher", "boom")
+
+        store.retarget_agent(
+            recipient.session_id, "%9", "test", "/tmp/tmux-test"
+        )
+
+        recovered = store.claim_pending_deliveries("new-watcher")
+        assert {item["body"] for item in recovered} == {"notified", "failed"}
+        assert {item["notify_attempts"] for item in recovered} == {0}
+        assert {item["last_error"] for item in recovered} == {None}
+
+    def test_retarget_resets_pending_delivery_failure_budget(self, store, two_agents):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "Test", sender.session_id, [sender.session_id, recipient.session_id]
+        )
+        store.send_message(thread.id, sender.session_id, "pending retry")
+        delivery = store.claim_pending_deliveries("watcher")[0]
+        store.mark_delivery_failed(delivery["id"], "watcher", "timeout")
+
+        store.retarget_agent(
+            recipient.session_id, "%9", "test", "/tmp/tmux-test",
+        )
+
+        recovered = store.claim_pending_deliveries("next-watcher")
+        assert len(recovered) == 1
+        assert recovered[0]["notify_attempts"] == 0
+        assert recovered[0]["last_error"] is None
 
     @pytest.mark.parametrize(
         ("tmux_session", "tmux_socket"),
@@ -460,20 +599,20 @@ class TestDeliveryStateMachine:
 
         assert store.claim_pending_deliveries("watcher") == []
 
-    def test_retirement_wins_claim_and_reregister_races(self, store, two_agents):
+    def test_reregister_gets_fresh_session_and_old_thread_stays_closed(
+        self, store, two_agents,
+    ):
         a, b = two_agents
         thread = store.create_thread("Test", a.session_id, [a.session_id, b.session_id])
         store.send_message(thread.id, a.session_id, "Old work")
-        delivery = store.claim_pending_deliveries("watcher")[0]
         store.mark_read(b.session_id)
         store.retire_agent(b.session_id)
-        store.mark_delivery_failed(delivery["id"], "late watcher")
         revived = store.register_agent("tester", "%3", "test", AgentKind.CODEX, "/tmp/tmux-test")
 
-        assert revived.session_id == b.session_id
-        assert not store.claim_is_current(delivery["id"], "watcher")
-        assert store.get_inbox(b.session_id) == []
-        assert store.claim_pending_deliveries("next-watcher") == []
+        assert revived.session_id != b.session_id
+        with pytest.raises(ValueError, match="recipient became inactive"):
+            store.send_message(thread.id, a.session_id, "Late old-thread work")
+        assert store.get_inbox(revived.session_id) == []
 
     def test_claim_pending(self, store, two_agents):
         a, b = two_agents
@@ -493,6 +632,7 @@ class TestDeliveryStateMachine:
         assert len(claimed) == 1
         assert claimed[0]["body"] == "Claim me"
         assert claimed[0]["recipient_name"] == "tester"
+        assert claimed[0]["recipient_tmux_socket"] == "/tmp/tmux-test"
 
     def test_double_claim_prevented(
         self, store, two_agents,
@@ -520,6 +660,39 @@ class TestDeliveryStateMachine:
         )
         assert len(claimed2) == 0
 
+    @pytest.mark.parametrize(
+        ("method", "extra_args"),
+        (
+            ("mark_notified", ()),
+            ("mark_delivery_failed", ("late failure",)),
+            ("release_delivery", ()),
+        ),
+    )
+    def test_stale_claim_owner_cannot_mutate_after_claim_theft(
+        self, store, two_agents, method, extra_args,
+    ):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "Test", sender.session_id, [sender.session_id, recipient.session_id]
+        )
+        store.send_message(thread.id, sender.session_id, "Claim theft")
+        delivery = store.claim_pending_deliveries(
+            "old-watcher", claim_duration_secs=-1,
+        )[0]
+        stolen = store.claim_pending_deliveries("new-watcher")[0]
+        assert stolen["id"] == delivery["id"]
+
+        getattr(store, method)(delivery["id"], "old-watcher", *extra_args)
+
+        assert store.claim_is_current(delivery["id"], "new-watcher")
+        with sqlite3.connect(store.db_path) as conn:
+            row = conn.execute(
+                "SELECT state, claimed_by, notify_attempts, last_error "
+                "FROM deliveries WHERE id = ?",
+                (delivery["id"],),
+            ).fetchone()
+        assert row == ("claimed", "new-watcher", 0, None)
+
     def test_mark_notified(self, store, two_agents):
         a, b = two_agents
         thread = store.create_thread(
@@ -535,7 +708,7 @@ class TestDeliveryStateMachine:
         claimed = store.claim_pending_deliveries(
             "watcher-1",
         )
-        store.mark_notified(claimed[0]["id"])
+        store.mark_notified(claimed[0]["id"], "watcher-1")
 
         # Should not be claimable again
         claimed2 = store.claim_pending_deliveries(
@@ -562,7 +735,7 @@ class TestDeliveryStateMachine:
             "watcher-1",
         )
         store.mark_delivery_failed(
-            claimed[0]["id"], error="timeout",
+            claimed[0]["id"], "watcher-1", error="timeout",
         )
 
         # Should be claimable again (back to pending)
@@ -593,6 +766,7 @@ class TestDeliveryStateMachine:
             if claimed:
                 store.mark_delivery_failed(
                     claimed[0]["id"],
+                    "watcher-1",
                     error="timeout",
                     max_attempts=3,
                 )
@@ -632,6 +806,43 @@ class TestDeliveryStateMachine:
             "watcher-2",
         )
         assert len(claimed2) == 1
+
+    def test_releasing_expired_read_claim_preserves_read_state(
+        self, store, two_agents,
+    ):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "Test", sender.session_id, [sender.session_id, recipient.session_id]
+        )
+        store.send_message(thread.id, sender.session_id, "already read")
+        store.claim_pending_deliveries("stale-watcher", claim_duration_secs=-1)
+        store.mark_read(recipient.session_id)
+
+        assert store.release_expired_claims() == 1
+        assert store.get_inbox(recipient.session_id) == []
+        with sqlite3.connect(store.db_path) as conn:
+            assert conn.execute(
+                "SELECT state, claimed_by, claim_expires_at FROM deliveries"
+            ).fetchone() == ("read", None, None)
+
+    def test_normal_release_does_not_consume_failure_attempts(
+        self, store, two_agents,
+    ):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "Test", sender.session_id, [sender.session_id, recipient.session_id]
+        )
+        store.send_message(thread.id, sender.session_id, "wait for idle")
+
+        for i in range(5):
+            delivery = store.claim_pending_deliveries(f"watcher-{i}")[0]
+            assert delivery["notify_attempts"] == 0
+            store.release_delivery(delivery["id"], f"watcher-{i}")
+
+        delivery = store.claim_pending_deliveries("watcher-error")[0]
+        store.mark_delivery_failed(delivery["id"], "watcher-error", "tmux failed")
+        retried = store.claim_pending_deliveries("watcher-retry")[0]
+        assert retried["notify_attempts"] == 1
 
 
 class TestWatcherHeartbeat:

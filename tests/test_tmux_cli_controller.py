@@ -1,11 +1,10 @@
 """Tests for tmux_cli_controller."""
-from unittest.mock import patch, MagicMock, call
-import time
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from claude_code_tools import tmux_execution_helpers
-from claude_code_tools.tmux_cli_controller import TmuxCLIController
+from claude_code_tools.tmux_cli_controller import CLI, TmuxCLIController
 
 
 class TestFormatPaneIdentifier:
@@ -127,6 +126,68 @@ class TestCreatePane:
         result = controller.create_pane()
 
         assert result is None
+
+
+class TestSendKeys:
+    """Native tmux failures must propagate to the CLI process."""
+
+    @patch.object(TmuxCLIController, "_run_tmux_command")
+    def test_send_keys_raises_when_native_tmux_fails(self, mock_run):
+        mock_run.return_value = ("tmux error", 1)
+
+        controller = TmuxCLIController()
+
+        with pytest.raises(RuntimeError, match="tmux send-keys failed"):
+            controller.send_keys("hello", pane_id="%1", delay_enter=False)
+
+    @patch("time.sleep")
+    @patch.object(TmuxCLIController, "_run_tmux_command")
+    def test_delayed_enter_raises_when_native_tmux_fails(
+        self, mock_run, _mock_sleep,
+    ):
+        mock_run.side_effect = [("", 0), ("tmux error", 1)]
+
+        controller = TmuxCLIController()
+
+        with pytest.raises(RuntimeError, match="tmux Enter failed"):
+            controller.send_keys(
+                "hello", pane_id="%1", delay_enter=0.01, verify_enter=False,
+            )
+
+    @patch("time.sleep")
+    @patch.object(TmuxCLIController, "capture_pane", return_value="unchanged")
+    @patch.object(TmuxCLIController, "_run_tmux_command", return_value=("", 0))
+    def test_delayed_enter_raises_after_verification_retries(
+        self, mock_run, _mock_capture, _mock_sleep,
+    ):
+        with pytest.raises(RuntimeError, match="tmux Enter was not accepted"):
+            TmuxCLIController().send_keys(
+                "hello", pane_id="%1", delay_enter=0.01, max_retries=2,
+            )
+        assert mock_run.call_count == 3
+
+
+class TestCLIExitFailures:
+    """Fire exits nonzero when these command methods propagate exceptions."""
+
+    def test_send_propagates_native_failure(self):
+        command = object.__new__(CLI)
+        command.mode = "local"
+        command.controller = MagicMock()
+        command.controller.resolve_pane_identifier.return_value = "%1"
+        command.controller.send_keys.side_effect = RuntimeError("tmux failed")
+
+        with pytest.raises(RuntimeError, match="tmux failed"):
+            command.send("hello", pane="%1", delay_enter=False)
+
+    def test_wait_idle_timeout_raises(self):
+        command = object.__new__(CLI)
+        command.mode = "local"
+        command.controller = MagicMock()
+        command.controller.wait_for_idle.return_value = False
+
+        with pytest.raises(TimeoutError, match="Timeout waiting for idle"):
+            command.wait_idle(timeout=0)
 
 class TestExecute:
     """Tests for execute method."""

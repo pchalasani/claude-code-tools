@@ -17,6 +17,17 @@ def _mock_capture(lines: list[str]):
 
 class TestPromptDetection:
 
+    @patch("claude_code_tools.msg.prompt_detect.subprocess.run")
+    def test_capture_targets_registered_tmux_socket(self, run):
+        run.return_value.returncode = 0
+        run.return_value.stdout = "› \n"
+
+        result = detect_prompt_state("%2", "codex", "/tmp/tmux-b")
+
+        assert result == PromptState.EMPTY
+        assert run.call_args.args[0][:3] == ["tmux", "-S", "/tmp/tmux-b"]
+
+
     @patch(
         "claude_code_tools.msg.prompt_detect"
         "._capture_last_lines",
