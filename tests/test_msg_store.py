@@ -54,13 +54,14 @@ class TestAgentRegistration:
         assert agent.pane_id == "%1"
         assert agent.session_id is not None
 
-    def test_re_register_updates_pane(self, store):
+    def test_re_register_updates_pane_after_retirement(self, store):
         a1 = store.register_agent(
             name="architect",
             pane_id="%1",
             tmux_session="test",
             agent_kind=AgentKind.CLAUDE,
         )
+        assert store.retire_agent(a1.session_id)
         a2 = store.register_agent(
             name="architect",
             pane_id="%5",
@@ -140,6 +141,20 @@ class TestAgentRegistration:
         assert revived.session_id == agent.session_id
         assert store.get_agent_by_name("builder", "test").pane_id == "%2"
 
+    def test_retire_refuses_unread_delivery(self, store, two_agents):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "Test", sender.session_id, [sender.session_id, recipient.session_id]
+        )
+        store.send_message(thread.id, sender.session_id, "read me")
+
+        with pytest.raises(ValueError, match="1 unread delivery"):
+            store.retire_agent(recipient.session_id)
+
+        assert recipient.session_id in {
+            agent.session_id for agent in store.list_agents(tmux_session="test")
+        }
+
     def test_legacy_database_adds_active_without_losing_agents(self, tmp_path):
         path = tmp_path / "legacy.db"
         conn = sqlite3.connect(path)
@@ -162,13 +177,21 @@ class TestAgentRegistration:
 
         assert migrated.get_agent_by_name("builder", "test").session_id == "old"
 
-    def test_new_name_on_same_pane_retires_old_identity(self, store):
+    def test_new_name_on_same_pane_is_refused(self, store):
         old = store.register_agent("old", "%1", "test", AgentKind.CODEX)
-        new = store.register_agent("new", "%1", "test", AgentKind.CODEX)
 
-        assert store.get_agent_by_name("old", "test") is None
-        assert [agent.session_id for agent in store.list_agents("test")] == [new.session_id]
-        assert store.get_agent_by_id(old.session_id) is not None
+        with pytest.raises(ValueError, match="pane already has"):
+            store.register_agent("new", "%1", "test", AgentKind.CODEX)
+
+        assert [agent.session_id for agent in store.list_agents("test")] == [old.session_id]
+
+    def test_active_name_cannot_move_without_retirement(self, store):
+        old = store.register_agent("old", "%1", "test", AgentKind.CODEX)
+
+        with pytest.raises(ValueError, match="already active at %1"):
+            store.register_agent("old", "%2", "test", AgentKind.CODEX)
+
+        assert store.get_agent_by_id(old.session_id).pane_id == "%1"
 
     def test_touch_agent(self, store, two_agents):
         a, _ = two_agents
@@ -364,6 +387,21 @@ class TestMessages:
 
 class TestDeliveryStateMachine:
 
+    def test_send_refuses_a_recipient_retired_after_thread_resolution(
+        self, store, two_agents,
+    ):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "Test", sender.session_id, [sender.session_id, recipient.session_id]
+        )
+        assert store.retire_agent(recipient.session_id)
+
+        with pytest.raises(ValueError, match="recipient became inactive"):
+            store.send_message(thread.id, sender.session_id, "late work")
+
+        with sqlite3.connect(store.db_path) as conn:
+            assert conn.execute("SELECT count(*) FROM messages").fetchone()[0] == 0
+
     def test_retired_recipient_is_not_claimed(self, store, two_agents):
         a, b = two_agents
         thread = store.create_thread(
@@ -372,7 +410,7 @@ class TestDeliveryStateMachine:
             participant_ids=[a.session_id, b.session_id],
         )
         store.send_message(thread.id, a.session_id, "Keep for history")
-
+        store.mark_read(b.session_id)
         store.retire_agent(b.session_id)
 
         assert store.claim_pending_deliveries("watcher") == []
@@ -382,7 +420,7 @@ class TestDeliveryStateMachine:
         thread = store.create_thread("Test", a.session_id, [a.session_id, b.session_id])
         store.send_message(thread.id, a.session_id, "Old work")
         delivery = store.claim_pending_deliveries("watcher")[0]
-
+        store.mark_read(b.session_id)
         store.retire_agent(b.session_id)
         store.mark_delivery_failed(delivery["id"], "late watcher")
         revived = store.register_agent("tester", "%3", "test", AgentKind.CODEX, "/tmp/tmux-test")

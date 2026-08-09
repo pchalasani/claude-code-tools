@@ -322,16 +322,19 @@ def register(
     tmux_socket = _detect_tmux_socket()
     display_addr = _detect_display_addr()
 
-    result = store.register_agent(
-        name=name,
-        pane_id=pane_id,
-        tmux_session=tmux_session,
-        agent_kind=agent_kind,
-        tmux_socket=tmux_socket,
-        display_addr=display_addr,
-        pid=os.getpid(),
-        cwd=os.getcwd(),
-    )
+    try:
+        result = store.register_agent(
+            name=name,
+            pane_id=pane_id,
+            tmux_session=tmux_session,
+            agent_kind=agent_kind,
+            tmux_socket=tmux_socket,
+            display_addr=display_addr,
+            pid=os.getpid(),
+            cwd=os.getcwd(),
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
     click.echo(
         f"Registered as '{name}' "
         f"(session={result.session_id[:8]}..., "
@@ -362,7 +365,11 @@ def unregister(ctx: click.Context, name: str | None, session_id: str | None) -> 
     if not agent:
         click.echo("Error: registration not found.", err=True)
         sys.exit(1)
-    if not store.retire_agent(agent.session_id):
+    try:
+        retired = store.retire_agent(agent.session_id)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if not retired:
         click.echo(f"Error: agent '{agent.name}' is already retired.", err=True)
         sys.exit(1)
     click.echo(f"Unregistered '{agent.name}' (history preserved)")
@@ -539,11 +546,14 @@ def send(
         created_by=me.session_id,
     )
 
-    store.send_message(
-        thread_id=thread.id,
-        from_agent=me.session_id,
-        body=body,
-    )
+    try:
+        store.send_message(
+            thread_id=thread.id,
+            from_agent=me.session_id,
+            body=body,
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
 
     if not store.is_watcher_alive():
         click.echo(

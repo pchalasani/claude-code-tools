@@ -161,12 +161,19 @@ class MsgStore:
         now = _now_iso()
         conn = self._get_conn()
         try:
+            conn.execute("BEGIN IMMEDIATE")
             existing = conn.execute(
-                """SELECT session_id FROM agents
+                """SELECT session_id, active, pane_id FROM agents
                 WHERE name = ? AND tmux_session = ?
                 AND (tmux_socket IS ? OR tmux_socket = ?)""",
                 (name, tmux_session, tmux_socket, tmux_socket),
             ).fetchone()
+
+            if existing and existing["active"] and existing["pane_id"] != pane_id:
+                raise ValueError(
+                    f"agent '{name}' is already active at {existing['pane_id']}; "
+                    "unregister it first"
+                )
 
             others = conn.execute(
                 """SELECT session_id FROM agents
@@ -179,8 +186,8 @@ class MsgStore:
                     existing["session_id"] if existing else None,
                 ),
             ).fetchall()
-            for other in others:
-                self._retire_agent(conn, other["session_id"])
+            if others:
+                raise ValueError("pane already has an active msg registration")
 
             if existing:
                 session_id = existing["session_id"]
@@ -289,6 +296,16 @@ class MsgStore:
         """Hide an agent from live routing while preserving its history."""
         conn = self._get_conn()
         try:
+            conn.execute("BEGIN IMMEDIATE")
+            unread = conn.execute(
+                "SELECT count(*) FROM deliveries WHERE recipient_id = ? "
+                "AND state NOT IN ('read', 'retired')",
+                (session_id,),
+            ).fetchone()[0]
+            if unread:
+                raise ValueError(
+                    f"agent has {unread} unread delivery; drain it before unregistering"
+                )
             changed = self._retire_agent(conn, session_id)
             conn.commit()
             return changed
@@ -485,9 +502,24 @@ class MsgStore:
             from_agent=from_agent,
             body=body,
         )
-        participants = self.get_thread_participants(thread_id)
         conn = self._get_conn()
         try:
+            conn.execute("BEGIN IMMEDIATE")
+            participants = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT agent_id FROM thread_participants WHERE thread_id = ?",
+                    (thread_id,),
+                )
+            ]
+            inactive = conn.execute(
+                "SELECT count(*) FROM agents WHERE session_id IN "
+                "(SELECT agent_id FROM thread_participants WHERE thread_id = ?) "
+                "AND active = 0",
+                (thread_id,),
+            ).fetchone()[0]
+            if inactive:
+                raise ValueError("message recipient became inactive; resolve it again")
             conn.execute(
                 """INSERT INTO messages
                     (id, thread_id, from_agent, body,
