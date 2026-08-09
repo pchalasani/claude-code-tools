@@ -1,5 +1,7 @@
 """Small CLI wiring checks."""
 
+import os
+
 from click.testing import CliRunner
 
 from claude_code_tools.msg.cli import _ensure_watcher_running, cli
@@ -58,3 +60,30 @@ def test_unregister_refuses_unread_delivery(tmp_path):
     assert result.exit_code == 1
     assert "1 unread delivery" in result.output
     assert store.get_agent_by_name("lane-4", "moscow") is not None
+
+
+def test_retarget_exact_session(monkeypatch, tmp_path):
+    path = tmp_path / "msg.db"
+    store = MsgStore(path)
+    agent = store.register_agent(
+        "lane-4", "%4", "moscow", AgentKind.CODEX, "/tmp/tmux"
+    )
+    monkeypatch.setattr("claude_code_tools.msg.cli._ensure_watcher_running", lambda _store: None)
+    monkeypatch.setattr(
+        "claude_code_tools.msg.cli._detect_tmux_session", lambda _pane=None: "moscow"
+    )
+    monkeypatch.setattr("claude_code_tools.msg.cli._detect_tmux_socket", lambda: "/tmp/tmux")
+    monkeypatch.setattr(
+        "claude_code_tools.msg.cli._detect_display_addr", lambda _pane=None: "moscow:0.9"
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["--db", str(path), "retarget", "--session-id", agent.session_id, "--pane", "%9"],
+    )
+
+    assert result.exit_code == 0, result.output
+    moved = store.get_agent_by_id(agent.session_id)
+    assert (moved.pane_id, moved.display_addr, moved.pid, moved.cwd) == (
+        "%9", "moscow:0.9", os.getpid(), os.getcwd(),
+    )

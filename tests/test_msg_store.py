@@ -193,6 +193,51 @@ class TestAgentRegistration:
 
         assert store.get_agent_by_id(old.session_id).pane_id == "%1"
 
+    def test_retarget_preserves_unread_delivery(self, store, two_agents):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "Test", sender.session_id, [sender.session_id, recipient.session_id]
+        )
+        store.send_message(thread.id, sender.session_id, "keep me")
+        unread = store.get_inbox(recipient.session_id)
+
+        moved = store.retarget_agent(
+            recipient.session_id, "%9", "test", "/tmp/tmux-test",
+            "test:1.9", 99, "/new",
+        )
+
+        assert (moved.session_id, moved.pane_id, moved.display_addr, moved.pid, moved.cwd) == (
+            recipient.session_id, "%9", "test:1.9", 99, "/new",
+        )
+        assert store.get_inbox(recipient.session_id) == unread
+
+    @pytest.mark.parametrize(
+        ("tmux_session", "tmux_socket"),
+        (("other", "/tmp/tmux-test"), ("test", "/tmp/other")),
+    )
+    def test_retarget_refuses_wrong_scope(self, store, tmux_session, tmux_socket):
+        agent = store.register_agent(
+            "builder", "%1", "test", AgentKind.CODEX, "/tmp/tmux-test"
+        )
+
+        with pytest.raises(ValueError, match="outside the requested tmux scope"):
+            store.retarget_agent(agent.session_id, "%9", tmux_session, tmux_socket)
+
+        assert store.get_agent_by_id(agent.session_id).pane_id == "%1"
+
+    def test_retarget_refuses_stale_or_occupied_target(self, store):
+        stale = store.register_agent("stale", "%1", "test", AgentKind.CODEX)
+        assert store.retire_agent(stale.session_id)
+        with pytest.raises(ValueError, match="active registration not found"):
+            store.retarget_agent(stale.session_id, "%9", "test")
+
+        moving = store.register_agent("moving", "%2", "test", AgentKind.CODEX)
+        store.register_agent("occupant", "%9", "test", AgentKind.CODEX)
+        with pytest.raises(ValueError, match="target pane already has"):
+            store.retarget_agent(moving.session_id, "%9", "test")
+
+        assert store.get_agent_by_id(moving.session_id).pane_id == "%2"
+
     def test_touch_agent(self, store, two_agents):
         a, _ = two_agents
         old_seen = a.last_seen

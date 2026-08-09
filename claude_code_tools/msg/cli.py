@@ -58,9 +58,9 @@ def _detect_tmux_pane() -> str | None:
     return os.environ.get("TMUX_PANE")
 
 
-def _detect_tmux_session() -> str | None:
+def _detect_tmux_session(pane: str | None = None) -> str | None:
     """Auto-detect current tmux session name."""
-    pane = os.environ.get("TMUX_PANE")
+    pane = pane or os.environ.get("TMUX_PANE")
     try:
         cmd = ["tmux", "display-message", "-p",
                "#{session_name}"]
@@ -89,9 +89,9 @@ def _detect_tmux_socket() -> str | None:
     return None
 
 
-def _detect_display_addr() -> str | None:
+def _detect_display_addr(pane: str | None = None) -> str | None:
     """Auto-detect full pane address (session:window.pane)."""
-    pane = os.environ.get("TMUX_PANE")
+    pane = pane or os.environ.get("TMUX_PANE")
     try:
         fmt = ("#{session_name}:#{window_index}."
                "#{pane_index}")
@@ -374,6 +374,31 @@ def unregister(ctx: click.Context, name: str | None, session_id: str | None) -> 
         click.echo(f"Error: agent '{agent.name}' is already retired.", err=True)
         sys.exit(1)
     click.echo(f"Unregistered '{agent.name}' (history preserved)")
+
+
+@cli.command()
+@click.option("--session-id", required=True, help="Exact active registration to move.")
+@click.option("--pane", required=True, help="Destination tmux pane ID.")
+@click.pass_context
+def retarget(ctx: click.Context, session_id: str, pane: str) -> None:
+    """Move one exact active registration to another pane."""
+    store: MsgStore = ctx.obj["store"]
+    tmux_session = _detect_tmux_session(pane)
+    if not tmux_session:
+        raise click.ClickException(f"cannot resolve tmux session for pane {pane}")
+    try:
+        agent = store.retarget_agent(
+            session_id=session_id,
+            pane_id=pane,
+            tmux_session=tmux_session,
+            tmux_socket=_detect_tmux_socket(),
+            display_addr=_detect_display_addr(pane),
+            pid=os.getpid(),
+            cwd=os.getcwd(),
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Retargeted '{agent.name}' to {agent.display_addr or agent.pane_id}")
 
 
 @cli.command("list")

@@ -312,6 +312,53 @@ class MsgStore:
         finally:
             conn.close()
 
+    def retarget_agent(
+        self,
+        session_id: str,
+        pane_id: str,
+        tmux_session: str,
+        tmux_socket: str | None = None,
+        display_addr: str | None = None,
+        pid: int | None = None,
+        cwd: str | None = None,
+    ) -> Agent:
+        """Move one exact active agent within its existing tmux scope."""
+        conn = self._get_conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute(
+                "SELECT * FROM agents WHERE session_id = ? AND active = 1",
+                (session_id,),
+            ).fetchone()
+            if not current:
+                raise ValueError("active registration not found")
+            if (
+                current["tmux_session"] != tmux_session
+                or current["tmux_socket"] != tmux_socket
+            ):
+                raise ValueError("registration is outside the requested tmux scope")
+            occupied = conn.execute(
+                """SELECT 1 FROM agents WHERE active = 1 AND pane_id = ?
+                AND tmux_session = ? AND (tmux_socket IS ? OR tmux_socket = ?)
+                AND session_id != ?""",
+                (pane_id, tmux_session, tmux_socket, tmux_socket, session_id),
+            ).fetchone()
+            if occupied:
+                raise ValueError("target pane already has an active msg registration")
+            conn.execute(
+                """UPDATE agents SET pane_id = ?, display_addr = ?, pid = ?, cwd = ?,
+                    last_seen = ? WHERE session_id = ? AND active = 1""",
+                (pane_id, display_addr, pid, cwd, _now_iso(), session_id),
+            )
+            moved = conn.execute(
+                "SELECT * FROM agents WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            conn.commit()
+            return self._row_to_agent(moved)
+        finally:
+            conn.close()
+
     def touch_agent(self, session_id: str) -> None:
         """Update last_seen for an agent."""
         conn = self._get_conn()
