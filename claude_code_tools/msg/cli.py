@@ -271,7 +271,7 @@ def cli(
             )
             sys.exit(1)
 
-    store = _get_store(db=db, local=local)
+    store = _get_store(db_path=db, local=local)
     ctx.obj["store"] = store
     if ctx.invoked_subcommand != "watch":
         _ensure_watcher_running(store)
