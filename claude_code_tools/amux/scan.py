@@ -47,11 +47,14 @@ def _tmux(*args: str) -> str:
     return out.stdout if out.returncode == 0 else ""
 
 
-def _child_argv_by_ppid() -> dict[int, str]:
-    """Map each PID to the joined command lines of its direct children.
+def _children_by_ppid() -> dict[int, list[tuple[int, str]]]:
+    """Map each PID to its direct children as ``(pid, command_line)`` pairs.
 
-    One ``ps`` call for the whole process table; the alternative is a fork per
-    pane, which dominated the old runtime.
+    One ``ps`` call for the whole process table; a fork per pane dominated the
+    original runtime. Keeping the child PIDs here (rather than a second
+    ``pgrep``) also means agent-PID selection sees full command lines --
+    ``pgrep -l`` reports only the executable name, which is ``node`` for Codex
+    and therefore unidentifiable.
     """
     try:
         out = subprocess.run(
@@ -63,44 +66,34 @@ def _child_argv_by_ppid() -> dict[int, str]:
     except (OSError, subprocess.SubprocessError):
         return {}
 
-    children: dict[int, list[str]] = {}
+    children: dict[int, list[tuple[int, str]]] = {}
     for line in out.splitlines():
         parts = line.strip().split(None, 2)
         if len(parts) < 3:
             continue
         try:
-            ppid = int(parts[0])
+            ppid, pid = int(parts[0]), int(parts[1])
         except ValueError:
             continue
-        children.setdefault(ppid, []).append(parts[2])
-    return {ppid: "\n".join(cmds) for ppid, cmds in children.items()}
+        children.setdefault(ppid, []).append((pid, parts[2]))
+    return children
 
 
-def _child_pid(ppid: int, kind: str) -> int:
-    """PID of the agent process under a pane's shell.
+def argv_of(children: list[tuple[int, str]]) -> str:
+    """Joined command lines, for harness classification."""
+    return "\n".join(cmd for _, cmd in children)
 
-    Matches on *kind* rather than taking the first child: a pane running
-    ``sleep 600 &`` alongside an agent would otherwise report the sleep's PID.
+
+def agent_pid(children: list[tuple[int, str]], kind: str) -> int:
+    """PID of the child matching *kind*, else the first child, else 0.
+
+    Matching on kind matters: a pane running ``sleep 600 &`` alongside an
+    agent would otherwise report the sleep's PID.
     """
-    try:
-        out = subprocess.run(
-            ["pgrep", "-P", str(ppid), "-l"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return 0
-    fallback = 0
-    for line in out.splitlines():
-        parts = line.split(None, 1)
-        if len(parts) != 2 or not parts[0].isdigit():
-            continue
-        pid = int(parts[0])
-        fallback = fallback or pid
-        if detect.classify_argv(parts[1]) == kind:
+    for pid, cmd in children:
+        if detect.classify_argv(cmd) == kind:
             return pid
-    return fallback
+    return children[0][0] if children else 0
 
 
 def capture(pane: str, lines: int = 40) -> str:
@@ -162,10 +155,13 @@ def scan(workers: int = 16) -> list[Agent]:
     if not listing:
         return []
 
-    argv_map = _child_argv_by_ppid()
+    child_map = _children_by_ppid()
     candidates: list[tuple[str, str, int, str, str, str]] = []
     for record in listing.split(_REC):
-        record = record.strip("\n")
+        # tmux terminates each -F line with a newline AFTER our record marker,
+        # so exactly one leading newline is separator; anything else is data
+        # (a path may legitimately end in a newline).
+        record = record[1:] if record.startswith("\n") else record
         if not record:
             continue
         parts = record.split(_SEP)
@@ -176,8 +172,8 @@ def scan(workers: int = 16) -> list[Agent]:
             ppid = int(pid_s)
         except ValueError:
             continue
-        argv = argv_map.get(ppid, "")
-        kind = detect.classify_argv(argv)
+        children = child_map.get(ppid, [])
+        kind = detect.classify_argv(argv_of(children))
         if kind is None:
             continue
         candidates.append((pane, session, ppid, title, cwd, kind))
@@ -201,13 +197,15 @@ def scan(workers: int = 16) -> list[Agent]:
                 session=session,
                 kind=kind,  # type: ignore[arg-type]
                 state=detect.detect_state(screen, kind),  # type: ignore[arg-type]
-                name=detect.extract_name(argv_map.get(ppid, ""), title, screen),
+                name=detect.extract_name(
+                    argv_of(child_map.get(ppid, [])), title, screen
+                ),
                 cwd=cwd,
                 repo=repo,
                 branch=branch,
                 model=detect.extract_model(screen, kind),  # type: ignore[arg-type]
                 info=detect.extract_info(screen, kind),  # type: ignore[arg-type]
-                pid=_child_pid(ppid, kind),
+                pid=agent_pid(child_map.get(ppid, []), kind),
             )
         )
 

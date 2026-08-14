@@ -307,9 +307,9 @@ class TestScanWithStubbedTmux:
         ]
         monkeypatch.setattr(scan_mod, "_tmux", lambda *a: (
             self._listing(rows) if a[0] == "list-panes" else "agent screen text"))
-        monkeypatch.setattr(scan_mod, "_child_argv_by_ppid",
-                            lambda: {100: "claude --resume alpha", 200: "vim x"})
-        monkeypatch.setattr(scan_mod, "_child_pid", lambda ppid, kind: ppid + 1)
+        monkeypatch.setattr(scan_mod, "_children_by_ppid",
+                            lambda: {100: [(101, "claude --resume alpha")],
+                                     200: [(201, "vim x")]})
         agents = scan_mod.scan(workers=2)
         assert [a.pane for a in agents] == ["s:1.1"]
         assert agents[0].name == "alpha" and agents[0].pid == 101
@@ -321,9 +321,8 @@ class TestScanWithStubbedTmux:
         rows = [("s:1.1", "s", "100", "t", "/tmp")]
         monkeypatch.setattr(scan_mod, "_tmux", lambda *a: (
             self._listing(rows) if a[0] == "list-panes" else ""))
-        monkeypatch.setattr(scan_mod, "_child_argv_by_ppid",
-                            lambda: {100: "codex --yolo"})
-        monkeypatch.setattr(scan_mod, "_child_pid", lambda ppid, kind: 0)
+        monkeypatch.setattr(scan_mod, "_children_by_ppid",
+                            lambda: {100: [(101, "codex --yolo")]})
         assert scan_mod.scan(workers=1) == []
 
     def test_no_panes_at_all(self, monkeypatch) -> None:
@@ -367,16 +366,22 @@ class TestGitContext:
 
 
 class TestCli:
-    def test_default_command_keeps_global_options(self) -> None:
-        """Regression: `amux --max-age 0` used to fall back to the 30s default."""
+    def test_default_command_keeps_global_options(self, monkeypatch) -> None:
+        """Regression: `amux --max-age 0` fell back to the 30s default.
+
+        Drives main() so that reverting the argv rewrite fails this test.
+        """
         from claude_code_tools.amux import cli
 
-        parser = cli.build_parser()
-        raw = ["--max-age", "0"]
-        if not any(t in {"pick", "list", "scan", "rows"} for t in raw):
-            raw.append("pick")
-        args = parser.parse_args(raw)
-        assert args.max_age == 0.0 and args.func is cli.cmd_pick
+        seen: dict[str, object] = {}
+        monkeypatch.setattr(cli.scan, "tmux_available", lambda: True)
+        # build_parser() resolves cmd_pick when main() calls it, so patching
+        # the module global here is enough to intercept the dispatch.
+        monkeypatch.setattr(
+            cli, "cmd_pick", lambda a: seen.update(max_age=a.max_age) or 0
+        )
+        cli.main(["--max-age", "0"])
+        assert seen["max_age"] == 0.0
 
     def test_explicit_subcommand_still_parses(self) -> None:
         from claude_code_tools.amux import cli
@@ -384,13 +389,44 @@ class TestCli:
         args = cli.build_parser().parse_args(["list", "--json"])
         assert args.json is True and args.func is cli.cmd_list
 
-    def test_interpreter_path_is_shell_quoted(self) -> None:
-        """fzf binds run through a shell; a spaced venv path must survive."""
-        import shlex
+    def test_fzf_bind_quotes_a_spaced_interpreter_path(self, monkeypatch) -> None:
+        """The reload bind is shell-executed; a spaced venv path must survive.
 
-        quoted = shlex.quote("/tmp/my venv/bin/python")
-        assert quoted != "/tmp/my venv/bin/python"
-        assert shlex.split(f"{quoted} -m x")[0] == "/tmp/my venv/bin/python"
+        Asserts on the actual argv handed to fzf, so removing shlex.quote()
+        from cmd_pick() fails this test.
+        """
+        import shlex as _shlex
+
+        from claude_code_tools.amux import cli
+        from claude_code_tools.amux.model import Agent as _A
+
+        captured: dict[str, list[str]] = {}
+
+        class _Proc:
+            returncode = 1
+            stdout = ""
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return _Proc()
+
+        monkeypatch.setattr(cli.sys, "executable", "/tmp/my venv/bin/python")
+        monkeypatch.setattr(cli.shutil, "which", lambda _: "/usr/bin/fzf")
+        monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
+        monkeypatch.setattr(
+            cli, "_agents_for_display",
+            lambda _: ([_A(pane="a:1.1", session="a", kind="claude")], False),
+        )
+        monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+        import argparse as _ap
+
+        cli.cmd_pick(_ap.Namespace(max_age=30.0))
+        binds = [c for c in captured["cmd"] if "reload(" in c]
+        assert binds, "no reload bind was built"
+        inner = binds[0].split("reload(", 1)[1].rstrip(")")
+        assert _shlex.split(inner)[0] == "/tmp/my venv/bin/python"
 
 
 class TestRecordParsing:
@@ -409,9 +445,8 @@ class TestRecordParsing:
         rec = scan_mod._SEP.join(["s:1.1", "s", "100", "title", cwd])
         monkeypatch.setattr(scan_mod, "_tmux", lambda *a: (
             rec + scan_mod._REC if a[0] == "list-panes" else "screen"))
-        monkeypatch.setattr(scan_mod, "_child_argv_by_ppid",
-                            lambda: {100: "claude --resume x"})
-        monkeypatch.setattr(scan_mod, "_child_pid", lambda ppid, kind: 1)
+        monkeypatch.setattr(scan_mod, "_children_by_ppid",
+                            lambda: {100: [(101, "claude --resume x")]})
         agents = scan_mod.scan(workers=1)
         assert agents[0].cwd == cwd
 
@@ -421,10 +456,31 @@ class TestRecordParsing:
         rec = scan_mod._SEP.join(["s:1.1", "s", "100", "two\nlines", "/tmp"])
         monkeypatch.setattr(scan_mod, "_tmux", lambda *a: (
             rec + scan_mod._REC if a[0] == "list-panes" else "screen"))
-        monkeypatch.setattr(scan_mod, "_child_argv_by_ppid",
-                            lambda: {100: "codex --yolo"})
-        monkeypatch.setattr(scan_mod, "_child_pid", lambda ppid, kind: 1)
+        monkeypatch.setattr(scan_mod, "_children_by_ppid",
+                            lambda: {100: [(101, "codex --yolo")]})
         assert [a.pane for a in scan_mod.scan(workers=1)] == ["s:1.1"]
+
+    def test_scan_requests_the_record_terminator(self, monkeypatch) -> None:
+        """The format string itself must carry the marker.
+
+        Regression: proving a synthetic REC-delimited string can be split says
+        nothing about what scan() asks tmux for.
+        """
+        from claude_code_tools.amux import scan as scan_mod
+
+        seen: dict[str, str] = {}
+
+        def fake_tmux(*args):
+            if args[0] == "list-panes":
+                seen["fmt"] = args[-1]
+            return ""
+
+        monkeypatch.setattr(scan_mod, "_tmux", fake_tmux)
+        scan_mod.scan()
+        # Assert the literal, not scan_mod._REC -- comparing against the
+        # module constant passes even if that constant is emptied.
+        assert seen["fmt"].endswith("\x1e")
+        assert "s/" not in seen["fmt"], "must not use tmux format substitution"
 
     def test_multiple_records_split_correctly(self, monkeypatch) -> None:
         from claude_code_tools.amux import scan as scan_mod
@@ -436,7 +492,7 @@ class TestRecordParsing:
         )
         monkeypatch.setattr(scan_mod, "_tmux", lambda *a: (
             recs if a[0] == "list-panes" else "screen"))
-        monkeypatch.setattr(scan_mod, "_child_argv_by_ppid",
-                            lambda: {100 + i: "claude x" for i in range(3)})
-        monkeypatch.setattr(scan_mod, "_child_pid", lambda ppid, kind: 1)
+        monkeypatch.setattr(scan_mod, "_children_by_ppid",
+                            lambda: {100 + i: [(200 + i, "claude x")]
+                                     for i in range(3)})
         assert len(scan_mod.scan(workers=2)) == 3
