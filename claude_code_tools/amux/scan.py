@@ -69,15 +69,30 @@ def _child_argv_by_ppid() -> dict[int, str]:
 
 
 def _child_pid(ppid: int, kind: str) -> int:
-    """Find the PID of the agent process under a pane's shell."""
+    """PID of the agent process under a pane's shell.
+
+    Matches on *kind* rather than taking the first child: a pane running
+    ``sleep 600 &`` alongside an agent would otherwise report the sleep's PID.
+    """
     try:
         out = subprocess.run(
-            ["pgrep", "-P", str(ppid)], capture_output=True, text=True, timeout=5
+            ["pgrep", "-P", str(ppid), "-l"],
+            capture_output=True,
+            text=True,
+            timeout=5,
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return 0
-    pids = [int(p) for p in out.split() if p.isdigit()]
-    return pids[0] if pids else 0
+    fallback = 0
+    for line in out.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) != 2 or not parts[0].isdigit():
+            continue
+        pid = int(parts[0])
+        fallback = fallback or pid
+        if detect.classify_argv(parts[1]) == kind:
+            return pid
+    return fallback
 
 
 def capture(pane: str, lines: int = 40) -> str:
@@ -101,7 +116,9 @@ def _git_context(cwd: str) -> tuple[str, str]:
         if git.is_file():  # worktree: ".git" is a pointer file
             try:
                 target = git.read_text().strip().removeprefix("gitdir: ")
-                head = Path(target) / "HEAD"
+                # Worktree pointers may be relative, and are relative to the
+                # directory holding .git -- not to amux's cwd.
+                head = (path / target).resolve() / "HEAD"
             except OSError:
                 head = None
         if head and head.exists():
@@ -129,8 +146,11 @@ def scan(workers: int = 16) -> list[Agent]:
             "#{session_name}:#{window_index}.#{pane_index}",
             "#{session_name}",
             "#{pane_pid}",
-            "#{pane_title}",
-            "#{pane_current_path}",
+            # tmux permits newlines in titles and paths, which would split one
+            # -F record across lines and make the pane vanish. Strip them at
+            # the source with tmux's own substitution.
+            "#{s/\n/ /:pane_title}",
+            "#{s/\n/ /:pane_current_path}",
         ]
     )
     listing = _tmux("list-panes", "-a", "-F", fmt)
@@ -162,6 +182,10 @@ def scan(workers: int = 16) -> list[Agent]:
 
     agents: list[Agent] = []
     for (pane, session, ppid, title, cwd, kind), screen in zip(candidates, screens):
+        # A pane that closed between list-panes and capture-pane yields "".
+        # Listing it would offer a jump target that no longer exists.
+        if not screen.strip():
+            continue
         repo, branch = _git_context(cwd)
         agents.append(
             Agent(

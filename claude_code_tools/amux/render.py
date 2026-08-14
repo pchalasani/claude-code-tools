@@ -30,20 +30,32 @@ def _colour(state: str, text: str, colour: bool) -> str:
 
 
 def picker_row(agent: Agent, colour: bool = True) -> str:
-    """One aligned, optionally coloured row for the fzf list."""
+    """The visible part of an fzf row (no key field); see :func:`picker_lines`."""
     state = _colour(agent.state, f"{agent.state:<{_W_STATE}}", colour)
     branch = f"@{agent.branch}" if agent.branch else ""
     where = _clip(f"{agent.repo}{branch}", _W_REPO)
     return (
-        f"{agent.pane:<{_W_PANE}} {state} {agent.kind:<{_W_KIND}} "
+        f"{_clip(agent.pane, _W_PANE):<{_W_PANE}} {state} {agent.kind:<{_W_KIND}} "
         f"{_clip(agent.name or '-', _W_NAME):<{_W_NAME}} "
         f"{where:<{_W_REPO}} {agent.info}"
     )
 
 
 def picker_lines(agents: list[Agent], colour: bool = True) -> str:
-    """All picker rows, newline-joined."""
-    return "\n".join(picker_row(a, colour) for a in agents)
+    """All fzf rows: a tab-separated key field followed by the visible text.
+
+    The leading ``pane<TAB>`` field exists because tmux permits spaces in
+    session names, so ``amux test:1.1`` would make fzf's whitespace-split
+    ``{1}`` resolve to ``amux`` -- pointing the preview and the jump at a pane
+    that does not exist. With ``--delimiter '\\t' --with-nth 2..`` the key stays
+    intact and invisible.
+    """
+    return "\n".join(f"{a.pane}\t{picker_row(a, colour)}" for a in agents)
+
+
+def pane_from_selection(line: str) -> str:
+    """Recover the pane target from a selected fzf line."""
+    return line.split("\t", 1)[0].strip()
 
 
 def table(agents: list[Agent], colour: bool = True) -> str:

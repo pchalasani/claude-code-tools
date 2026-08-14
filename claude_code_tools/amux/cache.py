@@ -40,11 +40,16 @@ def read(max_age: float | None = None) -> tuple[list[Agent], float]:
     except (OSError, ValueError):
         return [], -1.0
 
-    stamp = float(raw.get("time", 0))
-    age = time.time() - stamp
-    if max_age is not None and age > max_age:
-        return [], age
-    agents = [Agent.from_dict(d) for d in raw.get("agents", [])]
+    # Syntactically valid JSON can still be the wrong shape (hand-edited file,
+    # a truncated write from an older version). Never crash over a cache.
+    try:
+        stamp = float(raw.get("time", 0))
+        age = time.time() - stamp
+        if max_age is not None and age > max_age:
+            return [], age
+        agents = [Agent.from_dict(d) for d in raw.get("agents", []) if isinstance(d, dict)]
+    except (AttributeError, TypeError, ValueError):
+        return [], -1.0
     return agents, age
 
 
@@ -57,7 +62,9 @@ def write(agents: list[Agent]) -> None:
             "time": time.time(),
             "agents": [a.to_dict() for a in agents],
         }
-        tmp = path.with_suffix(".tmp")
+        # Per-process temp name: two concurrent `amux scan` runs sharing one
+        # ".tmp" would race, and the loser died on a missing file.
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
         tmp.write_text(json.dumps(payload))
         tmp.replace(path)
     except OSError:

@@ -55,6 +55,12 @@ _CODEX_CHROME = re.compile(
 )
 
 
+#: A pending prompt is at the BOTTOM of the screen. Searching all retained
+#: text made any earlier sentence containing e.g. "Would you like" pin the
+#: pane to `input` until it scrolled off.
+_PROMPT_TAIL_LINES = 12
+
+
 def detect_state(screen: str, kind: Kind) -> State:
     """Classify what the agent is doing from its visible screen.
 
@@ -66,7 +72,8 @@ def detect_state(screen: str, kind: Kind) -> State:
         One of ``input`` (waiting on the user), ``busy`` (mid-turn),
         ``bg`` (background monitors running), or ``idle``.
     """
-    if _ASKING.search(screen):
+    tail = "\n".join(screen.splitlines()[-_PROMPT_TAIL_LINES:])
+    if _ASKING.search(tail):
         return "input"
     if kind == "codex" and _codex_awaiting_answer(screen):
         return "input"

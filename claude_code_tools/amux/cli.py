@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -83,7 +84,9 @@ def cmd_pick(args: argparse.Namespace) -> int:
         print("no agents running")
         return 0
 
-    self_cmd = f"{sys.executable} -m claude_code_tools.amux"
+    # fzf runs bind commands through a shell, so the interpreter path must be
+    # quoted: a venv at "/tmp/my venv/bin/python" would otherwise run "/tmp/my".
+    self_cmd = f"{shlex.quote(sys.executable)} -m claude_code_tools.amux"
     binds = [
         f"ctrl-r:reload({self_cmd} rows --refresh)",
         # Opening on cached rows is what makes this instant; refresh the
@@ -94,6 +97,11 @@ def cmd_pick(args: argparse.Namespace) -> int:
         "fzf",
         "--ansi",
         "--no-sort",
+        # Field 1 is the pane target, hidden from view; see picker_lines().
+        "--delimiter",
+        "\t",
+        "--with-nth",
+        "2..",
         "--header",
         _FZF_HEADER,
         "--preview",
@@ -113,7 +121,9 @@ def cmd_pick(args: argparse.Namespace) -> int:
     if proc.returncode != 0 or not proc.stdout.strip():
         return 0
 
-    pane = proc.stdout.split()[0]
+    pane = render.pane_from_selection(proc.stdout)
+    if not pane:
+        return 0
     scan.switch_to(pane)
     return 0
 
@@ -154,9 +164,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     """Entry point for the ``amux`` console script."""
     parser = build_parser()
-    args = parser.parse_args(argv)
-    if not getattr(args, "func", None):
-        args = parser.parse_args([*(argv or []), "pick"])
+    raw = list(sys.argv[1:] if argv is None else argv)
+    # Default to the picker, but insert the subcommand rather than reparsing
+    # only ["pick"] -- reparsing dropped global options, so `amux --max-age 0`
+    # silently used the 30s default.
+    known = {"pick", "list", "scan", "rows"}
+    if not any(tok in known for tok in raw):
+        raw.append("pick")
+    args = parser.parse_args(raw)
     if not scan.tmux_available():
         print("amux: no tmux server running", file=sys.stderr)
         return 1
