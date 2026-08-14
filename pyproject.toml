@@ -41,6 +41,7 @@ aichat = "claude_code_tools.aichat:main"
 # Non-session utilities
 vault = "claude_code_tools.dotenv_vault:main"
 tmux-cli = "claude_code_tools.tmux_cli_controller:main"
+amux = "claude_code_tools.amux.cli:main"
 env-safe = "claude_code_tools.env_safe:main"
 md2gdoc = "claude_code_tools.md2gdoc:main"
 gdoc2md = "claude_code_tools.gdoc2md:main"

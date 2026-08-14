@@ -1,0 +1,64 @@
+"""Cache of the last scan, so the picker opens instantly.
+
+The picker shows cached rows immediately and kicks off a fresh scan in the
+background, replacing the list when it lands. With hundreds of panes, a cold
+scan is noticeable; a warm one is not.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+from pathlib import Path
+
+from .model import Agent
+
+_DEFAULT = Path.home() / ".cache" / "cc-tools" / "amux.json"
+
+
+def cache_path() -> Path:
+    """Location of the cache file (``AMUX_CACHE`` overrides)."""
+    override = os.environ.get("AMUX_CACHE")
+    return Path(override) if override else _DEFAULT
+
+
+def read(max_age: float | None = None) -> tuple[list[Agent], float]:
+    """Load cached agents.
+
+    Args:
+        max_age: If set, return an empty list when the cache is older than
+            this many seconds.
+
+    Returns:
+        ``(agents, age_seconds)``; ``age_seconds`` is ``-1`` when no usable
+        cache exists.
+    """
+    path = cache_path()
+    try:
+        raw = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return [], -1.0
+
+    stamp = float(raw.get("time", 0))
+    age = time.time() - stamp
+    if max_age is not None and age > max_age:
+        return [], age
+    agents = [Agent.from_dict(d) for d in raw.get("agents", [])]
+    return agents, age
+
+
+def write(agents: list[Agent]) -> None:
+    """Persist *agents* atomically, creating the cache directory if needed."""
+    path = cache_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "time": time.time(),
+            "agents": [a.to_dict() for a in agents],
+        }
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload))
+        tmp.replace(path)
+    except OSError:
+        pass  # a missing cache only costs speed, never correctness
