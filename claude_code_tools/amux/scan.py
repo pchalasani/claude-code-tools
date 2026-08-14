@@ -25,6 +25,14 @@ from .model import Agent
 #: Field separator for tmux -F output; chosen to not occur in paths or titles.
 _SEP = "\x1f"
 
+#: Explicit record terminator. tmux permits newlines in pane titles and in
+#: paths, so line-based parsing drops those panes entirely. Emitting an ASCII
+#: RS and splitting on it keeps records intact WITHOUT altering the data --
+#: tmux's own "#{s/\n/ /:...}" substitution is not the answer here: its
+#: pattern is a literal string, so it rewrites every letter "n"
+#: (/Users/pchalasani/Git/avon -> "/Users/pchalasa i/Git/avo ").
+_REC = "\x1e"
+
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)")
 
 
@@ -146,21 +154,21 @@ def scan(workers: int = 16) -> list[Agent]:
             "#{session_name}:#{window_index}.#{pane_index}",
             "#{session_name}",
             "#{pane_pid}",
-            # tmux permits newlines in titles and paths, which would split one
-            # -F record across lines and make the pane vanish. Strip them at
-            # the source with tmux's own substitution.
-            "#{s/\n/ /:pane_title}",
-            "#{s/\n/ /:pane_current_path}",
+            "#{pane_title}",
+            "#{pane_current_path}",
         ]
     )
-    listing = _tmux("list-panes", "-a", "-F", fmt)
+    listing = _tmux("list-panes", "-a", "-F", fmt + _REC)
     if not listing:
         return []
 
     argv_map = _child_argv_by_ppid()
     candidates: list[tuple[str, str, int, str, str, str]] = []
-    for line in listing.splitlines():
-        parts = line.split(_SEP)
+    for record in listing.split(_REC):
+        record = record.strip("\n")
+        if not record:
+            continue
+        parts = record.split(_SEP)
         if len(parts) != 5:
             continue
         pane, session, pid_s, title, cwd = parts

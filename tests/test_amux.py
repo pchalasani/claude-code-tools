@@ -292,8 +292,11 @@ class TestScanWithStubbedTmux:
 
     SEP = "\x1f"
 
+    REC = "\x1e"
+
     def _listing(self, rows: list[tuple[str, str, str, str, str]]) -> str:
-        return "\n".join(self.SEP.join(r) for r in rows)
+        """Mimic tmux -F output: fields by SEP, records terminated by REC."""
+        return "".join(self.SEP.join(r) + self.REC for r in rows)
 
     def test_only_agent_panes_are_returned(self, monkeypatch) -> None:
         from claude_code_tools.amux import scan as scan_mod
@@ -388,3 +391,52 @@ class TestCli:
         quoted = shlex.quote("/tmp/my venv/bin/python")
         assert quoted != "/tmp/my venv/bin/python"
         assert shlex.split(f"{quoted} -m x")[0] == "/tmp/my venv/bin/python"
+
+
+class TestRecordParsing:
+    """Pane records must survive newlines in titles/paths without mangling.
+
+    Regression: an earlier fix used tmux's "#{s/\\n/ /:...}" substitution,
+    whose pattern is a literal string -- it rewrote every letter 'n', turning
+    /Users/pchalasani/Git/avon into "/Users/pchalasa i/Git/avo ". Paths were
+    silently corrupted and git context came back blank for most panes.
+    """
+
+    def test_field_values_are_never_rewritten(self, monkeypatch) -> None:
+        from claude_code_tools.amux import scan as scan_mod
+
+        cwd = "/Users/pchalasani/Git/avon"
+        rec = scan_mod._SEP.join(["s:1.1", "s", "100", "title", cwd])
+        monkeypatch.setattr(scan_mod, "_tmux", lambda *a: (
+            rec + scan_mod._REC if a[0] == "list-panes" else "screen"))
+        monkeypatch.setattr(scan_mod, "_child_argv_by_ppid",
+                            lambda: {100: "claude --resume x"})
+        monkeypatch.setattr(scan_mod, "_child_pid", lambda ppid, kind: 1)
+        agents = scan_mod.scan(workers=1)
+        assert agents[0].cwd == cwd
+
+    def test_newline_in_title_does_not_drop_the_pane(self, monkeypatch) -> None:
+        from claude_code_tools.amux import scan as scan_mod
+
+        rec = scan_mod._SEP.join(["s:1.1", "s", "100", "two\nlines", "/tmp"])
+        monkeypatch.setattr(scan_mod, "_tmux", lambda *a: (
+            rec + scan_mod._REC if a[0] == "list-panes" else "screen"))
+        monkeypatch.setattr(scan_mod, "_child_argv_by_ppid",
+                            lambda: {100: "codex --yolo"})
+        monkeypatch.setattr(scan_mod, "_child_pid", lambda ppid, kind: 1)
+        assert [a.pane for a in scan_mod.scan(workers=1)] == ["s:1.1"]
+
+    def test_multiple_records_split_correctly(self, monkeypatch) -> None:
+        from claude_code_tools.amux import scan as scan_mod
+
+        recs = "".join(
+            scan_mod._SEP.join([f"s:1.{i}", "s", str(100 + i), "t", "/tmp"])
+            + scan_mod._REC
+            for i in range(3)
+        )
+        monkeypatch.setattr(scan_mod, "_tmux", lambda *a: (
+            recs if a[0] == "list-panes" else "screen"))
+        monkeypatch.setattr(scan_mod, "_child_argv_by_ppid",
+                            lambda: {100 + i: "claude x" for i in range(3)})
+        monkeypatch.setattr(scan_mod, "_child_pid", lambda ppid, kind: 1)
+        assert len(scan_mod.scan(workers=2)) == 3
