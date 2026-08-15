@@ -26,12 +26,15 @@ def _find_self_agent(store: MsgStore) -> object | None:
     pane_id = os.environ.get("TMUX_PANE")
     if not pane_id:
         return None
+    tmux_socket = os.environ.get("TMUX", "").split(",", 1)[0] or None
 
     try:
+        cmd = ["tmux"]
+        if tmux_socket:
+            cmd += ["-S", tmux_socket]
+        cmd += ["display-message", "-t", pane_id, "-p", "#{session_name}"]
         result = subprocess.run(
-            ["tmux", "display-message",
-             "-t", pane_id,
-             "-p", "#{session_name}"],
+            cmd,
             capture_output=True, text=True, timeout=5,
         )
         tmux_session = result.stdout.strip()
@@ -41,11 +44,11 @@ def _find_self_agent(store: MsgStore) -> object | None:
     if not tmux_session:
         return None
 
-    agents = store.list_agents(tmux_session=tmux_session)
-    for a in agents:
-        if a.pane_id == pane_id:
-            return a
-    return None
+    matches = [
+        agent for agent in store.list_agents(tmux_session, tmux_socket)
+        if agent.pane_id == pane_id and agent.tmux_socket == tmux_socket
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _check_and_notify(
@@ -58,9 +61,9 @@ def _check_and_notify(
     """
     # Read hook input
     try:
-        hook_input = json.load(sys.stdin)
+        json.load(sys.stdin)
     except (json.JSONDecodeError, EOFError):
-        hook_input = {}
+        pass
 
     try:
         store = MsgStore()
@@ -81,13 +84,9 @@ def _check_and_notify(
 
     # Claim deliveries (same protocol as watcher)
     claimer_id = f"hook-{hook_event}-{_new_uuid()[:8]}"
-    claimed = store.claim_pending_deliveries(claimer_id)
-
-    # Filter to our deliveries only
-    our_claims = [
-        d for d in claimed
-        if d["recipient_id"] == me.session_id
-    ]
+    claimed = store.claim_pending_deliveries(
+        claimer_id, recipient_id=me.session_id,
+    )
 
     # Build notification
     count = len(messages)
@@ -102,8 +101,8 @@ def _check_and_notify(
     )
 
     # Mark claimed as notified
-    for d in our_claims:
-        store.mark_notified(d["id"])
+    for d in claimed:
+        store.mark_notified(d["id"], claimer_id)
 
     # Output with additionalContext
     print(json.dumps({

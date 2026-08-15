@@ -21,7 +21,8 @@ class DeliveryState(str, Enum):
     Transitions:
         pending -> claimed -> notified -> read
         pending -> claimed -> failed
-        failed -> pending (retry)
+        claimed -> pending (busy, failure, or expired lease)
+        claimed -> read (inbox wins the race)
     """
 
     PENDING = "pending"

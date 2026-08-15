@@ -1,11 +1,33 @@
 """Tests for tmux_cli_controller."""
-from unittest.mock import patch, MagicMock, call
-import time
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from claude_code_tools import tmux_execution_helpers
 from claude_code_tools.tmux_cli_controller import TmuxCLIController
+
+
+@pytest.mark.parametrize("plugin", ("msg", "tmux-cli"))
+def test_codex_plugin_default_prompt_is_a_nonempty_string(plugin: str) -> None:
+    manifest_path = (
+        Path(__file__).parents[1]
+        / "plugins"
+        / plugin
+        / ".codex-plugin"
+        / "plugin.json"
+    )
+
+    default_prompt = json.loads(manifest_path.read_text())["interface"][
+        "defaultPrompt"
+    ]
+
+    assert isinstance(default_prompt, str)
+    assert default_prompt.strip()
 
 
 class TestFormatPaneIdentifier:
@@ -127,6 +149,101 @@ class TestCreatePane:
         result = controller.create_pane()
 
         assert result is None
+
+
+class TestSendKeys:
+    """Native tmux failures must propagate to the CLI process."""
+
+    @patch.object(TmuxCLIController, "_run_tmux_command")
+    def test_send_keys_raises_when_native_tmux_fails(self, mock_run):
+        mock_run.return_value = ("tmux error", 1)
+
+        controller = TmuxCLIController()
+
+        with pytest.raises(RuntimeError, match="tmux send-keys failed"):
+            controller.send_keys("hello", pane_id="%1", delay_enter=False)
+
+    @patch("time.sleep")
+    @patch.object(TmuxCLIController, "_run_tmux_command")
+    def test_delayed_enter_raises_when_native_tmux_fails(
+        self, mock_run, _mock_sleep,
+    ):
+        mock_run.side_effect = [("", 0), ("tmux error", 1)]
+
+        controller = TmuxCLIController()
+
+        with pytest.raises(RuntimeError, match="tmux Enter failed"):
+            controller.send_keys(
+                "hello", pane_id="%1", delay_enter=0.01, verify_enter=False,
+            )
+
+    @patch("time.sleep")
+    @patch.object(TmuxCLIController, "capture_pane", return_value="unchanged")
+    @patch.object(TmuxCLIController, "_run_tmux_command", return_value=("", 0))
+    def test_delayed_enter_raises_after_verification_retries(
+        self, mock_run, _mock_capture, _mock_sleep,
+    ):
+        with pytest.raises(RuntimeError, match="tmux Enter was not accepted"):
+            TmuxCLIController().send_keys(
+                "hello", pane_id="%1", delay_enter=0.01, max_retries=2,
+            )
+        assert mock_run.call_count == 3
+
+
+class TestCLIExitFailures:
+    """The installed CLI process exits nonzero when native tmux fails."""
+
+    @pytest.mark.parametrize(
+        ("fake_mode", "delay_enter", "expected_error"),
+        (
+            ("all", "False", "tmux send-keys failed"),
+            ("enter", "0.001", "tmux Enter failed"),
+        ),
+    )
+    def test_send_native_failure_exits_nonzero(
+        self,
+        tmp_path: Path,
+        fake_mode: str,
+        delay_enter: str,
+        expected_error: str,
+    ) -> None:
+        fake_tmux = tmp_path / "tmux"
+        fake_tmux.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$FAKE_TMUX_MODE\" = all ]; then exit 17; fi\n"
+            "case \"$*\" in *Enter) exit 17;; esac\n"
+            "exit 0\n"
+        )
+        fake_tmux.chmod(0o755)
+        env = os.environ.copy()
+        env.update(
+            {
+                "FAKE_TMUX_MODE": fake_mode,
+                "PATH": f"{tmp_path}{os.pathsep}{env['PATH']}",
+                "TMUX": "/tmp/fake-tmux,1,0",
+                "TMUX_PANE": "%1",
+            }
+        )
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "claude_code_tools.tmux_cli_controller",
+                "send",
+                "hello",
+                "--pane=%1",
+                f"--delay-enter={delay_enter}",
+            ],
+            capture_output=True,
+            env=env,
+            text=True,
+            timeout=5,
+        )
+
+        assert result.returncode != 0
+        assert expected_error in result.stderr
+
 
 class TestExecute:
     """Tests for execute method."""

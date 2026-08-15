@@ -7,7 +7,7 @@ This script provides functions to interact with CLI applications running in tmux
 import subprocess
 import time
 import re
-from typing import Optional, List, Dict, Tuple, Callable, Union, Any
+from typing import Optional, List, Dict, Tuple, Union, Any
 import json
 import os
 import hashlib
@@ -36,7 +36,7 @@ def _load_help_text():
                 help_file = resources.files('claude_code_tools') / 'docs' / 'tmux-cli-instructions.md'
                 if help_file.is_file():
                     return help_file.read_text(encoding='utf-8')
-            except:
+            except Exception:
                 pass
             
             # 2. Try accessing parent package to find docs at root level
@@ -46,7 +46,7 @@ def _load_help_text():
                 help_file = package_root / 'docs' / 'tmux-cli-instructions.md'
                 if help_file.is_file():
                     return help_file.read_text(encoding='utf-8')
-            except:
+            except Exception:
                 pass
         
         # Try pkg_resources as another fallback
@@ -58,12 +58,12 @@ def _load_help_text():
                     return pkg_resources.resource_string(
                         'claude_code_tools', path
                     ).decode('utf-8')
-                except:
+                except Exception:
                     continue
-        except:
+        except Exception:
             pass
             
-    except Exception as e:
+    except Exception:
         pass
     
     # If all else fails, return a basic help message
@@ -162,7 +162,7 @@ class TmuxCLIController:
             else:
                 # Fallback to pane ID
                 return pane_id
-        except:
+        except Exception:
             return pane_id
     
     def resolve_pane_identifier(self, identifier: str) -> Optional[str]:
@@ -202,7 +202,7 @@ class TmuxCLIController:
                     'display-message', '-t', f'{session}:{window}.{pane_index}', '-p', '#{pane_id}'
                 ])
                 return output if code == 0 else None
-            except:
+            except Exception:
                 return None
                 
         return None
@@ -375,7 +375,9 @@ class TmuxCLIController:
         if enter and delay_enter:
             # Send text without Enter first
             cmd = ['send-keys', '-t', target, text]
-            self._run_tmux_command(cmd)
+            _, code = self._run_tmux_command(cmd)
+            if code:
+                raise RuntimeError(f"tmux send-keys failed for {target}")
 
             # Determine delay duration
             if isinstance(delay_enter, bool):
@@ -397,7 +399,9 @@ class TmuxCLIController:
             cmd = ['send-keys', '-t', target, text]
             if enter:
                 cmd.append('Enter')
-            self._run_tmux_command(cmd)
+            _, code = self._run_tmux_command(cmd)
+            if code:
+                raise RuntimeError(f"tmux send-keys failed for {target}")
 
     def _send_enter_with_retry(self, target: str, content_before_enter: Optional[str],
                                 verify: bool, max_retries: int):
@@ -416,7 +420,9 @@ class TmuxCLIController:
         for attempt in range(max_retries):
             # Send Enter
             cmd = ['send-keys', '-t', target, 'Enter']
-            self._run_tmux_command(cmd)
+            _, code = self._run_tmux_command(cmd)
+            if code:
+                raise RuntimeError(f"tmux Enter failed for {target}")
 
             if not verify or content_before_enter is None:
                 return  # No verification needed
@@ -435,6 +441,7 @@ class TmuxCLIController:
             if attempt < max_retries - 1:
                 # Wait before retry (exponential backoff)
                 time.sleep(0.5 * (attempt + 1))
+        raise RuntimeError(f"tmux Enter was not accepted by {target}")
     
     def capture_pane(self, pane_id: Optional[str] = None, lines: Optional[int] = None) -> str:
         """
@@ -752,7 +759,7 @@ class CLI:
         # List all panes in current window
         panes = self.controller.list_panes()
         if panes:
-            print(f"\nPanes in current window:")
+            print("\nPanes in current window:")
             for pane in panes:
                 active_marker = " *" if pane['active'] else "  "
                 command = pane.get('command', '')
@@ -801,8 +808,7 @@ class CLI:
                 if resolved_pane:
                     self.controller.select_pane(pane_id=resolved_pane)
                 else:
-                    print(f"Could not resolve pane identifier: {pane}")
-                    return
+                    raise ValueError(f"Could not resolve pane identifier: {pane}")
             self.controller.send_keys(text, enter=enter, delay_enter=delay_enter)
         else:
             # Remote mode - pass pane_id directly
@@ -924,8 +930,7 @@ class CLI:
                 if resolved_pane:
                     self.controller.select_pane(pane_id=resolved_pane)
                 else:
-                    print(f"Could not resolve pane identifier: {pane}")
-                    return False
+                    raise ValueError(f"Could not resolve pane identifier: {pane}")
             target = None
         else:
             # Remote mode - resolve pane_id
@@ -937,7 +942,7 @@ class CLI:
             return True
         else:
             print("Timeout waiting for idle")
-            return False
+            raise TimeoutError("Timeout waiting for idle")
     
     def attach(self):
         """Attach to the managed session (remote mode only)."""
