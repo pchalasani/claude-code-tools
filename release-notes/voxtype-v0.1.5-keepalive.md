@@ -48,7 +48,7 @@ keepalive means the model was already evicted, which is the case this
 option prevents. Inline decoding is pre-existing — an ordinary take
 decode blocks capture identically — so closing the window means
 decoupling capture from decoding (callback-driven capture feeding a
-queue), tracked separately rather than bundled into this opt-in
+queue), tracked in issue #169 rather than bundled into this opt-in
 feature.
 
 ## Validation
