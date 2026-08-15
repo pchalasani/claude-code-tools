@@ -690,3 +690,62 @@ class TestFooterMatchesRealHarnessChrome:
             "  gpt-5.6-sol medium · farchat · main · Context 51% used\n"
         )
         assert detect.detect_state(screen, "codex") != "input"
+
+
+class TestFooterAnchorSpecifically:
+    """The anchor's job: footer chrome quoted INSIDE a content line is content.
+
+    The earlier 'option quoting footer text' test did not actually exercise
+    the anchor -- it relied on word alternatives the regex no longer uses, so
+    un-anchoring left it green. These use the real chrome glyphs mid-line.
+    """
+
+    def test_chrome_glyph_midline_is_not_footer(self) -> None:
+        line = "  I ran it and the status bar showed ⏵⏵ bypass permissions on"
+        assert not detect._FOOTER.search(line)
+
+    def test_ctx_bar_midline_is_not_footer(self) -> None:
+        line = "  The output contained ctx ████ which confused the parser"
+        assert not detect._FOOTER.search(line)
+
+    def test_codex_model_midline_is_not_footer(self) -> None:
+        line = "• Model changed to gpt-5.6-terra medium"
+        assert not detect._FOOTER.search(line)
+
+    def test_same_glyph_at_line_start_is_footer(self) -> None:
+        assert detect._FOOTER.search("  ⏵⏵ bypass permissions on")
+
+    def test_pending_prompt_quoting_chrome_stays_blocking(self) -> None:
+        """End to end: an option quoting chrome must not look answered."""
+        screen = (
+            "Which action should I take?\n"
+            "❯ 1. Continue\n"
+            "  2. Explain the ⏵⏵ bypass permissions on indicator\n"
+        )
+        assert detect.detect_state(screen, "claude") == "input"
+
+
+class TestMaxAgeValidation:
+    def test_nan_is_rejected(self) -> None:
+        """Regression: NaN max_age disabled expiry, serving stale data."""
+        from claude_code_tools.amux import cli
+
+        with pytest.raises(SystemExit):
+            cli.build_parser().parse_args(["--max-age", "nan", "list"])
+
+    def test_inf_is_rejected(self) -> None:
+        from claude_code_tools.amux import cli
+
+        with pytest.raises(SystemExit):
+            cli.build_parser().parse_args(["--max-age", "inf", "list"])
+
+    def test_negative_is_rejected(self) -> None:
+        from claude_code_tools.amux import cli
+
+        with pytest.raises(SystemExit):
+            cli.build_parser().parse_args(["--max-age", "-5", "list"])
+
+    def test_ordinary_value_accepted(self) -> None:
+        from claude_code_tools.amux import cli
+
+        assert cli.build_parser().parse_args(["--max-age", "0", "list"]).max_age == 0.0

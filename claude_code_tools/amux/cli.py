@@ -12,6 +12,7 @@ instant even with hundreds of panes.
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import shlex
 import shutil
@@ -128,6 +129,21 @@ def cmd_pick(args: argparse.Namespace) -> int:
     return 0
 
 
+def _finite_seconds(value: str) -> float:
+    """Parse a --max-age value, rejecting nan/inf.
+
+    argparse's ``type=float`` happily accepts "nan", and every comparison
+    against NaN is False -- so ``--max-age nan`` disabled cache expiry
+    entirely and served arbitrarily stale data.
+    """
+    seconds = float(value)
+    if not math.isfinite(seconds) or seconds < 0:
+        raise argparse.ArgumentTypeError(
+            f"must be a non-negative finite number of seconds, got {value!r}"
+        )
+    return seconds
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Construct the argument parser."""
     parser = argparse.ArgumentParser(
@@ -136,7 +152,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--max-age",
-        type=float,
+        type=_finite_seconds,
         default=30.0,
         help="seconds a cached scan stays usable (default: 30)",
     )
