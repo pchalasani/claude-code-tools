@@ -239,6 +239,15 @@ copy_to_clipboard = false
 overlay = true
 overlay_flex = 1.0   # how much the face flexes its shape (higher = more)
 overlay_speed = 1.0  # animation speed (lower = slower/gentler)
+
+# Keep the model's memory warm (parakeet-mlx only). After this many
+# minutes without a decode, voxtype quietly decodes a short silent
+# clip so the idle model stays recently-used and macOS is far less
+# likely to evict it to swap — otherwise, on a memory-pressured
+# machine, the first take after a long pause can stall for seconds
+# paging the model back in. Keeps ~1.7 GB in active use. 0 disables;
+# max 1440 (a day).
+keepalive_minutes = 0.0
 ```
 
 ## CLI

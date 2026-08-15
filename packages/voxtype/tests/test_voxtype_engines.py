@@ -1223,3 +1223,158 @@ def test_report_decode_time_formats(monkeypatch) -> None:
     assert msgs[-1] == "transcribed 4.0s of audio in 0.20s (20x realtime)"
     eng._report_decode_time(1.0, 0.0)  # never divides by zero
     assert msgs[-1] == "transcribed 1.0s of audio in 0.00s"
+
+
+# -- MLX keepalive --------------------------------------------------------
+
+
+def _make_mlx_engine():  # noqa: ANN202
+    """Build a ParakeetMlxEngine with a fake model (no weights loaded)."""
+    pytest.importorskip("mlx.core")
+    pytest.importorskip("parakeet_mlx")
+    from voxtype.engine_parakeet_mlx import ParakeetMlxEngine
+
+    statuses: list[str] = []
+    eng = ParakeetMlxEngine(
+        Config(engine="parakeet-mlx"), statuses.append
+    )
+    eng._model = SimpleNamespace(
+        transcribe=lambda path: SimpleNamespace(text="hi")
+    )
+    return eng, statuses
+
+
+def test_mlx_transcribe_restamps_last_decode() -> None:
+    """A successful decode restamps ``_last_decode`` (the keepalive
+    clock the tick's not-yet-due check depends on)."""
+    np = pytest.importorskip("numpy")
+    eng, _ = _make_mlx_engine()
+    eng._last_decode = time.monotonic() - 999.0
+    before = time.monotonic()
+    text = eng.transcribe(np.zeros(1600, dtype=np.float32), 16000)
+    assert text == "hi"
+    assert eng._last_decode >= before
+
+
+def test_mlx_transcribe_restamps_last_decode_on_failure() -> None:
+    """A FAILED decode must restamp too — the stamp sits first in
+    transcribe's ``finally`` — or an overdue keepalive would retry
+    every ~0.1 s loop iteration instead of once per interval."""
+    np = pytest.importorskip("numpy")
+    eng, _ = _make_mlx_engine()
+
+    def broken(path):  # noqa: ANN001, ANN202
+        raise RuntimeError("gpu gone")
+
+    eng._model = SimpleNamespace(transcribe=broken)
+    eng._last_decode = time.monotonic() - 999.0
+    before = time.monotonic()
+    with pytest.raises(RuntimeError, match="gpu gone"):
+        eng.transcribe(np.zeros(1600, dtype=np.float32), 16000)
+    assert eng._last_decode >= before
+
+
+def test_mlx_keepalive_tick_conditions() -> None:
+    """The tick decodes only when enabled, overdue, and idle."""
+    np = pytest.importorskip("numpy")  # noqa: F841
+    eng, _ = _make_mlx_engine()
+    calls: list = []
+
+    def fake_transcribe(samples, rate):  # noqa: ANN001, ANN202
+        calls.append(len(samples))
+        eng._last_decode = time.monotonic()  # transcribe's contract
+        return ""
+
+    eng.transcribe = fake_transcribe
+
+    overdue = time.monotonic() - 3600.0
+    # Disabled (default 0): never fires, however overdue.
+    eng._last_decode = overdue
+    eng._keepalive_tick()
+    assert calls == []
+
+    eng.cfg.keepalive_minutes = 5.0
+    # Overdue and idle: fires exactly once, then it's no longer due.
+    eng._keepalive_tick()
+    assert len(calls) == 1
+    eng._keepalive_tick()
+    assert len(calls) == 1
+
+    # Overdue but mid-take, mid-utterance, or with an unprocessed
+    # command (e.g. a hotkey press) queued: never fires.
+    eng._last_decode = overdue
+    eng._holding = True
+    eng._keepalive_tick()
+    eng._holding = False
+    eng._speech_since = time.monotonic()
+    eng._keepalive_tick()
+    eng._speech_since = None
+    from voxtype.engine_parakeet_mlx import KEEPALIVE_COMMAND_GRACE
+
+    stale = time.monotonic() - KEEPALIVE_COMMAND_GRACE - 1.0
+
+    # A command STILL QUEUED but older than the grace (possible when
+    # commands pile up during a slow model load): the queue peek — not
+    # the grace — must block the tick. Enqueue directly, bypassing
+    # _request's _last_command stamp.
+    eng._last_command = stale
+    with eng._cmd_lock:
+        eng._commands.append("reset")
+    eng._keepalive_tick()
+    assert len(calls) == 1
+    with eng._cmd_lock:
+        eng._commands.clear()
+
+    # A command processed and drained moments ago (the real capture-
+    # loop ordering: _process_commands runs before the tick): the
+    # grace must block the tick until it expires.
+    eng.request_reset()
+    with eng._cmd_lock:
+        eng._commands.clear()
+    eng._keepalive_tick()
+    assert len(calls) == 1
+    eng._last_command = stale
+    eng._keepalive_tick()
+    assert len(calls) == 2
+
+
+def test_mlx_keepalive_failure_is_contained() -> None:
+    """A raising decode must not escape the tick (capture must go on),
+    and the tick's own ``finally`` restamps the clock even when the
+    failure precedes ``transcribe``'s internal restamp (e.g. temp-file
+    creation raised), so the next tick is not-yet-due rather than an
+    immediate per-iteration retry."""
+    eng, _ = _make_mlx_engine()
+    attempts: list = []
+
+    def dies_before_transcribes_finally(samples, rate):  # noqa: ANN001, ANN202
+        attempts.append(1)
+        raise OSError("no temp file for you")
+
+    # Replace transcribe wholesale and do NOT restamp in the fake:
+    # only the tick-level finally can restamp here, which is exactly
+    # the safeguard under test.
+    eng.transcribe = dies_before_transcribes_finally
+    eng.cfg.keepalive_minutes = 5.0
+    eng._last_decode = time.monotonic() - 3600.0
+    before = time.monotonic()
+    eng._keepalive_tick()  # must not raise
+    assert len(attempts) == 1
+    assert eng._last_decode >= before  # restamped by the tick's finally
+    eng._keepalive_tick()  # no per-iteration retry storm
+    assert len(attempts) == 1
+
+
+def test_capture_loop_invokes_keepalive_tick(monkeypatch) -> None:
+    """The capture loop calls the hook every iteration (the base no-op;
+    the MLX override rides this same call site)."""
+    np = pytest.importorskip("numpy")
+    eng, statuses, holder = _make_parakeet(monkeypatch)
+    ticks: list[int] = []
+    eng._keepalive_tick = lambda: ticks.append(1)
+
+    chunk = np.zeros(1600, dtype=np.float32)
+    script = [chunk, chunk, lambda: (eng._stop.set(), chunk)[1]]
+    holder["factory"] = lambda **kw: ScriptedStream(script)
+    eng._capture_session(lambda text: None, lambda: None)
+    assert len(ticks) == 3
