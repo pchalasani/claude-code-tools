@@ -81,4 +81,10 @@ class Agent:
             return None
         if not isinstance(known.get("pid", 0), int):
             return None
+        # Literal[...] is a type-checker hint only; a hand-edited cache can
+        # still carry kind="vim" or state="waiting" and render as an agent.
+        if known.get("kind") not in ("claude", "codex"):
+            return None
+        if known.get("state", "idle") not in STATE_RANK:
+            return None
         return cls(**known)

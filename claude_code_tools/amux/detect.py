@@ -72,8 +72,13 @@ def detect_state(screen: str, kind: Kind) -> State:
         One of ``input`` (waiting on the user), ``busy`` (mid-turn),
         ``bg`` (background monitors running), or ``idle``.
     """
-    tail = "\n".join(screen.splitlines()[-_PROMPT_TAIL_LINES:])
-    if _ASKING.search(tail):
+    tail_lines = screen.splitlines()[-_PROMPT_TAIL_LINES:]
+    tail = "\n".join(tail_lines)
+    # An ANSWERED prompt keeps its choices on screen, with Claude's footer
+    # rendered below them. Only treat a prompt as pending when nothing from
+    # the footer appears after it -- otherwise a just-answered
+    # AskUserQuestion stays flagged as blocking until it scrolls off.
+    if _ASKING.search(tail) and not _footer_below_prompt(tail_lines):
         return "input"
     if kind == "codex" and _codex_awaiting_answer(screen):
         return "input"
@@ -83,6 +88,20 @@ def detect_state(screen: str, kind: Kind) -> State:
         return "bg"
     return "idle"
 
+
+#: Footer chrome Claude renders BELOW a completed exchange.
+_FOOTER = re.compile(r"bypass permissions on|ctx [█░]|new task\?|/clear to save")
+
+
+def _footer_below_prompt(lines: list[str]) -> bool:
+    """Whether harness footer chrome appears after the last prompt line."""
+    last_prompt = -1
+    for index, line in enumerate(lines):
+        if _ASKING.search(line):
+            last_prompt = index
+    if last_prompt < 0:
+        return False
+    return any(_FOOTER.search(line) for line in lines[last_prompt + 1 :])
 
 def _codex_awaiting_answer(screen: str) -> bool:
     """Heuristic: Codex asked a question and stopped.

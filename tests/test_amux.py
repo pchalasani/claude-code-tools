@@ -540,3 +540,62 @@ class TestCacheTypeValidation:
         cache.write([Agent(pane="a:1.1", session="a", kind="claude", pid=7)])
         loaded, _ = cache.read()
         assert len(loaded) == 1 and loaded[0].pid == 7
+
+
+class TestAnsweredPromptIsNotBlocking:
+    """An answered prompt leaves its choices on screen; only footer position
+    distinguishes it from one still waiting."""
+
+    ANSWERED = """
+  Which do you prefer?
+❯ 1. Yes
+  2. No
+  Understood, rebasing now.
+  ctx ████░░░░░░ 44%
+  ⏵⏵ bypass permissions on
+❯
+"""
+    PENDING = """
+  Understood, here are the options.
+  Which do you prefer?
+❯ 1. Yes
+  2. No
+"""
+
+    def test_answered_prompt_is_not_input(self) -> None:
+        assert detect.detect_state(self.ANSWERED, "claude") == "idle"
+
+    def test_pending_prompt_is_input(self) -> None:
+        assert detect.detect_state(self.PENDING, "claude") == "input"
+
+
+class TestCacheEnumAndClock:
+    def _write(self, tmp_path, monkeypatch, body: str):
+        path = tmp_path / "amux.json"
+        path.write_text(body)
+        monkeypatch.setenv("AMUX_CACHE", str(path))
+
+    def test_unknown_kind_is_rejected(self, tmp_path, monkeypatch) -> None:
+        self._write(tmp_path, monkeypatch,
+                    '{"time":0,"agents":[{"pane":"s:1.1","session":"s",'
+                    '"kind":"vim"}]}')
+        assert cache.read(max_age=None)[0] == []
+
+    def test_unknown_state_is_rejected(self, tmp_path, monkeypatch) -> None:
+        self._write(tmp_path, monkeypatch,
+                    '{"time":0,"agents":[{"pane":"s:1.1","session":"s",'
+                    '"kind":"claude","state":"waiting"}]}')
+        assert cache.read(max_age=None)[0] == []
+
+    def test_known_kind_and_state_accepted(self, tmp_path, monkeypatch) -> None:
+        self._write(tmp_path, monkeypatch,
+                    '{"time":0,"agents":[{"pane":"s:1.1","session":"s",'
+                    '"kind":"codex","state":"busy"}]}')
+        assert len(cache.read(max_age=None)[0]) == 1
+
+    def test_future_timestamp_never_counts_as_fresh(self, tmp_path, monkeypatch) -> None:
+        """Regression: negative age passed every max_age check indefinitely."""
+        self._write(tmp_path, monkeypatch,
+                    '{"time":9999999999,"agents":[{"pane":"s:1.1",'
+                    '"session":"s","kind":"claude"}]}')
+        assert cache.read(max_age=30)[0] == []
