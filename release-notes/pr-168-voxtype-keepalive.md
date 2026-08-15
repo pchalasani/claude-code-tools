@@ -1,4 +1,4 @@
-# voxtype v0.1.5 — keepalive: stop slow takes after idle
+# PR #168 — voxtype keepalive: stop slow takes after idle
 
 ## Problem
 
