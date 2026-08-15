@@ -7,6 +7,7 @@ import sqlite3
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+from .migrations import adopt_unique_legacy_registration, initialize_database
 from .models import (
     Agent,
     AgentKind,
@@ -23,80 +24,8 @@ DEFAULT_DB_DIR = os.environ.get(
 )
 DEFAULT_DB_PATH = os.path.join(DEFAULT_DB_DIR, "msg.db")
 
-SCHEMA_SQL = """
-PRAGMA journal_mode=WAL;
-PRAGMA busy_timeout=5000;
-PRAGMA foreign_keys=ON;
-
-CREATE TABLE IF NOT EXISTS agents (
-    session_id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    pane_id TEXT NOT NULL,
-    tmux_session TEXT NOT NULL,
-    tmux_socket TEXT,
-    display_addr TEXT,
-    agent_kind TEXT NOT NULL,
-    pid INTEGER,
-    cwd TEXT,
-    registered_at TEXT NOT NULL,
-    last_seen TEXT NOT NULL,
-    active INTEGER NOT NULL DEFAULT 1,
-    UNIQUE(name, tmux_session, tmux_socket)
-);
-
-CREATE TABLE IF NOT EXISTS threads (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    created_by TEXT NOT NULL
-        REFERENCES agents(session_id),
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS thread_participants (
-    thread_id TEXT NOT NULL
-        REFERENCES threads(id),
-    agent_id TEXT NOT NULL
-        REFERENCES agents(session_id),
-    PRIMARY KEY (thread_id, agent_id)
-);
-
-CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY,
-    thread_id TEXT NOT NULL
-        REFERENCES threads(id),
-    from_agent TEXT NOT NULL
-        REFERENCES agents(session_id),
-    body TEXT NOT NULL,
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS deliveries (
-    id TEXT PRIMARY KEY,
-    message_id TEXT NOT NULL
-        REFERENCES messages(id),
-    recipient_id TEXT NOT NULL
-        REFERENCES agents(session_id),
-    state TEXT NOT NULL DEFAULT 'pending',
-    claimed_by TEXT,
-    claim_expires_at TEXT,
-    notify_attempts INTEGER NOT NULL DEFAULT 0,
-    last_error TEXT,
-    created_at TEXT NOT NULL,
-    notified_at TEXT,
-    read_at TEXT,
-    UNIQUE(message_id, recipient_id)
-);
-
-CREATE TABLE IF NOT EXISTS watcher_heartbeat (
-    watcher_id TEXT PRIMARY KEY,
-    started_at TEXT NOT NULL,
-    last_heartbeat TEXT NOT NULL,
-    pid INTEGER NOT NULL
-);
-"""
-
 RELEASE_EXPIRED_SQL = """UPDATE deliveries SET
-    state = CASE WHEN state = 'read' THEN 'read' ELSE 'pending' END,
+    state = CASE WHEN state IN ('read', 'notified') THEN state ELSE 'pending' END,
     claimed_by = NULL, claim_expires_at = NULL
 WHERE claimed_by IS NOT NULL AND claim_expires_at < ?
     AND (? IS NULL OR recipient_id = ?)"""
@@ -119,22 +48,7 @@ class MsgStore:
     def _init_db(self) -> None:
         conn = self._get_conn()
         try:
-            conn.executescript(SCHEMA_SQL)
-            columns = {row[1] for row in conn.execute("PRAGMA table_info(agents)")}
-            if "active" not in columns:
-                conn.execute(
-                    "ALTER TABLE agents ADD COLUMN active INTEGER NOT NULL DEFAULT 1"
-                )
-            if conn.execute("PRAGMA user_version").fetchone()[0] < 1:
-                conn.execute(
-                    """UPDATE deliveries SET state = 'pending', notify_attempts = 0,
-                        last_error = NULL, claimed_by = NULL, claim_expires_at = NULL
-                    WHERE state IN ('pending', 'failed') AND recipient_id IN (
-                        SELECT session_id FROM agents WHERE active = 1
-                    )"""
-                )
-                conn.execute("PRAGMA user_version = 1")
-            conn.commit()
+            initialize_database(conn)
         finally:
             conn.close()
 
@@ -166,12 +80,6 @@ class MsgStore:
                 raise ValueError(f"agent '{name}' has ambiguous registrations")
             existing = existing_rows[0] if existing_rows else None
 
-            if existing and existing["active"] and existing["pane_id"] != pane_id:
-                raise ValueError(
-                    f"agent '{name}' is already active at {existing['pane_id']}; "
-                    "unregister it first"
-                )
-
             if existing and not existing["active"]:
                 conn.execute(
                     "UPDATE agents SET name = ? WHERE session_id = ?",
@@ -181,6 +89,23 @@ class MsgStore:
                     ),
                 )
                 existing = None
+
+            if not existing:
+                adopted = adopt_unique_legacy_registration(
+                    conn, name, pane_id, tmux_session, tmux_socket,
+                )
+                if adopted:
+                    existing = conn.execute(
+                        """SELECT session_id, active, pane_id FROM agents
+                        WHERE session_id = ?""",
+                        (adopted,),
+                    ).fetchone()
+
+            if existing and existing["active"] and existing["pane_id"] != pane_id:
+                raise ValueError(
+                    f"agent '{name}' is already active at {existing['pane_id']}; "
+                    "unregister it first"
+                )
 
             others = conn.execute(
                 """SELECT session_id FROM agents
