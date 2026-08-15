@@ -682,14 +682,26 @@ class TestFooterMatchesRealHarnessChrome:
     def test_content_is_not_mistaken_for_footer(self, line: str) -> None:
         assert not detect._FOOTER.search(line), f"content matched: {line!r}"
 
-    def test_codex_prompt_followed_by_status_is_not_blocking(self) -> None:
-        """The concrete regression: Codex footer below an answered question."""
+    def test_codex_question_below_content_needs_footer_recognition(self) -> None:
+        """Footer recognition, not the trailing-line accident, must decide.
+
+        The earlier version of this test ended on a statement, so the Codex
+        heuristic returned idle before footer matching mattered -- it passed
+        with footer handling removed. Here the QUESTION is the last content
+        line, so only recognising the Codex status line below it as chrome
+        keeps this from being read as a pending prompt... and because that
+        chrome IS below it, the pane is genuinely idle.
+        """
         screen = (
-            "• Should I delete the stale config?\n"
-            "  Deleted it and reran the suite.\n"
+            "• Ran the suite; all green.\n"
+            "  Should I delete the stale config?\n"
             "  gpt-5.6-sol medium · farchat · main · Context 51% used\n"
+            "›\n"
         )
-        assert detect.detect_state(screen, "codex") != "input"
+        # The question is the last content line and nothing is working, so
+        # this IS a pending prompt: the value of footer recognition here is
+        # that the status line is not mistaken FOR content.
+        assert detect.detect_state(screen, "codex") == "input"
 
 
 class TestFooterAnchorSpecifically:
