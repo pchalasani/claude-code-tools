@@ -873,3 +873,43 @@ class TestDescendantTraversal:
         agents = scan_mod.scan(workers=1)
         assert [(a.pane, a.kind, a.pid) for a in agents] == [("s:1.1", "claude", 102)]
         assert agents[0].name == "nested"
+
+
+class TestFzfStderrReachesTheTerminal:
+    """fzf draws its interface on stderr; capturing it hangs the picker.
+
+    Regression: subprocess.run(..., capture_output=True) piped stderr as well
+    as stdout, so the UI never reached the terminal and amux appeared to hang
+    waiting for keys against an invisible prompt. Only stdout may be captured.
+    """
+
+    def test_only_stdout_is_captured(self, monkeypatch) -> None:
+        import argparse as _ap
+        import subprocess as _sp
+
+        from claude_code_tools.amux import cli
+        from claude_code_tools.amux.model import Agent as _A
+
+        seen: dict[str, object] = {}
+
+        class _Proc:
+            returncode = 1
+            stdout = ""
+
+        def fake_run(cmd, **kwargs):
+            seen.update(kwargs)
+            return _Proc()
+
+        monkeypatch.setattr(cli.shutil, "which", lambda _: "/usr/bin/fzf")
+        monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
+        monkeypatch.setattr(
+            cli, "_agents_for_display",
+            lambda _: ([_A(pane="a:1.1", session="a", kind="claude")], False),
+        )
+        monkeypatch.setattr(cli.subprocess, "run", fake_run)
+        cli.cmd_pick(_ap.Namespace(max_age=30.0))
+
+        assert seen.get("capture_output") is not True, "must not capture stderr"
+        assert seen.get("stderr") is None, "stderr must be inherited"
+        assert seen.get("stdout") is _sp.PIPE, "stdout must be captured"

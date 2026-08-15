@@ -116,8 +116,16 @@ def cmd_pick(args: argparse.Namespace) -> int:
         if bind:
             cmd += ["--bind", bind]
 
+    # Capture ONLY stdout. capture_output=True also pipes stderr, which is
+    # where fzf draws its interface -- the UI never reaches the terminal and
+    # the picker looks hung, waiting for keys against an invisible prompt.
+    # (fzf reads keystrokes from /dev/tty, so feeding the list on stdin is
+    # fine.)
     proc = subprocess.run(
-        cmd, input=render.picker_lines(agents), capture_output=True, text=True
+        cmd,
+        input=render.picker_lines(agents),
+        stdout=subprocess.PIPE,
+        text=True,
     )
     if proc.returncode != 0 or not proc.stdout.strip():
         return 0
