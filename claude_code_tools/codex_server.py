@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Iterator, Mapping, Sequence
 
 from claude_code_tools import codex_server_retry
+from claude_code_tools.codex_server_callback import configure_app_server_callback
 from claude_code_tools.codex_server_legacy import reauthenticate_legacy_state
 from claude_code_tools.codex_server_fingerprint import (
     PluginSnapshot as _PluginSnapshot,
@@ -29,10 +30,8 @@ from claude_code_tools.codex_server_fingerprint import (
     read_plugin_configuration as _read_plugin_configuration,  # noqa: F401
 )
 from claude_code_tools.codex_server_generation import server_generation
-
 from claude_code_tools.codex_server_models import (
     CODEX_SERVER_GENERATION_ENV,
-    CODEX_SERVER_OPTIONS_ENV,
     FORCED_STOP_SECONDS,
     GRACEFUL_STOP_SECONDS,
     LOG_TRUNCATION_MARKER_MAX_BYTES,
@@ -576,7 +575,8 @@ def _require_unchanged_plugin_snapshot(
     codex_options: Sequence[str] = (),
 ) -> None:
     """Reject a lifecycle decision made across a plugin input change."""
-    if _plugin_configuration_snapshot(paths, codex_options) != expected:
+    current = _plugin_configuration_snapshot(paths, codex_options)
+    if current.fingerprint != expected.fingerprint:
         raise codex_server_retry.PluginSnapshotChangedError(
             "the Codex plugin or marketplace snapshot changed during "
             f"{operation}; retry after plugin updates finish"
@@ -747,10 +747,7 @@ def ensure_server(
     paths = paths_for_generation(base_paths, generation)
     with _reserved_generation_lifecycle(base_paths, paths, generation):
         child_env = _command_env(active_env, paths)
-        child_env[CODEX_SERVER_OPTIONS_ENV] = json.dumps(
-            list(codex_options),
-            separators=(",", ":"),
-        )
+        configure_app_server_callback(child_env, codex_options, paths.endpoint)
         locked_snapshot = _plugin_configuration_snapshot(paths, codex_options)
         if locked_snapshot.fingerprint != plugin_snapshot.fingerprint:
             raise codex_server_retry.PluginSnapshotChangedError(

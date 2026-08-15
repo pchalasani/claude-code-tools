@@ -34,12 +34,12 @@ from claude_code_tools.codex_server_models import (
         (Path("cache/remote_plugin_catalog"), False),
     ],
 )
-def test_missing_plugin_inputs_detect_absent_present_absent_aba(
+def test_semantically_missing_plugin_inputs_ignore_completed_aba(
     tmp_path: Path,
     relative: Path,
     is_file: bool,
 ) -> None:
-    """Missing inputs retain a parent generation across an ABA cycle."""
+    """A completed no-content ABA does not cause a false snapshot change."""
     paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
     paths.codex_home.mkdir(parents=True)
     target = paths.codex_home / relative
@@ -54,8 +54,7 @@ def test_missing_plugin_inputs_detect_absent_present_absent_aba(
 
     after = _plugin_configuration_snapshot(paths)
 
-    assert after.fingerprint == before.fingerprint
-    assert after.generation != before.generation
+    assert after == before
 
 
 @pytest.mark.parametrize(
@@ -83,6 +82,71 @@ def test_plugin_feature_flags_participate_in_fingerprint(
     assert _plugin_configuration_snapshot(paths).fingerprint != before.fingerprint
 
 
+def test_codex_marketplace_sync_metadata_does_not_roll_server(
+    tmp_path: Path,
+) -> None:
+    """Codex-owned sync observations are not process-generation inputs."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    paths.codex_home.mkdir(parents=True)
+    config = paths.codex_home / "config.toml"
+    config.write_text(
+        """
+[marketplaces.example]
+source_type = "git"
+source = "https://example.com/plugins.git"
+last_updated = "2026-08-14T12:00:00Z"
+last_revision = "old"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    before = _plugin_configuration_snapshot(paths)
+    config.write_text(
+        """
+[marketplaces.example]
+source_type = "git"
+source = "https://example.com/plugins.git"
+last_updated = "2026-08-14T17:10:14Z"
+last_revision = "new"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    after = _plugin_configuration_snapshot(paths)
+
+    assert after.fingerprint == before.fingerprint
+    assert after.generation != before.generation
+
+
+def test_marketplace_source_change_rolls_server(tmp_path: Path) -> None:
+    """A user-selected marketplace source remains a generation input."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    paths.codex_home.mkdir(parents=True)
+    config = paths.codex_home / "config.toml"
+    config.write_text(
+        '[marketplaces.example]\nsource = "https://example.com/one.git"\n',
+        encoding="utf-8",
+    )
+    before = _plugin_configuration_snapshot(paths)
+    config.write_text(
+        '[marketplaces.example]\nsource = "https://example.com/two.git"\n',
+        encoding="utf-8",
+    )
+
+    assert _plugin_configuration_snapshot(paths).fingerprint != before.fingerprint
+
+
+def test_runtime_plugin_cache_change_does_not_roll_server(tmp_path: Path) -> None:
+    """The App Server's dynamically refreshed cache is not immutable state."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    artifact = paths.codex_home / "plugins/cache/example/plugin.json"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text('{"version": 1}', encoding="utf-8")
+    before = _plugin_configuration_snapshot(paths)
+    artifact.write_text('{"version": 2}', encoding="utf-8")
+
+    assert _plugin_configuration_snapshot(paths) == before
+
+
 def test_plugin_regular_file_content_is_hashed_when_metadata_matches(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -97,10 +161,45 @@ def test_plugin_regular_file_content_is_hashed_when_metadata_matches(
         "_stat_generation",
         lambda _info: "fixed generation",
     )
-    before = _plugin_configuration_snapshot(paths)
+    before = fingerprinting._plugin_artifact_snapshot(paths)
     artifact.write_text("BBBB", encoding="utf-8")
 
-    assert _plugin_configuration_snapshot(paths).fingerprint != before.fingerprint
+    assert fingerprinting._plugin_artifact_snapshot(paths)[0] != before[0]
+
+
+def test_artifact_added_during_empty_root_certification_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real artifact cannot appear after the empty-root name scan."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    plugins = paths.codex_home / "plugins"
+    plugins.mkdir(parents=True)
+    original_check = fingerprinting._require_same_directory_path
+    inserted = False
+
+    def insert_before_path_check(
+        path: Path,
+        expected: os.stat_result,
+        message: str,
+    ) -> None:
+        nonlocal inserted
+        if path == plugins and not inserted:
+            inserted = True
+            plugins.joinpath("plugin.json").write_text("{}", encoding="utf-8")
+        original_check(path, expected, message)
+
+    monkeypatch.setattr(
+        fingerprinting,
+        "_require_same_directory_path",
+        insert_before_path_check,
+    )
+
+    with pytest.raises(
+        fingerprinting.PluginSnapshotChangedError,
+        match="cache changed",
+    ):
+        fingerprinting._plugin_artifact_snapshot(paths)
 
 
 def test_atomic_configuration_replacement_is_a_retryable_race(
@@ -162,7 +261,10 @@ def test_initial_plugin_input_race_is_retryable(
     monkeypatch.setattr(fingerprinting.os, "open", racing_open)
 
     with pytest.raises(fingerprinting.PluginSnapshotChangedError):
-        _plugin_configuration_snapshot(paths)
+        if input_name == "configuration":
+            _plugin_configuration_snapshot(paths)
+        else:
+            fingerprinting._plugin_artifact_snapshot(paths)
 
 
 @pytest.mark.parametrize(
@@ -220,7 +322,10 @@ def test_missing_plugin_input_appearance_is_retryable(
     )
 
     with pytest.raises(fingerprinting.PluginSnapshotChangedError):
-        _plugin_configuration_snapshot(paths)
+        if input_name == "configuration":
+            _plugin_configuration_snapshot(paths)
+        else:
+            fingerprinting._plugin_artifact_snapshot(paths)
 
 
 @pytest.mark.parametrize("helper", ["absolute", "relative"])
@@ -407,38 +512,37 @@ def test_atomic_plugin_root_replacement_is_a_retryable_race(
     displaced = paths.codex_home / "displaced"
     plugins.mkdir(parents=True)
     replacement.mkdir()
-    original_hash = fingerprinting._hash_directory
+    original_names = fingerprinting._plugin_directory_names
     replaced = False
 
-    def replace_after_hash(
+    def replace_after_names(
         directory_fd: int,
         relative: Path,
-        digest: fingerprinting.HashWriter,
-        generation: fingerprinting.HashWriter,
-        budget: list[int],
-        depth: int,
-    ) -> None:
+        budget: list[int] | None,
+    ) -> list[str]:
         nonlocal replaced
-        original_hash(
+        names = original_names(
             directory_fd,
             relative,
-            digest,
-            generation,
             budget,
-            depth,
         )
-        if not replaced:
+        if relative == Path("plugins") and not replaced:
             replaced = True
             plugins.rename(displaced)
             replacement.rename(plugins)
+        return names
 
-    monkeypatch.setattr(fingerprinting, "_hash_directory", replace_after_hash)
+    monkeypatch.setattr(
+        fingerprinting,
+        "_plugin_directory_names",
+        replace_after_names,
+    )
 
     with pytest.raises(
         fingerprinting.PluginSnapshotChangedError,
         match="cache root changed",
     ):
-        _plugin_configuration_snapshot(paths)
+        fingerprinting._plugin_artifact_snapshot(paths)
 
 
 def test_plugin_entry_removal_during_traversal_is_retryable(
@@ -482,7 +586,98 @@ def test_plugin_entry_removal_during_traversal_is_retryable(
         fingerprinting.PluginSnapshotChangedError,
         match="cache changed",
     ):
-        _plugin_configuration_snapshot(paths)
+        fingerprinting._plugin_artifact_snapshot(paths)
+
+
+def test_plugin_replacement_after_hash_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A final entry check catches replacement after content was hashed."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    artifact = paths.codex_home / "plugins/plugin.txt"
+    replacement = paths.codex_home / "replacement.txt"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("old", encoding="utf-8")
+    replacement.write_text("new", encoding="utf-8")
+    original_hash = fingerprinting._hash_regular_file
+
+    def replace_after_hash(
+        directory_fd: int,
+        name: str,
+        relative: Path,
+        expected: os.stat_result,
+        digest: fingerprinting.HashWriter,
+        generation: fingerprinting.HashWriter,
+        budget: list[int],
+    ) -> None:
+        original_hash(
+            directory_fd,
+            name,
+            relative,
+            expected,
+            digest,
+            generation,
+            budget,
+        )
+        replacement.replace(artifact)
+
+    monkeypatch.setattr(
+        fingerprinting,
+        "_hash_regular_file",
+        replace_after_hash,
+    )
+
+    with pytest.raises(
+        fingerprinting.PluginSnapshotChangedError,
+        match="directory changed",
+    ):
+        fingerprinting._plugin_artifact_snapshot(paths)
+
+
+def test_nested_artifact_change_after_child_hash_changes_next_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A later diagnostic scan observes a nested post-traversal change."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    artifact = paths.codex_home / "plugins/nested/plugin.txt"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("old", encoding="utf-8")
+    original_hash = fingerprinting._hash_directory
+    changed = False
+
+    def change_after_child_hash(
+        directory_fd: int,
+        relative: Path,
+        digest: fingerprinting.HashWriter,
+        generation: fingerprinting.HashWriter,
+        budget: list[int],
+        depth: int,
+    ) -> None:
+        nonlocal changed
+        original_hash(
+            directory_fd,
+            relative,
+            digest,
+            generation,
+            budget,
+            depth,
+        )
+        if relative == Path("plugins/nested") and not changed:
+            changed = True
+            artifact.write_text("new", encoding="utf-8")
+
+    monkeypatch.setattr(
+        fingerprinting,
+        "_hash_directory",
+        change_after_child_hash,
+    )
+
+    before = fingerprinting._plugin_artifact_snapshot(paths)
+    after = fingerprinting._plugin_artifact_snapshot(paths)
+
+    assert after != before
 
 
 def test_atomic_symlink_target_replacement_is_retryable(
@@ -532,7 +727,7 @@ def test_atomic_symlink_target_replacement_is_retryable(
         fingerprinting.PluginSnapshotChangedError,
         match="symlink target changed",
     ):
-        _plugin_configuration_snapshot(paths)
+        fingerprinting._plugin_artifact_snapshot(paths)
 
 
 def test_wide_plugin_tree_respects_file_descriptor_limit(tmp_path: Path) -> None:
@@ -545,16 +740,16 @@ def test_wide_plugin_tree_respects_file_descriptor_limit(tmp_path: Path) -> None
     program = textwrap.dedent(
         f"""
         import resource
-        from claude_code_tools.codex_server import (
-            _paths,
-            _plugin_configuration_snapshot,
+        from claude_code_tools.codex_server import _paths
+        from claude_code_tools.codex_server_fingerprint import (
+            _plugin_artifact_snapshot,
         )
 
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         resource.setrlimit(resource.RLIMIT_NOFILE, (min(24, hard), hard))
         paths = _paths({{"CODEX_HOME": {str(paths.codex_home)!r}}})
-        snapshot = _plugin_configuration_snapshot(paths)
-        assert len(snapshot.fingerprint) == 64
+        snapshot = _plugin_artifact_snapshot(paths)
+        assert len(snapshot[0]) == 64
         """
     )
 
@@ -581,7 +776,7 @@ def test_plugin_tree_aggregate_size_limit_is_enforced(
     monkeypatch.setattr(fingerprinting, "PLUGIN_TREE_MAX_BYTES", 3)
 
     with pytest.raises(CodexServerError, match="safe content size limit"):
-        _plugin_configuration_snapshot(paths)
+        fingerprinting._plugin_artifact_snapshot(paths)
 
 
 def test_normal_large_codex_plugin_binary_is_streamed(tmp_path: Path) -> None:
@@ -592,9 +787,9 @@ def test_normal_large_codex_plugin_binary_is_streamed(tmp_path: Path) -> None:
     with artifact.open("wb") as stream:
         stream.truncate(64 * 1024 * 1024 + 1)
 
-    snapshot = _plugin_configuration_snapshot(paths)
+    snapshot = fingerprinting._plugin_artifact_snapshot(paths)
 
-    assert len(snapshot.fingerprint) == 64
+    assert len(snapshot[0]) == 64
 
 
 def test_symlink_target_content_participates_in_fingerprint(
@@ -613,10 +808,10 @@ def test_symlink_target_content_participates_in_fingerprint(
         "_stat_generation",
         lambda _info: "fixed generation",
     )
-    before = _plugin_configuration_snapshot(paths)
+    before = fingerprinting._plugin_artifact_snapshot(paths)
     target.write_text("BBBB", encoding="utf-8")
 
-    assert _plugin_configuration_snapshot(paths).fingerprint != before.fingerprint
+    assert fingerprinting._plugin_artifact_snapshot(paths)[0] != before[0]
 
 
 def test_dangling_plugin_symlink_detects_target_parent_aba(
@@ -630,14 +825,14 @@ def test_dangling_plugin_symlink_detects_target_parent_aba(
     link.parent.mkdir(parents=True)
     link.symlink_to(target)
     target_parent.mkdir()
-    before = _plugin_configuration_snapshot(paths)
+    before = fingerprinting._plugin_artifact_snapshot(paths)
     target.write_text("temporary", encoding="utf-8")
     target.unlink()
 
-    after = _plugin_configuration_snapshot(paths)
+    after = fingerprinting._plugin_artifact_snapshot(paths)
 
-    assert after.fingerprint == before.fingerprint
-    assert after.generation != before.generation
+    assert after[0] == before[0]
+    assert after[1] != before[1]
 
 
 @pytest.mark.parametrize(

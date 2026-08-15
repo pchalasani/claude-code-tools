@@ -165,6 +165,25 @@ def _snapshot(
     return codex_server._PluginSnapshot(fingerprint, generation)
 
 
+def test_metadata_only_plugin_rewrite_remains_compatible(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Same-byte cache rewrites do not invalidate a semantic fingerprint."""
+    expected = _snapshot("same content", "before rewrite")
+    monkeypatch.setattr(
+        codex_server,
+        "_plugin_configuration_snapshot",
+        lambda _paths, _options=(): _snapshot("same content", "after rewrite"),
+    )
+
+    codex_server._require_unchanged_plugin_snapshot(
+        codex_server._paths({"CODEX_HOME": str(tmp_path / "home")}),
+        expected,
+        "test certification",
+    )
+
+
 def _arrange_live_helper(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -341,11 +360,11 @@ def test_sustained_probe_failure_preserves_ownership_but_fails_certification(
     ]
 
 
-def test_plugin_change_during_reuse_probe_is_revalidated(
+def test_metadata_rewrite_during_reuse_probe_remains_compatible(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Reuse retries and certifies against the replacement snapshot."""
+    """A same-content metadata rewrite does not replace a live server."""
     environment, _sleeps, _commands = _arrange_live_helper(
         monkeypatch,
         tmp_path,
@@ -355,9 +374,6 @@ def test_plugin_change_during_reuse_probe_is_revalidated(
         [
             _snapshot(),
             _snapshot(),
-            _snapshot(generation="changed during probe"),
-            _snapshot(generation="changed during probe"),
-            _snapshot(generation="changed during probe"),
             _snapshot(generation="changed during probe"),
         ]
     )
@@ -383,9 +399,6 @@ def test_plugin_change_during_reuse_probe_is_revalidated(
     assert observed == [
         "stable generation",
         "stable generation",
-        "changed during probe",
-        "changed during probe",
-        "changed during probe",
         "changed during probe",
     ]
 
@@ -543,13 +556,13 @@ def test_plugin_change_during_startup_is_not_certified(
     ) -> codex_server._PluginSnapshot:
         nonlocal snapshot_calls
         snapshot_calls += 1
-        generation = (
+        fingerprint = (
             "changed during startup"
             if snapshot_calls % 3 == 0
-            else "startup generation"
+            else "startup snapshot"
         )
-        value = _snapshot("startup snapshot", generation)
-        observed.append(value.generation)
+        value = _snapshot(fingerprint)
+        observed.append(value.fingerprint)
         return value
 
     def read_state(_paths: object) -> OwnedServer | None:
@@ -619,8 +632,8 @@ def test_plugin_change_during_startup_is_not_certified(
         item
         for _attempt in range(expected_attempts)
         for item in (
-            "startup generation",
-            "startup generation",
+            "startup snapshot",
+            "startup snapshot",
             "changed during startup",
         )
     ]

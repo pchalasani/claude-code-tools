@@ -26,6 +26,8 @@ from claude_code_tools.codex_server import (
     restart_server,
     stop_server,
 )
+from claude_code_tools.codex_server_resume import resume_server_paths
+from claude_code_tools.codex_server_models import CALLBACK_ENDPOINT_ENV
 
 
 NON_TUI_COMMANDS = {
@@ -55,8 +57,6 @@ NON_TUI_COMMANDS = {
     "unarchive",
     "update",
 }
-
-CALLBACK_ENDPOINT_ENV = "CCTOOLS_CODEX_CALLBACK_ENDPOINT"
 
 GLOBAL_OPTIONS_WITH_VALUES = {
     "--add-dir",
@@ -331,12 +331,22 @@ def dynamic_main() -> NoReturn:
     try:
         codex_path = _resolve_codex(active_env)
         if use_remote:
-            status = ensure_server(
+            codex_options = _server_configuration_options(arguments)
+            resume_paths = resume_server_paths(
+                arguments,
                 active_env,
-                codex_options=_server_configuration_options(arguments),
+                codex_options,
             )
-            endpoint = status.paths.endpoint
-            child_env = _command_env(active_env, status.paths)
+            if resume_paths is None:
+                status = ensure_server(
+                    active_env,
+                    codex_options=codex_options,
+                )
+                selected_paths = status.paths
+            else:
+                selected_paths = resume_paths
+            endpoint = selected_paths.endpoint
+            child_env = _command_env(active_env, selected_paths)
             child_env[CALLBACK_ENDPOINT_ENV] = endpoint
         else:
             child_env = dict(active_env)
