@@ -239,7 +239,45 @@ copy_to_clipboard = false
 overlay = true
 overlay_flex = 1.0   # how much the face flexes its shape (higher = more)
 overlay_speed = 1.0  # animation speed (lower = slower/gentler)
+
+# Keep the model's memory warm (parakeet-mlx only). After this many
+# minutes without a decode, voxtype quietly decodes a short silent
+# clip so the idle model stays recently-used and macOS is far less
+# likely to evict it to swap — otherwise, on a memory-pressured
+# machine, the first take after a long pause can stall for seconds
+# paging the model back in. Keeps ~1.7 GB in active use. 0 disables;
+# max 1440 (a day). See the note below on the one trade-off.
+keepalive_minutes = 0.0
 ```
+
+### About `keepalive_minutes`
+
+Turn this on if your Mac runs under heavy memory
+pressure and your *first* take after a pause is
+sometimes slow — several seconds for a few seconds of
+audio, when a normal take is near-instant. That
+slowness is macOS having evicted the idle model
+(~1.7 GB) to swap; the periodic silent decode keeps
+those pages in active use so it is far less likely to
+happen. A value of 5 (minutes) is a reasonable start.
+On a machine with memory to spare, leave it off — it
+is not free, it keeps ~1.7 GB resident.
+
+One trade-off worth knowing:
+
+- The keepalive decode runs on the same thread that
+  reads the microphone, so while it runs, capture
+  pauses. It skips itself during a take, during an
+  utterance, and for 30 seconds after any hotkey
+  press, so it should never collide with you
+  speaking — but if you happen to press the hotkey
+  in the instant it starts, the first fraction of a
+  second of your dictation can be lost.
+- In practice that window is ~0.2 s, because a
+  keepalive on a warm model is fast, and keeping the
+  model warm is the whole point. A multi-second
+  keepalive means the model had already been evicted,
+  which is the situation this option prevents.
 
 ## CLI
 

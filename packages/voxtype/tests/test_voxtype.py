@@ -238,6 +238,11 @@ def test_load_config_rejects_unknown_keys(tmp_path: Path) -> None:
         ("idle_timeout", float("nan")),
         ("idle_timeout", float("inf")),
         ("idle_timeout", float("-inf")),
+        ("keepalive_minutes", -1.0),
+        ("keepalive_minutes", float("nan")),
+        ("keepalive_minutes", float("inf")),
+        ("keepalive_minutes", 1441),
+        ("keepalive_minutes", 10**1000),
     ],
 )
 def test_validate_rejects_bad_values(field: str, value: object) -> None:
@@ -277,11 +282,21 @@ def test_write_sample_config_refuses_overwrite(tmp_path: Path) -> None:
         ("submit_phrases", "go"),
         ("submit_phrases", ["go", ""]),
         ("submit_phrases", ["go", 3]),
+        ("keepalive_minutes", "5"),
+        ("keepalive_minutes", True),
+        ("keepalive_minutes", None),
     ],
 )
 def test_validate_rejects_bad_types(field: str, value: object) -> None:
     with pytest.raises(ValueError):
         Config(**{field: value}).validate()
+
+
+def test_validate_accepts_keepalive_minutes() -> None:
+    """0 (off, the default), fractional, and integer intervals are valid."""
+    Config(keepalive_minutes=0).validate()
+    Config(keepalive_minutes=2.5).validate()
+    Config(keepalive_minutes=10).validate()
 
 
 def test_validate_huge_integer_idle_timeout() -> None:
