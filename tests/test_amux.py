@@ -913,3 +913,40 @@ class TestFzfStderrReachesTheTerminal:
         assert seen.get("capture_output") is not True, "must not capture stderr"
         assert seen.get("stderr") is None, "stderr must be inherited"
         assert seen.get("stdout") is _sp.PIPE, "stdout must be captured"
+
+
+class TestWorkingWithoutEscToInterrupt:
+    """Claude signals work in more than one way; only one mentions 'esc'.
+
+    Regression: sasy:1.4 had a subagent actively running and reported 'idle'.
+    All strings here are verbatim from live panes.
+    """
+
+    MAIN_SPINNER = "· Razzmatazzing… (1m 42s · ↓ 4.8k tokens · thought for 14s)"
+    SUBAGENT_ROW = (
+        "  ◯ cache-incremental-evidence  Grepping running.mdx for stale counts"
+        "                  1m 16s · ↓ 873.5k tokens"
+    )
+    FOOTER = "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent"
+
+    def test_main_spinner_without_esc_is_busy(self) -> None:
+        assert detect.detect_state(f"{self.MAIN_SPINNER}\n{self.FOOTER}", "claude") == "busy"
+
+    def test_running_subagent_is_background_work(self) -> None:
+        screen = f"{self.FOOTER}\n  ⏺ main\n{self.SUBAGENT_ROW}"
+        assert detect.detect_state(screen, "claude") == "bg"
+
+    def test_agent_marker_alone_is_not_background(self) -> None:
+        """'← 1 agent' appears on idle panes too; it must not imply work."""
+        assert detect.detect_state(self.FOOTER, "claude") == "idle"
+
+    def test_finished_output_line_is_not_background(self) -> None:
+        """⏺ prefixes ordinary assistant output, not just tree rows."""
+        screen = "⏺ The keepalive is built and done.\n" + self.FOOTER
+        assert detect.detect_state(screen, "claude") == "idle"
+
+    def test_finished_turn_with_live_monitor_is_background(self) -> None:
+        """'Baked for 16m 24s' is past tense -- the turn ended, but a monitor
+        is still going, which is precisely what bg means."""
+        screen = "✻ Baked for 16m 24s · 1 monitor still running"
+        assert detect.detect_state(screen, "claude") == "bg"

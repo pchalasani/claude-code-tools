@@ -74,8 +74,28 @@ _ASKING = re.compile(
     r"Select an option|Choose an option",
     re.MULTILINE,
 )
-_BUSY = re.compile(r"esc to interrupt", re.IGNORECASE)
-_BG = re.compile(r"\b\d+\s+monitors?\b")
+#: The MAIN agent is mid-turn. Two forms seen live:
+#:   "✻ Cooked for 14m 17s · esc to interrupt"
+#:   "· Razzmatazzing… (1m 42s · ↓ 4.8k tokens · thought for 14s)"
+#: The second has no "esc to interrupt" at all, so matching only that phrase
+#: reported an actively working pane as idle. The parenthesised
+#: elapsed-time-plus-token-counter is what distinguishes it from a subagent
+#: row, which carries the same counter WITHOUT parentheses.
+_BUSY = re.compile(
+    r"esc to interrupt|\(\d+[ms][^)]*↓[^)]*tokens",
+    re.IGNORECASE,
+)
+#: Background work. Two forms, both taken from live panes:
+#:   "✻ Baked for 16m 24s · 1 monitor still running"
+#:   "  ◯ cache-incremental-evidence  Grepping ...   1m 16s · ↓ 873.5k tokens"
+#: The second is Claude's subagent tree: ◯ marks a subagent still RUNNING
+#: (✓ marks a finished one, and ⏺ is ordinary assistant output, so neither of
+#: those can be used). Without this a pane with a working subagent but a free
+#: main prompt reported as idle.
+_BG = re.compile(
+    r"\b\d+\s+monitors?\b|^\s*◯\s+\S",
+    re.MULTILINE,
+)
 
 #: Codex chrome to ignore when looking for its last content line.
 _CODEX_CHROME = re.compile(
