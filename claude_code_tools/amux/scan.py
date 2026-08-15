@@ -79,13 +79,42 @@ def _children_by_ppid() -> dict[int, list[tuple[int, str]]]:
     return children
 
 
+def descendants(
+    tree: dict[int, list[tuple[int, str]]], root: int, limit: int = 200
+) -> list[tuple[int, str]]:
+    """Every process beneath *root*, breadth-first.
+
+    Direct children are not enough: a pane whose shell launches a wrapper
+    (``direnv exec``, a login shell, a `just` recipe) which then launches the
+    agent would otherwise show only the wrapper, and the agent would be
+    invisible. The whole process table is already snapshotted, so walking it
+    costs nothing extra.
+
+    Args:
+        tree: Map of ppid to ``(pid, command)`` pairs.
+        root: PID whose descendants are wanted.
+        limit: Safety bound on nodes visited, in case of a cycle.
+    """
+    out: list[tuple[int, str]] = []
+    queue = list(tree.get(root, []))
+    seen: set[int] = set()
+    while queue and len(out) < limit:
+        pid, cmd = queue.pop(0)
+        if pid in seen:
+            continue
+        seen.add(pid)
+        out.append((pid, cmd))
+        queue.extend(tree.get(pid, []))
+    return out
+
+
 def argv_of(children: list[tuple[int, str]]) -> str:
     """Joined command lines, for harness classification."""
     return "\n".join(cmd for _, cmd in children)
 
 
 def agent_pid(children: list[tuple[int, str]], kind: str) -> int:
-    """PID of the child matching *kind*, else the first child, else 0.
+    """PID of the process matching *kind*, else the first, else 0.
 
     Matching on kind matters: a pane running ``sleep 600 &`` alongside an
     agent would otherwise report the sleep's PID.
@@ -172,7 +201,7 @@ def scan(workers: int = 16) -> list[Agent]:
             ppid = int(pid_s)
         except ValueError:
             continue
-        children = child_map.get(ppid, [])
+        children = descendants(child_map, ppid)
         kind = detect.classify_argv(argv_of(children))
         if kind is None:
             continue
@@ -198,14 +227,14 @@ def scan(workers: int = 16) -> list[Agent]:
                 kind=kind,  # type: ignore[arg-type]
                 state=detect.detect_state(screen, kind),  # type: ignore[arg-type]
                 name=detect.extract_name(
-                    argv_of(child_map.get(ppid, [])), title, screen
+                    argv_of(descendants(child_map, ppid)), title, screen
                 ),
                 cwd=cwd,
                 repo=repo,
                 branch=branch,
                 model=detect.extract_model(screen, kind),  # type: ignore[arg-type]
                 info=detect.extract_info(screen, kind),  # type: ignore[arg-type]
-                pid=agent_pid(child_map.get(ppid, []), kind),
+                pid=agent_pid(descendants(child_map, ppid), kind),
             )
         )
 

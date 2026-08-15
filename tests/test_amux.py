@@ -795,3 +795,81 @@ class TestCodexBusyBeatsStaleQuestion:
             + "\n›\n  gpt-5.6-sol high · repo · main"
         )
         assert detect.detect_state(screen, "codex") == "idle"
+
+
+class TestExecutableOnlyMatching:
+    """Only the executable identifies a harness, never its arguments.
+
+    Regression (PR review): the patterns searched the whole command line, so
+    `rg claude .` in a pane was listed as an idle Claude agent.
+    """
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "rg claude .",
+            "grep -r codex /src",
+            "vim claude_notes.md",
+            "less /var/log/codex.log",
+            "git commit -m 'fix codex handling'",
+        ],
+    )
+    def test_agent_name_in_arguments_is_not_an_agent(self, cmd: str) -> None:
+        assert detect.classify_argv(cmd) is None
+
+    @pytest.mark.parametrize(
+        "cmd,kind",
+        [
+            ("claude --resume x", "claude"),
+            ("/usr/local/bin/codex --yolo", "codex"),
+            ("node /p/node_modules/@openai/codex/bin/codex.js --yolo", "codex"),
+            ("/Users/p/.local/share/claude/versions/2.1.220 --resume y", "claude"),
+        ],
+    )
+    def test_real_launchers_still_match(self, cmd: str, kind: str) -> None:
+        assert detect.classify_argv(cmd) == kind
+
+
+class TestDescendantTraversal:
+    """An agent under a wrapper process must still be found.
+
+    Regression (PR review): only direct children were inspected, so a pane
+    shell that launches a wrapper which launches the agent showed only the
+    wrapper and the agent was invisible.
+    """
+
+    TREE = {
+        100: [(101, "direnv exec . zsh")],
+        101: [(102, "claude --resume nested")],
+    }
+
+    def test_finds_agent_two_levels_down(self) -> None:
+        from claude_code_tools.amux import scan as scan_mod
+
+        found = scan_mod.descendants(self.TREE, 100)
+        assert detect.classify_argv(scan_mod.argv_of(found)) == "claude"
+        assert scan_mod.agent_pid(found, "claude") == 102
+
+    def test_direct_child_still_works(self) -> None:
+        from claude_code_tools.amux import scan as scan_mod
+
+        tree = {100: [(101, "codex --yolo")]}
+        found = scan_mod.descendants(tree, 100)
+        assert scan_mod.agent_pid(found, "codex") == 101
+
+    def test_cycle_does_not_hang(self) -> None:
+        from claude_code_tools.amux import scan as scan_mod
+
+        cyclic = {100: [(101, "a")], 101: [(100, "b")]}
+        assert len(scan_mod.descendants(cyclic, 100)) <= 2
+
+    def test_scan_finds_a_nested_agent(self, monkeypatch) -> None:
+        from claude_code_tools.amux import scan as scan_mod
+
+        rec = scan_mod._SEP.join(["s:1.1", "s", "100", "t", "/tmp"])
+        monkeypatch.setattr(scan_mod, "_tmux", lambda *a: (
+            rec + scan_mod._REC + "\n" if a[0] == "list-panes" else "screen"))
+        monkeypatch.setattr(scan_mod, "_children_by_ppid", lambda: self.TREE)
+        agents = scan_mod.scan(workers=1)
+        assert [(a.pane, a.kind, a.pid) for a in agents] == [("s:1.1", "claude", 102)]
+        assert agents[0].name == "nested"

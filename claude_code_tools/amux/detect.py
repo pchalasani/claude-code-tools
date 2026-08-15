@@ -18,23 +18,51 @@ from .model import Kind, State
 
 # --- harness identification (from the pane's child process argv) -----------
 
-_CODEX_ARGV = re.compile(r"(^|/|\s)codex(\s|$)|@openai/codex")
-_CLAUDE_ARGV = re.compile(r"(^|/|\s)claude(\s|$)")
+#: Interpreters that launch an agent via a script path rather than being the
+#: agent themselves (Codex ships as JS run under node).
+_INTERPRETERS = {"node", "node.exe", "python", "python3", "bun", "deno"}
+
+#: Script-path fragments that identify a harness when run under an interpreter.
+_CODEX_PATH = re.compile(r"@openai/codex|/codex(\.js|-cli)?\b")
+_CLAUDE_PATH = re.compile(r"/claude(\.js|-code)?\b|/\.local/share/claude/")
+
+
+def _basename(token: str) -> str:
+    """Executable name from an argv[0] token."""
+    return token.rsplit("/", 1)[-1]
 
 
 def classify_argv(argv: str) -> Kind | None:
-    """Identify the harness from a pane child process's command line.
+    """Identify the harness from a single process command line.
+
+    Only the EXECUTABLE decides -- argv[0], or the script path when argv[0] is
+    an interpreter. Searching the whole command line matched arguments too, so
+    an ordinary ``rg claude .`` in a pane was listed as an idle Claude agent.
 
     Args:
-        argv: Newline-joined command lines of the pane's child processes.
+        argv: One process's command line.
 
     Returns:
-        ``"codex"``, ``"claude"``, or ``None`` when no agent is running.
+        ``"codex"``, ``"claude"``, or ``None`` when this is not an agent.
     """
-    if _CODEX_ARGV.search(argv):
-        return "codex"
-    if _CLAUDE_ARGV.search(argv):
-        return "claude"
+    for line in argv.splitlines():
+        tokens = line.split()
+        if not tokens:
+            continue
+        exe = _basename(tokens[0])
+        if exe in ("codex", "codex-cli"):
+            return "codex"
+        if exe in ("claude", "claude-code"):
+            return "claude"
+        # Versioned Claude binaries are named after the version (2.1.220).
+        if re.fullmatch(r"\d+\.\d+\.\d+", exe):
+            return "claude"
+        if exe in _INTERPRETERS and len(tokens) > 1:
+            script = tokens[1]
+            if _CODEX_PATH.search(script):
+                return "codex"
+            if _CLAUDE_PATH.search(script):
+                return "claude"
     return None
 
 
