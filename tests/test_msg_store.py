@@ -444,6 +444,23 @@ class TestMessages:
         assert inbox[0]["body"] == "Review this please"
         assert inbox[0]["from_name"] == "architect"
 
+    def test_reused_name_does_not_rewrite_historical_sender(
+        self, store, two_agents,
+    ):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "Test", sender.session_id, [sender.session_id, recipient.session_id],
+        )
+        store.send_message(thread.id, sender.session_id, "historical")
+        assert store.retire_agent(sender.session_id)
+        replacement = store.register_agent(
+            sender.name, "%3", sender.tmux_session, AgentKind.CLAUDE,
+            sender.tmux_socket,
+        )
+
+        assert replacement.session_id != sender.session_id
+        assert store.get_inbox(recipient.session_id)[0]["from_name"] == sender.name
+
     def test_inbox_hides_own_messages(
         self, store, two_agents,
     ):
@@ -682,6 +699,33 @@ class TestDeliveryStateMachine:
             "watcher-1",
         )
         assert len(claimed2) == 0
+
+    def test_renew_deliveries_is_all_or_nothing(self, store, two_agents):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "Test", sender.session_id, [sender.session_id, recipient.session_id],
+        )
+        store.send_message(thread.id, sender.session_id, "first")
+        store.send_message(thread.id, sender.session_id, "second")
+        deliveries = store.claim_pending_deliveries("watcher")
+        delivery_ids = [delivery["id"] for delivery in deliveries]
+        with sqlite3.connect(store.db_path) as conn:
+            conn.execute(
+                "UPDATE deliveries SET claimed_by = 'other' WHERE id = ?",
+                (delivery_ids[1],),
+            )
+            before = conn.execute(
+                """SELECT id, claimed_by, claim_expires_at FROM deliveries
+                ORDER BY id"""
+            ).fetchall()
+
+        assert not store.renew_deliveries(delivery_ids, "watcher", 120)
+        with sqlite3.connect(store.db_path) as conn:
+            after = conn.execute(
+                """SELECT id, claimed_by, claim_expires_at FROM deliveries
+                ORDER BY id"""
+            ).fetchall()
+        assert after == before
 
     def test_failed_delivery_retries(
         self, store, two_agents,

@@ -534,10 +534,11 @@ class MsgStore:
                 raise ValueError("message recipient became inactive; resolve it again")
             conn.execute(
                 """INSERT INTO messages
-                    (id, thread_id, from_agent, body,
+                    (id, thread_id, from_agent, sender_name, body,
                      created_at)
-                VALUES (?, ?, ?, ?, ?)""",
-                (msg.id, msg.thread_id, msg.from_agent,
+                VALUES (?, ?, ?,
+                    (SELECT name FROM agents WHERE session_id = ?), ?, ?)""",
+                (msg.id, msg.thread_id, msg.from_agent, msg.from_agent,
                  msg.body, msg.created_at),
             )
             for pid in participants:
@@ -575,7 +576,7 @@ class MsgStore:
             if thread_id:
                 rows = conn.execute(
                     """SELECT m.*, d.id as delivery_id,
-                        d.state, a.name as from_name
+                        d.state, COALESCE(m.sender_name, a.name) as from_name
                     FROM messages m
                     JOIN deliveries d
                         ON m.id = d.message_id
@@ -590,7 +591,7 @@ class MsgStore:
             else:
                 rows = conn.execute(
                     """SELECT m.*, d.id as delivery_id,
-                        d.state, a.name as from_name,
+                        d.state, COALESCE(m.sender_name, a.name) as from_name,
                         t.title as thread_title
                     FROM messages m
                     JOIN deliveries d
@@ -701,7 +702,7 @@ class MsgStore:
             rows = conn.execute(
                 """SELECT d.*, m.body, m.from_agent,
                     m.thread_id, t.title as thread_title,
-                    a.name as from_name,
+                    COALESCE(m.sender_name, a.name) as from_name,
                     r.name as recipient_name,
                     r.pane_id as recipient_pane_id,
                     r.tmux_socket as recipient_tmux_socket,
@@ -733,6 +734,45 @@ class MsgStore:
                     AND a.active = 1""",
                 (delivery_id, claimer_id, _now_iso()),
             ).fetchone() is not None
+        finally:
+            conn.close()
+
+    def renew_deliveries(
+        self,
+        delivery_ids: list[str],
+        claimer_id: str,
+        claim_duration_secs: int,
+    ) -> bool:
+        """Atomically extend a complete batch of live delivery claims."""
+        if not delivery_ids:
+            return False
+        now = _now_iso()
+        expires = datetime.now(timezone.utc) + timedelta(
+            seconds=claim_duration_secs
+        )
+        placeholders = ",".join("?" for _ in delivery_ids)
+        conn = self._get_conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute(
+                f"""SELECT count(*) FROM deliveries d
+                JOIN agents a ON a.session_id = d.recipient_id
+                WHERE d.id IN ({placeholders}) AND d.claimed_by = ?
+                    AND d.state IN ('claimed', 'read')
+                    AND d.claim_expires_at >= ?
+                    AND a.active = 1""",
+                (*delivery_ids, claimer_id, now),
+            ).fetchone()[0]
+            if current != len(delivery_ids):
+                conn.rollback()
+                return False
+            conn.execute(
+                f"""UPDATE deliveries SET claim_expires_at = ?
+                WHERE id IN ({placeholders})""",
+                (expires.isoformat(), *delivery_ids),
+            )
+            conn.commit()
+            return True
         finally:
             conn.close()
 

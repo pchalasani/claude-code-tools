@@ -29,6 +29,10 @@ POLL_INTERVAL = 2.0  # seconds between DB checks
 IDLE_CHECK_TIMEOUT = 3.0  # quick idle check (not blocking)
 IDLE_TIME = 2.0  # seconds of no output = idle
 HEARTBEAT_INTERVAL = 10.0  # seconds between heartbeats
+SEND_TIMEOUT = 30
+SEND_CLEANUP_TIMEOUT = 5
+SEND_MAX_SECS = SEND_TIMEOUT + SEND_CLEANUP_TIMEOUT
+SEND_LEASE_SECS = SEND_MAX_SECS + 5
 
 
 class Watcher:
@@ -196,6 +200,12 @@ class Watcher:
             deliveries = self._current_deliveries(deliveries)
             if not deliveries:
                 return
+            delivery_ids = [delivery["id"] for delivery in deliveries]
+            if not self.store.renew_deliveries(
+                delivery_ids, self.watcher_id, SEND_LEASE_SECS,
+            ):
+                self._release_deliveries(deliveries)
+                return
             await self._tmux_send(target, notification, tmux_socket)
 
             for d in deliveries:
@@ -281,21 +291,26 @@ class Watcher:
             raise RuntimeError("recipient tmux socket is missing")
         env = os.environ.copy()
         env["TMUX"] = f"{tmux_socket},0,0"
-        proc = await asyncio.create_subprocess_exec(
-            "tmux-cli", "send", text,
-            f"--pane={pane_target}",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
+        proc = None
         try:
-            _, stderr = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=30,
-            )
-        except TimeoutError:
-            proc.kill()
-            await proc.communicate()
+            async with asyncio.timeout(SEND_TIMEOUT):
+                proc = await asyncio.create_subprocess_exec(
+                    "tmux-cli", "send", text,
+                    f"--pane={pane_target}",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env,
+                )
+                _, stderr = await proc.communicate()
+        except BaseException:
+            if proc is not None and proc.returncode is None:
+                proc.kill()
+                try:
+                    await asyncio.wait_for(
+                        proc.communicate(), timeout=SEND_CLEANUP_TIMEOUT,
+                    )
+                except TimeoutError:
+                    logger.error("Timed out reaping tmux-cli send process")
             raise
         if proc.returncode != 0:
             err = stderr.decode().strip() if stderr else ""

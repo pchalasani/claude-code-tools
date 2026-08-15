@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from datetime import datetime, timezone
+
+CURRENT_SCHEMA_VERSION = 3
 
 SCHEMA_STATEMENTS = (
     """CREATE TABLE IF NOT EXISTS agents (
@@ -36,6 +39,7 @@ SCHEMA_STATEMENTS = (
         id TEXT PRIMARY KEY,
         thread_id TEXT NOT NULL REFERENCES threads(id),
         from_agent TEXT NOT NULL REFERENCES agents(session_id),
+        sender_name TEXT,
         body TEXT NOT NULL,
         created_at TEXT NOT NULL
     )""",
@@ -60,6 +64,19 @@ SCHEMA_STATEMENTS = (
         pid INTEGER NOT NULL
     )""",
 )
+
+
+def _normalize_expiry(value: object) -> str | None:
+    """Return an aware ISO expiry in canonical UTC form, if valid."""
+    if not isinstance(value, str):
+        return None
+    try:
+        expiry = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if expiry.tzinfo is None or expiry.utcoffset() is None:
+        return None
+    return expiry.astimezone(timezone.utc).isoformat()
 
 
 def initialize_database(conn: sqlite3.Connection) -> None:
@@ -87,6 +104,12 @@ def initialize_database(conn: sqlite3.Connection) -> None:
             conn.execute(
                 "ALTER TABLE agents ADD COLUMN active INTEGER NOT NULL DEFAULT 1"
             )
+
+        message_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(messages)")
+        }
+        if "sender_name" not in message_columns:
+            conn.execute("ALTER TABLE messages ADD COLUMN sender_name TEXT")
 
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         if version < 1:
@@ -121,8 +144,52 @@ def initialize_database(conn: sqlite3.Connection) -> None:
                     AND (claimed_by IS NULL OR claim_expires_at IS NULL)"""
             )
 
-        if version < 2:
-            conn.execute("PRAGMA user_version = 2")
+        if version < 3:
+            conn.execute(
+                """UPDATE deliveries SET claimed_by = NULL,
+                    claim_expires_at = NULL
+                WHERE (state IS NULL OR state != 'claimed')
+                    AND (claimed_by IS NOT NULL OR claim_expires_at IS NOT NULL)"""
+            )
+            claims = conn.execute(
+                """SELECT id, claimed_by, claim_expires_at
+                FROM deliveries WHERE state = 'claimed'"""
+            ).fetchall()
+            malformed_claims = [
+                (row[0],)
+                for row in claims
+                if not isinstance(row[1], str)
+                or not row[1]
+                or _normalize_expiry(row[2]) is None
+            ]
+            conn.executemany(
+                """UPDATE deliveries SET state = 'pending',
+                    claimed_by = NULL, claim_expires_at = NULL WHERE id = ?""",
+                malformed_claims,
+            )
+            conn.executemany(
+                """UPDATE deliveries SET claim_expires_at = ? WHERE id = ?""",
+                (
+                    (normalized, row[0])
+                    for row in claims
+                    if isinstance(row[1], str)
+                    and row[1]
+                    and (normalized := _normalize_expiry(row[2])) is not None
+                ),
+            )
+            conn.execute(
+                """UPDATE messages SET sender_name = (
+                    SELECT CASE
+                        WHEN active = 0
+                            AND name LIKE '%@retired:' || session_id
+                        THEN substr(name, 1, length(name)
+                            - length('@retired:' || session_id))
+                        ELSE name
+                    END FROM agents
+                    WHERE session_id = messages.from_agent
+                ) WHERE sender_name IS NULL"""
+            )
+            conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
         conn.commit()
     except BaseException:
         conn.rollback()

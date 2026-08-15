@@ -5,9 +5,70 @@ from __future__ import annotations
 import sqlite3
 import threading
 
-from claude_code_tools.msg.migrations import initialize_database
+from claude_code_tools.msg.migrations import (
+    CURRENT_SCHEMA_VERSION,
+    initialize_database,
+)
 from claude_code_tools.msg.models import AgentKind
 from claude_code_tools.msg.store import MsgStore
+
+
+def test_version_zero_delivery_normalization_runs_once(tmp_path):
+    path = tmp_path / "origin.db"
+    store = MsgStore(str(path))
+    sender = store.register_agent("sender", "%1", "test", AgentKind.CLAUDE)
+    recipient = store.register_agent("recipient", "%2", "test", AgentKind.CODEX)
+    thread = store.create_thread(
+        "work", sender.session_id, [sender.session_id, recipient.session_id],
+    )
+    store.send_message(thread.id, sender.session_id, "pending retry")
+    store.send_message(thread.id, sender.session_id, "failed retry")
+    with sqlite3.connect(path) as conn:
+        ids = [row[0] for row in conn.execute("SELECT id FROM deliveries")]
+        conn.execute(
+            """UPDATE deliveries SET state = 'pending', notify_attempts = 2,
+                last_error = 'timeout', claimed_by = 'old',
+                claim_expires_at = '2099-01-01T00:00:00+00:00' WHERE id = ?""",
+            (ids[0],),
+        )
+        conn.execute(
+            """UPDATE deliveries SET state = 'failed', notify_attempts = 3,
+                last_error = 'gave up', claimed_by = 'old',
+                claim_expires_at = '2099-01-01T00:00:00+00:00' WHERE id = ?""",
+            (ids[1],),
+        )
+        conn.execute("PRAGMA user_version = 0")
+
+    MsgStore(str(path))
+
+    with sqlite3.connect(path) as conn:
+        rows = conn.execute(
+            """SELECT state, notify_attempts, last_error, claimed_by,
+                claim_expires_at FROM deliveries ORDER BY id"""
+        ).fetchall()
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        conn.execute(
+            """UPDATE deliveries SET state = 'failed', notify_attempts = 7,
+                last_error = 'after migration', claimed_by = 'sentinel',
+                claim_expires_at = '2099-01-01T00:00:00+00:00' WHERE id = ?""",
+            (ids[0],),
+        )
+    assert rows == [
+        ("pending", 0, None, None, None),
+        ("pending", 0, None, None, None),
+    ]
+    assert version == CURRENT_SCHEMA_VERSION
+
+    MsgStore(str(path))
+    with sqlite3.connect(path) as conn:
+        assert conn.execute(
+            """SELECT state, notify_attempts, last_error, claimed_by,
+                claim_expires_at FROM deliveries WHERE id = ?""",
+            (ids[0],),
+        ).fetchone() == (
+            "failed", 7, "after migration", "sentinel",
+            "2099-01-01T00:00:00+00:00",
+        )
 
 
 def test_version_two_retires_ambiguous_null_socket_panes_only(tmp_path):
@@ -98,7 +159,36 @@ def test_register_does_not_adopt_ambiguous_or_retired_legacy_rows(tmp_path):
     assert replacement.session_id != retired.session_id
 
 
-def test_version_two_repairs_claim_metadata_without_losing_terminals(tmp_path):
+def test_version_two_backfills_retired_historical_sender_name(tmp_path):
+    path = tmp_path / "sender-name.db"
+    store = MsgStore(str(path))
+    sender = store.register_agent("builder", "%1", "work", AgentKind.CLAUDE)
+    recipient = store.register_agent("reviewer", "%2", "work", AgentKind.CODEX)
+    thread = store.create_thread(
+        "work", sender.session_id, [sender.session_id, recipient.session_id],
+    )
+    store.send_message(thread.id, sender.session_id, "historical")
+    assert store.retire_agent(sender.session_id)
+    retired_name = f"builder@retired:{sender.session_id}"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "UPDATE agents SET name = ? WHERE session_id = ?",
+            (retired_name, sender.session_id),
+        )
+        conn.execute("UPDATE messages SET sender_name = NULL")
+        conn.execute("PRAGMA user_version = 2")
+
+    migrated = MsgStore(str(path))
+    replacement = migrated.register_agent(
+        "builder", "%3", "work", AgentKind.CLAUDE,
+    )
+
+    assert replacement.session_id != sender.session_id
+    inbox = migrated.get_inbox(recipient.session_id)
+    assert inbox[0]["from_name"] == "builder"
+
+
+def test_version_three_repairs_malformed_leases_and_nonclaims(tmp_path):
     path = tmp_path / "claims.db"
     store = MsgStore(str(path))
     sender = store.register_agent("sender", "%1", "work", AgentKind.CLAUDE)
@@ -106,22 +196,30 @@ def test_version_two_repairs_claim_metadata_without_losing_terminals(tmp_path):
     thread = store.create_thread(
         "work", sender.session_id, [sender.session_id, recipient.session_id],
     )
-    for body in ("notified", "no-owner", "no-expiry", "valid"):
+    states = (
+        ("notified", "stale", "bad"),
+        ("read", "stale", "bad"),
+        ("failed", "stale", "bad"),
+        ("pending", "stale", "bad"),
+        ("claimed", None, "2099-01-01T00:00:00+00:00"),
+        ("claimed", "watcher", None),
+        ("claimed", "watcher", "not-a-timestamp"),
+        ("claimed", "watcher", "2099-01-01"),
+        ("claimed", "watcher", "2099-01-01T00:00:00"),
+        ("claimed", "watcher", "2099-01-01T01:30:00+01:30"),
+        ("claimed", "watcher", "2099-01-01T00:00:00+00:00"),
+    )
+    for index in range(len(states)):
+        body = str(index)
         store.send_message(thread.id, sender.session_id, body)
     with sqlite3.connect(path) as conn:
         ids = [row[0] for row in conn.execute("SELECT id FROM deliveries ORDER BY id")]
-        values = (
-            ("notified", "stale", "2000", ids[0]),
-            ("claimed", None, "2099", ids[1]),
-            ("claimed", "watcher", None, ids[2]),
-            ("claimed", "watcher", "2099", ids[3]),
-        )
         conn.executemany(
             """UPDATE deliveries SET state = ?, claimed_by = ?,
                 claim_expires_at = ? WHERE id = ?""",
-            values,
+            ((*state, delivery_id) for state, delivery_id in zip(states, ids)),
         )
-        conn.execute("PRAGMA user_version = 1")
+        conn.execute("PRAGMA user_version = 2")
 
     MsgStore(str(path))
 
@@ -132,9 +230,16 @@ def test_version_two_repairs_claim_metadata_without_losing_terminals(tmp_path):
         ).fetchall()
     assert rows == [
         ("notified", None, None),
+        ("read", None, None),
+        ("failed", None, None),
         ("pending", None, None),
         ("pending", None, None),
-        ("claimed", "watcher", "2099"),
+        ("pending", None, None),
+        ("pending", None, None),
+        ("pending", None, None),
+        ("pending", None, None),
+        ("claimed", "watcher", "2099-01-01T00:00:00+00:00"),
+        ("claimed", "watcher", "2099-01-01T00:00:00+00:00"),
     ]
 
 
@@ -185,7 +290,9 @@ def test_concurrent_initializers_serialize_real_connections(tmp_path):
 
     assert errors == []
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == (
+            CURRENT_SCHEMA_VERSION
+        )
         tables = {
             row[0]
             for row in conn.execute(

@@ -5,11 +5,15 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import sqlite3
+import time
+from datetime import datetime, timedelta
 
 import pytest
 
 from claude_code_tools.msg.models import AgentKind
 from claude_code_tools.msg.prompt_detect import PromptState
+from claude_code_tools.msg import store as store_module
+from claude_code_tools.msg import watcher as watcher_module
 from claude_code_tools.msg.watcher import Watcher, run_watcher
 
 
@@ -130,6 +134,47 @@ def test_replacement_waits_until_final_claim_finishes(monkeypatch, tmp_path):
     assert watcher.store.get_agent_by_name("b", "test").pane_id == "%3"
 
 
+def test_send_finishes_after_original_lease_expiry(monkeypatch, tmp_path):
+    watcher = Watcher(str(tmp_path / "msg.db"))
+    sender = watcher.store.register_agent("a", "%1", "test", AgentKind.CLAUDE)
+    recipient = watcher.store.register_agent("b", "%2", "test", AgentKind.CODEX)
+    thread = watcher.store.create_thread(
+        "Test", sender.session_id, [sender.session_id, recipient.session_id],
+    )
+    watcher.store.send_message(thread.id, sender.session_id, "hello")
+    claimed = watcher.store.claim_pending_deliveries(
+        watcher.watcher_id, claim_duration_secs=1,
+    )
+    original_expiry = datetime.fromisoformat(claimed[0]["claim_expires_at"])
+    expiries = []
+
+    async def finish_after_original_expiry(*_args):
+        with sqlite3.connect(watcher.store.db_path) as conn:
+            renewed = conn.execute(
+                "SELECT claim_expires_at FROM deliveries"
+            ).fetchone()[0]
+        expiries.append(datetime.fromisoformat(renewed))
+        future = original_expiry + timedelta(seconds=2)
+        monkeypatch.setattr(store_module, "_now_iso", future.isoformat)
+
+    monkeypatch.setattr(
+        watcher, "_check_idle", lambda *_args: asyncio.sleep(0, result=True),
+    )
+    monkeypatch.setattr(watcher, "_tmux_send", finish_after_original_expiry)
+    monkeypatch.setattr(
+        "claude_code_tools.msg.watcher.detect_prompt_state",
+        lambda *_args: PromptState.EMPTY,
+    )
+
+    asyncio.run(watcher._deliver_to_recipient(recipient.session_id, claimed))
+
+    assert expiries[0] > original_expiry + timedelta(seconds=2)
+    with sqlite3.connect(watcher.store.db_path) as conn:
+        assert conn.execute(
+            "SELECT state, claimed_by, claim_expires_at FROM deliveries"
+        ).fetchone() == ("notified", None, None)
+
+
 def test_same_pane_id_on_two_tmux_servers_stays_socket_scoped(monkeypatch, tmp_path):
     watcher = Watcher(str(tmp_path / "msg.db"))
     sender = watcher.store.register_agent(
@@ -142,7 +187,9 @@ def test_same_pane_id_on_two_tmux_servers_stays_socket_scoped(monkeypatch, tmp_p
         for name, socket in (("b", "/tmp/tmux-a"), ("c", "/tmp/tmux-b"))
     ]
     thread = watcher.store.create_thread(
-        "Test", sender.session_id, [sender.session_id, *(r.session_id for r in recipients)]
+        "Test",
+        sender.session_id,
+        [sender.session_id, *(r.session_id for r in recipients)],
     )
     watcher.store.send_message(thread.id, sender.session_id, "hello")
     claimed = watcher.store.claim_pending_deliveries(watcher.watcher_id)
@@ -250,20 +297,22 @@ def test_wait_idle_timeout_kills_and_reaps_child(monkeypatch, tmp_path):
     assert events == ["communicate", "kill", "communicate"]
 
 
-def test_send_timeout_kills_and_reaps_child(monkeypatch, tmp_path):
+@pytest.mark.parametrize("stage", ("creation", "communication", "cancellation"))
+def test_send_timeout_kills_and_reaps_child(stage, monkeypatch, tmp_path):
     watcher = Watcher(str(tmp_path / "msg.db"))
     events = []
+    started = asyncio.Event()
 
     class Process:
         returncode = None
 
-        def communicate(self):
+        async def communicate(self):
             events.append("communicate")
-
-            async def finish():
-                return b"", b""
-
-            return finish()
+            if events.count("communicate") == 1:
+                started.set()
+                await asyncio.Future()
+            self.returncode = -9
+            return b"", b""
 
         def kill(self):
             events.append("kill")
@@ -271,18 +320,34 @@ def test_send_timeout_kills_and_reaps_child(monkeypatch, tmp_path):
     process = Process()
 
     async def create_subprocess(*_args, **_kwargs):
+        events.append("create")
+        if stage == "creation":
+            await asyncio.Future()
         return process
 
-    async def time_out(awaitable, **_kwargs):
-        awaitable.close()
-        raise TimeoutError
+    async def exercise():
+        task = asyncio.create_task(
+            watcher._tmux_send("%2", "/msg:inbox", "/tmp/tmux")
+        )
+        if stage == "cancellation":
+            await started.wait()
+            task.cancel()
+        expected = asyncio.CancelledError if stage == "cancellation" else TimeoutError
+        with pytest.raises(expected):
+            await task
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_subprocess)
-    monkeypatch.setattr(asyncio, "wait_for", time_out)
+    monkeypatch.setattr(watcher_module, "SEND_TIMEOUT", 0.01)
+    monkeypatch.setattr(watcher_module, "SEND_CLEANUP_TIMEOUT", 0.01)
 
-    with pytest.raises(TimeoutError):
-        asyncio.run(watcher._tmux_send("%2", "/msg:inbox", "/tmp/tmux"))
-    assert events == ["communicate", "kill", "communicate"]
+    before = time.monotonic()
+    asyncio.run(exercise())
+    assert time.monotonic() - before < 0.5
+    if stage == "creation":
+        assert events == ["create"]
+    else:
+        assert events == ["create", "communicate", "kill", "communicate"]
+    assert watcher_module.SEND_LEASE_SECS > watcher_module.SEND_MAX_SECS
 
 
 def test_missing_tmux_socket_fails_closed(monkeypatch, tmp_path):
@@ -302,7 +367,9 @@ def test_second_watcher_exits_without_starting(monkeypatch, tmp_path):
     db = tmp_path / "msg.db"
     lock = open(f"{db}.watcher.lock", "w")
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    monkeypatch.setattr(asyncio, "run", lambda _coroutine: pytest.fail("watcher started"))
+    monkeypatch.setattr(
+        asyncio, "run", lambda _coroutine: pytest.fail("watcher started"),
+    )
 
     try:
         run_watcher(str(db))
