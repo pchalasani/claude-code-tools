@@ -55,13 +55,13 @@ docs. Click a card below to jump to a feature, or
 <img src="assets/card-tmux.svg" alt="tmux-cli" width="200"/>
 </a>
 </td>
-</tr>
-<tr>
 <td align="center">
 <a href="https://pchalasani.github.io/claude-code-tools/tools/amux/">
 <img src="assets/card-amux.svg" alt="amux" width="200"/>
 </a>
 </td>
+</tr>
+<tr>
 <td align="center">
 <a href="https://pchalasani.github.io/claude-code-tools/tools/agent-tunnel/">
 <img src="assets/card-agent-tunnel.svg" alt="agent-tunnel" width="200"/>
@@ -77,21 +77,31 @@ docs. Click a card below to jump to a feature, or
 <img src="assets/card-vault.svg" alt="vault" width="200"/>
 </a>
 </td>
-</tr>
-<tr>
 <td align="center">
 <a href="https://pchalasani.github.io/claude-code-tools/tools/env-safe/">
 <img src="assets/card-env-safe.svg" alt="env-safe" width="200"/>
 </a>
 </td>
+</tr>
+<tr>
 <td align="center">
 <a href="https://pchalasani.github.io/claude-code-tools/plugins-detail/safety-hooks/">
 <img src="assets/card-safety.svg" alt="safety" width="200"/>
 </a>
 </td>
 <td align="center">
+<a href="https://pchalasani.github.io/claude-code-tools/tools/sasy-guard/">
+<img src="assets/card-sasy-guard.svg" alt="sasy-guard" width="200"/>
+</a>
+</td>
+<td align="center">
 <a href="https://pchalasani.github.io/claude-code-tools/tools/statusline/">
 <img src="assets/card-statusline.svg" alt="statusline" width="200"/>
+</a>
+</td>
+<td align="center">
+<a href="https://pchalasani.github.io/claude-code-tools/tools/fix-session/">
+<img src="assets/card-session-repair.svg" alt="session repair" width="200"/>
 </a>
 </td>
 </tr>
@@ -111,39 +121,28 @@ docs. Click a card below to jump to a feature, or
 <img src="assets/card-alt.svg" alt="alt" width="200"/>
 </a>
 </td>
-</tr>
-<tr>
 <td align="center">
 <a href="https://pchalasani.github.io/claude-code-tools/plugins-detail/voice/">
 <img src="assets/card-voice.svg" alt="voice" width="200"/>
-</a>
-</td>
-<td align="center">
-<a href="https://pchalasani.github.io/claude-code-tools/tools/fix-session/">
-<img src="assets/card-session-repair.svg" alt="session repair" width="200"/>
-</a>
-</td>
-<td align="center">
-<a href="https://pchalasani.github.io/claude-code-tools/tools/sasy-guard/">
-<img src="assets/card-sasy-guard.svg" alt="sasy-guard" width="200"/>
 </a>
 </td>
 </tr>
 <tr>
 <td align="center">
 <a href="https://pchalasani.github.io/claude-code-tools/tools/aichat/port/">
-<img src="assets/card-session-port.svg" alt="session porting" width="200"/>
-</a>
-</td>
-<td align="center">
-<a href="https://pchalasani.github.io/claude-code-tools/guides/claude-to-codex/">
-<img src="assets/card-claude-to-codex.svg" alt="Codex dynamic workflows" width="200"/>
+<img src="assets/card-session-port.svg" alt="Claude &lt;-&gt; Codex session porting" width="200"/>
 </a>
 </td>
 <td align="center">
 <a href="https://pchalasani.github.io/claude-code-tools/tools/github-wake/">
 <img src="assets/card-github-watch.svg"
-     alt="github-watch: wake on github comment" width="200"/>
+     alt="github-watch: wake on a GitHub comment" width="200"/>
+</a>
+</td>
+<td align="center" colspan="2">
+<a href="https://pchalasani.github.io/claude-code-tools/guides/claude-to-codex/">
+<img src="assets/card-codex-dynamic-workflows.svg"
+     alt="Codex Dynamic Workflows" width="416"/>
 </a>
 </td>
 </tr>

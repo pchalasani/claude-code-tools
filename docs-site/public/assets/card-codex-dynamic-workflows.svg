@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="416" height="100">
+  <defs>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#2b1a06"/>
+      <stop offset="100%" style="stop-color:#150c02"/>
+    </linearGradient>
+  </defs>
+  <rect width="416" height="100" rx="8" fill="url(#bg)"/>
+  <text x="208" y="44" font-family="monospace" font-size="26" font-weight="bold" fill="#f59e0b" text-anchor="middle" filter="url(#glow)">Codex Dynamic Workflows</text>
+  <g stroke="#fcd34d" stroke-opacity="0.5" stroke-width="1.5" fill="none">
+    <path d="M156 77 L 188 77"/>
+    <path d="M188 77 C 204 77, 204 66, 220 66"/>
+    <path d="M188 77 L 220 77"/>
+    <path d="M188 77 C 204 77, 204 88, 220 88"/>
+    <path d="M228 66 C 244 66, 244 77, 260 77"/>
+    <path d="M228 77 L 260 77"/>
+    <path d="M228 88 C 244 88, 244 77, 260 77"/>
+  </g>
+  <g fill="#fcd34d" fill-opacity="0.85">
+    <circle cx="152" cy="77" r="3.5"/>
+    <circle cx="224" cy="66" r="2.5"/>
+    <circle cx="224" cy="77" r="2.5"/>
+    <circle cx="224" cy="88" r="2.5"/>
+    <circle cx="264" cy="77" r="3.5"/>
+  </g>
+</svg>

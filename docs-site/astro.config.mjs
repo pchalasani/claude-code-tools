@@ -191,7 +191,7 @@ export default defineConfig({
           label: "Guides",
           items: [
             {
-              label: "Claude → Codex",
+              label: "Codex Dynamic Workflows",
               slug: "guides/claude-to-codex",
             },
             {
