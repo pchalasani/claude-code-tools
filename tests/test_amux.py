@@ -749,3 +749,37 @@ class TestMaxAgeValidation:
         from claude_code_tools.amux import cli
 
         assert cli.build_parser().parse_args(["--max-age", "0", "list"]).max_age == 0.0
+
+
+class TestCodexBusyBeatsStaleQuestion:
+    """A visible spinner outranks an older question still on screen.
+
+    Regression: Codex asks, you answer, it starts working -- the question is
+    still rendered above, and the heuristic reported 'input' while the agent
+    was plainly busy.
+    """
+
+    ANSWERED_AND_WORKING = """• Would you like me to run the full suite?
+› Yes, please run it.
+• Waiting for background terminal (1m 02s • esc to interrupt)
+  gpt-5.6-sol high · repo · main"""
+
+    STILL_ASKING = """• I found two candidate configs.
+  Should I delete the stale one before continuing?
+›
+  gpt-5.6-sol high · farchat · main"""
+
+    def test_working_after_an_answer_is_busy(self) -> None:
+        assert detect.detect_state(self.ANSWERED_AND_WORKING, "codex") == "busy"
+
+    def test_genuine_pending_question_is_still_input(self) -> None:
+        assert detect.detect_state(self.STILL_ASKING, "codex") == "input"
+
+    def test_question_far_up_the_scrollback_is_ignored(self) -> None:
+        """Only the tail counts; an old question must not pin the state."""
+        screen = (
+            "• Should I continue?\n"
+            + "\n".join(f"• step {i} done." for i in range(20))
+            + "\n›\n  gpt-5.6-sol high · repo · main"
+        )
+        assert detect.detect_state(screen, "codex") == "idle"

@@ -80,10 +80,14 @@ def detect_state(screen: str, kind: Kind) -> State:
     # AskUserQuestion stays flagged as blocking until it scrolls off.
     if _ASKING.search(tail) and not _footer_below_prompt(tail_lines):
         return "input"
-    if kind == "codex" and _codex_awaiting_answer(screen):
-        return "input"
+    # BUSY must be decided before the Codex question heuristic. A visible
+    # spinner is proof the agent is working, whereas the heuristic can only
+    # guess from an older question still on screen: Codex asks, you answer,
+    # it starts working -- and the question is still up there.
     if _BUSY.search(screen):
         return "busy"
+    if kind == "codex" and _codex_awaiting_answer(tail):
+        return "input"
     if _BG.search(screen):
         return "bg"
     return "idle"
@@ -118,6 +122,10 @@ def _codex_awaiting_answer(screen: str) -> bool:
     the last real content line -- ignoring the input box and status chrome --
     ends in a question mark. This has false positives (an answer that merely
     ends in a question) and misses (a question phrased as a statement).
+
+    Only the screen TAIL is considered, and callers must rule out "busy"
+    first: a question further up the scrollback says nothing about whether
+    the agent is still waiting for you.
     """
     for line in reversed(screen.splitlines()):
         if not line.strip() or _CODEX_CHROME.search(line):
