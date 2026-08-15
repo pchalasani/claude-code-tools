@@ -295,8 +295,14 @@ class TestScanWithStubbedTmux:
     REC = "\x1e"
 
     def _listing(self, rows: list[tuple[str, str, str, str, str]]) -> str:
-        """Mimic tmux -F output: fields by SEP, records terminated by REC."""
-        return "".join(self.SEP.join(r) + self.REC for r in rows)
+        """Mimic REAL tmux -F output.
+
+        tmux terminates each -F line with a newline AFTER our record marker,
+        so the wire form is ``record + REC + "\n"``. Joining records
+        REC-adjacent (no newline) meant the leading-newline strip in scan()
+        was never exercised, and deleting it left these tests green.
+        """
+        return "".join(self.SEP.join(r) + self.REC + "\n" for r in rows)
 
     def test_only_agent_panes_are_returned(self, monkeypatch) -> None:
         from claude_code_tools.amux import scan as scan_mod
@@ -444,7 +450,7 @@ class TestRecordParsing:
         cwd = "/Users/pchalasani/Git/avon"
         rec = scan_mod._SEP.join(["s:1.1", "s", "100", "title", cwd])
         monkeypatch.setattr(scan_mod, "_tmux", lambda *a: (
-            rec + scan_mod._REC if a[0] == "list-panes" else "screen"))
+            rec + scan_mod._REC + "\n" if a[0] == "list-panes" else "screen"))
         monkeypatch.setattr(scan_mod, "_children_by_ppid",
                             lambda: {100: [(101, "claude --resume x")]})
         agents = scan_mod.scan(workers=1)
@@ -455,7 +461,7 @@ class TestRecordParsing:
 
         rec = scan_mod._SEP.join(["s:1.1", "s", "100", "two\nlines", "/tmp"])
         monkeypatch.setattr(scan_mod, "_tmux", lambda *a: (
-            rec + scan_mod._REC if a[0] == "list-panes" else "screen"))
+            rec + scan_mod._REC + "\n" if a[0] == "list-panes" else "screen"))
         monkeypatch.setattr(scan_mod, "_children_by_ppid",
                             lambda: {100: [(101, "codex --yolo")]})
         assert [a.pane for a in scan_mod.scan(workers=1)] == ["s:1.1"]
@@ -488,6 +494,7 @@ class TestRecordParsing:
         recs = "".join(
             scan_mod._SEP.join([f"s:1.{i}", "s", str(100 + i), "t", "/tmp"])
             + scan_mod._REC
+            + "\n"
             for i in range(3)
         )
         monkeypatch.setattr(scan_mod, "_tmux", lambda *a: (
@@ -495,4 +502,41 @@ class TestRecordParsing:
         monkeypatch.setattr(scan_mod, "_children_by_ppid",
                             lambda: {100 + i: [(200 + i, "claude x")]
                                      for i in range(3)})
-        assert len(scan_mod.scan(workers=2)) == 3
+        # Assert the VALUES, not just the count: without the leading-newline
+        # strip every record after the first yields pane "\ns:1.N", which still
+        # counts as 3 but cannot be captured or selected.
+        assert [a.pane for a in scan_mod.scan(workers=2)] == [
+            "s:1.0", "s:1.1", "s:1.2"
+        ]
+
+
+class TestCacheTypeValidation:
+    """A well-shaped cache record can still hold wrong-typed fields."""
+
+    def test_null_pane_is_dropped_not_rendered(self, tmp_path, monkeypatch) -> None:
+        """Regression: reached render._clip() and crashed on len(None)."""
+        path = tmp_path / "amux.json"
+        path.write_text(
+            '{"time":9999999999,"agents":['
+            '{"pane":null,"session":"s","kind":"claude"}]}'
+        )
+        monkeypatch.setenv("AMUX_CACHE", str(path))
+        agents, _ = cache.read()
+        assert agents == []
+        render.picker_lines(agents, colour=False)  # must not raise
+
+    def test_wrong_typed_optional_field_is_dropped(self, tmp_path, monkeypatch) -> None:
+        path = tmp_path / "amux.json"
+        path.write_text(
+            '{"time":9999999999,"agents":['
+            '{"pane":"a:1.1","session":"s","kind":"claude","name":123}]}'
+        )
+        monkeypatch.setenv("AMUX_CACHE", str(path))
+        assert cache.read()[0] == []
+
+    def test_valid_record_still_loads(self, tmp_path, monkeypatch) -> None:
+        """Validation must not reject legitimate cache entries."""
+        monkeypatch.setenv("AMUX_CACHE", str(tmp_path / "amux.json"))
+        cache.write([Agent(pane="a:1.1", session="a", kind="claude", pid=7)])
+        loaded, _ = cache.read()
+        assert len(loaded) == 1 and loaded[0].pid == 7

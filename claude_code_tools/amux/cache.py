@@ -47,7 +47,10 @@ def read(max_age: float | None = None) -> tuple[list[Agent], float]:
         age = time.time() - stamp
         if max_age is not None and age > max_age:
             return [], age
-        agents = [Agent.from_dict(d) for d in raw.get("agents", []) if isinstance(d, dict)]
+        parsed = (
+            Agent.from_dict(d) for d in raw.get("agents", []) if isinstance(d, dict)
+        )
+        agents = [a for a in parsed if a is not None]
     except (AttributeError, TypeError, ValueError):
         return [], -1.0
     return agents, age

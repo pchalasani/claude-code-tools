@@ -62,7 +62,23 @@ class Agent:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> Agent:
-        """Rebuild an :class:`Agent` from :meth:`to_dict` output."""
+    def from_dict(cls, data: dict[str, Any]) -> Agent | None:
+        """Rebuild an :class:`Agent` from :meth:`to_dict` output.
+
+        Returns ``None`` for a record that is the right shape but the wrong
+        types -- a hand-edited or truncated cache with ``"pane": null`` would
+        otherwise reach the renderer and crash on ``len(None)``.
+        """
         known = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
+        for field_name in ("pane", "session", "kind", "state"):
+            value = known.get(field_name)
+            if value is not None and not isinstance(value, str):
+                return None
+        for field_name in ("name", "cwd", "repo", "branch", "model", "info"):
+            if not isinstance(known.get(field_name, ""), str):
+                return None
+        if known.get("pane") is None or known.get("session") is None:
+            return None
+        if not isinstance(known.get("pid", 0), int):
+            return None
         return cls(**known)
