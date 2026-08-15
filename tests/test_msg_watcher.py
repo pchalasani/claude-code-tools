@@ -263,20 +263,22 @@ def test_notification_command_matches_agent(agent_kind, expected, tmp_path):
     assert watcher._build_notification(agent_kind) == expected
 
 
-def test_wait_idle_timeout_kills_and_reaps_child(monkeypatch, tmp_path):
+@pytest.mark.parametrize("stage", ("timeout", "cancellation"))
+def test_wait_idle_timeout_and_cancellation_cleanup(stage, monkeypatch, tmp_path):
     watcher = Watcher(str(tmp_path / "msg.db"))
     events = []
+    started = asyncio.Event()
 
     class Process:
         returncode = None
 
-        def communicate(self):
+        async def communicate(self):
             events.append("communicate")
-
-            async def finish():
-                return b"", b""
-
-            return finish()
+            if events.count("communicate") == 1:
+                started.set()
+                await asyncio.Future()
+            self.returncode = -9
+            return b"", b""
 
         def kill(self):
             events.append("kill")
@@ -286,14 +288,25 @@ def test_wait_idle_timeout_kills_and_reaps_child(monkeypatch, tmp_path):
     async def create_subprocess(*_args, **_kwargs):
         return process
 
-    async def time_out(awaitable, **_kwargs):
-        awaitable.close()
-        raise TimeoutError
+    async def exercise():
+        task = asyncio.create_task(
+            watcher._check_idle("%2", "/tmp/tmux")
+        )
+        if stage == "cancellation":
+            await started.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            assert not await task
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_subprocess)
-    monkeypatch.setattr(asyncio, "wait_for", time_out)
+    monkeypatch.setattr(watcher_module, "IDLE_CHECK_TIMEOUT", 0.01)
+    monkeypatch.setattr(watcher_module, "IDLE_CLEANUP_TIMEOUT", 0.01)
 
-    assert not asyncio.run(watcher._check_idle("%2", "/tmp/tmux"))
+    before = time.monotonic()
+    asyncio.run(exercise())
+    assert time.monotonic() - before < 0.5
     assert events == ["communicate", "kill", "communicate"]
 
 

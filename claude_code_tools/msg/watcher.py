@@ -27,6 +27,7 @@ logger = logging.getLogger("msg.watcher")
 
 POLL_INTERVAL = 2.0  # seconds between DB checks
 IDLE_CHECK_TIMEOUT = 3.0  # quick idle check (not blocking)
+IDLE_CLEANUP_TIMEOUT = 5
 IDLE_TIME = 2.0  # seconds of no output = idle
 HEARTBEAT_INTERVAL = 10.0  # seconds between heartbeats
 SEND_TIMEOUT = 30
@@ -270,11 +271,20 @@ class Watcher:
             try:
                 await asyncio.wait_for(
                     proc.communicate(),
-                    timeout=IDLE_CHECK_TIMEOUT + 5,
+                    timeout=IDLE_CHECK_TIMEOUT + IDLE_CLEANUP_TIMEOUT,
                 )
-            except TimeoutError:
+            except BaseException as exc:
+                if proc.returncode is not None:
+                    raise
                 proc.kill()
-                await proc.communicate()
+                try:
+                    await asyncio.wait_for(
+                        proc.communicate(), timeout=IDLE_CLEANUP_TIMEOUT,
+                    )
+                except TimeoutError:
+                    logger.error("Timed out reaping tmux-cli idle process")
+                if not isinstance(exc, Exception):
+                    raise
                 return False
             return proc.returncode == 0
         except Exception:
