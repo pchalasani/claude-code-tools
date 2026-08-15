@@ -1,4 +1,4 @@
 interface:
   display_name: "GitHub Reply Wakeup"
-  short_description: "Wake this session when a GitHub issue gets a reply"
-  default_prompt: "Use $github-wake to register an existing GitHub issue and wake this session when its first future reply arrives."
+  short_description: "Wake Codex or Claude when a GitHub issue gets a reply"
+  default_prompt: "Use $github-wake to register an existing GitHub issue and wake this agent session when its first future reply arrives."

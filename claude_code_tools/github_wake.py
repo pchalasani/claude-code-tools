@@ -5,10 +5,16 @@ from __future__ import annotations
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
+import tempfile
 import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
+from pathlib import Path
+from types import FrameType
 from urllib.parse import urlparse
 
 import click
@@ -16,7 +22,10 @@ import click
 from claude_code_tools.codex_server_process import process_identity
 from claude_code_tools.github_watch_store import IssueWatch, WatchStore
 from claude_code_tools.issue_reply_delivery import (
+    _MAX_MONITOR_MESSAGE_BYTES,
+    _MONITOR_ACK,
     DeliveryConfigurationError,
+    DeliveryTarget,
     codex_target_from_environment,
 )
 
@@ -32,6 +41,11 @@ _MAX_GH_OUTPUT_BYTES = 1024 * 1024
 @click.option("--start", is_flag=True, help="Start the shared watcher.")
 @click.option("--stop", is_flag=True, help="Stop the shared watcher.")
 @click.option("--cancel", metavar="WATCH_ID", help="Cancel one pending wakeup.")
+@click.option(
+    "--claude-monitor",
+    is_flag=True,
+    help="Wait through Claude Code's Monitor tool until the reply arrives.",
+)
 def cli(
     issue_url: str | None,
     show_status: bool,
@@ -39,10 +53,11 @@ def cli(
     start: bool,
     stop: bool,
     cancel: str | None,
+    claude_monitor: bool,
 ) -> None:
     """Wake this session when ISSUE_URL receives its first future comment."""
     modes = sum((show_status, start, stop, cancel is not None))
-    if modes > 1 or (modes and issue_url is not None):
+    if modes > 1 or (modes and issue_url is not None) or (modes and claude_monitor):
         raise click.UsageError(
             "provide an issue URL or exactly one management option"
         )
@@ -65,15 +80,24 @@ def cli(
         return
     if issue_url is None:
         raise click.UsageError("provide a GitHub issue URL")
+    if claude_monitor:
+        _run_claude_monitor(issue_url)
+        return
     _register(issue_url)
 
 
-def _register(issue_url: str) -> None:
+def _register(
+    issue_url: str,
+    target: DeliveryTarget | None = None,
+    announce: bool = True,
+    preserve_on_start_failure: bool = True,
+) -> IssueWatch:
     """Validate and durably register one existing issue URL."""
-    try:
-        target = codex_target_from_environment()
-    except DeliveryConfigurationError as exc:
-        raise click.ClickException(str(exc)) from exc
+    if target is None:
+        try:
+            target = codex_target_from_environment()
+        except DeliveryConfigurationError as exc:
+            raise click.ClickException(str(exc)) from exc
     repository, issue_number, host = _parse_issue_url(issue_url)
     canonical_url = _verify_issue(repository, issue_number, host)
     store = WatchStore()
@@ -89,11 +113,106 @@ def _register(issue_url: str) -> None:
     try:
         _ensure_watcher(store)
     except Exception as exc:
+        if not preserve_on_start_failure:
+            store.cancel(watch.watch_id)
         raise click.ClickException(
             "the wakeup was durably registered, but the shared watcher did not "
             f"start: {exc}; run 'github-wake --start'"
         ) from exc
-    click.echo(f"Reply wakeup armed for {canonical_url} ({watch.watch_id[:8]}).")
+    if announce:
+        click.echo(
+            f"Reply wakeup armed for {canonical_url} ({watch.watch_id[:8]})."
+        )
+    return watch
+
+
+def _run_claude_monitor(issue_url: str) -> None:
+    """Register a watch and emit its reply through one live Monitor process."""
+    store = WatchStore()
+    with _monitor_listener() as (listener, socket_path):
+        stopped = False
+        notification_emitted = False
+        watch: IssueWatch | None = None
+
+        def stop_monitor(_signum: int, _frame: FrameType | None) -> None:
+            nonlocal stopped
+            stopped = True
+            listener.close()
+
+        previous = signal.signal(signal.SIGTERM, stop_monitor)
+        try:
+            watch = _register(
+                issue_url,
+                target=DeliveryTarget(
+                    kind="claude-monitor-v1",
+                    payload={"socketPath": str(socket_path)},
+                ),
+                announce=False,
+                preserve_on_start_failure=False,
+            )
+            if stopped:
+                return
+            try:
+                _receive_monitor_message(
+                    listener,
+                    lambda message: click.echo(message, color=False),
+                )
+                notification_emitted = True
+            except OSError:
+                if not stopped:
+                    raise
+                return
+        finally:
+            signal.signal(signal.SIGTERM, previous)
+            if watch is not None and not notification_emitted:
+                store.cancel(watch.watch_id)
+
+
+@contextmanager
+def _monitor_listener() -> Iterator[tuple[socket.socket, Path]]:
+    """Create one private short-lived Unix listener for Claude delivery."""
+    directory = Path(
+        tempfile.mkdtemp(prefix=f"cctools-gw-{os.getuid()}-", dir="/tmp")
+    )
+    path = directory / "reply.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        listener.bind(str(path))
+        os.chmod(path, 0o600)
+        listener.listen(1)
+        yield listener, path
+    finally:
+        listener.close()
+        path.unlink(missing_ok=True)
+        directory.rmdir()
+
+
+def _receive_monitor_message(
+    listener: socket.socket,
+    emit: Callable[[str], None],
+) -> None:
+    """Print only a fully received reply and acknowledge it to the daemon."""
+    connection, _ = listener.accept()
+    with connection:
+        connection.settimeout(10)
+        chunks: list[bytes] = []
+        size = 0
+        while True:
+            chunk = connection.recv(8192)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > _MAX_MONITOR_MESSAGE_BYTES:
+                raise RuntimeError("Claude monitor notification is too large")
+            chunks.append(chunk)
+        try:
+            message = b"".join(chunks).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise RuntimeError("Claude monitor notification is not UTF-8") from exc
+        if not message or "\n" in message or "\r" in message:
+            raise RuntimeError("Claude monitor notification is not one line")
+        emit(message)
+        connection.sendall(_MONITOR_ACK)
 
 
 def _verify_issue(repository: str, issue_number: int, host: str) -> str:

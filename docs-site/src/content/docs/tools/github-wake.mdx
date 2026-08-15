@@ -15,10 +15,22 @@ Run `github-wake` only when the current session is genuinely waiting for a
 reply. The command verifies the issue, records a durable watch, and starts one
 shared per-user watcher daemon.
 
-Codex delivery currently requires a session launched through `codex-dynamic`.
-The GitHub polling and durable state are agent-neutral. Delivery is behind a
-small adapter boundary so another agent can be supported without replacing the
-watcher.
+Codex delivery requires a session launched through `codex-dynamic`. In Claude
+Code 2.1.98 or later, ask Claude to watch the issue with `github-wake`; the
+installed skill runs the following command through Claude's `Monitor` tool:
+
+```bash
+github-wake --claude-monitor https://github.com/OWNER/REPOSITORY/issues/123
+```
+
+The Monitor tool must own this command. Running it through Bash would block a
+tool call instead of feeding the reply asynchronously into the conversation.
+Claude Code monitors stop when their session ends and are not restored when a
+session resumes.
+
+The GitHub polling and durable state are agent-neutral. Separate delivery
+adapters send the event through either the Codex App Server or Claude Code's
+live Monitor process without replacing the shared watcher.
 
 The daemon polls once per GitHub repository, even when many sessions have
 pending watches. It uses conditional GitHub requests, overlapping time windows,

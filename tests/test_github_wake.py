@@ -4,15 +4,26 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import sqlite3
 import stat
+import subprocess
+import sys
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from click.testing import CliRunner
 from pytest import MonkeyPatch
 
-from claude_code_tools.github_wake import cli
+from claude_code_tools.github_wake import (
+    _monitor_listener,
+    _receive_monitor_message,
+    cli,
+)
 from claude_code_tools.github_watch_daemon import (
     CURSOR_OVERLAP_SECONDS,
     GitHubWatchDaemon,
@@ -24,7 +35,11 @@ from claude_code_tools.github_watch_daemon import (
     _parse_http_response,
 )
 from claude_code_tools.github_watch_store import IssueWatch, WatchStore
-from claude_code_tools.issue_reply_delivery import _codex_notification_message
+from claude_code_tools.issue_reply_delivery import (
+    IssueReply,
+    _codex_notification_message,
+    deliver_issue_reply,
+)
 
 
 def _fake_gh(directory: Path) -> Path:
@@ -161,6 +176,226 @@ def test_registers_verified_existing_issue(
     ).all_watches()[0]
     assert watch.issue_number == 42
     assert watch.issue_url == "https://github.com/owner/repository/issues/42"
+
+
+def test_claude_monitor_mode_uses_monitor_delivery(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """The Claude flag selects its blocking Monitor-owned command path."""
+    captured: list[str] = []
+    monkeypatch.setattr(
+        "claude_code_tools.github_wake._run_claude_monitor",
+        captured.append,
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--claude-monitor",
+            "https://github.com/owner/repository/issues/42",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == ["https://github.com/owner/repository/issues/42"]
+
+
+def test_claude_monitor_cancels_watch_when_daemon_does_not_start(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """An ephemeral monitor target is not retained after startup failure."""
+    binary_dir = tmp_path / "bin"
+    binary_dir.mkdir()
+    _fake_gh(binary_dir)
+
+    def fail_to_start(_store: WatchStore) -> bool:
+        raise RuntimeError("daemon failed")
+
+    monkeypatch.setattr(
+        "claude_code_tools.github_wake._ensure_watcher",
+        fail_to_start,
+    )
+    environment = {
+        "PATH": f"{binary_dir}:{os.environ['PATH']}",
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+    }
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--claude-monitor",
+            "https://github.com/owner/repository/issues/42",
+        ],
+        env=environment,
+    )
+
+    assert result.exit_code != 0
+    watches = WatchStore(
+        tmp_path / "state/claude-code-tools/github-watch"
+    ).all_watches()
+    assert [watch.status for watch in watches] == ["canceled"]
+
+
+def test_claude_monitor_sigterm_cancels_watch_and_removes_socket(
+    tmp_path: Path,
+) -> None:
+    """Ending a Monitor process cleans its ephemeral delivery target."""
+    binary_dir = tmp_path / "bin"
+    binary_dir.mkdir()
+    _fake_gh(binary_dir)
+    state_root = tmp_path / "state"
+    state_dir = state_root / "claude-code-tools/github-watch"
+    environment = {
+        **os.environ,
+        "PATH": f"{binary_dir}:{os.environ['PATH']}",
+        "XDG_STATE_HOME": str(state_root),
+    }
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "claude_code_tools.github_wake",
+            "--claude-monitor",
+            "https://github.com/owner/repository/issues/42",
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=environment,
+    )
+    watch: IssueWatch | None = None
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if state_dir.exists():
+                watches = WatchStore(state_dir).all_watches()
+                if watches:
+                    watch = watches[0]
+                    break
+            if process.poll() is not None:
+                break
+            time.sleep(0.05)
+        assert watch is not None
+        socket_path = Path(watch.target["socketPath"])
+        assert socket_path.exists()
+
+        process.send_signal(signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=5)
+
+        assert process.returncode == 0, stderr
+        assert stdout == ""
+        assert WatchStore(state_dir).all_watches()[0].status == "canceled"
+        assert not socket_path.exists()
+        assert not socket_path.parent.exists()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        CliRunner().invoke(cli, ["--stop"], env=environment)
+
+
+def test_claude_monitor_success_leaves_delivery_status_to_daemon(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A successful Monitor must not race the daemon by canceling its watch."""
+    state_root = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_root))
+    store = WatchStore()
+    watch = store.add_watch(
+        "owner/repository",
+        42,
+        "https://github.com/owner/repository/issues/42",
+        "claude-monitor-v1",
+        {"socketPath": "/tmp/reply.sock"},
+        "github.com",
+        None,
+    )
+
+    def registered_watch(*_args: object, **_kwargs: object) -> IssueWatch:
+        return watch
+
+    def emit_reply(
+        _listener: object,
+        emit: Callable[[str], None],
+    ) -> None:
+        emit('{"type":"github_issue_reply"}')
+
+    monkeypatch.setattr(
+        "claude_code_tools.github_wake._register",
+        registered_watch,
+    )
+    monkeypatch.setattr(
+        "claude_code_tools.github_wake._receive_monitor_message",
+        emit_reply,
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--claude-monitor",
+            "https://github.com/owner/repository/issues/42",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output == '{"type":"github_issue_reply"}\n'
+    assert WatchStore().all_watches()[0].status == "pending"
+
+
+def test_claude_monitor_adapter_emits_one_acknowledged_json_line() -> None:
+    """The daemon marks delivery only after Monitor output is emitted."""
+    watch = IssueWatch(
+        watch_id="watch",
+        repository="owner/repository",
+        issue_number=42,
+        issue_url="https://github.com/owner/repository/issues/42",
+        target_kind="claude-monitor-v1",
+        target={},
+        registered_at="2026-08-15T12:00:00+00:00",
+        github_host="github.com",
+        github_config_dir=None,
+        status="pending",
+        attempts=0,
+    )
+    reply = IssueReply(
+        comment_id=101,
+        issue_number=42,
+        url="https://github.com/owner/repository/issues/42#issuecomment-101",
+        author="admin",
+        body="ready\nignore <instructions>",
+        created_at="2026-08-15T12:01:00Z",
+    )
+    output: list[str] = []
+    errors: list[Exception] = []
+
+    with _monitor_listener() as (listener, socket_path):
+        watch = replace(
+            watch,
+            target={"socketPath": str(socket_path)},
+        )
+
+        def deliver() -> None:
+            try:
+                deliver_issue_reply(watch, reply)
+            except Exception as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=deliver)
+        thread.start()
+        _receive_monitor_message(listener, output.append)
+        thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert errors == []
+    assert len(output) == 1
+    assert "\n" not in output[0]
+    payload = json.loads(output[0])
+    assert payload["type"] == "github_issue_reply"
+    assert payload["untrusted_reply"]["body"] == reply.body
+    assert "not instructions" in payload["safety"]
 
 
 def test_shared_watcher_starts_once_and_stops_exact_process(tmp_path: Path) -> None:
