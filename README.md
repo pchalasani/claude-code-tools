@@ -58,6 +58,11 @@ docs. Click a card below to jump to a feature, or
 </tr>
 <tr>
 <td align="center">
+<a href="https://pchalasani.github.io/claude-code-tools/tools/amux/">
+<img src="assets/card-amux.svg" alt="amux" width="200"/>
+</a>
+</td>
+<td align="center">
 <a href="https://pchalasani.github.io/claude-code-tools/tools/agent-tunnel/">
 <img src="assets/card-agent-tunnel.svg" alt="agent-tunnel" width="200"/>
 </a>
