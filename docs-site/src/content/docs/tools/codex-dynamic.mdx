@@ -255,8 +255,9 @@ idle; otherwise it steers into and extends the active turn. Either reporting
 path invokes the model and consumes tokens.
 
 `codex-dynamic` marks its tool environment as callback-ready. It supplies the
-marker both to the TUI process and through Codex's shell-environment policy, so
-the default survives restrictive settings such as `inherit = "core"`. The
+marker to the TUI and configures it in the managed App Server's
+shell-environment policy, where tool processes are actually created. The
+default therefore survives restrictive settings such as `inherit = "core"`. The
 workflow runner therefore arms a callback for detached runs even if the agent
 forgets to add `--notify-current-thread`. Pass `--no-notify-current-thread`
 only when you intentionally want to disable this default.
@@ -489,11 +490,13 @@ visible as diagnostics instead of hiding otherwise readable runs. Set
   callback retry. `codex-workflows` deliberately has no control operations.
 </Aside>
 
-## Plugin updates without restarts
+## Plugin updates and server generations
 
-An app server loads its plugin catalog once, and Codex currently has no
-in-session plugin-reload command. `codex-dynamic` handles this automatically by
-using versioned server generations instead of replacing the shared server.
+Codex refreshes installed plugin caches inside the long-running app server and
+invalidates its own in-memory plugin state when the effective plugins change.
+Those cache files and Codex-maintained marketplace fields such as
+`last_updated` and `last_revision` are therefore runtime state, not immutable
+app-server inputs.
 
 <Steps>
 
@@ -511,17 +514,30 @@ using versioned server generations instead of replacing the shared server.
 
 </Steps>
 
-The launcher fingerprints the selected Codex executable, plugin catalog, and
-server-affecting options. If they match an existing healthy generation, it
-reuses that generation. Otherwise it starts and certifies a new socket before
-making it the default. Existing TUIs and in-flight callbacks remain connected
-to the old socket, so they are not interrupted and keep the plugin snapshot
-with which they started.
+The launcher fingerprints the selected Codex executable, user-selected plugin
+and marketplace configuration, plugin feature gates, and server-affecting
+options. If they match an existing healthy generation, it reuses that
+generation. Otherwise it starts and certifies a new socket before making it the
+default. Existing TUIs and in-flight callbacks remain connected to the old
+socket, so they are not interrupted. Codex-managed plugin caches, catalog
+downloads, sync timestamps, and observed marketplace revisions do not create
+new generations.
 
-Plugin installation can rewrite the catalog while the launcher reads it. The
-launcher cleans up the uncertified attempt, takes a fresh snapshot, and retries
-with a small fixed limit. Persistent catalog changes still fail closed; wait
-for the installation to finish and run `codex-dynamic` again.
+When resuming an explicit session ID or name, the launcher first asks every
+compatible managed generation which threads it already has loaded. If an older
+generation owns that thread, the new TUI reconnects to that socket instead of
+trying to load a second in-memory copy on the current generation. A bare resume
+picker and the `--last` form stay on the current generation because the launcher
+cannot safely reproduce Codex's native selection rules. After a rollover, use
+the explicit session ID or name if that thread is still loaded by an older
+generation. Older generations are eligible only when their Codex executable,
+version, server options, and process-level plugin configuration match the
+current configuration.
+
+The launcher reads configuration through a race-checked descriptor. If a user
+or Codex rewrites `config.toml` during that read, the launcher retries with a
+small fixed limit. Cache refreshes can continue independently without blocking
+or rolling the shared server.
 
 Codex does not expose a reliable count of clients attached to an app server,
 so the helper never guesses that an old generation is unused and kills it.
@@ -630,19 +646,20 @@ codex-dynamic
 1. **Establish a callback-capable session**
 
    `codex-dynamic` resolves the exact Codex executable, checks its version, and
-   fingerprints that executable together with the effective plugin catalog and
-   server options. It reuses the matching healthy generation or starts a
-   supervised app server on a generation-specific Unix socket. The current
-   generation marker changes only after the new listener passes ownership,
-   process-identity, plugin-snapshot, and socket-peer checks. A failed rollout
-   therefore leaves the previous default untouched.
+   fingerprints that executable together with process-level plugin
+   configuration and server options. It reuses the matching healthy generation
+   or starts a supervised app server on a
+   generation-specific Unix socket. The current generation marker changes only
+   after the new listener passes ownership, process-identity, plugin-snapshot,
+   and socket-peer checks. A failed rollout therefore leaves the previous
+   default untouched.
 
    The launcher then replaces itself with `codex --remote` using that exact
    socket. It is not a proxy in front of the TUI, so Codex still owns the
    terminal, signals, and exit status directly. The same immutable endpoint is
-   injected through Codex's shell-environment policy, making callbacks the
-   default for detached workflow launches even under a restrictive inheritance
-   policy.
+   configured in the managed App Server's shell-environment policy, making
+   callbacks the default for detached workflow launches even under a
+   restrictive inheritance policy.
 
 2. **Verify the callback before creating the run**
 

@@ -140,6 +140,12 @@ docs. Click a card below to jump to a feature, or
 <img src="assets/card-claude-to-codex.svg" alt="Codex dynamic workflows" width="200"/>
 </a>
 </td>
+<td align="center">
+<a href="https://pchalasani.github.io/claude-code-tools/tools/github-wake/">
+<img src="assets/card-github-watch.svg"
+     alt="github-watch: wake on github comment" width="200"/>
+</a>
+</td>
 </tr>
 </table>
 

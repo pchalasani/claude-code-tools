@@ -272,7 +272,9 @@ def test_codex_dynamic_starts_server_and_forwards_resume_arguments(
     """The remote wrapper execs Codex with unchanged subcommand arguments."""
     root, environment = server_environment
     arguments_path = root / "arguments.json"
+    server_arguments_path = root / "server-arguments.json"
     environment["FAKE_CODEX_ARGS"] = str(arguments_path)
+    environment["FAKE_CODEX_SERVER_ARGS"] = str(server_arguments_path)
     command = [
         sys.executable,
         "-c",
@@ -305,6 +307,16 @@ def test_codex_dynamic_starts_server_and_forwards_resume_arguments(
         "--last",
     ]
     assert Path(invocation["codexHome"]) == Path(environment["CODEX_HOME"]).resolve()
+    server_arguments = json.loads(
+        server_arguments_path.read_text(encoding="utf-8")
+    )
+    assert server_arguments == [
+        "--config",
+        (
+            "shell_environment_policy.set.CCTOOLS_CODEX_CALLBACK_ENDPOINT="
+            f"{json.dumps(endpoint)}"
+        ),
+    ]
     assert get_status(environment).status == "running"
 
 
@@ -393,7 +405,12 @@ def test_codex_dynamic_propagates_plugin_configuration_to_server(
     )
 
     assert result.returncode == 0, result.stderr
-    assert json.loads(server_arguments.read_text(encoding="utf-8")) == overrides
+    worker_options = json.loads(server_arguments.read_text(encoding="utf-8"))
+    assert worker_options[:-2] == overrides
+    assert worker_options[-2] == "--config"
+    assert worker_options[-1].startswith(
+        "shell_environment_policy.set.CCTOOLS_CODEX_CALLBACK_ENDPOINT="
+    )
 
 
 def test_forced_restart_preserves_certified_server_options(
@@ -418,7 +435,12 @@ def test_forced_restart_preserves_certified_server_options(
     restarted = restart_server(environment, allow_disconnect=True)
 
     assert restarted.pid != first.pid
-    assert json.loads(server_arguments.read_text(encoding="utf-8")) == options
+    worker_options = json.loads(server_arguments.read_text(encoding="utf-8"))
+    assert worker_options[:-2] == options
+    assert worker_options[-2] == "--config"
+    assert worker_options[-1].startswith(
+        "shell_environment_policy.set.CCTOOLS_CODEX_CALLBACK_ENDPOINT="
+    )
 
 
 def test_codex_dynamic_rejects_endpoint_override(

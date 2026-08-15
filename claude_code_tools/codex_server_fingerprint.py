@@ -6,6 +6,7 @@ import errno
 import hashlib
 import json
 import os
+import re
 import stat
 import tomllib
 from dataclasses import dataclass
@@ -29,6 +30,10 @@ PLUGIN_APP_FEATURES = (
     "plugin_sharing",
     "remote_plugin",
 )
+MARKETPLACE_RUNTIME_FIELDS = {
+    "last_revision",
+    "last_updated",
+}
 _PLUGIN_MUTATION_ERRNOS = {
     errno.ELOOP,
     errno.ENOENT,
@@ -39,6 +44,7 @@ _PLUGIN_PATH_RACE_ERRNOS = {
     errno.ENOTDIR,
     errno.ESTALE,
 }
+_REMOTE_INSTALL_TEMP_FILE = re.compile(r"^\.tmp[A-Za-z0-9]{6}$")
 
 
 @dataclass(frozen=True)
@@ -60,7 +66,7 @@ def plugin_configuration_snapshot(
     paths: ServerPaths,
     codex_options: Sequence[str] = (),
 ) -> PluginSnapshot:
-    """Safely snapshot plugin configuration and resolved cache artifacts."""
+    """Safely snapshot process-level plugin configuration."""
     config_path = paths.codex_home / "config.toml"
     config, config_generation = read_plugin_configuration(config_path)
     profile_name = _selected_profile(codex_options)
@@ -81,24 +87,28 @@ def plugin_configuration_snapshot(
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
-    artifacts = hashlib.sha256()
-    tree_generations: list[str] = []
-    for relative in (Path("plugins"), Path("cache/remote_plugin_catalog")):
-        tree_generations.append(
-            hash_plugin_tree(paths.codex_home / relative, relative, artifacts)
-        )
-    artifact_digest = artifacts.hexdigest()
-    fingerprint = hashlib.sha256(configuration + artifact_digest.encode()).hexdigest()
+    fingerprint = hashlib.sha256(configuration).hexdigest()
     generation = hashlib.sha256(
         "\0".join(
             [
                 *configuration_generations,
-                *tree_generations,
-                artifact_digest,
+                fingerprint,
             ]
         ).encode()
     ).hexdigest()
     return PluginSnapshot(fingerprint=fingerprint, generation=generation)
+
+
+def _plugin_artifact_snapshot(paths: ServerPaths) -> tuple[str, tuple[str, ...]]:
+    """Hash installed plugin artifacts in one bounded verification pass."""
+    artifacts = hashlib.sha256()
+    relative = Path("plugins")
+    generation = hash_plugin_tree(
+        paths.codex_home / relative,
+        relative,
+        artifacts,
+    )
+    return artifacts.hexdigest(), (generation,)
 
 
 def plugin_configuration_fingerprint(
@@ -136,10 +146,27 @@ def _relevant_configuration(config: dict[str, object]) -> dict[str, object]:
         features = {
             key: features[key] for key in PLUGIN_APP_FEATURES if key in features
         }
+    marketplaces = config.get("marketplaces", {})
+    if isinstance(marketplaces, dict):
+        marketplaces = {
+            name: _stable_marketplace_configuration(value)
+            for name, value in marketplaces.items()
+        }
     return {
         "features": features,
-        "marketplaces": config.get("marketplaces", {}),
+        "marketplaces": marketplaces,
         "plugins": config.get("plugins", {}),
+    }
+
+
+def _stable_marketplace_configuration(value: object) -> object:
+    """Remove Codex-maintained sync observations from one marketplace."""
+    if not isinstance(value, dict):
+        return value
+    return {
+        key: item
+        for key, item in value.items()
+        if key not in MARKETPLACE_RUNTIME_FIELDS
     }
 
 
@@ -149,12 +176,12 @@ def read_plugin_configuration(path: Path) -> tuple[dict[str, object], str]:
     try:
         fd = os.open(path, flags)
     except FileNotFoundError:
-        generation = _missing_generation(path)
+        _missing_generation(path)
         _require_missing_path(
             path,
             f"Codex plugin configuration changed while being read: {path}",
         )
-        return {}, generation
+        return {}, f"missing-configuration:{path.name}"
     except OSError as exc:
         if exc.errno in _PLUGIN_PATH_RACE_ERRNOS:
             raise PluginSnapshotChangedError(
@@ -224,12 +251,12 @@ def hash_plugin_tree(root: Path, label: Path, digest: HashWriter) -> str:
         root_fd = os.open(root, flags)
     except FileNotFoundError:
         digest.update(b"missing:" + os.fsencode(str(label)) + b"\0")
-        generation = _missing_generation(root)
+        _missing_generation(root)
         _require_missing_path(
             root,
             f"Codex plugin cache root changed while being read: {root!r}",
         )
-        return generation
+        return _empty_tree_generation(label)
     except OSError as exc:
         if exc.errno in _PLUGIN_PATH_RACE_ERRNOS:
             raise PluginSnapshotChangedError(
@@ -242,12 +269,32 @@ def hash_plugin_tree(root: Path, label: Path, digest: HashWriter) -> str:
     budget = [0, 0]
     try:
         initial_info = os.fstat(root_fd)
-        _hash_directory(root_fd, label, digest, generation, budget, 0)
-        _require_unchanged_path(
+        initial_names = _plugin_directory_names(root_fd, label, None)
+        if initial_names:
+            _hash_directory(root_fd, label, digest, generation, budget, 0)
+            result = generation.hexdigest()
+        else:
+            digest.update(b"missing:" + os.fsencode(str(label)) + b"\0")
+            if _plugin_directory_names(root_fd, label, None):
+                raise PluginSnapshotChangedError(
+                    f"Codex plugin cache changed while being read: {root!r}"
+                )
+            result = _empty_tree_generation(label)
+        _require_same_directory_path(
             root,
             initial_info,
             f"Codex plugin cache root changed while being read: {root!r}",
         )
+        if not initial_names:
+            if _plugin_directory_names(root_fd, label, None):
+                raise PluginSnapshotChangedError(
+                    f"Codex plugin cache changed while being read: {root!r}"
+                )
+            _require_same_directory_path(
+                root,
+                initial_info,
+                f"Codex plugin cache root changed while being read: {root!r}",
+            )
     except OSError as exc:
         if exc.errno in _PLUGIN_MUTATION_ERRNOS:
             raise PluginSnapshotChangedError(
@@ -258,7 +305,12 @@ def hash_plugin_tree(root: Path, label: Path, digest: HashWriter) -> str:
         ) from exc
     finally:
         os.close(root_fd)
-    return generation.hexdigest()
+    return result
+
+
+def _empty_tree_generation(label: Path) -> str:
+    """Identify a plugin root with no runtime-relevant entries."""
+    return f"empty-or-missing:{label}"
 
 
 def _hash_directory(
@@ -277,20 +329,13 @@ def _hash_directory(
         raise CodexServerError(
             f"Codex plugin cache path is not a directory: {relative!r}"
         )
-    _update_entry(digest, generation, b"directory", relative, initial_info)
-    with os.scandir(directory_fd) as stream:
-        names: list[str] = []
-        for child in stream:
-            budget[0] += 1
-            if budget[0] > PLUGIN_TREE_MAX_ENTRIES:
-                raise CodexServerError(
-                    "Codex plugin cache contains too many entries to snapshot safely"
-                )
-            names.append(child.name)
-    names.sort(key=os.fsencode)
+    _update_directory(digest, generation, relative, initial_info)
+    names = _plugin_directory_names(directory_fd, relative, budget)
+    observed_entries: dict[str, tuple[int, ...]] = {}
     for name in names:
         child_relative = relative / name
         info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        observed_entries[name] = _plugin_entry_identity(info)
         if stat.S_ISLNK(info.st_mode):
             _update_entry(digest, generation, b"symlink", child_relative, info)
             target = os.readlink(name, dir_fd=directory_fd)
@@ -308,7 +353,9 @@ def _hash_directory(
         elif stat.S_ISDIR(info.st_mode):
             child_fd = os.open(name, _directory_flags(), dir_fd=directory_fd)
             try:
-                if _stat_generation(os.fstat(child_fd)) != _stat_generation(info):
+                if _directory_identity(os.fstat(child_fd)) != _directory_identity(
+                    info
+                ):
                     raise PluginSnapshotChangedError(
                         "Codex plugin directory changed while being read: "
                         f"{child_relative!r}"
@@ -335,10 +382,92 @@ def _hash_directory(
             )
         else:
             _update_entry(digest, generation, b"special", child_relative, info)
-    if _stat_generation(os.fstat(directory_fd)) != _stat_generation(initial_info):
+    final_info = os.fstat(directory_fd)
+    final_names = _plugin_directory_names(directory_fd, relative, None)
+    if (
+        _directory_identity(final_info) != _directory_identity(initial_info)
+        or final_names != names
+        or any(
+            _plugin_entry_identity(
+                os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            )
+            != observed_entries[name]
+            for name in names
+        )
+    ):
         raise PluginSnapshotChangedError(
             f"Codex plugin directory changed while being read: {relative!r}"
         )
+
+
+def _plugin_directory_names(
+    directory_fd: int,
+    relative: Path,
+    budget: list[int] | None,
+) -> list[str]:
+    """Return sorted fingerprint-relevant children of one directory."""
+    with os.scandir(directory_fd) as stream:
+        names: list[str] = []
+        for child in stream:
+            if _ignored_plugin_entry(relative, child.name):
+                continue
+            if budget is not None:
+                budget[0] += 1
+                if budget[0] > PLUGIN_TREE_MAX_ENTRIES:
+                    raise CodexServerError(
+                        "Codex plugin cache contains too many entries to "
+                        "snapshot safely"
+                    )
+            names.append(child.name)
+    names.sort(key=os.fsencode)
+    return names
+
+
+def _ignored_plugin_entry(relative: Path, name: str) -> bool:
+    """Exclude volatile installer bookkeeping that App Server does not load."""
+    parts = relative.parts
+    if parts == ("plugins",) and name == ".remote-plugin-install-staging":
+        return True
+    remote_plugin_root = (
+        len(parts) == 4
+        and parts[:3] == ("plugins", "cache", "openai-curated-remote")
+    )
+    return remote_plugin_root and (
+        name == ".codex-remote-plugin-install.json"
+        or _REMOTE_INSTALL_TEMP_FILE.fullmatch(name) is not None
+    )
+
+
+def _directory_identity(info: os.stat_result) -> tuple[int, int, int]:
+    """Return stable identity fields unaffected by child bookkeeping writes."""
+    return info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode)
+
+
+def _plugin_entry_identity(info: os.stat_result) -> tuple[int, ...]:
+    """Return stable directory identity or full mutable-entry generation."""
+    if stat.S_ISDIR(info.st_mode):
+        return _directory_identity(info)
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+
+
+def _update_directory(
+    digest: HashWriter,
+    generation: HashWriter,
+    relative: Path,
+    info: os.stat_result,
+) -> None:
+    """Hash a directory without volatile child-change timestamps."""
+    identity = ":".join(str(item) for item in _directory_identity(info)).encode()
+    record = b"directory:" + os.fsencode(str(relative)) + b"\0"
+    digest.update(record)
+    generation.update(record + identity + b"\0")
 
 
 def _hash_regular_file(
@@ -509,17 +638,10 @@ def _update_entry(
     relative: Path,
     info: os.stat_result,
 ) -> None:
-    """Add a typed pathname and its observed generation to both digests."""
-    record = (
-        kind
-        + b":"
-        + os.fsencode(str(relative))
-        + b"\0"
-        + _stat_generation(info).encode()
-        + b"\0"
-    )
+    """Hash semantic identity separately from race-detection metadata."""
+    record = kind + b":" + os.fsencode(str(relative)) + b"\0"
     digest.update(record)
-    generation.update(record)
+    generation.update(record + _stat_generation(info).encode() + b"\0")
 
 
 def _require_unchanged_path(
@@ -535,6 +657,22 @@ def _require_unchanged_path(
             raise PluginSnapshotChangedError(message) from exc
         raise
     if _stat_generation(current) != _stat_generation(expected):
+        raise PluginSnapshotChangedError(message)
+
+
+def _require_same_directory_path(
+    path: Path,
+    expected: os.stat_result,
+    message: str,
+) -> None:
+    """Reject directory replacement while tolerating ignored-child churn."""
+    try:
+        current = path.lstat()
+    except OSError as exc:
+        if exc.errno in _PLUGIN_MUTATION_ERRNOS:
+            raise PluginSnapshotChangedError(message) from exc
+        raise
+    if _directory_identity(current) != _directory_identity(expected):
         raise PluginSnapshotChangedError(message)
 
 

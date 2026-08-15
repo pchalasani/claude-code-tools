@@ -107,6 +107,10 @@ export default defineConfig({
             { label: "sasy-guard", slug: "tools/sasy-guard" },
             { label: "agent-tunnel", slug: "tools/agent-tunnel" },
             {
+              label: "github-watch: wake on GitHub comment",
+              slug: "tools/github-wake",
+            },
+            {
               label: "voxtype",
               collapsed: false,
               items: [

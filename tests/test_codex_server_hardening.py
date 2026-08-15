@@ -181,10 +181,10 @@ def main() -> int:
             value["appServerVersion"] = control_path("server-version").read_text()
         print(json.dumps(value))
         return 0
-    if len(arguments) == 3 and arguments[:2] == ["app-server", "--listen"]:
-        if not arguments[2].startswith("unix://"):
+    if len(arguments) >= 3 and arguments[-3:-1] == ["app-server", "--listen"]:
+        if not arguments[-1].startswith("unix://"):
             return 25
-        os.environ["FAKE_CODEX_LISTEN_ENDPOINT"] = arguments[2]
+        os.environ["FAKE_CODEX_LISTEN_ENDPOINT"] = arguments[-1]
         if os.environ.get("FAKE_CODEX_NODE_WRAPPER"):
             return run_wrapper()
         return run_server()
@@ -425,10 +425,10 @@ def test_noisy_version_and_health_diagnostics_retain_final_results(
     assert probe.server_version == "9.9.9"
 
 
-def test_plugin_snapshot_detects_resolved_artifact_replacement(
+def test_plugin_snapshot_ignores_runtime_cache_replacement(
     tmp_path: Path,
 ) -> None:
-    """Same-ID plugin upgrades change the persisted server fingerprint."""
+    """Codex-managed cache replacement does not roll the app server."""
     paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
     paths.codex_home.mkdir(parents=True)
     paths.codex_home.joinpath("config.toml").write_text(
@@ -450,13 +450,13 @@ def test_plugin_snapshot_detects_resolved_artifact_replacement(
     os.replace(replacement, artifact)
     after = _plugin_configuration_snapshot(paths)
 
-    assert after.fingerprint != before.fingerprint
+    assert after == before
 
 
-def test_plugin_snapshot_tracks_marketplace_refresh_revision(
+def test_plugin_snapshot_ignores_marketplace_refresh_revision(
     tmp_path: Path,
 ) -> None:
-    """Marketplace refresh metadata participates in plugin certification."""
+    """Marketplace refresh metadata is runtime state, not configuration."""
     paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
     paths.codex_home.mkdir(parents=True)
     config = paths.codex_home / "config.toml"
@@ -470,7 +470,10 @@ def test_plugin_snapshot_tracks_marketplace_refresh_revision(
         encoding="utf-8",
     )
 
-    assert _plugin_configuration_snapshot(paths).fingerprint != before.fingerprint
+    after = _plugin_configuration_snapshot(paths)
+
+    assert after.fingerprint == before.fingerprint
+    assert after.generation != before.generation
 
 
 @pytest.mark.parametrize("kind", ["symlink", "fifo", "oversize", "integer", "deep"])
@@ -597,7 +600,7 @@ def test_plugin_tree_entry_limit_is_enforced(
     monkeypatch.setattr(fingerprinting, "PLUGIN_TREE_MAX_ENTRIES", 2)
 
     with pytest.raises(CodexServerError, match="too many entries"):
-        _plugin_configuration_snapshot(paths)
+        fingerprinting._plugin_artifact_snapshot(paths)
 
 
 @pytest.mark.parametrize("kind", ["oversize", "integer", "deep"])

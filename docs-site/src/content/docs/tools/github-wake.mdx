@@ -1,0 +1,59 @@
+---
+title: "github-watch: wake on GitHub comment"
+description: Wake the originating agent session when a GitHub issue gets a reply.
+---
+
+`github-wake` registers an existing GitHub issue and wakes the originating
+session when its first future comment arrives:
+
+```bash
+github-wake https://github.com/OWNER/REPOSITORY/issues/123
+```
+
+Create the issue separately with `gh issue create` or another GitHub client.
+Run `github-wake` only when the current session is genuinely waiting for a
+reply. The command verifies the issue, records a durable watch, and starts one
+shared per-user watcher daemon.
+
+Codex delivery requires a session launched through `codex-dynamic`. In Claude
+Code 2.1.98 or later, ask Claude to watch the issue with `github-wake`; the
+installed skill runs the following command through Claude's `Monitor` tool:
+
+```bash
+github-wake --claude-monitor https://github.com/OWNER/REPOSITORY/issues/123
+```
+
+The Monitor tool must own this command. Running it through Bash would block a
+tool call instead of feeding the reply asynchronously into the conversation.
+Claude Code monitors stop when their session ends and are not restored when a
+session resumes.
+
+The GitHub polling and durable state are agent-neutral. Separate delivery
+adapters send the event through either the Codex App Server or Claude Code's
+live Monitor process without replacing the shared watcher.
+
+The daemon polls once per GitHub repository, even when many sessions have
+pending watches. It uses conditional GitHub requests, overlapping time windows,
+bounded pagination, and retry-safe cursors. Those safeguards reduce API use
+without losing comments that appear late in GitHub's repository-wide index.
+
+When the first future comment arrives, the daemon sends a normalized reply to
+the recorded session. The comment is wrapped as untrusted data, so its contents
+do not become trusted agent instructions.
+
+## Watcher controls
+
+```bash
+github-wake --status
+github-wake --status --json
+github-wake --start
+github-wake --stop
+github-wake --cancel WATCH_ID
+```
+
+The daemon stores state under
+`$XDG_STATE_HOME/claude-code-tools/github-watch`, or
+`~/.local/state/claude-code-tools/github-watch` when `XDG_STATE_HOME` is unset.
+It records a GitHub configuration directory rather than an access token, so
+personal and work `gh` configurations can share the same daemon without
+writing credentials into watcher state.

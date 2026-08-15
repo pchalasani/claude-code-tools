@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"
+     viewBox="0 0 200 100">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#081c24"/>
+      <stop offset="55%" stop-color="#102846"/>
+      <stop offset="100%" stop-color="#24113d"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="200" height="100" rx="8" fill="url(#bg)"/>
+  <rect x="1" y="1" width="198" height="98" rx="7" fill="none"
+        stroke="#67e8f9" stroke-opacity="0.35"/>
+  <text x="100" y="38" font-family="monospace" font-size="19"
+        font-weight="bold" fill="#67e8f9" text-anchor="middle"
+        filter="url(#glow)">github-watch:</text>
+  <text x="100" y="66" font-family="monospace" font-size="12"
+        fill="#e2e8f0" text-anchor="middle">wake on github comment</text>
+</svg>
