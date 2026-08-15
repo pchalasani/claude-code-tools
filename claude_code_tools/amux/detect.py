@@ -93,7 +93,12 @@ def detect_state(screen: str, kind: Kind) -> State:
 #: start of a line: an option in a PENDING prompt can quote this text
 #: ("2. Explain why the status says bypass permissions on") and must not be
 #: mistaken for the footer itself.
-_FOOTER = re.compile(r"^\s*(⏵⏵|ctx [█░]|new task\?|✻|※)")
+_FOOTER = re.compile(
+    r"^\s*("
+    r"⏵⏵|ctx [█░]|new task\?|✻|※"       # Claude chrome
+    r"|gpt-[\w.\-]+\s|›"                # Codex status line and input box
+    r")"
+)
 
 
 def _footer_below_prompt(lines: list[str]) -> bool:

@@ -647,3 +647,46 @@ class TestOptionTextResemblingFooter:
             "  2. Show me the ctx ████ meter\n"
         )
         assert detect.detect_state(screen, "claude") == "input"
+
+
+class TestFooterMatchesRealHarnessChrome:
+    """Footer patterns are checked against lines captured from live panes.
+
+    The synthetic fixtures elsewhere in this file only covered Claude, so the
+    Codex status line was not recognised as footer chrome -- meaning a Codex
+    pane whose message contained prompt-like text would stay flagged 'input'
+    indefinitely. These strings are verbatim from real panes.
+    """
+
+    REAL_FOOTERS = [
+        "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents",
+        "  ctx ████████░░ 86%   5h ░░░░░░░░░░ 3% ↻4h29m",
+        "  gpt-5.6-sol medium · farchat · main · Context 51% used",
+        "  gpt-5.6-sol high · claude-code-tools.feat-brief-v2 · feat/brief-v2",
+        "› Write tests for @filename",
+        "                        new task? /clear to save 317.5k tokens",
+    ]
+
+    REAL_CONTENT = [
+        "• Model changed to gpt-5.6-terra medium",
+        "⚠ MCP client for `gpt-codex` failed to start: MCP startup failed",
+        "  I changed the ctx meter copy in the onboarding flow.",
+        "  2. Explain why the status says bypass permissions on",
+    ]
+
+    @pytest.mark.parametrize("line", REAL_FOOTERS)
+    def test_real_footer_lines_are_recognised(self, line: str) -> None:
+        assert detect._FOOTER.search(line), f"footer not matched: {line!r}"
+
+    @pytest.mark.parametrize("line", REAL_CONTENT)
+    def test_content_is_not_mistaken_for_footer(self, line: str) -> None:
+        assert not detect._FOOTER.search(line), f"content matched: {line!r}"
+
+    def test_codex_prompt_followed_by_status_is_not_blocking(self) -> None:
+        """The concrete regression: Codex footer below an answered question."""
+        screen = (
+            "• Should I delete the stale config?\n"
+            "  Deleted it and reran the suite.\n"
+            "  gpt-5.6-sol medium · farchat · main · Context 51% used\n"
+        )
+        assert detect.detect_state(screen, "codex") != "input"
