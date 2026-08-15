@@ -8,6 +8,7 @@ scan is noticeable; a warm one is not.
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from pathlib import Path
@@ -45,9 +46,10 @@ def read(max_age: float | None = None) -> tuple[list[Agent], float]:
     try:
         stamp = float(raw.get("time", 0))
         age = time.time() - stamp
-        # A future timestamp (clock skew, hand-edited file) gives a negative
-        # age that silently passes every max_age check forever.
-        if age < 0:
+        # Python's json accepts the NaN literal, and every comparison against
+        # nan is False -- so a NaN age passed both the negative check and the
+        # max_age check, making the cache permanently "fresh".
+        if not math.isfinite(age) or age < 0:
             return [], -1.0
         if max_age is not None and age > max_age:
             return [], age

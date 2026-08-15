@@ -91,9 +91,18 @@ class TestDetectState:
     def test_states(self, screen: str, kind: str, expected: str) -> None:
         assert detect.detect_state(screen, kind) == expected  # type: ignore[arg-type]
 
-    def test_input_outranks_busy(self) -> None:
-        """A question on screen wins even if a spinner is also visible."""
+    def test_spinner_below_a_prompt_means_it_was_answered(self) -> None:
+        """Position decides, not mere presence.
+
+        A spinner rendered BELOW the choices means the user already answered
+        and work resumed -- that pane is busy, not blocking.
+        """
         screen = CLAUDE_ASKING + "\n✻ thinking · esc to interrupt"
+        assert detect.detect_state(screen, "claude") == "busy"
+
+    def test_prompt_below_a_spinner_is_still_blocking(self) -> None:
+        """Claude worked, then stopped to ask: the prompt is last, so input."""
+        screen = "✻ Cooked for 2m · esc to interrupt\n" + CLAUDE_ASKING
         assert detect.detect_state(screen, "claude") == "input"
 
     def test_codex_statement_is_not_a_question(self) -> None:
@@ -515,10 +524,14 @@ class TestCacheTypeValidation:
 
     def test_null_pane_is_dropped_not_rendered(self, tmp_path, monkeypatch) -> None:
         """Regression: reached render._clip() and crashed on len(None)."""
+        import time as _t
+
         path = tmp_path / "amux.json"
+        # A CURRENT timestamp: a future one is rejected before agents are
+        # parsed, so this test would not reach Agent.from_dict at all.
         path.write_text(
-            '{"time":9999999999,"agents":['
-            '{"pane":null,"session":"s","kind":"claude"}]}'
+            '{"time":%f,"agents":['
+            '{"pane":null,"session":"s","kind":"claude"}]}' % _t.time()
         )
         monkeypatch.setenv("AMUX_CACHE", str(path))
         agents, _ = cache.read()
@@ -526,10 +539,12 @@ class TestCacheTypeValidation:
         render.picker_lines(agents, colour=False)  # must not raise
 
     def test_wrong_typed_optional_field_is_dropped(self, tmp_path, monkeypatch) -> None:
+        import time as _t
+
         path = tmp_path / "amux.json"
         path.write_text(
-            '{"time":9999999999,"agents":['
-            '{"pane":"a:1.1","session":"s","kind":"claude","name":123}]}'
+            '{"time":%f,"agents":['
+            '{"pane":"a:1.1","session":"s","kind":"claude","name":123}]}' % _t.time()
         )
         monkeypatch.setenv("AMUX_CACHE", str(path))
         assert cache.read()[0] == []
@@ -599,3 +614,36 @@ class TestCacheEnumAndClock:
                     '{"time":9999999999,"agents":[{"pane":"s:1.1",'
                     '"session":"s","kind":"claude"}]}')
         assert cache.read(max_age=30)[0] == []
+
+
+class TestNaNTimestamp:
+    def test_nan_timestamp_is_not_fresh(self, tmp_path, monkeypatch) -> None:
+        """Regression: every comparison against NaN is False, so a NaN age
+        passed both the negative check and max_age -- cached forever."""
+        path = tmp_path / "amux.json"
+        path.write_text(
+            '{"time":NaN,"agents":[{"pane":"s:1.1","session":"s",'
+            '"kind":"claude"}]}'
+        )
+        monkeypatch.setenv("AMUX_CACHE", str(path))
+        assert cache.read(max_age=30)[0] == []
+
+
+class TestOptionTextResemblingFooter:
+    def test_option_quoting_footer_text_stays_blocking(self) -> None:
+        """Regression: an option mentioning footer words made a PENDING
+        prompt look answered, hiding a genuinely blocked agent."""
+        screen = (
+            "Which action should I take?\n"
+            "❯ 1. Continue\n"
+            "  2. Explain why the status says bypass permissions on\n"
+        )
+        assert detect.detect_state(screen, "claude") == "input"
+
+    def test_option_mentioning_ctx_bar_stays_blocking(self) -> None:
+        screen = (
+            "Pick one?\n"
+            "❯ 1. Yes\n"
+            "  2. Show me the ctx ████ meter\n"
+        )
+        assert detect.detect_state(screen, "claude") == "input"

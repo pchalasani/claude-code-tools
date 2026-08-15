@@ -89,8 +89,11 @@ def detect_state(screen: str, kind: Kind) -> State:
     return "idle"
 
 
-#: Footer chrome Claude renders BELOW a completed exchange.
-_FOOTER = re.compile(r"bypass permissions on|ctx [█░]|new task\?|/clear to save")
+#: Footer chrome Claude renders BELOW a completed exchange. Anchored to the
+#: start of a line: an option in a PENDING prompt can quote this text
+#: ("2. Explain why the status says bypass permissions on") and must not be
+#: mistaken for the footer itself.
+_FOOTER = re.compile(r"^\s*(⏵⏵|ctx [█░]|new task\?|✻|※)")
 
 
 def _footer_below_prompt(lines: list[str]) -> bool:
