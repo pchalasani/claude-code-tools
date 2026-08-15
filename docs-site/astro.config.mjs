@@ -98,6 +98,7 @@ export default defineConfig({
                 },
               ],
             },
+            { label: "amux", slug: "tools/amux" },
             { label: "lmsh", slug: "tools/lmsh" },
             { label: "fix-session", slug: "tools/fix-session" },
             { label: "Status Line", slug: "tools/statusline" },
