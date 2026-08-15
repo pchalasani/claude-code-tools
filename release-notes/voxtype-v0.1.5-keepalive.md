@@ -31,9 +31,25 @@ is skipped whenever it could collide with real speech:
   about to speak)
 
 A failed keepalive is contained and retries once per interval, never
-per loop iteration. A command can still land mid-decode — inherent to
-inline decoding, take decodes included; activation is then delayed by
-the decode's duration and buffered audio is processed right after.
+per loop iteration.
+
+## Known limitation
+
+The keepalive decodes on the capture thread (MLX is thread-local), so
+capture pauses for its duration. The guards above narrow that window
+but cannot close it: a hotkey press landing just after the checks, or
+mid-decode, can clip the first moment of dictation — PortAudio's input
+buffer holds well under a second, and its overflow flag is not
+surfaced.
+
+Exposure is small in practice: a keepalive on a warm model takes
+~0.2 s, and keeping the model warm is the point; a multi-second
+keepalive means the model was already evicted, which is the case this
+option prevents. Inline decoding is pre-existing — an ordinary take
+decode blocks capture identically — so closing the window means
+decoupling capture from decoding (callback-driven capture feeding a
+queue), tracked separately rather than bundled into this opt-in
+feature.
 
 ## Validation
 

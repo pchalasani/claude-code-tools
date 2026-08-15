@@ -231,13 +231,23 @@ class ParakeetMlxEngine(ParakeetEngine):
         an unprocessed activation command (e.g. a hotkey press) is
         queued, and for ``KEEPALIVE_COMMAND_GRACE`` seconds after any
         command — a just-activated user (whose activation command was
-        already drained) is about to speak. A command can still arrive
-        in the instant after these checks or mid-decode — inherent to
-        inline decoding on this thread, take decodes included — in
-        which case activation is delayed by the decode's duration and
-        the buffered audio is processed immediately after; the checks
-        make that window rare (quiet for 30+ s, at most once per
-        interval), not impossible. Opt-in: 0 (the default) disables.
+        already drained) is about to speak.
+
+        Known limitation: the checks narrow that window but cannot
+        close it, since a hotkey press can land just after them or
+        mid-decode. Capture is then blocked for the rest of the
+        decode; PortAudio's input buffer holds well under a second, so
+        speech beyond that is dropped rather than merely delayed (the
+        blocking read's overflow flag is not surfaced either). Inline
+        decoding on this thread is pre-existing — an ordinary take
+        decode blocks capture the same way — and closing the window
+        needs capture decoupled from decoding (callback-driven capture
+        feeding a queue), which is deliberately out of scope here. In
+        practice the exposure is small: a keepalive on a warm model
+        takes ~0.2 s, and the feature keeps the model warm precisely
+        so it stays that way; a multi-second keepalive means the model
+        was already evicted, which is the case this option exists to
+        prevent. Opt-in: 0 (the default) disables.
         """
         secs = float(getattr(self.cfg, "keepalive_minutes", 0.0)) * 60.0
         if secs <= 0 or self._holding or self._speech_since is not None:

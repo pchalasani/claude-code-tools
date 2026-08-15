@@ -436,7 +436,10 @@ strip_fillers = true
 # idle model stays recently-used and macOS is far less likely to
 # evict it to swap — otherwise the first take after a long pause can
 # stall for seconds paging it back in. Keeps ~1.7 GB in active use.
-# 0 disables; max 1440 (a day).
+# 0 disables; max 1440 (a day). Trade-off: the keepalive briefly
+# pauses capture (~0.2 s on a warm model); it avoids takes and waits
+# 30 s after any hotkey, but a press landing exactly as it starts can
+# clip the first moment of dictation.
 keepalive_minutes = 0.0
 
 # Moonshine model: tiny | base | tiny-streaming | base-streaming |
