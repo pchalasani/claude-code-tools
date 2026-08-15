@@ -9,6 +9,28 @@ Tool calls and tool results are flattened into clearly labeled text on
 assistant lines; reasoning items, encrypted payloads, and Codex
 bookkeeping records are dropped entirely.
 
+Compaction: Codex rollout files are append-only logs, so a session
+that was compacted still contains its full pre-compaction history --
+history the live Codex session no longer sends to the model. Porting
+mirrors Codex's own resume semantics: when the rollout holds
+``compacted`` records, everything before the LAST one is dropped and
+the transcript starts from that record's ``replacement_history``
+(the messages Codex itself kept: preserved user messages; its
+encrypted summary item is dropped like all encrypted content),
+followed by the items recorded after the compaction. Legacy
+``compacted`` records carrying a plaintext ``message`` summary
+contribute that summary as a user message. Without this, a
+long-lived Codex session ports into a transcript far larger than any
+model context (a real 108-compaction rollout produced a ~6M-token
+"transcript" that could never be resumed).
+
+Goal context: Codex re-injects the session's active goal as a
+``<codex_internal_context source="goal">`` user message on every
+turn. These are internal wrappers, not user input, and are dropped --
+except the LAST one in the ported range, which is kept (labeled
+``[codex goal context]``) so the standing goal survives the port:
+Claude Code has no equivalent auto-injection mechanism.
+
 Memory bounds: the rollout is processed in two streaming passes (a
 metadata-harvesting pass, then a message pass), so the full transcript
 is never accumulated in memory -- at most one merged same-role turn is
@@ -46,6 +68,7 @@ from claude_code_tools.port_codex_flatten import (  # noqa: F401
     TOOL_TEXT_CAP,
     _flatten_payload,
     _join_text_blocks,
+    _text_block_parts,
 )
 from claude_code_tools.session_utils import (
     encode_claude_project_path,
@@ -61,14 +84,15 @@ CLAUDE_LINE_VERSION = "2.1.211"
 MAX_PROJECT_COMPONENT_BYTES = 255
 
 # Top-level line types in modern rollouts that carry no transcript
-# content and are dropped entirely.
+# content and are dropped entirely. ``compacted`` records are NOT
+# listed here: they are history-replacement points handled explicitly
+# by :func:`iter_flat_messages`.
 _DROPPED_LINE_TYPES = frozenset(
     {
         "event_msg",
         "turn_context",
         "world_state",
         "inter_agent_communication_metadata",
-        "compacted",
     }
 )
 
@@ -333,16 +357,233 @@ def harvest_rollout_meta(codex_session_file: Path) -> dict[str, Any]:
     return meta
 
 
+# Prefixes of Codex's per-turn goal-context injection: the attribute
+# form (<codex_internal_context source="goal">) ends at the space,
+# and the bare closing form is matched exactly -- never a bare
+# "<codex_internal_context" prefix, which would also swallow genuine
+# text starting with a longer tag name. Matches the entries in
+# export_session.CODEX_WRAPPER_TEXT_PREFIXES that drop these blocks
+# from extracted text.
+_GOAL_CONTEXT_PREFIXES = (
+    "<codex_internal_context ",
+    "<codex_internal_context>",
+)
+
+# Label prepended to the one goal-context block the port keeps.
+_GOAL_CONTEXT_LABEL = "[codex goal context]"
+
+
+def _goal_context_text(payload: dict[str, Any]) -> Optional[str]:
+    """Extract the text of a pure goal-context user message.
+
+    Codex injects the active goal as a standalone user message whose
+    every text block is a ``<codex_internal_context ...>`` wrapper.
+    Messages mixing goal wrappers with genuine text (which real Codex
+    rollouts do not produce) are conservatively NOT treated as goal
+    context, so genuine input is never relabeled.
+
+    Args:
+        payload: A Codex response-item payload (or a
+            ``replacement_history`` item).
+
+    Returns:
+        The joined wrapper text, or None when the payload is not a
+        pure goal-context user message.
+    """
+    if payload.get("type") != "message":
+        return None
+    if payload.get("role") != "user":
+        return None
+    parts = _text_block_parts(payload.get("content"))
+    if not parts:
+        return None
+    for part in parts:
+        if not part.lstrip().startswith(_GOAL_CONTEXT_PREFIXES):
+            return None
+    return "\n".join(parts).strip()
+
+
+def _is_compaction_boundary(data: dict[str, Any]) -> bool:
+    """Check whether a record is a usable history-replacement point.
+
+    A ``compacted`` record marks the point where Codex discarded its
+    live history and replaced it. It is usable as a boundary only when
+    it actually carries replacement content: a NON-EMPTY
+    ``replacement_history`` list (modern rollouts; real compactions
+    always keep at least the summary item, so an empty list means a
+    partial/corrupt record) or a non-empty plaintext ``message``
+    summary (legacy rollouts). A malformed ``compacted`` record with
+    neither is ignored -- treating it as a boundary would silently
+    drop the whole preceding transcript with nothing to replace it.
+
+    Args:
+        data: A parsed top-level rollout record.
+
+    Returns:
+        True if the record is a usable compaction boundary.
+    """
+    if data.get("type") != "compacted":
+        return False
+    payload = data.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    history = payload.get("replacement_history")
+    if isinstance(history, list) and history:
+        return True
+    message = payload.get("message")
+    return isinstance(message, str) and bool(message.strip())
+
+
+def _scan_rollout(
+    codex_session_file: Path,
+) -> tuple[
+    Optional[int], Optional[tuple[int, Optional[int], str]], int
+]:
+    """Locate the compaction boundary and last goal context (one pass).
+
+    Streaming pass over the parsed records. Compactions chain (each
+    ``replacement_history`` already incorporates the effect of every
+    earlier compaction), so only the LAST usable boundary matters.
+    The last goal-context injection is tracked only within the ported
+    range: finding a new boundary discards any goal context recorded
+    before it, then rescans the boundary's own replacement history.
+
+    Args:
+        codex_session_file: Path to the Codex rollout JSONL file.
+
+    Returns:
+        Tuple ``(boundary, goal, total)``. ``boundary`` is the index
+        of the last usable ``compacted`` record within the stream of
+        parsed records (None when the rollout has none). ``goal`` is
+        ``(record_idx, item_idx, text)`` locating the last
+        goal-context message -- ``item_idx`` is its position inside
+        the boundary record's ``replacement_history``, or None when
+        the goal context is an ordinary record -- or None when the
+        ported range holds no goal context. ``total`` is the number
+        of parsed records this pass saw: the message pass must stop
+        there, so records a LIVE session appends between the two
+        passes (possibly including a new compaction that would make
+        this scan's boundary stale) are ignored rather than ported
+        inconsistently. Indices are stable across passes because the
+        log is append-only and both passes parse records with the
+        same tolerant reader.
+    """
+    boundary: Optional[int] = None
+    goal: Optional[tuple[int, Optional[int], str]] = None
+    total = 0
+    for idx, data in enumerate(
+        _iter_rollout_records(codex_session_file)
+    ):
+        total = idx + 1
+        if _is_compaction_boundary(data):
+            boundary = idx
+            goal = None
+            payload = data.get("payload")
+            if isinstance(payload, dict):
+                history = payload.get("replacement_history")
+                if isinstance(history, list):
+                    for item_idx, item in enumerate(history):
+                        if not isinstance(item, dict):
+                            continue
+                        text = _goal_context_text(item)
+                        if text:
+                            goal = (idx, item_idx, text)
+            continue
+        payload = _extract_item_payload(data)
+        if payload is not None:
+            text = _goal_context_text(payload)
+            if text:
+                goal = (idx, None, text)
+    return boundary, goal, total
+
+
+def _iter_compaction_messages(
+    data: dict[str, Any],
+    default_timestamp: Optional[str],
+    goal_item_idx: Optional[int] = None,
+) -> Iterator[dict[str, Any]]:
+    """Flatten the replacement content of one ``compacted`` record.
+
+    Yields the messages Codex itself kept as live context after the
+    compaction: each ``replacement_history`` item is flattened with
+    the same rules as ordinary response items (meta/developer
+    messages and the encrypted ``compaction`` summary item are
+    dropped), and a legacy non-empty plaintext ``message`` summary is
+    yielded as a user message. The history item at ``goal_item_idx``
+    (the kept goal-context injection, normally dropped as an internal
+    wrapper) is yielded as a labeled user message instead.
+
+    Args:
+        data: A ``compacted`` rollout record (payload known-dict).
+        default_timestamp: Fallback timestamp for the yielded
+            messages (replacement items carry no timestamps of their
+            own; the record's own timestamp is preferred).
+        goal_item_idx: Index into ``replacement_history`` of the goal
+            context to keep, or None to keep none.
+
+    Yields:
+        Dicts with ``role``, ``text`` and ``timestamp`` keys.
+    """
+    payload = data.get("payload")
+    if not isinstance(payload, dict):
+        return
+    timestamp = data.get("timestamp")
+    if not isinstance(timestamp, str):
+        timestamp = None
+    timestamp = timestamp or default_timestamp
+
+    history = payload.get("replacement_history")
+    if isinstance(history, list):
+        for item_idx, item in enumerate(history):
+            if not isinstance(item, dict):
+                continue
+            if item_idx == goal_item_idx:
+                text = _goal_context_text(item)
+                if text:
+                    yield {
+                        "role": "user",
+                        "text": f"{_GOAL_CONTEXT_LABEL}\n{text}",
+                        "timestamp": timestamp,
+                    }
+                continue
+            flattened = _flatten_payload(item)
+            if flattened is None:
+                continue
+            role, text = flattened
+            yield {
+                "role": role,
+                "text": text,
+                "timestamp": timestamp,
+            }
+
+    message = payload.get("message")
+    if isinstance(message, str) and message.strip():
+        # Legacy rollouts: the plaintext summary Codex injected as
+        # the user-side bridge after compacting.
+        yield {
+            "role": "user",
+            "text": message,
+            "timestamp": timestamp,
+        }
+
+
 def iter_flat_messages(
     codex_session_file: Path, default_timestamp: Optional[str]
 ) -> Iterator[dict[str, Any]]:
     """Stream the flattened transcript messages of a rollout file.
 
-    Second streaming pass: transcript items are flattened one at a
-    time and yielded immediately, so the full message list is never
-    accumulated in memory regardless of file size. Message text is
-    NEVER truncated here: only tool arguments/results were already
-    capped (at ``TOOL_TEXT_CAP``) during flattening.
+    Two streaming passes: the first locates the last usable
+    compaction boundary and the last goal-context injection (if
+    any), the second flattens transcript items one at a time and
+    yields them immediately, so the full message list is never
+    accumulated in memory regardless of file size. When a boundary
+    exists, every record before it is skipped and the transcript
+    starts from the boundary's replacement content -- mirroring what
+    Codex itself would send to the model on resume. The last
+    goal-context injection in the ported range is kept as a labeled
+    user message (all other copies are dropped as internal noise). Message text is NEVER truncated here: only tool
+    arguments/results were already capped (at ``TOOL_TEXT_CAP``)
+    during flattening.
 
     Args:
         codex_session_file: Path to the Codex rollout JSONL file.
@@ -352,13 +593,50 @@ def iter_flat_messages(
     Yields:
         Dicts with ``role``, ``text`` and ``timestamp`` keys.
     """
-    for data in _iter_rollout_records(codex_session_file):
+    boundary, goal, total = _scan_rollout(codex_session_file)
+    for idx, data in enumerate(
+        _iter_rollout_records(codex_session_file)
+    ):
+        if idx >= total:
+            # Appended by a live session after the scan pass: porting
+            # these could straddle a compaction the scan never saw.
+            break
+        if boundary is not None:
+            if idx < boundary:
+                continue
+            if idx == boundary:
+                goal_item_idx = (
+                    goal[1]
+                    if goal is not None and goal[0] == idx
+                    else None
+                )
+                yield from _iter_compaction_messages(
+                    data, default_timestamp, goal_item_idx
+                )
+                continue
+        if goal is not None and goal[0] == idx:
+            # The last goal-context injection in the ported range:
+            # kept (labeled) so the standing goal survives the port.
+            timestamp = data.get("timestamp")
+            if not isinstance(timestamp, str):
+                timestamp = None
+            yield {
+                "role": "user",
+                "text": f"{_GOAL_CONTEXT_LABEL}\n{goal[2]}",
+                "timestamp": timestamp or default_timestamp,
+            }
+            continue
         line_type = data.get("type")
         if not isinstance(line_type, str):
             # Every transcript item carries a string type (modern
             # response_item lines and legacy bare items alike);
             # non-string shapes are unrecognized records, and
             # unhashable ones would crash the set-membership test.
+            continue
+        if line_type == "compacted":
+            # A compacted record past the boundary (or any compacted
+            # record when no usable boundary exists) carries no
+            # transcript content of its own.
             continue
         if line_type == "session_meta" or line_type in _DROPPED_LINE_TYPES:
             continue

@@ -34,6 +34,16 @@ Only flattened tool arguments/results are truncated (at
 ``TOOL_TEXT_CAP`` characters, with an explicit suffix); ordinary
 message text is preserved verbatim.
 
+Compaction: Claude session files are append-only logs, so a session
+that was compacted still contains its full pre-compaction history --
+history the live Claude session no longer sends to the model. Porting
+mirrors Claude Code's own resume semantics: when the session holds
+compact-summary lines (``type: user`` with ``isCompactSummary:
+true``, written right after a ``compact_boundary`` system line),
+everything before the LAST one is dropped and the transcript starts
+from that summary message (whose plaintext already summarizes the
+dropped history) followed by the lines recorded after it.
+
 Durability: the rollout is written to a temporary file in the
 destination directory and atomically renamed onto its final path only
 after the whole transcript was written (reusing the atomic writer of
@@ -358,15 +368,84 @@ def _flatten_claude_line(
     return _flatten_assistant_content(content)
 
 
+def _is_compact_summary_line(data: dict[str, Any]) -> bool:
+    """Check whether a record is a main-chain compact-summary line.
+
+    Claude Code writes a ``type: user`` line with ``isCompactSummary:
+    true`` right after each ``compact_boundary`` system line; its
+    plaintext summarizes the history the live session no longer sends
+    to the model. Sidechain lines are excluded: a summary inside a
+    subagent transcript must not truncate the main transcript. A
+    marked line that flattens to no usable text (malformed or empty)
+    is also excluded -- treating it as a boundary would drop the
+    whole preceding transcript while contributing no summary.
+
+    Args:
+        data: A parsed top-level Claude session record.
+
+    Returns:
+        True if the record is a usable main-chain compact-summary
+        line.
+    """
+    if (
+        data.get("type") != "user"
+        or data.get("isCompactSummary") is not True
+        or data.get("isSidechain") is True
+    ):
+        return False
+    return any(
+        text.strip() for _, text in _flatten_claude_line(data)
+    )
+
+
+def _scan_claude_session(
+    claude_session_file: Path,
+) -> tuple[Optional[int], int]:
+    """Locate the last compact-summary line of a Claude session.
+
+    Streaming pass over the parsed records. Compactions chain (each
+    summary already covers everything before it, including earlier
+    compactions), so only the LAST one matters.
+
+    Args:
+        claude_session_file: Path to the Claude session JSONL file.
+
+    Returns:
+        Tuple ``(boundary, total)``. ``boundary`` is the index of the
+        last usable compact-summary line within the stream of parsed
+        records, or None when the session was never compacted.
+        ``total`` is the number of parsed records this pass saw: the
+        message pass must stop there, so records a LIVE session
+        appends between the two passes (possibly including a new
+        compaction that would make this scan's boundary stale) are
+        ignored rather than ported inconsistently. Indices are stable
+        across passes because the log is append-only and both passes
+        parse records with the same tolerant reader.
+    """
+    last: Optional[int] = None
+    total = 0
+    for idx, data in enumerate(
+        _iter_claude_records(claude_session_file)
+    ):
+        total = idx + 1
+        if _is_compact_summary_line(data):
+            last = idx
+    return last, total
+
+
 def iter_flat_claude_messages(
     claude_session_file: Path, default_timestamp: Optional[str]
 ) -> Iterator[dict[str, Any]]:
     """Stream the flattened transcript messages of a Claude session.
 
-    Second streaming pass: records are flattened one at a time and
-    yielded immediately, so the full message list is never accumulated
-    in memory. Message text is NEVER truncated here: only tool
-    arguments/results were capped (at ``TOOL_TEXT_CAP``) during
+    Two streaming passes: the first locates the last compact-summary
+    line (if any), the second flattens records one at a time and
+    yields them immediately, so the full message list is never
+    accumulated in memory. When a compact summary exists, every
+    record before it is skipped and the transcript starts from the
+    summary line itself -- mirroring what Claude Code would send to
+    the model on resume. Message text is NEVER truncated here: only
+    tool arguments/results were capped (at ``TOOL_TEXT_CAP``) during
     flattening.
 
     Args:
@@ -377,7 +456,16 @@ def iter_flat_claude_messages(
         Dicts with ``role``, ``text`` and ``timestamp`` keys, in
         transcript order, with no empty texts.
     """
-    for data in _iter_claude_records(claude_session_file):
+    boundary, total = _scan_claude_session(claude_session_file)
+    for idx, data in enumerate(
+        _iter_claude_records(claude_session_file)
+    ):
+        if idx >= total:
+            # Appended by a live session after the scan pass: porting
+            # these could straddle a compaction the scan never saw.
+            break
+        if boundary is not None and idx < boundary:
+            continue
         pairs = _flatten_claude_line(data)
         if not pairs:
             continue
