@@ -105,7 +105,10 @@ export default defineConfig({
             { label: "env-safe", slug: "tools/env-safe" },
             { label: "sasy-guard", slug: "tools/sasy-guard" },
             { label: "agent-tunnel", slug: "tools/agent-tunnel" },
-            { label: "github-wake", slug: "tools/github-wake" },
+            {
+              label: "github-watch: wake on GitHub comment",
+              slug: "tools/github-wake",
+            },
             {
               label: "voxtype",
               collapsed: false,
