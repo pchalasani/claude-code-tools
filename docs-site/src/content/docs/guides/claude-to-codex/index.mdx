@@ -11,15 +11,15 @@ import {
   Steps,
 } from "@astrojs/starlight/components";
 
+This is the Codex analog of Claude Code's
+[dynamic workflows](https://code.claude.com/docs/en/workflows), which Codex
+does not have natively. The `dynamic-workflow` plugin in this repository
+supplies that capability through an installable skill and a durable JavaScript
+runtime.
+
 A dynamic workflow is a small JavaScript program that coordinates agents at
 runtime. JavaScript owns predictable control flow—fan-out, fan-in, loops,
 branches, and aggregation—while agents own reasoning and tool use.
-
-The `dynamic-workflow` plugin in this repository brings that pattern to Codex
-through an installable skill and a durable JavaScript runtime. Claude Code
-offers the same pattern natively as its
-[dynamic workflows](https://code.claude.com/docs/en/workflows), so the model
-here will look familiar if you already write those.
 
 <CardGrid>
   <Card title="What you get">
@@ -27,7 +27,7 @@ here will look familiar if you already write those.
     and adapt as the work progresses.
   </Card>
   <Card title="What differs from Claude Code">
-    Codex has no equivalent of Claude Code's interactive `/workflows` command.
+    Even with the plugin, Codex has no interactive `/workflows` command.
   </Card>
 </CardGrid>
 
