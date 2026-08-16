@@ -67,18 +67,18 @@ strategy.
     (`aichat search`) and the action menu appears
     automatically.
   </TabItem>
-  <TabItem label="By session ID">
-    Pass a session ID directly to `aichat menu`:
+  <TabItem label="By session reference">
+    Pass a name, ID/fragment, filename fragment, or path to `aichat menu`:
 
     ```bash
-    aichat menu abc123-def456
+    aichat menu session-finder
     ```
 
-    Or use the shortcut (any unknown argument is
-    treated as a session ID):
+    Or use the shortcut (an unknown command token is treated as the session
+    reference):
 
     ```bash
-    aichat abc123-def456
+    aichat session-finder
     ```
   </TabItem>
   <TabItem label="Latest session">
@@ -158,10 +158,9 @@ swapped into place, so a move interrupted partway
 cannot leave you with a truncated transcript.
 
 :::caution
-An ambiguous query aborts the move and lists the
-candidates — nothing is written or deleted. That
-matters more here than elsewhere, because a Claude
-move removes the old transcript once the new one is
-written. (A Codex move never does: the rollout is
-rewritten where it already lives.)
+In a terminal, an ambiguous query opens the shared candidate table before any
+write. Cancelling leaves every candidate untouched. Without interactive input,
+the move exits and lists the candidates. That matters here because a Claude
+move removes the old transcript after the new one is written. A Codex move
+rewrites its rollout in place.
 :::

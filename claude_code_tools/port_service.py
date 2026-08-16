@@ -25,13 +25,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
 
 if TYPE_CHECKING:
-    from claude_code_tools.resolve_session import ResolveResult, SessionRecord
+    from claude_code_tools.resolve_session import SessionRecord
 
 from claude_code_tools.session_resolution import (
-    _detect_direct_path_agent,
-    _resolve_query_for_agent,
-    ambiguity_candidates,
-    build_ambiguity_message,
+    SessionQueryAmbiguity,
+    SessionQueryError,
+    resolve_session_query,
 )
 
 
@@ -138,47 +137,28 @@ def resolve_port_session(
         PortSessionError: When the session cannot be found or its
             agent cannot be detected.
     """
-    # Arbitrary session names are legitimate queries here, and some
-    # (e.g. "~nonexistent-user" or names with NUL bytes) make path
-    # probing itself raise. Treat any such input as a non-path query
-    # and fall through to resolver lookup instead of crashing.
     try:
-        input_path: Optional[Path] = Path(session).expanduser()
-        is_direct_file = input_path.is_file()
-    except (OSError, RuntimeError, ValueError):
-        input_path = None
-        is_direct_file = False
-    if is_direct_file and input_path is not None:
-        agent = _detect_direct_path_agent(
-            input_path, claude_home, codex_home
+        resolved = resolve_session_query(
+            session,
+            claude_home=claude_home,
+            codex_home=codex_home,
         )
-        if agent not in ("claude", "codex"):
+    except SessionQueryAmbiguity as error:
+        raise PortAmbiguityError(
+            error.query,
+            error.records,
+            error.match_count,
+            str(error),
+        ) from error
+    except SessionQueryError as error:
+        if not session.strip() or str(error).startswith("Session not found:"):
             raise PortSessionError(
-                f"Could not detect agent for session file: {input_path}"
-            )
-        return ResolvedSession(agent=agent, session_file=input_path)
-
-    results: "list[ResolveResult]" = []
-    for agent_name, home in (("claude", claude_home), ("codex", codex_home)):
-        result = _resolve_query_for_agent(session, agent_name, home)
-        if result is not None and result.kind != "not_found":
-            results.append(result)
-
-    if not results:
-        raise PortSessionError(
-            f"Session not found in Claude or Codex homes: {session}"
-        )
-    if len(results) == 1 and results[0].kind == "single":
-        record = results[0].records[0]
-        return ResolvedSession(
-            agent=record.agent, session_file=Path(record.session_file)
-        )
-    records, match_count = ambiguity_candidates(results)
-    raise PortAmbiguityError(
-        session,
-        records,
-        match_count,
-        build_ambiguity_message(session, results),
+                f"Session not found in Claude or Codex homes: {session}"
+            ) from error
+        raise PortSessionError(str(error)) from error
+    return ResolvedSession(
+        agent=resolved.agent,
+        session_file=resolved.session_file,
     )
 
 

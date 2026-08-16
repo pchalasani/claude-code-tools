@@ -134,8 +134,9 @@ are available:
 ## Example Commands
 
 ```bash
-# Resume specific session with trim/rollover options
-aichat resume <session_id>
+# Resume by session name, ID/fragment, filename fragment, or path
+aichat resume <session>
+aichat resume session-finder
 
 # Resume latest session with trim/rollover options
 aichat resume
@@ -161,3 +162,10 @@ directories (`~/.claude` and `~/.codex`). You can also
 set the `CLAUDE_CONFIG_DIR` and `CODEX_HOME` environment
 variables.
 :::
+
+Session-taking commands accept names set with `/rename` as well as IDs,
+filename fragments, and paths. If a name matches several sessions, an
+interactive terminal shows a numbered Rich table. Enter `q`, press Ctrl-C, or
+send end-of-input to cancel without changing anything. Non-terminal and JSON
+modes list the ambiguity and exit nonzero instead of prompting. See
+[Resolve](./resolve/) for the complete command list and match precedence.

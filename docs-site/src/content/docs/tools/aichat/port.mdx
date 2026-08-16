@@ -108,7 +108,8 @@ session whose automatic title happens to contain the same text.
 When multiple sessions match, `aichat port` does not guess. It shows an
 interactive chooser with each candidate's agent, match reason, name or title,
 project directory, session ID, and modification time. Select a number to port
-that source session, or enter `q` to cancel.
+that source session. Enter `q`, press Ctrl-C, or send end-of-input to cancel
+before any conversion output is created.
 
 If no interactive input is available, the command exits without porting a
 session and prints the candidates so a later command can use a full session ID.

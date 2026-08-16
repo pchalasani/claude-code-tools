@@ -7,7 +7,7 @@ Codex sessions, following the pattern of tools like git, docker, etc.
 
 All session-related tools are accessible as subcommands:
     aichat search          - Full-text search across all sessions
-    aichat resume          - Resume a session (latest or by ID)
+    aichat resume          - Resume a session (latest or by name/ID/path)
     aichat menu            - Interactive session menu
     aichat trim            - Trim session content
     ... and more
@@ -18,75 +18,11 @@ etc.) are still available.
 
 import click
 
-
-def _session_homes() -> tuple[str | None, str | None]:
-    """Return agent homes configured on the root Click context."""
-    context = click.get_current_context(silent=True)
-    if context is None:
-        return None, None
-    root_obj = context.find_root().obj or {}
-    return root_obj.get("claude_home"), root_obj.get("codex_home")
-
-
-def _resolve_cli_session(
-    session: str,
-    agent: str | None = None,
-    *,
-    claude_home: str | None = None,
-    codex_home: str | None = None,
-) -> "ResolvedSessionQuery":
-    """Resolve a CLI session query or print its user-facing error."""
-    import sys
-
-    from claude_code_tools.session_resolution import (
-        ResolvedSessionQuery,
-        SessionQueryError,
-        resolve_session_query,
-    )
-
-    root_claude_home, root_codex_home = _session_homes()
-    effective_claude_home = (
-        root_claude_home if claude_home is None else claude_home
-    )
-    effective_codex_home = (
-        root_codex_home if codex_home is None else codex_home
-    )
-    try:
-        return resolve_session_query(
-            session,
-            agent=agent,
-            claude_home=effective_claude_home,
-            codex_home=effective_codex_home,
-        )
-    except SessionQueryError as error:
-        print(f"Error: {error}", file=sys.stderr)
-        sys.exit(1)
-
-
-def _resolve_export_session(
-    session: str,
-    agent: str | None = None,
-) -> "ResolvedSessionQuery":
-    """Resolve export input and surface shared resolver failures."""
-    import sys
-
-    from claude_code_tools.session_resolution import (
-        ResolvedSessionQuery,
-        SessionQueryError,
-        resolve_session_query,
-    )
-
-    claude_home, codex_home = _session_homes()
-    try:
-        return resolve_session_query(
-            session,
-            agent=agent,
-            claude_home=claude_home,
-            codex_home=codex_home,
-        )
-    except SessionQueryError as error:
-        print(f"Error: {error}", file=sys.stderr)
-        sys.exit(1)
+from claude_code_tools.session_cli_resolution import (
+    resolve_cli_session as _resolve_cli_session,
+    resolve_export_session as _resolve_export_session,
+    session_homes as _session_homes,
+)
 
 
 def _consume_export_agent(
@@ -127,14 +63,27 @@ def _consume_export_agent(
     return agent, remaining
 
 
-class SessionIDGroup(click.Group):
-    """Custom group that treats unknown commands as session IDs for menu."""
+class SessionReferenceGroup(click.Group):
+    """Treat an unknown command token as a session reference for ``menu``."""
 
     def parse_args(self, ctx, args):
-        # If the first arg looks like a session ID (not a known command), route to menu
-        if args and args[0] not in self.commands and not args[0].startswith('-'):
-            # Treat as session ID - prepend 'menu' to make it a menu command
-            args = ['menu'] + args
+        from claude_code_tools.cli_passthrough import (
+            MissingPositionalError,
+            positional_index,
+        )
+
+        try:
+            command_index = positional_index(
+                args,
+                value_options=("--claude-home", "--codex-home"),
+            )
+        except MissingPositionalError:
+            command_index = None
+        if (
+            command_index is not None
+            and args[command_index] not in self.commands
+        ):
+            args.insert(command_index, "menu")
         return super().parse_args(ctx, args)
 
 
@@ -158,7 +107,7 @@ class ResolveCommand(click.Command):
             ctx.exit(1)
 
 
-@click.group(cls=SessionIDGroup, invoke_without_command=True)
+@click.group(cls=SessionReferenceGroup, invoke_without_command=True)
 @click.version_option()
 @click.option(
     '--claude-home',
@@ -373,7 +322,7 @@ def _find_and_run_session_ui(
     Otherwise, finds latest sessions for current project/branch and shows UI.
 
     Args:
-        session_id: Optional explicit session ID or path
+        session_id: Optional explicit session name, ID/fragment, or path.
         agent_constraint: 'claude', 'codex', or 'both'
         start_screen: Screen to show when single session found
         select_target: Screen to go to after selection (multiple sessions)
@@ -758,9 +707,16 @@ Examples:
 @main.command("find-original", context_settings={"ignore_unknown_options": True, "allow_extra_args": True, "allow_interspersed_args": False})
 @click.pass_context
 def find_original(ctx):
-    """Find the original session from a trimmed/continued session."""
+    """Find the original session from a named or identified session."""
     import sys
-    sys.argv = [sys.argv[0].replace('aichat', 'find-original-session')] + ctx.args
+    from claude_code_tools.legacy_session_wrappers import (
+        resolved_find_original_args,
+    )
+
+    sys.argv = [
+        sys.argv[0].replace('aichat', 'find-original-session'),
+        *resolved_find_original_args(ctx.args),
+    ]
     from claude_code_tools.find_original_session import (
         main as find_original_main,
     )
@@ -770,9 +726,16 @@ def find_original(ctx):
 @main.command("find-derived", context_settings={"ignore_unknown_options": True, "allow_extra_args": True, "allow_interspersed_args": False})
 @click.pass_context
 def find_derived(ctx):
-    """Find derived sessions (trimmed/continued) from an original."""
+    """Find sessions derived from a named or identified original."""
     import sys
-    sys.argv = [sys.argv[0].replace('aichat', 'find-trimmed-sessions')] + ctx.args
+    from claude_code_tools.legacy_session_wrappers import (
+        resolved_find_derived_args,
+    )
+
+    sys.argv = [
+        sys.argv[0].replace('aichat', 'find-trimmed-sessions'),
+        *resolved_find_derived_args(ctx.args),
+    ]
     from claude_code_tools.find_trimmed_sessions import (
         main as find_derived_main,
     )
@@ -782,9 +745,14 @@ def find_derived(ctx):
 @main.command("menu", context_settings={"ignore_unknown_options": True, "allow_extra_args": True, "allow_interspersed_args": False})
 @click.pass_context
 def menu(ctx):
-    """Interactive menu for a specific session (by ID or path)."""
+    """Open the action menu for a session name, ID/fragment, or path."""
     import sys
-    sys.argv = [sys.argv[0].replace('aichat', 'session-menu')] + ctx.args
+    from claude_code_tools.legacy_session_wrappers import resolved_menu_args
+
+    sys.argv = [
+        sys.argv[0].replace('aichat', 'session-menu'),
+        *resolved_menu_args(ctx.args),
+    ]
     from claude_code_tools.session_menu_cli import main as menu_main
     menu_main()
 
@@ -805,7 +773,7 @@ def menu(ctx):
               help="Force agent type (auto-detected if not specified)")
 @click.option("--claude-home", help="Path to Claude home directory")
 @click.option("--simple-ui", is_flag=True,
-              help="Use simple CLI trim instead of Node UI (requires session ID)")
+              help="Use simple CLI trim instead of Node UI (requires SESSION)")
 def trim(session, tools, threshold, trim_assistant, output_dir, agent, claude_home, simple_ui):
     """Trim session to reduce size by truncating large tool outputs.
 
@@ -813,8 +781,9 @@ def trim(session, tools, threshold, trim_assistant, output_dir, agent, claude_ho
     the length threshold. Creates a new trimmed session file with lineage
     metadata linking back to the original.
 
-    If no session ID provided, finds latest session for current project/branch
-    and opens the interactive trim menu.
+    If no SESSION is provided, finds the latest session for the current
+    project/branch. SESSION accepts a name, ID/fragment, filename fragment,
+    or path. With no direct trim options, opens the interactive trim menu.
 
     \b
     Examples:
@@ -836,7 +805,7 @@ def trim(session, tools, threshold, trim_assistant, output_dir, agent, claude_ho
     if simple_ui or tools or trim_assistant or output_dir:
         # Direct CLI mode - need a session
         if not session:
-            print("Error: Direct trim options require a session ID", file=sys.stderr)
+            print("Error: Direct trim options require SESSION", file=sys.stderr)
             print("Use 'aichat trim' without options for interactive mode", file=sys.stderr)
             sys.exit(1)
 
@@ -929,6 +898,9 @@ def trim_in_place_cmd(session, tools, threshold, trim_assistant, dry_run,
     This powers the `>trim` in-session trigger of the aichat plugin, and
     can also be used directly on any Claude session.
 
+    SESSION may be a Claude session name, ID/fragment, filename fragment,
+    or direct transcript path.
+
     \b
     Examples:
         aichat trim-in-place abc123 --dry-run     # Preview tokens saved
@@ -940,7 +912,6 @@ def trim_in_place_cmd(session, tools, threshold, trim_assistant, dry_run,
     import sys
     from pathlib import Path
 
-    from claude_code_tools.session_utils import resolve_session_path
     from claude_code_tools.trim_in_place import trim_session_in_place
 
     def emit_error(msg: str) -> None:
@@ -950,24 +921,50 @@ def trim_in_place_cmd(session, tools, threshold, trim_assistant, dry_run,
             print(f"Error: {msg}", file=sys.stderr)
         sys.exit(1)
 
+    root_claude_home, _ = _session_homes()
+    effective_claude_home = claude_home or root_claude_home
     try:
-        session_file = resolve_session_path(session, claude_home)
-    except SystemExit:
-        # resolve_session_path() exits directly (SystemExit is NOT an
-        # Exception) for ambiguous partial ids, after listing the
-        # matches on stderr. Under --json, convert that to the
-        # contractual single {"error": ...} stdout line.
-        if not json_output:
-            raise
-        emit_error(
-            f"Multiple sessions match '{session}'. "
-            f"Use a more specific session ID."
+        direct_path = Path(session).expanduser()
+        is_direct_file = direct_path.is_file()
+    except (OSError, RuntimeError, ValueError):
+        direct_path = None
+        is_direct_file = False
+
+    if is_direct_file and direct_path is not None:
+        session_file = direct_path.absolute()
+    elif json_output:
+        from claude_code_tools.session_cli_resolution import (
+            exact_claude_filename,
         )
-    except Exception as e:
-        # SESSION comes from the CLI/hook and may be hostile (e.g. a
-        # path long enough to raise ENAMETOOLONG): keep the --json
-        # single-line contract for any resolution failure.
-        emit_error(str(e) or type(e).__name__)
+        from claude_code_tools.session_resolution import (
+            SessionQueryError,
+            resolve_session_query,
+        )
+
+        try:
+            resolved = resolve_session_query(
+                session,
+                agent="claude",
+                claude_home=effective_claude_home,
+            )
+        except SessionQueryError as error:
+            session_file = exact_claude_filename(
+                session,
+                effective_claude_home,
+            )
+            if session_file is None:
+                emit_error(str(error))
+        else:
+            session_file = resolved.session_file
+    else:
+        resolved = _resolve_cli_session(
+            session,
+            "claude",
+            claude_home=effective_claude_home,
+            allow_legacy_claude_filename=True,
+            selection_prompt="Which Claude session do you want to trim?",
+        )
+        session_file = resolved.session_file
 
     target_tools = None
     if tools:
@@ -1116,7 +1113,10 @@ def smart_trim(
     # If any direct CLI options specified (but not instructions), use smart_trim.py
     if exclude_types or preserve_recent != 10 or content_threshold != 200 or output_dir or dry_run:
         if not session:
-            print("Error: Direct smart-trim options require a session ID", file=sys.stderr)
+            print(
+                "Error: Direct smart-trim options require a session ID",
+                file=sys.stderr,
+            )
             print("Use 'aichat smart-trim' without options for interactive mode", file=sys.stderr)
             sys.exit(1)
 
@@ -1234,16 +1234,21 @@ def export_session(ctx, agent, session):
 def export_claude(ctx):
     """Export Claude Code session to text/markdown format.
 
-    If no session ID provided, finds latest Claude session for current
-    project/branch.
+    SESSION may be a Claude name, ID/fragment, filename fragment, or path.
+    If omitted, finds the latest Claude session for the current project.
     """
     import sys
-    args = ctx.args
-    session_id = args[0] if args and not args[0].startswith('-') else None
+    from claude_code_tools.legacy_session_wrappers import (
+        resolved_agent_export_args,
+    )
 
-    if session_id:
+    delegated = resolved_agent_export_args(ctx.args, "claude")
+    if delegated is not None:
         # Pass to existing export CLI
-        sys.argv = [sys.argv[0].replace('aichat', 'export-claude-session')] + args
+        sys.argv = [
+            sys.argv[0].replace('aichat', 'export-claude-session'),
+            *delegated,
+        ]
         from claude_code_tools.export_claude_session import (
             main as export_claude_main,
         )
@@ -1264,16 +1269,21 @@ def export_claude(ctx):
 def export_codex(ctx):
     """Export Codex session to text/markdown format.
 
-    If no session ID provided, finds latest Codex session for current
-    project/branch.
+    SESSION may be a Codex name, ID/fragment, filename fragment, or path.
+    If omitted, finds the latest Codex session for the current project.
     """
     import sys
-    args = ctx.args
-    session_id = args[0] if args and not args[0].startswith('-') else None
+    from claude_code_tools.legacy_session_wrappers import (
+        resolved_agent_export_args,
+    )
 
-    if session_id:
+    delegated = resolved_agent_export_args(ctx.args, "codex")
+    if delegated is not None:
         # Pass to existing export CLI
-        sys.argv = [sys.argv[0].replace('aichat', 'export-codex-session')] + args
+        sys.argv = [
+            sys.argv[0].replace('aichat', 'export-codex-session'),
+            *delegated,
+        ]
         from claude_code_tools.export_codex_session import (
             main as export_codex_main,
         )
@@ -1289,14 +1299,43 @@ def export_codex(ctx):
         )
 
 
-@main.command("delete", context_settings={"ignore_unknown_options": True, "allow_extra_args": True, "allow_interspersed_args": False})
-@click.pass_context
-def delete(ctx):
-    """Delete a session file with safety confirmation."""
-    import sys
-    sys.argv = [sys.argv[0].replace('aichat', 'delete-session')] + ctx.args
-    from claude_code_tools.delete_session import main as delete_main
-    delete_main()
+@main.command("delete")
+@click.argument("session", required=True)
+@click.option(
+    "--agent",
+    type=click.Choice(["claude", "codex"], case_sensitive=False),
+    help="Restrict the search to this agent's home",
+)
+@click.option("--claude-home", help="Path to Claude home directory")
+@click.option("--codex-home", help="Path to Codex home directory")
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    help="Skip the final deletion confirmation",
+)
+def delete(
+    session: str,
+    agent: str | None,
+    claude_home: str | None,
+    codex_home: str | None,
+    force: bool,
+) -> None:
+    """Delete a Claude or Codex session safely.
+
+    SESSION accepts a name, ID/fragment, filename fragment, or path. Ambiguous
+    interactive matches display a numbered picker before any deletion prompt.
+    """
+    from claude_code_tools.delete_session import delete_resolved_session
+
+    resolved = _resolve_cli_session(
+        session,
+        agent,
+        claude_home=claude_home,
+        codex_home=codex_home,
+        selection_prompt="Which session do you want to delete?",
+    )
+    delete_resolved_session(resolved.session_file, force=force)
 
 
 @main.command("info")
@@ -1336,7 +1375,11 @@ def info(session, agent, json_output):
 
     # Find session file
     if session:
-        resolved = _resolve_cli_session(session, agent)
+        resolved = _resolve_cli_session(
+            session,
+            agent,
+            interactive=not json_output,
+        )
         session_file = resolved.session_file
         detected_agent = resolved.agent
     else:
@@ -1670,8 +1713,9 @@ def move_account(session, to_home, from_home, agent, keep):
     tool-results, workflows); Codex moves relocate the rollout file
     and its thread-name entries in session_index.jsonl.
 
-    SESSION may be a session UUID (full or partial), a Claude session
-    name assigned with /rename, or a Codex thread name.
+    SESSION may be a session UUID (full or partial), a Claude session name
+    assigned with /rename, or a Codex thread name. Ambiguous interactive
+    matches display a numbered picker including each source account.
 
     \b
     Examples:
@@ -2066,7 +2110,7 @@ def rollover(session, quick, prompt, agent):
     # If CLI options provided, use direct handler (backward compatible)
     if quick or prompt:
         if not session:
-            print("Error: --quick or --prompt require a session ID",
+            print("Error: --quick or --prompt require SESSION",
                   file=sys.stderr)
             print("Use 'aichat rollover' without options for interactive mode",
                   file=sys.stderr)
@@ -2138,7 +2182,11 @@ def lineage(session, agent, json_output):
         )
         return
 
-    resolved = _resolve_cli_session(session, agent)
+    resolved = _resolve_cli_session(
+        session,
+        agent,
+        interactive=not json_output,
+    )
     session_file = resolved.session_file
 
     # Get lineage (returns newest-first, ending with original)
@@ -2205,8 +2253,9 @@ def lineage(session, agent, json_output):
 def resume_session(ctx, claude_home, codex_home, agent):
     """Resume a session with various options (resume, clone, trim, continue).
 
-    If no session ID provided, finds latest session for current project/branch.
-    Shows resume menu with options: resume as-is, clone, trim+resume,
+    If no SESSION is provided, finds the latest session for the current
+    project/branch. SESSION accepts a name, ID/fragment, filename fragment,
+    or path. The resume menu offers resume as-is, clone, trim+resume,
     smart-trim, or continue with context.
 
     \b
