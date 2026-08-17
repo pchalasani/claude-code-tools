@@ -253,7 +253,7 @@ def test_tmux_cli_uses_registered_socket(monkeypatch, tmp_path):
 @pytest.mark.parametrize(
     ("agent_kind", "expected"),
     (
-        ("codex", "/prompts:msg:inbox"),
+        ("codex", "You have a new inter-agent message. Run msg inbox now."),
         ("claude", "/msg:inbox"),
     ),
 )

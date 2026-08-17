@@ -245,9 +245,9 @@ class Watcher:
     def _build_notification(
         self, agent_kind: str,
     ) -> str:
-        """Build notification slash command."""
+        """Build the client-specific inbox prompt."""
         if agent_kind == "codex":
-            return "/prompts:msg:inbox"
+            return "You have a new inter-agent message. Run msg inbox now."
         return "/msg:inbox"
 
     async def _check_idle(

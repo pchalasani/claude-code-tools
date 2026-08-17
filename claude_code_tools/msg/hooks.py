@@ -76,22 +76,19 @@ def _check_and_notify(
         _approve()
         return
 
-    # Check for unread messages
-    messages = store.get_inbox(me.session_id)
-    if not messages:
-        _approve()
-        return
-
     # Claim deliveries (same protocol as watcher)
     claimer_id = f"hook-{hook_event}-{_new_uuid()[:8]}"
     claimed = store.claim_pending_deliveries(
         claimer_id, recipient_id=me.session_id,
     )
+    if not claimed:
+        _approve()
+        return
 
     # Build notification
-    count = len(messages)
+    count = len(claimed)
     senders = list(dict.fromkeys(
-        m.get("from_name", "unknown") for m in messages
+        delivery.get("from_name", "unknown") for delivery in claimed
     ))
     sender_str = ", ".join(senders)
     notification = (
@@ -114,8 +111,8 @@ def _check_and_notify(
 
 
 def _approve() -> None:
-    """Output a simple approve response."""
-    print(json.dumps({"decision": "approve"}))
+    """Complete the hook without emitting a client-specific response."""
+    pass
 
 
 @click.group()

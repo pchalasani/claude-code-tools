@@ -113,8 +113,7 @@ class TestStopHook:
                 cli, ["stop"],
                 input=json.dumps({}),
             )
-        output = json.loads(result.output)
-        assert output == {"decision": "approve"}
+        assert result.output == ""
 
     def test_with_messages_notifies(self, setup_agents):
         """When messages exist, hook injects context."""
@@ -167,6 +166,24 @@ class TestStopHook:
         assert "hookSpecificOutput" in json.loads(result.output)
         claimed = store.claim_pending_deliveries("watcher")
         assert [item["recipient_id"] for item in claimed] == [second.session_id]
+
+    def test_already_notified_message_does_not_notify_again(self, setup_agents):
+        """Unread deliveries produce only one notification."""
+        _sender, receiver, store = setup_agents
+        claimed = store.claim_pending_deliveries(
+            "watcher", recipient_id=receiver.session_id,
+        )
+        store.mark_notified(claimed[0]["id"], "watcher")
+
+        with patch(
+            "claude_code_tools.msg.hooks.MsgStore", return_value=store,
+        ), patch(
+            "claude_code_tools.msg.hooks._find_self_agent",
+            return_value=receiver,
+        ):
+            result = CliRunner().invoke(cli, ["stop"], input="{}")
+
+        assert result.output == ""
 
 
 class TestPromptSubmitHook:
