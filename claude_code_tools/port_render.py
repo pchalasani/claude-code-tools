@@ -9,10 +9,9 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from rich import box
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Confirm, Prompt
+from rich.prompt import Confirm
 from rich.status import Status
 from rich.table import Table
 from rich.text import Text
@@ -23,11 +22,7 @@ if TYPE_CHECKING:
         PortResult,
         ResolvedSession,
     )
-    from claude_code_tools.resolve_session import SessionRecord
-
-
 _AGENT_LABELS = {"claude": "Claude", "codex": "Codex"}
-_MAX_CANDIDATE_TITLE_CHARS = 120
 _MACOS_CLIPBOARD_COMMANDS = (("pbcopy",),)
 _LINUX_CLIPBOARD_COMMANDS = (
     ("wl-copy",),
@@ -51,12 +46,7 @@ def _clipboard_commands(
     if platform_name == "win32":
         system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
         system32 = system_root / "System32"
-        powershell = (
-            system32
-            / "WindowsPowerShell"
-            / "v1.0"
-            / "powershell.exe"
-        )
+        powershell = system32 / "WindowsPowerShell" / "v1.0" / "powershell.exe"
         return (
             (str(system32 / "clip.exe"),),
             (
@@ -122,41 +112,6 @@ def _target_label(source_agent: str) -> str:
     return "Claude Code" if target == "claude" else "Codex"
 
 
-def _match_reason(record: "SessionRecord", query: str) -> str:
-    """Explain why one resolver candidate matched the query."""
-    matched_by = record.matched_by
-    if matched_by == "id":
-        return "exact session ID"
-    if matched_by == "partial-id":
-        return "session ID prefix"
-    if matched_by == "id-substring":
-        return "session ID contains query"
-    if matched_by == "filename":
-        return "rollout filename contains query"
-    if matched_by == "name":
-        name = record.name or ""
-        if name.casefold() == query.casefold():
-            return "exact name/title"
-        return "name/title contains query"
-    return "resolver match"
-
-
-def _candidate_details(record: "SessionRecord") -> Text:
-    """Build a readable multi-line summary for one candidate."""
-    details = Text()
-    title = " ".join((record.name or "Untitled session").split())
-    if len(title) > _MAX_CANDIDATE_TITLE_CHARS:
-        title = title[: _MAX_CANDIDATE_TITLE_CHARS - 3] + "..."
-    details.append(title, style="bold")
-    details.append("\nProject  ", style="dim")
-    details.append(record.directory or "Unknown")
-    details.append("\nID       ", style="dim")
-    details.append(record.session_id)
-    details.append("\nModified ", style="dim")
-    details.append(record.modified)
-    return details
-
-
 class PortDisplay:
     """Render progress, ambiguity choices, errors, and final results."""
 
@@ -187,59 +142,20 @@ class PortDisplay:
             spinner="dots",
         )
 
-    def choose_candidate(
-        self, error: "PortAmbiguityError"
-    ) -> "ResolvedSession | None":
+    def choose_candidate(self, error: "PortAmbiguityError") -> "ResolvedSession | None":
         """Present matching sessions and return the user's selection."""
         from claude_code_tools.port_service import ResolvedSession
+        from claude_code_tools.session_selection import choose_session_record
 
-        heading = Text()
-        heading.append(f"{error.match_count} sessions matched ", style="yellow")
-        heading.append(repr(error.query), style="bold yellow")
-        heading.append(". Choose the source session to port.", style="yellow")
-        self.console.print(heading)
-
-        table = Table(
-            box=box.ROUNDED,
-            header_style="bold cyan",
-            show_lines=True,
-            expand=True,
-        )
-        table.add_column("#", justify="right", no_wrap=True)
-        table.add_column("Agent", no_wrap=True)
-        table.add_column("Why it matched")
-        table.add_column("Session")
-        for index, record in enumerate(error.records, start=1):
-            table.add_row(
-                str(index),
-                _agent_label(record.agent),
-                _match_reason(record, error.query),
-                _candidate_details(record),
-            )
-        self.console.print(table)
-
-        if error.match_count > len(error.records):
-            hidden = error.match_count - len(error.records)
-            self.console.print(
-                f"[dim]{hidden} older matches are not shown. "
-                "Rerun with a full session ID to select one of them.[/dim]"
-            )
-
-        if not sys.stdin.isatty():
-            raise EOFError
-
-        choices = [str(index) for index in range(1, len(error.records) + 1)]
-        choices.append("q")
-        choice = Prompt.ask(
-            "[bold]Which source session do you want to port?[/bold] "
-            "[dim](number or q to cancel)[/dim]",
-            choices=choices,
-            show_choices=False,
+        record = choose_session_record(
+            error.query,
+            error.records,
+            error.match_count,
+            prompt="Which source session do you want to port?",
             console=self.console,
         )
-        if choice == "q":
+        if record is None:
             return None
-        record = error.records[int(choice) - 1]
         return ResolvedSession(
             agent=record.agent,
             session_file=Path(record.session_file),
@@ -334,11 +250,7 @@ class PortDisplay:
             self.console.print(
                 "[bold green]✓ Session ID copied to clipboard.[/bold green]"
             )
-            command = (
-                "codex resume"
-                if target_agent == "codex"
-                else "claude --resume"
-            )
+            command = "codex resume" if target_agent == "codex" else "claude --resume"
             self.console.print("[bold]Now you can run:[/bold]")
             self.console.print(
                 Text(
@@ -354,9 +266,7 @@ class PortDisplay:
 
     def error(self, message: str) -> None:
         """Render an expected failure without a traceback."""
-        self.error_console.print(
-            Text.assemble(("Error: ", "bold red"), message)
-        )
+        self.error_console.print(Text.assemble(("Error: ", "bold red"), message))
 
     def cancelled(self) -> None:
         """Render a user-requested cancellation."""

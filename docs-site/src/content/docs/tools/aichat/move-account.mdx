@@ -29,12 +29,18 @@ aichat move-account <session> --to <config-dir> [options]
 - a **session UUID** — full or partial (a prefix or substring)
 - a **Claude session name** — the title set with `/rename`
 - a **Codex thread name**
+- an exact **session file path** inside an eligible source home
 
-Resolution is tiered: an exact id wins, then an exact name, then an id
-prefix, then id/name substrings. An exact name outranks an id prefix, so a
-short name can never silently select a session whose UUID happens to start
-with the same characters. Ambiguous matches are listed and refused rather
-than guessed.
+Resolution uses the shared tiers: exact id, exact name, id prefix, id
+substring, filename substring, then name substring. The winning tier is
+chosen across all searched source accounts, so a weaker match in one account
+cannot compete with an exact name in another.
+
+In an interactive terminal, ambiguous matches appear in a numbered Rich table.
+The table includes the source home so equal names in different accounts remain
+distinguishable. Enter `q`, press Ctrl-C, or send end-of-input to cancel before
+anything moves. Without a terminal, the command lists the matches and exits
+nonzero; use `--from` or a more specific query to disambiguate.
 
 ## Options
 

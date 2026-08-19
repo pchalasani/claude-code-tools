@@ -86,9 +86,7 @@ def _write_claude_session(
     title: str | None = None,
 ) -> Path:
     """Write a minimal portable Claude session, optionally named."""
-    proj = claude_home / "projects" / encode_claude_project_path(
-        str(project_dir)
-    )
+    proj = claude_home / "projects" / encode_claude_project_path(str(project_dir))
     proj.mkdir(parents=True, exist_ok=True)
     lines: list[dict[str, object]] = [
         {
@@ -118,9 +116,7 @@ def _write_claude_session(
     return path
 
 
-def _resolve(
-    session: str, claude_home: Path, codex_home: Path
-) -> ResolvedSession:
+def _resolve(session: str, claude_home: Path, codex_home: Path) -> ResolvedSession:
     """Resolve a port query against the two isolated fake homes."""
     return resolve_port_session(
         session,
@@ -188,9 +184,7 @@ class TestLookupForms:
         self, claude_home: Path, codex_home: Path, project_dir: Path
     ) -> None:
         rollout = write_modern_rollout(codex_home, project_dir)
-        resolved = _resolve(
-            "rollout-2026-07-16T20-41-57", claude_home, codex_home
-        )
+        resolved = _resolve("rollout-2026-07-16T20-41-57", claude_home, codex_home)
         assert resolved.agent == "codex"
         assert resolved.session_file == rollout.resolve()
 
@@ -259,9 +253,7 @@ class TestLookupForms:
         of masking the database error as "session not found".
         """
         rollout = write_modern_rollout(codex_home, project_dir)
-        (codex_home / "state_9.sqlite").write_bytes(
-            b"not a sqlite database"
-        )
+        (codex_home / "state_9.sqlite").write_bytes(b"not a sqlite database")
         resolved = _resolve(MODERN_UUID, claude_home, codex_home)
         assert resolved.agent == "codex"
         assert resolved.session_file == rollout.resolve()
@@ -322,9 +314,7 @@ class TestRejections:
         with pytest.raises(PortSessionError, match="not found"):
             _resolve(query, claude_home, codex_home)
 
-    @pytest.mark.parametrize(
-        "query", ["a/b", "a\\b", "*", "??", "has*star", "what?"]
-    )
+    @pytest.mark.parametrize("query", ["a/b", "a\\b", "*", "??", "has*star", "what?"])
     def test_separator_and_glob_queries_reject_matching_names(
         self,
         claude_home: Path,
@@ -360,9 +350,7 @@ class TestRejections:
     ) -> None:
         """One claude and one codex match must be rejected together."""
         sid = str(uuid.uuid4())
-        _write_claude_session(
-            claude_home, sid, project_dir, title="xshared-name"
-        )
+        _write_claude_session(claude_home, sid, project_dir, title="xshared-name")
         rollout = write_modern_rollout(codex_home, project_dir)
         database = codex_home / "state_1.sqlite"
         _create_threads_database(database)
@@ -393,7 +381,7 @@ class TestRejections:
         project_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """An exact name and an incidental title match stay user-chosen."""
+        """Equal-tier exact names across agents stay user-chosen."""
         query = "sasy-blog-21jul2026"
         claude_id = str(uuid.uuid4())
         claude_session = _write_claude_session(
@@ -410,11 +398,7 @@ class TestRejections:
             MODERN_UUID,
             rollout,
             str(project_dir),
-            (
-                f"see how port works; source name {query}; "
-                + ("long automatic title " * 20)
-                + "NEVER_SHOW_THIS_TAIL"
-            ),
+            query,
             1_720_000_000,
         )
         # Candidate order is newest first. Keep Claude first so input
@@ -442,14 +426,9 @@ class TestRejections:
         assert result.exit_code == 0, result.output
         assert "2 sessions matched" in result.output
         assert "exact name/title" in result.output
-        assert "name/title contains query" in result.output
-        assert "see how port works" in result.output
-        assert "NEVER_SHOW_THIS_TAIL" not in result.output
+        assert result.output.count("exact name/title") == 2
         assert "Which source session do you want to port?" in result.output
-        assert (
-            "Detected source agent: claude — porting to Codex"
-            in result.output
-        )
+        assert "Detected source agent: claude — porting to Codex" in result.output
         assert "Port complete" in result.output
         assert len(list((codex_home / "sessions").rglob("*.jsonl"))) == 2
 
@@ -522,9 +501,7 @@ class TestRejections:
     ) -> None:
         """`aichat port <name>` converts the named claude session."""
         sid = str(uuid.uuid4())
-        _write_claude_session(
-            claude_home, sid, project_dir, title="cli-name-port"
-        )
+        _write_claude_session(claude_home, sid, project_dir, title="cli-name-port")
         result = runner.invoke(
             main,
             [
@@ -537,10 +514,7 @@ class TestRejections:
             ],
         )
         assert result.exit_code == 0, result.output
-        assert (
-            "Detected source agent: claude — porting to Codex"
-            in result.output
-        )
+        assert "Detected source agent: claude — porting to Codex" in result.output
         assert "New Codex session id:" in result.output
         assert list((codex_home / "sessions").rglob("rollout-*.jsonl"))
 

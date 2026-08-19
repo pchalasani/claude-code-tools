@@ -20,12 +20,19 @@ import os
 import shutil
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
+
+if TYPE_CHECKING:
+    from claude_code_tools.resolve_session import SessionRecord
 
 from claude_code_tools.find_claude_session import get_custom_title
 from claude_code_tools.resolve_session_names import codex_thread_names
-from claude_code_tools.session_utils import get_session_uuid
+from claude_code_tools.session_utils import (
+    detect_agent_from_content,
+    get_session_uuid,
+)
 
 
 @dataclass
@@ -41,6 +48,16 @@ class SessionCandidate:
     path: Path
     session_id: str
     title: str
+
+
+@dataclass(frozen=True)
+class AccountSessionMatch:
+    """One globally ranked match in a particular source account."""
+
+    home: Path
+    candidate: SessionCandidate
+    matched_by: str
+    tier: int
 
 
 @dataclass
@@ -101,16 +118,33 @@ def _iter_session_files(home: Path) -> List[Path]:
     projects = home / "projects"
     if not projects.is_dir():
         return []
-    return [
-        f
-        for f in projects.glob("*/*.jsonl")
-        if not f.name.startswith("agent-")
-    ]
+    return [f for f in projects.glob("*/*.jsonl") if not f.name.startswith("agent-")]
 
 
 def _session_title(path: Path) -> str:
     """Return the user-assigned name of a transcript, or ''."""
     return get_custom_title(path.stem, "", session_file=path)
+
+
+def _candidate_match(candidate: SessionCandidate, query: str) -> tuple[int, str] | None:
+    """Return the shared resolver tier and match label for a candidate."""
+    query_cf = query.casefold()
+    session_id = candidate.session_id.casefold()
+    title = candidate.title.casefold()
+    filename = candidate.path.name.casefold()
+    if session_id == query_cf:
+        return 0, "id"
+    if title == query_cf:
+        return 1, "name"
+    if session_id.startswith(query_cf):
+        return 2, "partial-id"
+    if query_cf in session_id:
+        return 3, "id-substring"
+    if query_cf in filename:
+        return 4, "filename"
+    if title and query_cf in title:
+        return 5, "name"
+    return None
 
 
 def _tiered_match(
@@ -119,7 +153,8 @@ def _tiered_match(
     """Pick candidates by tiered matching; first non-empty tier wins.
 
     Tiers: exact session id, exact name, id prefix, id substring,
-    name substring. All comparisons are case-insensitive, so a pasted
+    filename substring, name substring. All comparisons are case-insensitive,
+    so a pasted
     uppercase UUID still resolves. An exact name outranks an id prefix
     so a short name can never silently select a session whose UUID
     happens to start with the same characters.
@@ -131,21 +166,11 @@ def _tiered_match(
     Returns:
         Matching candidates; empty if nothing matched.
     """
-    tiers: List[List[SessionCandidate]] = [[], [], [], [], []]
-    query_cf = query.casefold()
+    tiers: List[List[SessionCandidate]] = [[], [], [], [], [], []]
     for cand in candidates:
-        sid = cand.session_id.casefold()
-        title = cand.title.casefold()
-        if sid == query_cf:
-            tiers[0].append(cand)
-        elif title == query_cf:
-            tiers[1].append(cand)
-        elif sid.startswith(query_cf):
-            tiers[2].append(cand)
-        elif query_cf in sid:
-            tiers[3].append(cand)
-        elif title and query_cf in title:
-            tiers[4].append(cand)
+        match = _candidate_match(cand, query)
+        if match is not None:
+            tiers[match[0]].append(cand)
     for tier in tiers:
         if tier:
             return tier
@@ -163,16 +188,18 @@ def find_sessions_in_home(home: Path, query: str) -> List[SessionCandidate]:
     Returns:
         Matching candidates; empty if nothing matched.
     """
-    candidates = [
+    return _tiered_match(_all_sessions_in_home(home), query)
+
+
+def _all_sessions_in_home(home: Path) -> List[SessionCandidate]:
+    """Return every eligible Claude transcript in one account."""
+    return [
         SessionCandidate(path=f, session_id=f.stem, title=_session_title(f))
         for f in _iter_session_files(home)
     ]
-    return _tiered_match(candidates, query)
 
 
-def find_codex_sessions_in_home(
-    home: Path, query: str
-) -> List[SessionCandidate]:
+def find_codex_sessions_in_home(home: Path, query: str) -> List[SessionCandidate]:
     """Resolve a session query against one Codex home.
 
     Codex rollout files live under ``sessions/YYYY/MM/DD/`` and carry
@@ -186,6 +213,11 @@ def find_codex_sessions_in_home(
     Returns:
         Matching candidates; empty if nothing matched.
     """
+    return _tiered_match(_all_codex_sessions_in_home(home), query)
+
+
+def _all_codex_sessions_in_home(home: Path) -> List[SessionCandidate]:
+    """Return every eligible Codex rollout in one account."""
     home = home.expanduser()
     sessions_dir = home / "sessions"
     if not sessions_dir.is_dir():
@@ -201,7 +233,7 @@ def find_codex_sessions_in_home(
                 title=names.get(uuid.casefold(), ""),
             )
         )
-    return _tiered_match(candidates, query)
+    return candidates
 
 
 def _transcript_cwd(session_file: Path) -> str:
@@ -270,9 +302,7 @@ def move_session_between_homes(
 
     dest_file = to_home / rel
     if dest_file.exists():
-        raise ValueError(
-            f"Session already exists in target account: {dest_file}"
-        )
+        raise ValueError(f"Session already exists in target account: {dest_file}")
 
     sidecar_src = session_file.with_suffix("")
     sidecar_dest = dest_file.with_suffix("")
@@ -417,12 +447,12 @@ def move_codex_session_between_homes(
     session_id = get_session_uuid(session_file.stem)
     dest_file = to_home / rel
     if dest_file.exists():
-        raise ValueError(
-            f"Session already exists in target account: {dest_file}"
-        )
-    clash = next(
-        (to_home / "sessions").rglob(f"rollout-*{session_id}.jsonl"), None
-    ) if (to_home / "sessions").is_dir() else None
+        raise ValueError(f"Session already exists in target account: {dest_file}")
+    clash = (
+        next((to_home / "sessions").rglob(f"rollout-*{session_id}.jsonl"), None)
+        if (to_home / "sessions").is_dir()
+        else None
+    )
     if clash is not None:
         raise ValueError(
             f"Session {session_id} already exists in target account: {clash}"
@@ -442,9 +472,7 @@ def move_codex_session_between_homes(
             "source untouched"
         )
 
-    index_moved = _transfer_index_entries(
-        from_home, to_home, session_id, keep
-    )
+    index_moved = _transfer_index_entries(from_home, to_home, session_id, keep)
     cwd = _transcript_cwd(dest_file)
 
     if not keep:
@@ -481,13 +509,9 @@ def resume_command(result: MoveResult, to_home: Path) -> str:
     # home: the pasted command then works regardless of any
     # CLAUDE_CONFIG_DIR / CODEX_HOME lingering in the user's shell.
     if result.agent == "codex":
-        return (
-            f"{cd_part}CODEX_HOME={home_quoted} "
-            f"codex resume {result.session_id}"
-        )
+        return f"{cd_part}CODEX_HOME={home_quoted} codex resume {result.session_id}"
     return (
-        f"{cd_part}CLAUDE_CONFIG_DIR={home_quoted} "
-        f"claude --resume {result.session_id}"
+        f"{cd_part}CLAUDE_CONFIG_DIR={home_quoted} claude --resume {result.session_id}"
     )
 
 
@@ -514,9 +538,7 @@ def _resolve_agent(
     if agent_arg:
         return agent_arg.lower()
     to_kind = detect_home_kind(to_home)
-    from_kind = (
-        detect_home_kind(Path(from_home_arg)) if from_home_arg else None
-    )
+    from_kind = detect_home_kind(Path(from_home_arg)) if from_home_arg else None
     if to_kind and from_kind and to_kind != from_kind:
         print(
             f"Error: source looks like a {from_kind} home but target "
@@ -555,9 +577,7 @@ def candidate_source_homes(agent: str, to_home: Path) -> List[Path]:
     if agent == "codex":
         env_var, prefix, required = "CODEX_HOME", ".codex", "sessions"
     else:
-        env_var, prefix, required = (
-            "CLAUDE_CONFIG_DIR", ".claude", "projects"
-        )
+        env_var, prefix, required = ("CLAUDE_CONFIG_DIR", ".claude", "projects")
 
     raw: List[Path] = []
     env_val = os.environ.get(env_var)
@@ -579,6 +599,177 @@ def candidate_source_homes(agent: str, to_home: Path) -> List[Path]:
         seen.add(resolved)
         out.append(cand)
     return out
+
+
+def _globally_ranked_account_matches(
+    homes: List[Path],
+    query: str,
+    agent: str,
+) -> List[AccountSessionMatch]:
+    """Return winning-tier matches across every candidate source home."""
+    matches: List[AccountSessionMatch] = []
+    for home in homes:
+        candidates = (
+            _all_codex_sessions_in_home(home)
+            if agent == "codex"
+            else _all_sessions_in_home(home)
+        )
+        for candidate in candidates:
+            match = _candidate_match(candidate, query)
+            if match is not None:
+                matches.append(
+                    AccountSessionMatch(
+                        home=home,
+                        candidate=candidate,
+                        tier=match[0],
+                        matched_by=match[1],
+                    )
+                )
+    if not matches:
+        return []
+    winning_tier = min(match.tier for match in matches)
+    return [match for match in matches if match.tier == winning_tier]
+
+
+def _direct_account_match(
+    session: str,
+    homes: List[Path],
+    agent: str,
+) -> AccountSessionMatch | None:
+    """Resolve an existing transcript path within one source account."""
+    try:
+        session_path = Path(session).expanduser().absolute()
+        is_file = session_path.is_file()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if not is_file:
+        return None
+
+    detected = detect_agent_from_content(session_path, max_lines=None)
+    if detected != agent:
+        detected_label = detected or "unknown"
+        raise ValueError(
+            f"session file is {detected_label}, but the account move is "
+            f"configured for {agent}: {session_path}"
+        )
+
+    source_homes = []
+    for home in homes:
+        try:
+            session_path.relative_to(home.expanduser().absolute())
+        except ValueError:
+            continue
+        source_homes.append(home)
+    if len(source_homes) != 1:
+        raise ValueError(
+            "session path must be inside exactly one eligible source home: "
+            f"{session_path}"
+        )
+
+    source_home = source_homes[0]
+    candidates = (
+        _all_codex_sessions_in_home(source_home)
+        if agent == "codex"
+        else _all_sessions_in_home(source_home)
+    )
+    candidate = next(
+        (
+            item
+            for item in candidates
+            if item.path.absolute() == session_path
+        ),
+        None,
+    )
+    if candidate is None:
+        raise ValueError(f"session path is not an eligible transcript: {session_path}")
+    return AccountSessionMatch(
+        home=source_home,
+        candidate=candidate,
+        tier=-1,
+        matched_by="filename",
+    )
+
+
+def _account_match_record(
+    match: AccountSessionMatch,
+    agent: str,
+) -> "SessionRecord":
+    """Convert an account match into common selector metadata."""
+    from typing import cast
+
+    from claude_code_tools.resolve_session import (
+        Agent,
+        MatchKind,
+        SessionRecord,
+    )
+
+    timestamp = match.candidate.path.stat().st_mtime
+    return SessionRecord(
+        agent=cast(Agent, agent),
+        session_id=match.candidate.session_id,
+        name=match.candidate.title or None,
+        directory=_transcript_cwd(match.candidate.path) or None,
+        home=str(match.home),
+        session_file=str(match.candidate.path),
+        matched_by=cast(MatchKind, match.matched_by),
+        modified=datetime.fromtimestamp(timestamp).astimezone().isoformat(),
+        archived=False,
+        _modified_timestamp=timestamp,
+    )
+
+
+def _select_account_match(
+    session: str,
+    matches: List[AccountSessionMatch],
+    agent: str,
+) -> AccountSessionMatch:
+    """Select one ambiguous source account without mutating any files."""
+    records_and_matches = sorted(
+        ((_account_match_record(match, agent), match) for match in matches),
+        key=lambda item: item[0]._modified_timestamp,
+        reverse=True,
+    )
+    records = tuple(item[0] for item in records_and_matches)
+
+    from claude_code_tools.session_selection import (
+        choose_session_record,
+        stdin_is_interactive,
+    )
+
+    if not stdin_is_interactive():
+        print(
+            f"Error: multiple sessions match '{session}':",
+            file=sys.stderr,
+        )
+        for record in records:
+            label = f" ({record.name})" if record.name else ""
+            print(
+                f"  {record.home}: {record.session_id}{label}",
+                file=sys.stderr,
+            )
+        print(
+            "Use a more specific ID or name, or disambiguate with --from.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    try:
+        selected = choose_session_record(
+            session,
+            records,
+            len(records),
+            prompt="Which source session do you want to move?",
+            show_home=True,
+        )
+    except (EOFError, KeyboardInterrupt):
+        selected = None
+    if selected is None:
+        print("Session selection cancelled.", file=sys.stderr)
+        sys.exit(1)
+    for record, match in records_and_matches:
+        if record is selected:
+            return match
+    raise RuntimeError("Selected account session was not found")
 
 
 def run_move_account(
@@ -632,67 +823,69 @@ def run_move_account(
         )
         if from_home.expanduser().resolve() == to_home.resolve():
             print(
-                "Error: source and target account dirs are the same: "
-                f"{from_home}",
+                f"Error: source and target account dirs are the same: {from_home}",
                 file=sys.stderr,
             )
             sys.exit(1)
-        candidates = finder(from_home, session)
-        if not candidates:
-            print(
-                f"Error: no session matching '{session}' in {from_home}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+        homes = [from_home]
     else:
         homes = candidate_source_homes(agent, to_home)
         if not homes:
             print(
-                f"Error: no local {agent} config dirs found to search; "
-                "pass --from",
+                f"Error: no local {agent} config dirs found to search; pass --from",
                 file=sys.stderr,
             )
             sys.exit(1)
-        matches = [
-            (home, cands)
-            for home in homes
-            if (cands := finder(home, session))
-        ]
-        if not matches:
-            searched = ", ".join(str(h) for h in homes)
-            print(
-                f"Error: no session matching '{session}' in any of: "
-                f"{searched}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        if len(matches) > 1:
-            print(
-                f"Error: '{session}' matches sessions in multiple "
-                "accounts:",
-                file=sys.stderr,
-            )
-            for home, cands in matches:
-                for cand in cands:
-                    label = f" ({cand.title})" if cand.title else ""
-                    print(
-                        f"  {home}: {cand.session_id}{label}",
-                        file=sys.stderr,
-                    )
-            print("Disambiguate with --from.", file=sys.stderr)
-            sys.exit(1)
-        from_home, candidates = matches[0]
-    if len(candidates) > 1:
-        print(
-            f"Error: multiple sessions match '{session}':", file=sys.stderr
-        )
-        for cand in candidates:
-            label = f" ({cand.title})" if cand.title else ""
-            print(f"  {cand.session_id}{label}", file=sys.stderr)
-        print("Use a more specific ID or name.", file=sys.stderr)
+
+    try:
+        direct_match = _direct_account_match(session, homes, agent)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    cand = candidates[0]
+    if direct_match is not None:
+        account_matches = [direct_match]
+    elif from_home_arg:
+        candidates = finder(homes[0], session)
+        if not candidates:
+            print(
+                f"Error: no session matching '{session}' in {homes[0]}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        account_matches = []
+        for candidate in candidates:
+            match = _candidate_match(candidate, session)
+            if match is not None:
+                account_matches.append(
+                    AccountSessionMatch(
+                        home=homes[0],
+                        candidate=candidate,
+                        tier=match[0],
+                        matched_by=match[1],
+                    )
+                )
+    else:
+        account_matches = _globally_ranked_account_matches(
+            homes,
+            session,
+            agent,
+        )
+        if not account_matches:
+            searched = ", ".join(str(h) for h in homes)
+            print(
+                f"Error: no session matching '{session}' in any of: {searched}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    selected_match = (
+        account_matches[0]
+        if len(account_matches) == 1
+        else _select_account_match(session, account_matches, agent)
+    )
+    from_home = selected_match.home
+    cand = selected_match.candidate
     label = f" ({cand.title})" if cand.title else ""
     verb = "Copying" if keep else "Moving"
     print(f"{verb} {agent} session {cand.session_id}{label}")

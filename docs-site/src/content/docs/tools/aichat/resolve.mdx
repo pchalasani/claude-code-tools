@@ -124,11 +124,19 @@ and exits `0`:
 
 ## The same lookup in other commands
 
-You rarely need to call `resolve` by hand first. The
-ordinary session commands — `info`, `export`, `copy`,
-`move`, `query`, `clone`, `rollover`, `lineage`,
-`smart-trim`, `trim`, and `resume` — accept the same
-queries directly:
+You rarely need to call `resolve` by hand first. These commands accept the
+same queries directly:
+
+- `aichat <session>` and `menu`
+- `trim`, `smart-trim`, `trim-in-place`, and `resume`
+- `export`, `export-claude`, `export-codex`, `info`, and `copy`
+- `move`, `delete`, `query`, `clone`, `rollover`, and `lineage`
+- `find-original`, `find-derived`, and [`port`](../port/)
+
+`trim-in-place` and the two agent-specific exporters constrain the resolver to
+the agent named by the command. [`move-account`](../move-account/) uses the
+same tiers across several source homes and includes the source home in its
+picker.
 
 ```bash
 # All of these name one session
@@ -137,11 +145,10 @@ aichat info a15f9ced
 aichat lineage 88e9-43d7
 ```
 
-Those commands search **both** agent homes and detect
-the agent themselves, so `--agent` there narrows the
-search rather than selecting a home. It may come
-before or after the session argument, and
-`--agent=codex` works as well as `--agent codex`.
+Except for the constrained variants above, these commands search **both**
+agent homes and detect the agent themselves. Where a command offers
+`--agent`, the option narrows the search. It may come before or after the
+session argument, and `--agent=codex` works as well as `--agent codex`.
 
 Pass a session file path and no home is searched at
 all: the agent comes from the file's own content, and
@@ -150,9 +157,11 @@ A file that sits inside an agent home but does not
 read as a session is rejected, rather than trusted
 because of where it lives.
 
-An ambiguous query fails with the candidate list
-instead of acting on an arbitrary match. `delete` and
-`menu` still use the older id-or-path lookup.
+In an interactive terminal, an ambiguous action query opens a Rich table with
+the candidates newest first. Choose a number to continue with that session, or
+enter `q` to cancel. Ctrl-C and end-of-input also cancel before the command
+changes anything. Non-interactive and JSON callers still fail deterministically
+with the candidate list instead of guessing or prompting.
 
 ### Home overrides
 
@@ -191,13 +200,8 @@ seconds.
 None of this changes which session you get — it only
 changes how much work is done to be sure of it.
 
-[`port`](../port/) takes the same query forms but
-resolves them on its own path: no `--agent` (use
-`--claude-home` / `--codex-home`), and a query that
-matches in **both** agents is ambiguous there even
-when one side matched on a stronger tier — the
-precedence table above is applied per agent, not
-across the two.
+[`port`](../port/) uses the same resolver and picker. It has no `--agent`, so
+use `--claude-home` and `--codex-home` to choose the searched homes.
 
 ## Exit codes
 

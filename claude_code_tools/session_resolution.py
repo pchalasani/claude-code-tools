@@ -56,6 +56,38 @@ class SessionQueryError(Exception):
     """A user-facing failure while resolving a session query."""
 
 
+class SessionQueryAmbiguity(SessionQueryError):
+    """A session query with several eligible matches.
+
+    Attributes:
+        query: Original user-supplied query.
+        records: Newest-first candidates available for selection.
+        match_count: Total matches, including candidates omitted by the cap.
+        display_limit: Maximum candidates carried for interactive display.
+    """
+
+    def __init__(
+        self,
+        query: str,
+        records: "tuple[SessionRecord, ...]",
+        match_count: int,
+        message: str,
+    ) -> None:
+        """Initialize a structured ambiguity.
+
+        Args:
+            query: Original user-supplied query.
+            records: Newest-first selectable candidates.
+            match_count: Total matches before display capping.
+            message: Human-readable ambiguity listing.
+        """
+        super().__init__(message)
+        self.query = query
+        self.records = records
+        self.match_count = match_count
+        self.display_limit = _MAX_AMBIGUITY_LINES
+
+
 @dataclass(frozen=True)
 class ResolvedSessionQuery:
     """A resolved session file and metadata needed by CLI actions.
@@ -188,15 +220,12 @@ def ambiguity_candidates(
     records = [record for result in results for record in result.records]
     records.sort(key=lambda record: record._modified_timestamp, reverse=True)
     total = sum(
-        1 if result.kind == "single" else result.match_count
-        for result in results
+        1 if result.kind == "single" else result.match_count for result in results
     )
     return tuple(records[:_MAX_AMBIGUITY_LINES]), total
 
 
-def build_ambiguity_message(
-    session: str, results: "list[ResolveResult]"
-) -> str:
+def build_ambiguity_message(session: str, results: "list[ResolveResult]") -> str:
     """Build the shared multi-candidate ambiguity message.
 
     Args:
@@ -231,9 +260,7 @@ def build_ambiguity_message(
     )
 
 
-def _metadata_for_path(
-    agent: str, session_file: Path
-) -> tuple[str | None, str | None]:
+def _metadata_for_path(agent: str, session_file: Path) -> tuple[str | None, str | None]:
     """Read the cwd and branch metadata for a selected session file."""
     if agent == "claude":
         return (
@@ -251,14 +278,33 @@ def _metadata_for_path(
     )
 
 
+def resolved_session_from_record(
+    record: "SessionRecord",
+) -> ResolvedSessionQuery:
+    """Build action metadata for a user-selected resolver record.
+
+    Args:
+        record: Candidate selected from a structured ambiguity.
+
+    Returns:
+        The resolved session metadata used by direct ``aichat`` actions.
+    """
+    session_file = Path(record.session_file).absolute()
+    directory, branch = _metadata_for_path(record.agent, session_file)
+    return ResolvedSessionQuery(
+        agent=record.agent,
+        session_file=session_file,
+        directory=record.directory or directory,
+        git_branch=branch,
+    )
+
+
 def _session_id_from_content(agent: str, session_file: Path) -> str | None:
     """Extract a session identity from authoritative transcript content."""
     import json
 
     try:
-        with session_file.open(
-            "r", encoding="utf-8", errors="replace"
-        ) as transcript:
+        with session_file.open("r", encoding="utf-8", errors="replace") as transcript:
             for line in transcript:
                 try:
                     record = json.loads(line)
@@ -271,16 +317,11 @@ def _session_id_from_content(agent: str, session_file: Path) -> str | None:
                 elif record.get("type") == "session_meta":
                     payload = record.get("payload")
                     session_id = (
-                        payload.get("id")
-                        if isinstance(payload, dict)
-                        else None
+                        payload.get("id") if isinstance(payload, dict) else None
                     )
-                elif (
-                    "timestamp" in record
-                    and (
-                        isinstance(record.get("git"), dict)
-                        or isinstance(record.get("instructions"), str)
-                    )
+                elif "timestamp" in record and (
+                    isinstance(record.get("git"), dict)
+                    or isinstance(record.get("instructions"), str)
                 ):
                     session_id = record.get("id")
                 else:
@@ -325,13 +366,11 @@ def _validated_fast_candidates(
             discovered_path = candidate_path.absolute()
             validation_path = candidate_path.resolve()
             if candidate_agent == "claude":
-                if is_malformed_session(
+                if is_malformed_session(validation_path) or is_sidechain_session(
                     validation_path
-                ) or is_sidechain_session(validation_path):
+                ):
                     continue
-                directory, branch = _metadata_for_path(
-                    candidate_agent, validation_path
-                )
+                directory, branch = _metadata_for_path(candidate_agent, validation_path)
                 if not directory:
                     continue
             else:
@@ -350,13 +389,8 @@ def _validated_fast_candidates(
                     if isinstance(branch_value, str) and branch_value
                     else None
                 )
-            content_id = _session_id_from_content(
-                candidate_agent, validation_path
-            )
-            if (
-                content_id is None
-                or lowered_query not in content_id.casefold()
-            ):
+            content_id = _session_id_from_content(candidate_agent, validation_path)
+            if content_id is None or lowered_query not in content_id.casefold():
                 continue
         except (
             OSError,
@@ -425,9 +459,7 @@ def _codex_has_exact_name(query: str, home: str | None) -> bool | None:
     if database is None:
         return False
     try:
-        connection = sqlite3.connect(
-            f"file:{database}?mode=ro", uri=True
-        )
+        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
         try:
             rows = connection.execute(
                 "SELECT id, title FROM threads WHERE title IS NOT NULL"
@@ -452,9 +484,7 @@ def _has_exact_name(
     codex_home: str | None,
 ) -> bool | None:
     """Check the higher-priority exact-name tier without full resolution."""
-    if agent in (None, "claude") and _claude_has_exact_name(
-        query, claude_home
-    ):
+    if agent in (None, "claude") and _claude_has_exact_name(query, claude_home):
         return True
     if agent in (None, "codex"):
         return _codex_has_exact_name(query, codex_home)
@@ -488,9 +518,7 @@ def _codex_has_outranking_id(
     candidate_id = candidate.session_id.casefold()
     lowered = query.casefold()
     try:
-        connection = sqlite3.connect(
-            f"file:{database}?mode=ro", uri=True
-        )
+        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
         try:
             rows = connection.execute("SELECT id FROM threads")
             for (session_id,) in rows:
@@ -499,10 +527,7 @@ def _codex_has_outranking_id(
                 normalized_id = session_id.casefold()
                 if not normalized_id.startswith(lowered):
                     continue
-                if (
-                    candidate.resolved.agent != "codex"
-                    or normalized_id != candidate_id
-                ):
+                if candidate.resolved.agent != "codex" or normalized_id != candidate_id:
                     return True
             return False
         finally:
@@ -519,9 +544,7 @@ def _has_fast_path_conflict(
     codex_home: str | None,
 ) -> bool | None:
     """Check cheap higher-priority name and database ID tiers."""
-    exact_name = _has_exact_name(
-        query, agent, claude_home, codex_home
-    )
+    exact_name = _has_exact_name(query, agent, claude_home, codex_home)
     if exact_name is not False:
         return exact_name
     if agent in (None, "codex"):
@@ -563,23 +586,36 @@ def _restore_discovered_path(
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
-        candidates = [
-            ResolvedSessionQuery(agent, path, None, None)
+        all_candidates = [
+            _record_for_resolved_candidate(
+                ResolvedSessionQuery(agent, path, None, None),
+                matched_by="filename",
+                claude_home=claude_home,
+                codex_home=codex_home,
+            )
             for path in matches
         ]
-        raise SessionQueryError(
-            _fast_candidate_ambiguity(session, candidates)
+        all_candidates.sort(
+            key=lambda record: record._modified_timestamp,
+            reverse=True,
+        )
+        candidates = tuple(all_candidates[:_MAX_AMBIGUITY_LINES])
+        raise SessionQueryAmbiguity(
+            session,
+            candidates,
+            len(all_candidates),
+            _fast_candidate_ambiguity(session, all_candidates),
         )
     return canonical_path
 
 
 def _fast_candidate_ambiguity(
-    session: str, candidates: list[ResolvedSessionQuery]
+    session: str, candidates: list["SessionRecord"]
 ) -> str:
     """Build a fallback ambiguity message for resolver-invisible files."""
     lines = [
-        f"  [{candidate.agent}] {candidate.session_file}"
-        for candidate in candidates[:_MAX_AMBIGUITY_LINES]
+        f"  [{record.agent}] {record.session_file}"
+        for record in candidates[:_MAX_AMBIGUITY_LINES]
     ]
     remaining = len(candidates) - len(lines)
     if remaining:
@@ -590,6 +626,49 @@ def _fast_candidate_ambiguity(
         f"{listing}\n"
         "Use a longer unique id, the exact session name, or the "
         "full file path."
+    )
+
+
+def _record_for_resolved_candidate(
+    candidate: ResolvedSessionQuery,
+    *,
+    matched_by: str,
+    claude_home: str | None,
+    codex_home: str | None,
+) -> "SessionRecord":
+    """Convert a validated filename candidate into selector metadata.
+
+    Args:
+        candidate: Validated session candidate.
+        matched_by: Resolver match classification for display.
+        claude_home: Optional Claude home override.
+        codex_home: Optional Codex home override.
+
+    Returns:
+        A session record suitable for structured ambiguity selection.
+    """
+    from datetime import datetime
+
+    from claude_code_tools.resolve_session import Agent, MatchKind, SessionRecord
+
+    path = candidate.session_file
+    timestamp = path.stat().st_mtime
+    home = (
+        get_claude_home(claude_home)
+        if candidate.agent == "claude"
+        else get_codex_home(codex_home)
+    )
+    return SessionRecord(
+        agent=cast(Agent, candidate.agent),
+        session_id=get_session_uuid(path.stem),
+        name=None,
+        directory=candidate.directory,
+        home=str(home),
+        session_file=str(path),
+        matched_by=cast("MatchKind", matched_by),
+        modified=datetime.fromtimestamp(timestamp).astimezone().isoformat(),
+        archived="archived_sessions" in path.parts,
+        _modified_timestamp=timestamp,
     )
 
 
@@ -617,11 +696,7 @@ def _retain_winning_tier(
     if not results:
         return results
     winning_tier = min(_result_tier(result, query) for result in results)
-    return [
-        result
-        for result in results
-        if _result_tier(result, query) == winning_tier
-    ]
+    return [result for result in results if _result_tier(result, query) == winning_tier]
 
 
 def _validate_resolver_content_ids(
@@ -644,12 +719,11 @@ def _validate_resolver_content_ids(
         )
         content_id = _session_id_from_content(record.agent, path)
         filename_id = get_session_uuid(discovered_path.stem)
-        if (
-            content_id is not None
-            and content_id.casefold() != filename_id.casefold()
-        ):
+        if content_id is not None and content_id.casefold() != filename_id.casefold():
             continue
-        valid_records.append(record)
+        valid_records.append(
+            replace(record, session_file=str(discovered_path))
+        )
 
     removed_count = len(result.records) - len(valid_records)
     remaining_count = (
@@ -720,9 +794,7 @@ def resolve_session_query(
         input_path = None
         is_direct_file = False
     if is_direct_file and input_path is not None:
-        detected = _detect_direct_path_agent(
-            input_path, claude_home, codex_home
-        )
+        detected = _detect_direct_path_agent(input_path, claude_home, codex_home)
         if detected == "codex":
             from claude_code_tools.resolve_session import (
                 _is_legacy_codex_rollout,
@@ -743,16 +815,12 @@ def resolve_session_query(
             )
         supplied_path = input_path.absolute()
         directory, branch = _metadata_for_path(detected, supplied_path)
-        return ResolvedSessionQuery(
-            detected, supplied_path, directory, branch
-        )
+        return ResolvedSessionQuery(detected, supplied_path, directory, branch)
 
     fast_candidates: list[_ValidatedFastCandidate] = []
     fast_candidates_overflowed = False
     if _ID_FRAGMENT_RE.fullmatch(session):
-        bounded = _validated_fast_candidates(
-            session, agent, claude_home, codex_home
-        )
+        bounded = _validated_fast_candidates(session, agent, claude_home, codex_home)
         fast_candidates_overflowed = bounded is None
         if bounded is not None:
             fast_candidates = bounded
@@ -787,9 +855,7 @@ def resolve_session_query(
         else (("claude", claude_home), ("codex", codex_home))
     )
     for agent_name, home in homes:
-        result = _resolve_query_for_agent(
-            session, agent_name, home, resolver_errors
-        )
+        result = _resolve_query_for_agent(session, agent_name, home, resolver_errors)
         if result is not None and result.kind != "not_found":
             validated_result = _validate_resolver_content_ids(
                 result,
@@ -812,13 +878,33 @@ def resolve_session_query(
             record.agent, discovered_path, record.directory, branch
         )
     if results:
-        raise SessionQueryError(build_ambiguity_message(session, results))
+        records, match_count = ambiguity_candidates(results)
+        raise SessionQueryAmbiguity(
+            session,
+            records,
+            match_count,
+            build_ambiguity_message(session, results),
+        )
     if len(fast_candidates) > 1:
-        raise SessionQueryError(
-            _fast_candidate_ambiguity(
-                session,
-                [candidate.resolved for candidate in fast_candidates],
+        all_records = [
+            _record_for_resolved_candidate(
+                candidate.resolved,
+                matched_by="id-substring",
+                claude_home=claude_home,
+                codex_home=codex_home,
             )
+            for candidate in fast_candidates
+        ]
+        all_records.sort(
+            key=lambda record: record._modified_timestamp,
+            reverse=True,
+        )
+        records = tuple(all_records[:_MAX_AMBIGUITY_LINES])
+        raise SessionQueryAmbiguity(
+            session,
+            records,
+            len(all_records),
+            _fast_candidate_ambiguity(session, all_records),
         )
     if resolver_errors:
         raise SessionQueryError(str(resolver_errors[0]))
