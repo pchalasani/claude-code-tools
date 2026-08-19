@@ -84,7 +84,10 @@ class TestCreatePane:
     def test_empty_output_returns_none(self, mock_window, mock_run):
         """When split-window returns empty output, return None."""
         mock_window.return_value = "@1"
-        mock_run.return_value = ("", 0)  # Empty output with code 0
+        mock_run.side_effect = [
+            ("", 0),  # list-panes
+            ("", 0),  # split-window
+        ]
 
         controller = TmuxCLIController()
         result = controller.create_pane()
@@ -96,7 +99,10 @@ class TestCreatePane:
     def test_invalid_pane_id_returns_none(self, mock_window, mock_run):
         """When split-window returns invalid pane ID, return None."""
         mock_window.return_value = "@1"
-        mock_run.return_value = ("invalid", 0)  # Invalid pane ID format
+        mock_run.side_effect = [
+            ("", 0),  # list-panes
+            ("invalid", 0),  # split-window
+        ]
 
         controller = TmuxCLIController()
         result = controller.create_pane()
@@ -108,20 +114,32 @@ class TestCreatePane:
     def test_valid_pane_id_returned(self, mock_window, mock_run):
         """When split-window returns valid pane ID, return it."""
         mock_window.return_value = "@1"
-        mock_run.return_value = ("%123", 0)
+        mock_run.side_effect = [
+            ("", 0),  # list-panes
+            ("%123", 0),  # split-window
+            ("%123", 0),  # display-message verification
+        ]
 
         controller = TmuxCLIController()
         result = controller.create_pane()
 
         assert result == "%123"
         assert controller.target_pane == "%123"
+        assert mock_run.call_args_list[0].args[0][0] == "list-panes"
+        assert mock_run.call_args_list[1].args[0][0] == "split-window"
+        assert mock_run.call_args_list[2].args[0] == [
+            "display-message", "-t", "%123", "-p", "#{pane_id}"
+        ]
 
     @patch.object(TmuxCLIController, '_run_tmux_command')
     @patch.object(TmuxCLIController, 'get_current_window_id')
     def test_error_code_returns_none(self, mock_window, mock_run):
         """When split-window fails, return None."""
         mock_window.return_value = "@1"
-        mock_run.return_value = ("%123", 1)  # Error code
+        mock_run.side_effect = [
+            ("", 0),  # list-panes
+            ("%123", 1),  # split-window
+        ]
 
         controller = TmuxCLIController()
         result = controller.create_pane()
