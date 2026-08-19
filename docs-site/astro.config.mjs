@@ -106,6 +106,7 @@ export default defineConfig({
             { label: "env-safe", slug: "tools/env-safe" },
             { label: "sasy-guard", slug: "tools/sasy-guard" },
             { label: "agent-tunnel", slug: "tools/agent-tunnel" },
+            { label: "msg", slug: "tools/msg" },
             {
               label: "github-watch: wake on GitHub comment",
               slug: "tools/github-wake",

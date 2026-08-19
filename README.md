@@ -145,6 +145,11 @@ docs. Click a card below to jump to a feature, or
      alt="Codex Dynamic Workflows" width="416"/>
 </a>
 </td>
+<td align="center">
+<a href="https://pchalasani.github.io/claude-code-tools/tools/msg/">
+<img src="assets/card-msg.svg" alt="msg: inter-agent comms" width="200"/>
+</a>
+</td>
 </tr>
 </table>
 

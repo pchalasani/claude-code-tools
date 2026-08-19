@@ -1,0 +1,149 @@
+---
+title: "msg — Inter-Agent Messaging"
+---
+
+`msg` lets coding agent sessions talk to each other. A Claude Code session in
+one tmux pane can send a message to a Codex session in another, and get a
+reply — so you can hand work between agents instead of relaying it yourself.
+
+:::note[Installation]
+The `msg` and `msg-hook` commands are part of the `claude-code-tools` Python
+package. See [Quick Start](../../getting-started/) for installation.
+
+Claude Code watcher notifications and hook notices in either client require
+the companion `msg` plugin. Codex can receive the watcher's idle-prompt
+instruction with the CLI alone, but needs the plugin for notifications while
+it is busy or has text in its prompt. See
+[Plugin Installation](../../getting-started/plugins/) for marketplace setup,
+then install `msg@cctools-plugins` in Claude Code or
+`msg@cctools-codex-plugins` in Codex. Start a new agent session after
+installing it.
+:::
+
+## Quick start
+
+From each agent session you want reachable, register a name:
+
+```bash
+msg register my-claude
+```
+
+The tmux pane and agent type are auto-detected. From another registered
+session, send a message:
+
+```bash
+msg send my-claude "take a look at the auth module"
+```
+
+The watcher notifies the receiving agent without inserting the message body.
+The receiving agent runs `msg inbox` to read and mark the message as read, then
+can answer with `msg reply my-codex "your reply"`.
+
+## How addressing works
+
+A name is not a machine address. `msg register` binds a name to the tmux pane
+you ran it in, and messages route to whatever pane that registration currently
+points at.
+
+Name lookup is scoped to the **exact tmux socket and tmux session**. Agents in
+different tmux servers or sessions do not see each other, even when they use
+the same database.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `msg register NAME` | Register this session under a name. |
+| `msg unregister [NAME]` | Retire a registration; message history is kept. |
+| `msg retarget --session-id ID --pane PANE` | Move a registration to another pane. |
+| `msg list` | List registered agents. |
+| `msg send TO BODY` | Send to one agent, or several via `a,b,c`. |
+| `msg reply TO BODY` | Send a message; this is an alias for `msg send`. |
+| `msg inbox` | Show unread messages and mark them read. |
+| `msg thread create TITLE --with a,b` | Start a named thread. |
+| `msg threads` | List active threads. |
+| `msg status` | Watcher health and registered agents. |
+| `msg watch` | Run the watcher daemon in the foreground. |
+
+`msg register` takes `--pane` and `--agent` (`claude` or `codex`) when you want
+to register a pane other than your own, or override detection.
+
+`msg inbox` takes `--thread ID` to filter to one thread; the ID may be a prefix.
+
+## Registration lifecycle
+
+Registrations are explicit, and retiring one never deletes history.
+
+- `msg unregister` with no argument retires the registration for the current
+  pane. With a NAME it retires that agent in the current tmux session. With
+  `--session-id` it retires one exact registration — use that when a name has
+  been registered more than once.
+
+- Unregistering **fails if the agent still has unread deliveries**, so a
+  message cannot be silently stranded. Read the inbox first, then retire.
+
+- `msg retarget` moves an active registration to another pane on the same tmux
+  server and in the same tmux session. It preserves the name, thread
+  membership, and history. Retarget a registration when its pane has moved;
+  registering the same active name in a different pane fails.
+
+Names are reusable after retirement, and historical messages keep the sender
+name they were sent under rather than being rewritten.
+
+## Notifications and inbox reads
+
+A background watcher polls SQLite for pending deliveries. Any `msg` command
+except `msg watch` tries to start one watcher for the selected database.
+
+When the receiving agent is idle and its prompt is empty, the watcher submits
+an inbox instruction in that agent's pane. If the agent is busy, the prompt
+contains text, or the prompt state cannot be determined, the watcher leaves
+the delivery pending instead of typing over the session.
+
+For Claude Code, the companion plugin supplies the inbox slash command. In
+both clients, its Stop and UserPromptSubmit hooks can add a short notice such
+as "Run msg inbox when ready" to the receiving agent's context. These notices
+contain the sender name and unread count, not the message body.
+
+`msg inbox` reads unread message bodies directly from SQLite and marks only the
+messages it displayed as read. It still works when the watcher is not running,
+so manual inbox checks are the fallback if automatic notification is not set
+up or cannot safely reach the prompt.
+
+```bash
+msg status   # is the watcher alive, and who is registered?
+msg watch    # run it in the foreground instead (debugging)
+```
+
+## Which database
+
+Registrations and messages live in SQLite. The database is chosen in this
+order:
+
+1. `--db PATH` — an explicit path.
+2. `--local` — `<git repo root>/.msg/msg.db`, scoped to one project. Falls
+   back to `$PWD/.msg/msg.db` outside a repo.
+3. Default — `~/.msg/msg.db`, shared across every project. Override the
+   directory with the `MSG_DB_DIR` environment variable.
+
+The global database allows agents in different repositories to communicate
+when they are in the same tmux server and tmux session. Use `--local` when a
+project should have its own isolated roster, and put the flag before the
+subcommand:
+
+```bash
+msg --local register my-claude
+msg --local send my-codex "project-local message"
+```
+
+Agents only see each other inside the same database.
+
+## Using it from an agent
+
+The bundled `msg` skill teaches an agent these commands, so you can say
+"ask my-codex to review this" and it will use the CLI itself.
+
+Keep messages short. The message body enters the receiving agent's context
+when the agent runs `msg inbox`. Automatic notifications do not contain the
+body; hook notices contain only a count, sender names, and an instruction to
+check the inbox.

@@ -13,6 +13,7 @@ Delivery logic for headed agents:
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import logging
 import os
 import signal
@@ -26,8 +27,13 @@ logger = logging.getLogger("msg.watcher")
 
 POLL_INTERVAL = 2.0  # seconds between DB checks
 IDLE_CHECK_TIMEOUT = 3.0  # quick idle check (not blocking)
+IDLE_CLEANUP_TIMEOUT = 5
 IDLE_TIME = 2.0  # seconds of no output = idle
 HEARTBEAT_INTERVAL = 10.0  # seconds between heartbeats
+SEND_TIMEOUT = 30
+SEND_CLEANUP_TIMEOUT = 5
+SEND_MAX_SECS = SEND_TIMEOUT + SEND_CLEANUP_TIMEOUT
+SEND_LEASE_SECS = SEND_MAX_SECS + 5
 
 
 class Watcher:
@@ -41,7 +47,6 @@ class Watcher:
         self.watcher_id = _new_uuid()
         self.pid = os.getpid()
         self._running = True
-        self._active_recipients: set[str] = set()
 
     async def run(self) -> None:
         """Main watcher loop."""
@@ -112,9 +117,6 @@ class Watcher:
             for recipient_id, deliveries in (
                 by_recipient.items()
             ):
-                if recipient_id in self._active_recipients:
-                    continue
-                self._active_recipients.add(recipient_id)
                 tasks.append(
                     self._deliver_to_recipient(
                         recipient_id, deliveries,
@@ -136,21 +138,20 @@ class Watcher:
     ) -> None:
         """Deliver notifications to a single recipient."""
         try:
+            deliveries = self._current_deliveries(deliveries)
             if not deliveries:
                 return
 
             recipient_name = deliveries[0]["recipient_name"]
             pane_id = deliveries[0]["recipient_pane_id"]
-            display_addr = (
-                deliveries[0]["recipient_display_addr"]
-            )
+            tmux_socket = deliveries[0].get("recipient_tmux_socket")
             agent_kind = deliveries[0].get(
                 "recipient_agent_kind", "claude",
             )
-            target = display_addr or pane_id
+            target = pane_id
 
             # Step 1: Quick idle check (non-blocking)
-            is_idle = await self._check_idle(target)
+            is_idle = await self._check_idle(target, tmux_socket)
 
             if not is_idle:
                 # Agent is busy — release claims.
@@ -164,7 +165,7 @@ class Watcher:
 
             # Step 2: Check prompt state
             prompt_state = detect_prompt_state(
-                target, agent_kind,
+                target, agent_kind, tmux_socket,
             )
 
             if prompt_state == PromptState.HAS_TEXT:
@@ -197,10 +198,19 @@ class Watcher:
                 recipient_name, target, notification,
             )
 
-            await self._tmux_send(target, notification)
+            deliveries = self._current_deliveries(deliveries)
+            if not deliveries:
+                return
+            delivery_ids = [delivery["id"] for delivery in deliveries]
+            if not self.store.renew_deliveries(
+                delivery_ids, self.watcher_id, SEND_LEASE_SECS,
+            ):
+                self._release_deliveries(deliveries)
+                return
+            await self._tmux_send(target, notification, tmux_socket)
 
             for d in deliveries:
-                self.store.mark_notified(d["id"])
+                self.store.mark_notified(d["id"], self.watcher_id)
 
             logger.info(
                 "Notified %s successfully.",
@@ -214,34 +224,41 @@ class Watcher:
             )
             for d in deliveries:
                 self.store.mark_delivery_failed(
-                    d["id"], error=str(e),
+                    d["id"], self.watcher_id, error=str(e),
                 )
-        finally:
-            self._active_recipients.discard(recipient_id)
+    def _current_deliveries(self, deliveries: list[dict]) -> list[dict]:
+        current = []
+        for delivery in deliveries:
+            if self.store.claim_is_current(delivery["id"], self.watcher_id):
+                current.append(delivery)
+            else:
+                self.store.release_delivery(delivery["id"], self.watcher_id)
+        return current
 
     def _release_deliveries(
         self, deliveries: list[dict],
     ) -> None:
         """Release claimed deliveries back to pending."""
         for d in deliveries:
-            self.store.mark_delivery_failed(
-                d["id"],
-                error="Released by watcher (not ready)",
-            )
+            self.store.release_delivery(d["id"], self.watcher_id)
 
     def _build_notification(
         self, agent_kind: str,
     ) -> str:
-        """Build notification slash command."""
+        """Build the client-specific inbox prompt."""
         if agent_kind == "codex":
-            return "/prompts:inbox"
+            return "You have a new inter-agent message. Run msg inbox now."
         return "/msg:inbox"
 
     async def _check_idle(
-        self, pane_target: str,
+        self, pane_target: str, tmux_socket: str | None,
     ) -> bool:
         """Quick non-blocking idle check."""
+        if not tmux_socket:
+            return False
         try:
+            env = os.environ.copy()
+            env["TMUX"] = f"{tmux_socket},0,0"
             proc = await asyncio.create_subprocess_exec(
                 "tmux-cli", "wait_idle",
                 f"--pane={pane_target}",
@@ -249,36 +266,66 @@ class Watcher:
                 f"--timeout={IDLE_CHECK_TIMEOUT}",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=env,
             )
-            _, _ = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=IDLE_CHECK_TIMEOUT + 5,
-            )
+            try:
+                await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=IDLE_CHECK_TIMEOUT + IDLE_CLEANUP_TIMEOUT,
+                )
+            except BaseException as exc:
+                if proc.returncode is not None:
+                    raise
+                proc.kill()
+                try:
+                    await asyncio.wait_for(
+                        proc.communicate(), timeout=IDLE_CLEANUP_TIMEOUT,
+                    )
+                except TimeoutError:
+                    logger.error("Timed out reaping tmux-cli idle process")
+                if not isinstance(exc, Exception):
+                    raise
+                return False
             return proc.returncode == 0
-        except (asyncio.TimeoutError, Exception):
+        except Exception:
             return False
 
     async def _tmux_send(
         self,
         pane_target: str,
         text: str,
+        tmux_socket: str | None,
     ) -> None:
-        """Type text into a tmux pane via tmux-cli."""
-        proc = await asyncio.create_subprocess_exec(
-            "tmux-cli", "send", text,
-            f"--pane={pane_target}",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await asyncio.wait_for(
-            proc.communicate(),
-            timeout=30,
-        )
+        """Type text into a pane through tmux-cli on its registered server."""
+        if not tmux_socket:
+            raise RuntimeError("recipient tmux socket is missing")
+        env = os.environ.copy()
+        env["TMUX"] = f"{tmux_socket},0,0"
+        proc = None
+        try:
+            async with asyncio.timeout(SEND_TIMEOUT):
+                proc = await asyncio.create_subprocess_exec(
+                    "tmux-cli", "send", text,
+                    f"--pane={pane_target}",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env,
+                )
+                _, stderr = await proc.communicate()
+        except BaseException:
+            if proc is not None and proc.returncode is None:
+                proc.kill()
+                try:
+                    await asyncio.wait_for(
+                        proc.communicate(), timeout=SEND_CLEANUP_TIMEOUT,
+                    )
+                except TimeoutError:
+                    logger.error("Timed out reaping tmux-cli send process")
+            raise
         if proc.returncode != 0:
             err = stderr.decode().strip() if stderr else ""
             raise RuntimeError(
-                f"tmux-cli send failed for "
-                f"{pane_target}: {err}"
+                f"tmux-cli send failed for {pane_target}: {err}"
             )
 
 
@@ -290,5 +337,13 @@ def run_watcher(db_path: str = DEFAULT_DB_PATH) -> None:
         "%(message)s",
         datefmt="%H:%M:%S",
     )
-    watcher = Watcher(db_path=db_path)
-    asyncio.run(watcher.run())
+    lock = open(f"{db_path}.watcher.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock.close()
+        logger.info("Watcher already running for %s", db_path)
+        return
+    with lock:
+        watcher = Watcher(db_path=db_path)
+        asyncio.run(watcher.run())
