@@ -490,6 +490,42 @@ def git_subcommand(command: str) -> str | None:
     return tokens[i] if i < len(tokens) else None
 
 
+# Setting this environment variable allows commits in every session, without
+# depending on a session-scoped flag file. Flag files live in /tmp, which macOS
+# reaps after a few days, so a long-lived session used to start prompting again
+# partway through its life.
+ALLOW_ENV_VAR = "CCTOOLS_ALLOW_GIT"
+_TRUTHY = {"1", "true", "yes", "on"}
+
+FLAG_DIR = "/tmp/claude"
+ALLOW_FLAG = "allow-git-commit"
+DENY_FLAG = "deny-git-commit"
+
+
+def _flag_path(name: str, session_id: str) -> str:
+    return os.path.join(FLAG_DIR, f"{name}.{session_id}")
+
+
+def env_allows_commit() -> bool:
+    """Return whether the environment opts every session into commits."""
+    return os.environ.get(ALLOW_ENV_VAR, "").strip().lower() in _TRUTHY
+
+
+def commit_allowed(session_id: str = "") -> bool:
+    """Return whether a commit may proceed without asking the user.
+
+    A session-scoped deny flag (written by ``>allow-git off``) wins over the
+    environment variable, so a single session can still opt back into prompts.
+    """
+    if session_id and os.path.exists(_flag_path(DENY_FLAG, session_id)):
+        return False
+    if env_allows_commit():
+        return True
+    return bool(session_id) and os.path.exists(
+        _flag_path(ALLOW_FLAG, session_id)
+    )
+
+
 def check_git_commit_command(
     command: str,
     session_id: str = "",
@@ -507,10 +543,7 @@ def check_git_commit_command(
     # Check each subcommand in compound commands
     for subcmd in _split_shell_commands(command):
         if git_subcommand(subcmd) in COMMIT_SUBCOMMANDS:
-            # Check if commits are allowed via session-scoped flag
-            if session_id and os.path.exists(
-                f'/tmp/claude/allow-git-commit.{session_id}'
-            ):
+            if commit_allowed(session_id):
                 return "allow", None
             reason = "Git commit requires your approval."
             return "ask", reason

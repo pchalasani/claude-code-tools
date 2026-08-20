@@ -2,7 +2,6 @@
 import os
 import re
 import shlex
-import subprocess
 import sys
 from pathlib import Path
 
@@ -76,10 +75,6 @@ _ENV_VALUE_OPTS: set[str] = {'-u', '--unset', '-C', '--chdir', '-P'}
 _ENV_SHORT_VALUE_OPTS = frozenset('uCPS')
 _UNRESOLVABLE_CHDIR_CHARS = frozenset('$`*?[')
 _REPOSITORY_ROUTING_VARS = {'GIT_DIR', 'GIT_WORK_TREE'}
-_UNVERIFIED_STAGING_REASON = (
-    'Could not safely resolve the target repository or inspect its status. '
-    'Approval is required before staging files.'
-)
 _ADD_ALL_LONG_OPTIONS = {'--a', '--al', '--all'}
 
 
@@ -501,16 +496,7 @@ def _commit_avoids_editor(
     return bool(message_sources or fixup_value)
 
 
-def _is_allowed(flag_name: str, session_id: str = "") -> bool:
-    """Check if a session-scoped allow flag is set."""
-    if not session_id:
-        return False
-    return os.path.exists(
-        f'/tmp/claude/allow-git-{flag_name}.{session_id}'
-    )
-
-
-def check_git_add_command(command, session_id: str = ""):
+def check_git_add_command(command):
     """
     Check if a git add command contains dangerous patterns.
     Handles compound commands (e.g., "cd /path && git add .").
@@ -522,7 +508,7 @@ def check_git_add_command(command, session_id: str = ""):
     first_ask_result = None
 
     for subcmd in _split_compound_command(command):
-        result = _check_single_git_add_command(subcmd, session_id)
+        result = _check_single_git_add_command(subcmd)
         decision, reason = result
 
         # Hard blocks return immediately
@@ -540,7 +526,7 @@ def check_git_add_command(command, session_id: str = ""):
     return False, None
 
 
-def _check_single_git_add_command(command, session_id: str = ""):
+def _check_single_git_add_command(command):
     """
     Check a single (non-compound) command for dangerous git add patterns.
     Returns tuple: (decision, reason) where decision is bool or "ask"/"block"/"allow"
@@ -548,9 +534,8 @@ def _check_single_git_add_command(command, session_id: str = ""):
     # Normalize recognized add commands after stripping supported Git prefixes.
     normalized_cmd = ' '.join(command.strip().split())
     resolved_add = _resolve_git_add_argv(command)
-    repo_cwd: str | None = os.getcwd()
     if resolved_add is not None:
-        add_argv, repo_cwd = resolved_add
+        add_argv, _ = resolved_add
         normalized_cmd = shlex.join(add_argv)
 
     # Always allow --dry-run (used internally to detect what would be staged)
@@ -597,96 +582,17 @@ DO NOT use:
 
 Instead, use:
 - 'git add <specific-files>' to stage specific files
-- 'git add <specific-directory>/' to stage a specific directory (with confirmation)
+- 'git add <specific-directory>/' to stage a specific directory
 - 'git add -u' to stage all modified/deleted files (but not untracked)
 
 This restriction prevents accidentally staging unwanted files."""
         return True, reason
 
-    if resolved_add is not None and repo_cwd is None:
-        return 'ask', _UNVERIFIED_STAGING_REASON
-
     if any(
         argument.startswith('--pathspec-')
         for argument in add_arguments
     ):
-        if _is_allowed('staging', session_id):
-            return False, None
         return 'ask', 'Staging paths supplied through a pathspec file.'
-
-    # Check for git add with a directory
-    # Match: git add <dirname>/ or git add <path/to/dir>/
-    directory_pattern = re.compile(r'^git\s+add\s+(?!-)[^\s]+/$')
-    match = directory_pattern.search(normalized_cmd)
-
-    if match:
-        # Extract the directory path from the command
-        parts = normalized_cmd.split()
-        dir_path = None
-        for i, part in enumerate(parts):
-            if i > 0 and parts[i-1] == 'add' and part.endswith('/'):
-                dir_path = part.rstrip('/')
-                break
-
-        if dir_path:
-            # Use dry-run to get files that would be staged
-            try:
-                result = subprocess.run(
-                    ['git', 'add', '--dry-run', dir_path + '/'],
-                    capture_output=True, text=True, cwd=repo_cwd
-                )
-                if result.returncode != 0:
-                    return 'ask', _UNVERIFIED_STAGING_REASON
-                # Parse dry-run output: "add 'filename'" lines
-                files = []
-                for line in result.stdout.strip().split('\n'):
-                    if line.startswith('add '):
-                        # Extract filename from "add 'filename'"
-                        fname = line[4:].strip().strip("'")
-                        files.append(fname)
-
-                if not files:
-                    # No files to stage
-                    return False, None
-
-                # Check which files are modified vs new
-                modified_files = []
-                new_files = []
-                for f in files:
-                    status_result = subprocess.run(
-                        ['git', 'status', '--porcelain', f],
-                        capture_output=True, text=True, cwd=repo_cwd
-                    )
-                    if status_result.returncode != 0:
-                        return 'ask', _UNVERIFIED_STAGING_REASON
-                    status = status_result.stdout.strip()
-                    if status:
-                        status_code = status[:2]
-                        if '?' in status_code:
-                            new_files.append(f)
-                        else:
-                            modified_files.append(f)
-
-                # If only new files, allow without permission
-                if not modified_files:
-                    return False, None
-
-                # Modified files present - ask for permission
-                # Check if staging is allowed via flag file
-                if _is_allowed('staging', session_id):
-                    return False, None
-                file_list = ", ".join(modified_files[:5])
-                if len(modified_files) > 5:
-                    file_list += f" (+{len(modified_files) - 5} more)"
-                reason = (
-                    f"Staging directory {dir_path}/ with modified files: {file_list}"
-                )
-                return "ask", reason
-
-            except Exception:
-                # If dry-run fails, fall back to asking permission
-                reason = f"Staging directory {dir_path}/ (couldn't verify file status)"
-                return "ask", reason
 
     # Also check for git commit -a without a message flag (which would open an
     # editor).
@@ -708,68 +614,7 @@ This restriction prevents accidentally staging unwanted files."""
             )
             return True, reason
 
-    # Check if staging modified files (not new/untracked) - requires permission
-    # This check runs after all blocking patterns pass
-    if normalized_cmd.startswith('git add'):
-        modified_files = get_modified_files_being_staged(
-            normalized_cmd, cwd=repo_cwd)
-        if modified_files is None:
-            return 'ask', _UNVERIFIED_STAGING_REASON
-        if modified_files:
-            # Check if staging is allowed via flag file
-            if _is_allowed('staging', session_id):
-                return False, None
-            file_list = ", ".join(modified_files[:5])
-            if len(modified_files) > 5:
-                file_list += f" (+{len(modified_files) - 5} more)"
-            reason = f"Staging modified files: {file_list}"
-            return "ask", reason
-
     return False, None
-
-
-def get_modified_files_being_staged(command, cwd=None):
-    """
-    Extract files from git add command and return those that are modified
-    (not new/untracked). Returns empty list if only staging new files.
-    """
-    try:
-        parts = shlex.split(command)
-    except ValueError:
-        return None
-    if len(parts) < 3 or parts[0] != 'git' or parts[1] != 'add':
-        return []
-
-    # Extract file arguments (skip 'git add' and any flags)
-    files = []
-    for part in parts[2:]:
-        if not part.startswith('-'):
-            files.append(part)
-
-    if not files:
-        return []
-
-    modified_files = []
-    for f in files:
-        try:
-            # Check git status for this file
-            result = subprocess.run(
-                ['git', 'status', '--porcelain', f],
-                capture_output=True, text=True, cwd=cwd or os.getcwd()
-            )
-            if result.returncode != 0:
-                return None
-            status = result.stdout.strip()
-            if status:
-                # Status codes: ?? = untracked, M = modified, A = staged
-                # We want to flag modified files (not untracked)
-                status_code = status[:2]
-                if '?' not in status_code:  # Not untracked = modified/staged
-                    modified_files.append(f)
-        except Exception:
-            return None
-
-    return modified_files
 
 
 # If run as a standalone script
@@ -787,9 +632,7 @@ if __name__ == "__main__":
 
     # Get the command being executed
     command = data.get("tool_input", {}).get("command", "")
-    session_id = data.get("session_id", "")
-
-    should_block, reason = check_git_add_command(command, session_id=session_id)
+    should_block, reason = check_git_add_command(command)
 
     if should_block:
         print(json.dumps({
