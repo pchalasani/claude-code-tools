@@ -153,9 +153,9 @@ dangerous operations.
 | Hook | What it blocks / modifies |
 |------|--------------------------|
 | `rm` protection | Blocks `rm -rf` on critical paths; requires approval for others |
-| `git add` protection | Blocks `git add -A`; requires approval for modified files |
+| `git add` protection | Blocks bulk staging (`git add -A`, `git add .`, wildcards) |
 | `git checkout` protection | Warns before discarding uncommitted changes |
-| `git commit` protection | Blocks commits without user review |
+| `git commit` protection | Asks before commits; `CCTOOLS_ALLOW_GIT=1` allows them |
 | `.env` protection | Blocks all read/write/edit of `.env` files; suggests `env-safe` CLI |
 | File length limit | Blocks reading files >500 lines to prevent context bloat |
 
