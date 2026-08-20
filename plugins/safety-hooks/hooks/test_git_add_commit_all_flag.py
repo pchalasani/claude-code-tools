@@ -8,11 +8,10 @@ Tests cover:
     - Long options with attached and separate values
     - Options that do and do not supply a commit message
     - The `--` pathspec separator
+    - Bulk `git add` forms staying blocked behind supported command prefixes
 """
 import os
-import subprocess
 import sys
-import tempfile
 import unittest
 
 # Add the hooks directory to path for imports
@@ -220,80 +219,20 @@ class TestBlockedGitAdd(unittest.TestCase):
 
     def test_env_separator_assignments_do_not_hide_add(self) -> None:
         self.assertTrue(_blocks("env -- X=1 git add -A"))
-        decision, _ = check_git_add_command(
-            "env -- GIT_DIR=/other/.git git add tracked.txt"
-        )
-        self.assertEqual(decision, "ask")
+        self.assertTrue(_blocks("env -- GIT_DIR=/other/.git git add -A"))
 
-    def test_env_split_checks_modified_file_in_chdir(self) -> None:
-        with tempfile.TemporaryDirectory() as repo:
-            subprocess.run(
-                ["git", "init"], cwd=repo, check=True,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            path = os.path.join(repo, "tracked.txt")
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write("staged\n")
-            subprocess.run(
-                ["git", "add", "tracked.txt"], cwd=repo, check=True,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write("modified\n")
+    def test_dynamic_chdir_does_not_hide_a_bulk_add(self) -> None:
+        self.assertTrue(_blocks('git -C "$REPO" add -A'))
 
-            decision, _ = check_git_add_command(
-                f"env --chdir={repo} -S 'git add tracked.txt'"
-            )
-            self.assertEqual(decision, "ask")
-
-    def test_attached_env_chdir_checks_target_repository(self) -> None:
-        with tempfile.TemporaryDirectory() as repo:
-            subprocess.run(
-                ["git", "init"], cwd=repo, check=True,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            path = os.path.join(repo, "tracked.txt")
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write("staged\n")
-            subprocess.run(
-                ["git", "add", "tracked.txt"], cwd=repo, check=True,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write("modified\n")
-
-            commands = (
-                f"env -C{repo} git add tracked.txt",
-                f"env -iC {repo} git add tracked.txt",
-            )
-            for command in commands:
-                with self.subTest(command=command):
-                    decision, _ = check_git_add_command(command)
-                    self.assertEqual(decision, "ask")
-
-    def test_dynamic_chdir_requires_approval(self) -> None:
-        decision, _ = check_git_add_command(
-            'git -C "$REPO" add tracked.txt'
-        )
-        self.assertEqual(decision, "ask")
-
-    def test_repository_routing_requires_approval(self) -> None:
+    def test_repository_routing_does_not_hide_a_bulk_add(self) -> None:
         commands = (
-            "GIT_DIR=/other/.git GIT_WORK_TREE=/other git add tracked.txt",
-            "env GIT_DIR=/other/.git git add tracked.txt",
-            "git --git-dir=/other/.git --work-tree=/other add tracked.txt",
+            "GIT_DIR=/other/.git GIT_WORK_TREE=/other git add -A",
+            "env GIT_DIR=/other/.git git add .",
+            "git --git-dir=/other/.git --work-tree=/other add --all",
         )
         for command in commands:
             with self.subTest(command=command):
-                decision, _ = check_git_add_command(command)
-                self.assertEqual(decision, "ask")
-
-    def test_uninspectable_repository_requires_approval(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            decision, _ = check_git_add_command(
-                f"git -C {directory} add tracked.txt"
-            )
-        self.assertEqual(decision, "ask")
+                self.assertTrue(_blocks(command))
 
     def test_pathspec_file_requires_approval(self) -> None:
         for command in (
@@ -304,28 +243,6 @@ class TestBlockedGitAdd(unittest.TestCase):
             with self.subTest(command=command):
                 decision, _ = check_git_add_command(command)
                 self.assertEqual(decision, "ask")
-
-    def test_quoted_modified_filename_requires_approval(self) -> None:
-        with tempfile.TemporaryDirectory() as repo:
-            subprocess.run(
-                ["git", "init"], cwd=repo, check=True,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            path = os.path.join(repo, "tracked file.txt")
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write("staged\n")
-            subprocess.run(
-                ["git", "add", "tracked file.txt"], cwd=repo, check=True,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write("modified\n")
-
-            decision, _ = check_git_add_command(
-                f"git -C {repo} add 'tracked file.txt'"
-            )
-            self.assertEqual(decision, "ask")
-
 
 class TestAllowedCommits(unittest.TestCase):
     """Commands that supply a message must not be blocked."""

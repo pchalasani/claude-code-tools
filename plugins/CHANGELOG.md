@@ -1,5 +1,23 @@
 # Plugin Changelog
 
+## 2026-08-20
+
+### safety-hooks 1.15.0
+
+- feat: `CCTOOLS_ALLOW_GIT=1` allows `git commit` in every session
+  - the session-scoped `/tmp` allow flag no longer has to survive for commits
+    to work, which it did not: macOS reaps `/tmp` after a few days, so a
+    long-lived session started prompting again partway through its life
+  - `>allow-git off` writes a session-scoped deny flag that overrides the
+    environment variable, so one session can opt back into prompts
+  - `>allow-git status` reports which of the three is in effect
+- change: `git add` of explicitly named paths never asks for approval
+  - blanket staging (`git add -A`, `git add .`, `git add *`) stays blocked,
+    including behind `env -C`, `env -S`, and `GIT_DIR=` prefixes
+  - `git add --pathspec-from-file` still asks, since the hook cannot read the
+    path list it would stage
+  - `>allow-git staging` is gone; staging is no longer gated
+
 ## 2026-07-16
 
 ### dynamic-workflow 0.2.1

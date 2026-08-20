@@ -72,8 +72,8 @@ def main():
     ask_reasons = []
 
     for check_func in checks:
-        # Pass session_id to git checks that support it
-        if check_func in (check_git_add_command, check_git_commit_command):
+        # Only the commit check is session-scoped.
+        if check_func is check_git_commit_command:
             result = check_func(command, session_id=session_id)
         else:
             result = check_func(command)

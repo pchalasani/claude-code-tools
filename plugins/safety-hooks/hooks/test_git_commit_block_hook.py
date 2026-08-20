@@ -5,7 +5,7 @@ Unit tests for git_commit_block_hook.py
 Tests cover:
     - `git -C <dir> commit` and other global-option forms reaching the gate
     - Compound commands
-    - The session-scoped allow flag
+    - The session-scoped allow flag, the deny flag, and CCTOOLS_ALLOW_GIT
     - Commands that merely mention "git commit" staying allowed
 """
 import os
@@ -17,7 +17,26 @@ import unittest
 # Add the hooks directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from git_commit_block_hook import check_git_commit_command, git_subcommand
+from git_commit_block_hook import (
+    ALLOW_ENV_VAR,
+    check_git_commit_command,
+    git_subcommand,
+)
+
+_SAVED_ENV: str | None = None
+
+
+def setUpModule() -> None:
+    """Run the gate tests with the ambient allow-everywhere setting cleared."""
+    global _SAVED_ENV
+    _SAVED_ENV = os.environ.pop(ALLOW_ENV_VAR, None)
+
+
+def tearDownModule() -> None:
+    if _SAVED_ENV is None:
+        os.environ.pop(ALLOW_ENV_VAR, None)
+    else:
+        os.environ[ALLOW_ENV_VAR] = _SAVED_ENV
 
 
 class TestGitSubcommand(unittest.TestCase):
@@ -283,6 +302,54 @@ class TestSessionAllowFlag(unittest.TestCase):
         )
 
         self.assertEqual(json.loads(result.stdout), {"decision": "approve"})
+
+
+class TestAllowEnvVar(unittest.TestCase):
+    """CCTOOLS_ALLOW_GIT allows commits without a session-scoped flag file."""
+
+    def setUp(self) -> None:
+        self.session_id = "env-session-" + str(os.getpid())
+        self.deny = f"/tmp/claude/deny-git-commit.{self.session_id}"
+        os.makedirs("/tmp/claude", exist_ok=True)
+        self.addCleanup(
+            lambda: os.path.exists(self.deny) and os.remove(self.deny))
+        self.addCleanup(os.environ.pop, ALLOW_ENV_VAR, None)
+
+    def test_env_var_allows_commit_without_any_flag(self) -> None:
+        os.environ[ALLOW_ENV_VAR] = "1"
+        decision, _ = check_git_commit_command(
+            "git commit -m 'x'", session_id=self.session_id)
+        self.assertEqual(decision, "allow")
+
+    def test_env_var_allows_commit_with_no_session_id(self) -> None:
+        os.environ[ALLOW_ENV_VAR] = "true"
+        decision, _ = check_git_commit_command("git commit -m 'x'")
+        self.assertEqual(decision, "allow")
+
+    def test_falsy_env_var_still_asks(self) -> None:
+        os.environ[ALLOW_ENV_VAR] = "0"
+        decision, _ = check_git_commit_command(
+            "git commit -m 'x'", session_id=self.session_id)
+        self.assertEqual(decision, "ask")
+
+    def test_session_deny_flag_overrides_env_var(self) -> None:
+        os.environ[ALLOW_ENV_VAR] = "1"
+        with open(self.deny, "w", encoding="utf-8") as handle:
+            handle.write(self.session_id)
+        decision, _ = check_git_commit_command(
+            "git commit -m 'x'", session_id=self.session_id)
+        self.assertEqual(decision, "ask")
+
+    def test_deny_flag_overrides_allow_flag(self) -> None:
+        allow = f"/tmp/claude/allow-git-commit.{self.session_id}"
+        for path in (allow, self.deny):
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(self.session_id)
+        self.addCleanup(lambda: os.path.exists(allow) and os.remove(allow))
+
+        decision, _ = check_git_commit_command(
+            "git commit -m 'x'", session_id=self.session_id)
+        self.assertEqual(decision, "ask")
 
 
 if __name__ == "__main__":
