@@ -526,6 +526,73 @@ def check_git_add_command(command):
     return False, None
 
 
+# `git add` options that take their value as the following token.
+_ADD_VALUE_OPTS = {'--chmod', '--pathspec-from-file'}
+
+
+def _add_pathspecs(add_arguments: list[str]) -> list[str]:
+    """Return the pathspec operands of a `git add`, dropping its options."""
+    pathspecs: list[str] = []
+    index = 0
+    while index < len(add_arguments):
+        argument = add_arguments[index]
+        if argument == '--':
+            pathspecs.extend(add_arguments[index + 1:])
+            break
+        if argument in _ADD_VALUE_OPTS:
+            index += 2
+            continue
+        if argument.startswith('-'):
+            index += 1
+            continue
+        pathspecs.append(argument)
+        index += 1
+    return pathspecs
+
+
+def _selects_repository_root(pathspec: str, cwd: str | None) -> bool:
+    """Return whether a pathspec stages everything `git add .` would stage.
+
+    `git add .` is blocked outright, so its equivalents have to be blocked too:
+    `./`, the repository-root magic `:/` and `:(top)`, and any absolute path
+    that contains the working directory.
+    """
+    if not pathspec:
+        # An empty pathspec matches every path in the repository.
+        return True
+
+    if pathspec.startswith(':'):
+        if pathspec.startswith(':('):
+            end = pathspec.find(')')
+            if end == -1:
+                return False
+            if 'exclude' in pathspec[2:end]:
+                return False
+            return os.path.normpath(pathspec[end + 1:] or '.') == '.'
+        magic = pathspec[1:]
+        if magic.startswith(('!', '^')):
+            return False
+        if magic.startswith('/'):
+            return os.path.normpath(magic[1:] or '.') == '.'
+        return magic == ''
+
+    normalized = os.path.normpath(os.path.expanduser(pathspec))
+    if normalized == '.' or normalized == '..':
+        return True
+    if normalized.startswith('..' + os.sep):
+        return True
+    if os.path.isabs(normalized):
+        if cwd is None:
+            return False
+        # realpath, because /var and /private/var name the same directory on
+        # macOS and a plain string compare would miss the equivalence.
+        base = os.path.realpath(cwd)
+        target = os.path.realpath(normalized)
+        return base == target or base.startswith(
+            target.rstrip(os.sep) + os.sep)
+    return False
+
+
 def _check_single_git_add_command(command):
     """
     Check a single (non-compound) command for dangerous git add patterns.
@@ -534,8 +601,9 @@ def _check_single_git_add_command(command):
     # Normalize recognized add commands after stripping supported Git prefixes.
     normalized_cmd = ' '.join(command.strip().split())
     resolved_add = _resolve_git_add_argv(command)
+    repo_cwd: str | None = os.getcwd()
     if resolved_add is not None:
-        add_argv, _ = resolved_add
+        add_argv, repo_cwd = resolved_add
         normalized_cmd = shlex.join(add_argv)
 
     # Always allow --dry-run (used internally to detect what would be staged)
@@ -571,12 +639,18 @@ This restriction prevents accidentally staging unwanted files."""
         argument.split('=', 1)[0] in _ADD_ALL_LONG_OPTIONS
         for argument in add_arguments
     )
-    if dangerous_pattern.search(normalized_cmd) or abbreviated_all:
+    stages_root = any(
+        _selects_repository_root(pathspec, repo_cwd)
+        for pathspec in _add_pathspecs(add_arguments)
+    )
+    if dangerous_pattern.search(normalized_cmd) or abbreviated_all or stages_root:
         reason = """BLOCKED: Dangerous git add pattern detected!
 
 DO NOT use:
 - 'git add -A', 'git add -a', 'git add --all' (adds ALL files)
-- 'git add .' (adds entire current directory)
+- 'git add .' (adds entire current directory), or an equivalent such as
+  'git add ./', 'git add :/', 'git add :(top)', or an absolute path that
+  contains the current directory
 - 'git add ../' or similar parent directory patterns
 - 'git add *' (wildcard patterns)
 

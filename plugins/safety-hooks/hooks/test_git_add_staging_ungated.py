@@ -3,7 +3,8 @@
 Unit tests for staging decisions in git_add_block_hook.py
 
 Staging specific paths is not gated: `git add <path>` is allowed even when the
-paths are already-tracked modified files. Bulk staging stays blocked outright.
+paths are already-tracked modified files. Bulk staging stays blocked outright,
+including pathspecs that select the whole repository by another name.
 """
 import os
 import subprocess
@@ -76,6 +77,40 @@ class TestStagingIsUngated(unittest.TestCase):
         for command in ("git add -A", "git add .", "git add --all",
                         "git add *"):
             self.assertBlocked(command)
+
+    def test_root_equivalent_pathspecs_are_blocked(self) -> None:
+        """Anything that stages what `git add .` stages is blocked too."""
+        for command in (
+            "git add ./",
+            "git add .//",
+            "git add :/",
+            "git add :",
+            "git add :(top)",
+            'git add ""',
+            "git add /",
+            "git add ../",
+            f"git add {self.repo}",
+            f"git add {self.repo}/",
+            f"git add {os.path.realpath(self.repo)}/",
+            f"git -C {self.repo} add ./",
+            "git add tracked.txt ./",
+            "git add -- ./",
+        ):
+            with self.subTest(command=command):
+                self.assertBlocked(command)
+
+    def test_paths_below_the_root_are_still_allowed(self) -> None:
+        for command in (
+            "git add sub/",
+            "git add ./sub",
+            "git add :/sub",
+            "git add :(top)sub",
+            "git add :!tracked.txt",
+            f"git add {self.repo}/sub",
+            "git add --chmod=+x tracked.txt",
+        ):
+            with self.subTest(command=command):
+                self.assertAllowed(command)
 
     def test_pathspec_file_still_asks(self) -> None:
         decision, _ = check_git_add_command(
