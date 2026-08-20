@@ -534,9 +534,8 @@ def _check_single_git_add_command(command):
     # Normalize recognized add commands after stripping supported Git prefixes.
     normalized_cmd = ' '.join(command.strip().split())
     resolved_add = _resolve_git_add_argv(command)
-    repo_cwd: str | None = os.getcwd()
     if resolved_add is not None:
-        add_argv, repo_cwd = resolved_add
+        add_argv, _ = resolved_add
         normalized_cmd = shlex.join(add_argv)
 
     # Always allow --dry-run (used internally to detect what would be staged)
