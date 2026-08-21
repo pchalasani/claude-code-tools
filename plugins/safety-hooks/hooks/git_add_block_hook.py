@@ -270,6 +270,18 @@ def _is_repository_routing_assignment(token: str) -> bool:
     return token.partition('=')[0] in _REPOSITORY_ROUTING_VARS
 
 
+def _routing_assignment_work_tree(token: str) -> str | None:
+    """Return the work tree an assignment names, unresolved.
+
+    `GIT_WORK_TREE` names the tree Git stages from. `GIT_DIR` only relocates
+    the repository metadata, leaving the work tree where it is, so it returns
+    None. The value stays unresolved because a later `git -C` moves the
+    directory a relative value is resolved against.
+    """
+    name, _separator, value = token.partition('=')
+    return value if name == 'GIT_WORK_TREE' and value else None
+
+
 def _resolve_git_add_argv(
     command: str,
 ) -> tuple[list[str], str | None] | None:
@@ -283,10 +295,11 @@ def _resolve_git_add_argv(
         return None
 
     cwd = os.getcwd()
+    work_tree: str | None = None
     i = 0
     while i < len(argv) and _ASSIGNMENT_WORD.match(argv[i]):
         if _is_repository_routing_assignment(argv[i]):
-            cwd = None
+            work_tree = _routing_assignment_work_tree(argv[i]) or work_tree
         i += 1
 
     if i < len(argv) and Path(argv[i]).name == 'env':
@@ -297,14 +310,16 @@ def _resolve_git_add_argv(
             short_value = _env_short_value(token)
             if _ASSIGNMENT_WORD.match(token):
                 if _is_repository_routing_assignment(token):
-                    cwd = None
+                    work_tree = (
+                        _routing_assignment_work_tree(token) or work_tree)
                 i += 1
                 continue
             if token == '--':
                 i += 1
                 while i < len(argv) and _ASSIGNMENT_WORD.match(argv[i]):
                     if _is_repository_routing_assignment(argv[i]):
-                        cwd = None
+                        work_tree = (
+                            _routing_assignment_work_tree(argv[i]) or work_tree)
                     i += 1
                 break
             if name in _ENV_VALUE_OPTS or short_value:
@@ -362,14 +377,18 @@ def _resolve_git_add_argv(
                 value = argv[i]
             if name == '-C' and value:
                 cwd = _resolve_add_chdir(cwd, value)
-            elif name in {'--git-dir', '--work-tree'}:
-                cwd = None
+            elif name == '--work-tree' and value:
+                work_tree = value
             i += 1
             continue
         break
 
     if i >= len(argv) or argv[i] != 'add':
         return None
+    if work_tree is not None:
+        # `git -C` moves the directory a relative work tree resolves against,
+        # so this cannot be done where the value is first seen.
+        cwd = _resolve_add_chdir(cwd, work_tree)
     return ['git', 'add', *argv[i + 1:]], cwd
 
 
@@ -550,6 +569,18 @@ def _add_pathspecs(add_arguments: list[str]) -> list[str]:
     return pathspecs
 
 
+def _is_root_of_its_base(path: str) -> bool:
+    """Return whether a path selects the whole tree it is resolved against.
+
+    Used for repository-root magic, where the remainder is relative to the
+    repository root: `:/` and `://` both name the root, and `git add ://`
+    stages every file in the repository.
+    """
+    if not path:
+        return True
+    return os.path.normpath(path) in {'.', os.sep}
+
+
 def _selects_repository_root(pathspec: str, cwd: str | None) -> bool:
     """Return whether a pathspec stages everything `git add .` would stage.
 
@@ -568,12 +599,12 @@ def _selects_repository_root(pathspec: str, cwd: str | None) -> bool:
                 return False
             if 'exclude' in pathspec[2:end]:
                 return False
-            return os.path.normpath(pathspec[end + 1:] or '.') == '.'
+            return _is_root_of_its_base(pathspec[end + 1:])
         magic = pathspec[1:]
         if magic.startswith(('!', '^')):
             return False
         if magic.startswith('/'):
-            return os.path.normpath(magic[1:] or '.') == '.'
+            return _is_root_of_its_base(magic[1:])
         return magic == ''
 
     normalized = os.path.normpath(os.path.expanduser(pathspec))
@@ -583,7 +614,10 @@ def _selects_repository_root(pathspec: str, cwd: str | None) -> bool:
         return True
     if os.path.isabs(normalized):
         if cwd is None:
-            return False
+            # The work tree could not be resolved (a shell expansion, say), so
+            # whether this path contains it is unknowable. Treat it as bulk
+            # staging rather than approving a possible `git add <work-tree>`.
+            return True
         # realpath, because /var and /private/var name the same directory on
         # macOS and a plain string compare would miss the equivalence.
         base = os.path.realpath(cwd)
