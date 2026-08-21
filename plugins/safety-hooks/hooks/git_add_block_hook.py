@@ -270,6 +270,18 @@ def _is_repository_routing_assignment(token: str) -> bool:
     return token.partition('=')[0] in _REPOSITORY_ROUTING_VARS
 
 
+def _routing_assignment_work_tree(token: str) -> str | None:
+    """Return the work tree an assignment names, unresolved.
+
+    `GIT_WORK_TREE` names the tree Git stages from. `GIT_DIR` only relocates
+    the repository metadata, leaving the work tree where it is, so it returns
+    None. The value stays unresolved because a later `git -C` moves the
+    directory a relative value is resolved against.
+    """
+    name, _separator, value = token.partition('=')
+    return value if name == 'GIT_WORK_TREE' and value else None
+
+
 def _resolve_git_add_argv(
     command: str,
 ) -> tuple[list[str], str | None] | None:
@@ -283,10 +295,11 @@ def _resolve_git_add_argv(
         return None
 
     cwd = os.getcwd()
+    work_tree: str | None = None
     i = 0
     while i < len(argv) and _ASSIGNMENT_WORD.match(argv[i]):
         if _is_repository_routing_assignment(argv[i]):
-            cwd = None
+            work_tree = _routing_assignment_work_tree(argv[i]) or work_tree
         i += 1
 
     if i < len(argv) and Path(argv[i]).name == 'env':
@@ -297,14 +310,16 @@ def _resolve_git_add_argv(
             short_value = _env_short_value(token)
             if _ASSIGNMENT_WORD.match(token):
                 if _is_repository_routing_assignment(token):
-                    cwd = None
+                    work_tree = (
+                        _routing_assignment_work_tree(token) or work_tree)
                 i += 1
                 continue
             if token == '--':
                 i += 1
                 while i < len(argv) and _ASSIGNMENT_WORD.match(argv[i]):
                     if _is_repository_routing_assignment(argv[i]):
-                        cwd = None
+                        work_tree = (
+                            _routing_assignment_work_tree(argv[i]) or work_tree)
                     i += 1
                 break
             if name in _ENV_VALUE_OPTS or short_value:
@@ -362,14 +377,18 @@ def _resolve_git_add_argv(
                 value = argv[i]
             if name == '-C' and value:
                 cwd = _resolve_add_chdir(cwd, value)
-            elif name in {'--git-dir', '--work-tree'}:
-                cwd = None
+            elif name == '--work-tree' and value:
+                work_tree = value
             i += 1
             continue
         break
 
     if i >= len(argv) or argv[i] != 'add':
         return None
+    if work_tree is not None:
+        # `git -C` moves the directory a relative work tree resolves against,
+        # so this cannot be done where the value is first seen.
+        cwd = _resolve_add_chdir(cwd, work_tree)
     return ['git', 'add', *argv[i + 1:]], cwd
 
 
@@ -526,6 +545,88 @@ def check_git_add_command(command):
     return False, None
 
 
+# `git add` options that take their value as the following token.
+_ADD_VALUE_OPTS = {'--chmod', '--pathspec-from-file'}
+
+
+def _add_pathspecs(add_arguments: list[str]) -> list[str]:
+    """Return the pathspec operands of a `git add`, dropping its options."""
+    pathspecs: list[str] = []
+    index = 0
+    while index < len(add_arguments):
+        argument = add_arguments[index]
+        if argument == '--':
+            pathspecs.extend(add_arguments[index + 1:])
+            break
+        if argument in _ADD_VALUE_OPTS:
+            index += 2
+            continue
+        if argument.startswith('-'):
+            index += 1
+            continue
+        pathspecs.append(argument)
+        index += 1
+    return pathspecs
+
+
+def _is_root_of_its_base(path: str) -> bool:
+    """Return whether a path selects the whole tree it is resolved against.
+
+    Used for repository-root magic, where the remainder is relative to the
+    repository root: `:/` and `://` both name the root, and `git add ://`
+    stages every file in the repository.
+    """
+    if not path:
+        return True
+    return os.path.normpath(path) in {'.', os.sep}
+
+
+def _selects_repository_root(pathspec: str, cwd: str | None) -> bool:
+    """Return whether a pathspec stages everything `git add .` would stage.
+
+    `git add .` is blocked outright, so its equivalents have to be blocked too:
+    `./`, the repository-root magic `:/` and `:(top)`, and any absolute path
+    that contains the working directory.
+    """
+    if not pathspec:
+        # An empty pathspec matches every path in the repository.
+        return True
+
+    if pathspec.startswith(':'):
+        if pathspec.startswith(':('):
+            end = pathspec.find(')')
+            if end == -1:
+                return False
+            if 'exclude' in pathspec[2:end]:
+                return False
+            return _is_root_of_its_base(pathspec[end + 1:])
+        magic = pathspec[1:]
+        if magic.startswith(('!', '^')):
+            return False
+        if magic.startswith('/'):
+            return _is_root_of_its_base(magic[1:])
+        return magic == ''
+
+    normalized = os.path.normpath(os.path.expanduser(pathspec))
+    if normalized == '.' or normalized == '..':
+        return True
+    if normalized.startswith('..' + os.sep):
+        return True
+    if os.path.isabs(normalized):
+        if cwd is None:
+            # The work tree could not be resolved (a shell expansion, say), so
+            # whether this path contains it is unknowable. Treat it as bulk
+            # staging rather than approving a possible `git add <work-tree>`.
+            return True
+        # realpath, because /var and /private/var name the same directory on
+        # macOS and a plain string compare would miss the equivalence.
+        base = os.path.realpath(cwd)
+        target = os.path.realpath(normalized)
+        return base == target or base.startswith(
+            target.rstrip(os.sep) + os.sep)
+    return False
+
+
 def _check_single_git_add_command(command):
     """
     Check a single (non-compound) command for dangerous git add patterns.
@@ -534,8 +635,9 @@ def _check_single_git_add_command(command):
     # Normalize recognized add commands after stripping supported Git prefixes.
     normalized_cmd = ' '.join(command.strip().split())
     resolved_add = _resolve_git_add_argv(command)
+    repo_cwd: str | None = os.getcwd()
     if resolved_add is not None:
-        add_argv, _ = resolved_add
+        add_argv, repo_cwd = resolved_add
         normalized_cmd = shlex.join(add_argv)
 
     # Always allow --dry-run (used internally to detect what would be staged)
@@ -571,12 +673,18 @@ This restriction prevents accidentally staging unwanted files."""
         argument.split('=', 1)[0] in _ADD_ALL_LONG_OPTIONS
         for argument in add_arguments
     )
-    if dangerous_pattern.search(normalized_cmd) or abbreviated_all:
+    stages_root = any(
+        _selects_repository_root(pathspec, repo_cwd)
+        for pathspec in _add_pathspecs(add_arguments)
+    )
+    if dangerous_pattern.search(normalized_cmd) or abbreviated_all or stages_root:
         reason = """BLOCKED: Dangerous git add pattern detected!
 
 DO NOT use:
 - 'git add -A', 'git add -a', 'git add --all' (adds ALL files)
-- 'git add .' (adds entire current directory)
+- 'git add .' (adds entire current directory), or an equivalent such as
+  'git add ./', 'git add :/', 'git add :(top)', or an absolute path that
+  contains the current directory
 - 'git add ../' or similar parent directory patterns
 - 'git add *' (wildcard patterns)
 

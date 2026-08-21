@@ -37,6 +37,9 @@ decisions to Claude Code.
   - `git add -A`, `git add -a`, `git add --all` - stages everything including
     untracked files across the entire repo
   - `git add .` - stages entire current directory blindly
+  - equivalents of `git add .`: `git add ./`, the repository-root magic
+    `git add :/` and `git add :(top)`, an empty pathspec, and any absolute
+    path containing the working directory
   - `git add ../` (parent directory patterns) - stages outside current scope
   - `git add *` (wildcard patterns) - shell expansion can match unexpected files
   - `git commit -a` without `-m` flag - would open an editor (not interactive)

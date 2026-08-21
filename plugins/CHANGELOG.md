@@ -2,6 +2,18 @@
 
 ## 2026-08-20
 
+### safety-hooks 1.15.1
+
+- fix: block pathspecs that stage the repository root by another name
+  - `git add ./`, `git add :/`, `git add :(top)`, `git add ""`, and absolute
+    paths containing the working directory all stage what the blocked
+    `git add .` stages, and are now blocked with it
+  - paths below the root (`sub/`, `./sub`, `:/sub`, `:(top)sub`) and
+    exclusions (`:!file`) are unaffected
+  - reported by the Codex reviewer on PR #174
+
+## 2026-08-20
+
 ### safety-hooks 1.15.0
 
 - feat: `CCTOOLS_ALLOW_GIT=1` allows `git commit` in every session
