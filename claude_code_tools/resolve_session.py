@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal, TextIO
 
+from claude_code_tools.helper_sessions import is_helper_session
 from claude_code_tools.resolve_session_names import codex_thread_names
 from claude_code_tools.session_utils import (
     get_claude_home,
@@ -331,6 +332,7 @@ def enumerate_claude_sessions(home: Path) -> list[SessionRecord]:
             eligible = (
                 eligible
                 and not claude_sessions.is_malformed_session(path)
+                and not is_helper_session(path)
             )
         except (OSError, UnicodeError, TypeError, ValueError):
             eligible = False
@@ -362,6 +364,7 @@ def enumerate_claude_sessions(home: Path) -> list[SessionRecord]:
                 eligible = (
                     eligible
                     and not claude_sessions.is_malformed_session(session_file)
+                    and not is_helper_session(session_file)
                     and directory is not None
                 )
             except (OSError, UnicodeError, TypeError, ValueError):
@@ -992,4 +995,3 @@ def resolve(
         records=tuple(tagged[:25]),
         match_count=len(tagged),
     )
-
