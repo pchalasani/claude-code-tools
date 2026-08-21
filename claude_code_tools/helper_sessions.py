@@ -100,9 +100,9 @@ def run_and_mark_helper_fork(
 ) -> ResultT:
     """Run a headless fork operation and mark its transcript afterward.
 
-    Marking runs for successful results, nonzero client results, and raised
-    exceptions. When concurrent session creation makes the fork ambiguous,
-    :func:`mark_new_helper_session` safely leaves every transcript untouched.
+    Marking runs whenever the operation returns an exact session ID, including
+    nonzero client results. Raised exceptions and missing IDs safely leave every
+    transcript untouched.
 
     Args:
         source_session_file: Transcript passed to the headless fork client.
