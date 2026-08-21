@@ -45,7 +45,7 @@ def test_marks_the_only_new_fork_as_helper(tmp_path: Path) -> None:
     _write_session(fork, "fork")
     original_tail = fork.read_text(encoding="utf-8").splitlines()[1]
 
-    marked = mark_new_helper_session(snapshot)
+    marked = mark_new_helper_session(snapshot, session_id="fork")
 
     assert marked == fork
     assert is_helper_session(fork)
@@ -84,9 +84,23 @@ def test_ambiguous_new_sessions_are_not_guessed(tmp_path: Path) -> None:
     _write_session(first, "first")
     _write_session(second, "second")
 
-    assert mark_new_helper_session(snapshot) is None
+    assert mark_new_helper_session(snapshot, session_id="missing") is None
     assert not is_helper_session(first)
     assert not is_helper_session(second)
+
+
+def test_missing_result_id_does_not_mark_only_new_session(
+    tmp_path: Path,
+) -> None:
+    """A concurrent session cannot be mistaken for a failed helper fork."""
+    source = tmp_path / "source.jsonl"
+    unrelated = tmp_path / "unrelated.jsonl"
+    _write_session(source, "source")
+    snapshot = snapshot_session_files(source)
+    _write_session(unrelated, "unrelated")
+
+    assert mark_new_helper_session(snapshot) is None
+    assert not is_helper_session(unrelated)
 
 
 def test_malformed_first_record_is_not_a_helper(tmp_path: Path) -> None:
@@ -103,9 +117,9 @@ def test_failed_headless_operation_still_marks_its_fork(tmp_path: Path) -> None:
     fork = tmp_path / "failed-fork.jsonl"
     _write_session(source, "source")
 
-    def failed_operation() -> int:
+    def failed_operation() -> tuple[int, str]:
         _write_session(fork, "failed-fork")
-        return 17
+        return 17, "failed-fork"
 
     result = run_and_mark_helper_fork(source, failed_operation)
 

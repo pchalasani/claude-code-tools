@@ -73,26 +73,20 @@ def mark_new_helper_session(
     snapshot: SessionFileSnapshot,
     session_id: str | None = None,
 ) -> Path | None:
-    """Mark a newly created fork without guessing across concurrent files.
+    """Mark the exact newly created fork reported by the headless client.
 
     Args:
         snapshot: Transcript paths captured before the fork started.
-        session_id: Session ID reported by the headless client, when available.
+        session_id: Session ID reported by the headless client.
 
     Returns:
-        The marked transcript, or None when no unique safe target exists.
+        The marked transcript, or None when the reported target is unavailable.
     """
+    if not session_id or Path(session_id).name != session_id:
+        return None
     new_paths = _session_files(snapshot.directory) - snapshot.paths
-    candidate: Path | None = None
-    if session_id:
-        if Path(session_id).name != session_id:
-            return None
-        reported = (snapshot.directory / f"{session_id}.jsonl").absolute()
-        if reported in new_paths:
-            candidate = reported
-    elif len(new_paths) == 1:
-        candidate = next(iter(new_paths))
-    if candidate is None:
+    candidate = (snapshot.directory / f"{session_id}.jsonl").absolute()
+    if candidate not in new_paths:
         return None
 
     from claude_code_tools.session_utils import mark_session_as_helper
@@ -102,7 +96,7 @@ def mark_new_helper_session(
 
 def run_and_mark_helper_fork(
     source_session_file: Path,
-    operation: Callable[[], ResultT],
+    operation: Callable[[], tuple[ResultT, str | None]],
 ) -> ResultT:
     """Run a headless fork operation and mark its transcript afterward.
 
@@ -112,13 +106,16 @@ def run_and_mark_helper_fork(
 
     Args:
         source_session_file: Transcript passed to the headless fork client.
-        operation: Blocking operation that creates and runs the fork.
+        operation: Blocking operation returning its result and fork session ID.
 
     Returns:
         The operation's original result.
     """
     snapshot = snapshot_session_files(source_session_file)
+    outcome: tuple[ResultT, str | None] | None = None
     try:
-        return operation()
+        outcome = operation()
+        return outcome[0]
     finally:
-        mark_new_helper_session(snapshot)
+        if outcome is not None:
+            mark_new_helper_session(snapshot, session_id=outcome[1])
