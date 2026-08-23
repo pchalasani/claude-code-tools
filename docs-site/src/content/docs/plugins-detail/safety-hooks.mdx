@@ -168,6 +168,40 @@ The hook directs users to the
 [env-safe](../../tools/env-safe/) CLI for safe
 inspection of environment variables.
 
+#### Globs in find / grep / ripgrep
+
+The guard also inspects filename globs passed to
+`find`, `grep`, and `rg`, and blocks a command only
+when its glob *targets* a dotenv name. A glob counts
+as targeting a dotenv when its literal text mentions
+`env`, or when its non-`*` wildcards (`?`, bracket
+classes) can spell one out:
+
+- Blocked: `find . -name '.env'`,
+  `find . -path '*/.env'`,
+  `grep -r --include='*.env*'`, `rg -g '*env'`,
+  `find . -name '.?nv'`
+- Allowed: `find . -name '*.ts'`,
+  `find . -path '*/dist/*'`,
+  `grep -rn TODO --include='*.py' .`,
+  `rg TODO -g '*.rs'`
+
+A bare `*` is not treated as naming a dotenv, even
+though it could match one at runtime -- otherwise
+every ordinary include-glob would be denied. This is
+consistent with the guard allowing `grep -r SECRET .`
+(no glob at all), which reads the same files. The
+known trade-off: a glob like `--include='*.local'`
+can match `.env.local` but is allowed, because it
+reaches a dotenv only by `*` expanding over the
+entire `.env` literal.
+
+Negated predicates and globs are exclusions, not
+selections, so they never trigger the guard:
+`find . ! -path '*/.env'`,
+`find . -not -name '.env'`, and
+`rg -g '!.env*'` are all allowed.
+
 :::tip
 If you need to modify a `.env` file, do so
 manually outside of Claude Code. Use `env-safe`

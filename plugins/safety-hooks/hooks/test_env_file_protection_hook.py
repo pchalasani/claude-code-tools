@@ -126,6 +126,8 @@ class TestBlocked(unittest.TestCase):
         self.assertBlocked("rg -g '.[e]nv.[0-9]*' SECRET .")
         self.assertBlocked("rg -g '[^a]env' SECRET .")
         self.assertBlocked("grep --include='[^a]env' SECRET .")
+        self.assertBlocked("grep -r SECRET --include='*env' .")
+        self.assertBlocked("grep -r SECRET --include='*env*' .")
 
     def test_write_and_copy(self):
         self.assertBlocked("cp " + DOTENV + " " + DOTENV + ".bak")
@@ -188,6 +190,8 @@ class TestBlocked(unittest.TestCase):
         self.assertBlocked(r"find . -regex '.*/\.env' -delete")
         self.assertBlocked("find . -regex '.*[.]env' -delete")
         self.assertBlocked(r"find . -regex '.*\.env' -delete")
+        self.assertBlocked("find . -not -path '*/build/*' -name '.env'")
+        self.assertBlocked("find . ! -name '*.log' -path '*/.env'")
 
     def test_file_literally_named_env(self):
         self.assertBlocked("cat env")
@@ -331,6 +335,23 @@ class TestAllowed(unittest.TestCase):
         self.assertAllowed("rg -g '!.env*' SECRET .")
         self.assertAllowed("rg --glob='!**/.env*' SECRET .")
         self.assertAllowed("rg -g '[a-z]*.py' SECRET .")
+
+    def test_ordinary_globs_do_not_select_dotenv(self):
+        """A '*' must not be allowed to spell out the literal '.env'."""
+        self.assertAllowed("find . -name '*.ts'")
+        self.assertAllowed("find . -path '*/dist/*'")
+        self.assertAllowed("grep -rn TODO --include='*.py' .")
+        self.assertAllowed("rg TODO -g '*.rs'")
+        self.assertAllowed("grep -r SECRET --include='*' .")
+        # Accepted trade-off: '*.local' can match '.env.local', but only by
+        # '*' expanding over the whole '.env' literal; treated as ordinary.
+        self.assertAllowed("grep -r X --include='*.local' .")
+
+    def test_negated_find_predicates_are_exclusions(self):
+        self.assertAllowed("find . ! -path '*/build/*'")
+        self.assertAllowed("find . -not -path '*/build/*' -name '*.go'")
+        self.assertAllowed("find . ! -path '*/.env'")
+        self.assertAllowed("find . -not -name '.env'")
 
     def test_quoted_or_escaped_shell_globs_are_literal(self):
         self.assertAllowed("cat '.[e]nv'")

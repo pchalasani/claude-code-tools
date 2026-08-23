@@ -220,6 +220,12 @@ def _glob_names_dotenv(pattern: str) -> bool:
             )
             if not matches:
                 continue
+            # A bare '*' may only spell out the literal '.env' when the
+            # pattern text itself mentions 'env'; otherwise every glob
+            # containing '*' (e.g. '*.ts') would count as naming a dotenv.
+            if (token == '*' and dotenv_state < 4
+                    and 'env' not in basename_pattern.lower()):
+                continue
             if dotenv_state < 4:
                 expected = '.env'[dotenv_state]
                 if candidate.lower() != expected:
@@ -778,6 +784,10 @@ def _reader_accesses_dotenv(command_word: str, args: List[str]) -> bool:
         }
         for position, arg in enumerate(args[:-1]):
             pattern = args[position + 1]
+            # A negated predicate (-not/! -path X) excludes matches rather
+            # than selecting them, so it cannot be used to read a dotenv.
+            if position and args[position - 1] in {'-not', '!'}:
+                continue
             if arg in path_predicates and (
                     _names_dotenv(pattern)
                     or _glob_names_dotenv(pattern)):
