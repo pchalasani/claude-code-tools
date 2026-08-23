@@ -205,7 +205,9 @@ selections, so they never trigger the guard:
 still blocked, and negation is ignored when the
 `find` expression contains a disjunction
 (`-o`/`-or`/`,`), since an `-o` branch can re-select
-the excluded file.
+the excluded file. Parenthesised `\( ... \)`
+expressions are not analysed as a unit; the guard
+inspects predicates token by token.
 
 :::tip
 If you need to modify a `.env` file, do so
