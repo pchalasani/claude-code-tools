@@ -202,6 +202,8 @@ class TestBlocked(unittest.TestCase):
         self.assertBlocked(r"find . ! -name '.env' -o -exec cat {} \;")
         self.assertBlocked("find . ! -name '.env' -or -delete")
         self.assertBlocked("find . ! -name '.env' , -exec cat {} +")
+        # '!' here is -printf's format operand, not a negation.
+        self.assertBlocked(r"find . -printf '!' -name '.env' -exec cat {} \;")
 
     def test_file_literally_named_env(self):
         self.assertBlocked("cat env")
@@ -362,6 +364,7 @@ class TestAllowed(unittest.TestCase):
         self.assertAllowed("find . -not -path '*/build/*' -name '*.go'")
         self.assertAllowed("find . ! -path '*/.env'")
         self.assertAllowed("find . -not -name '.env'")
+        self.assertAllowed("find . -type f ! -name '.env'")
 
     def test_quoted_or_escaped_shell_globs_are_literal(self):
         self.assertAllowed("cat '.[e]nv'")

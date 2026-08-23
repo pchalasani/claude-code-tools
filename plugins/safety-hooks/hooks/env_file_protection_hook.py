@@ -796,7 +796,16 @@ def _reader_accesses_dotenv(command_word: str, args: List[str]) -> bool:
             while scan >= 0 and args[scan] in {'-not', '!'}:
                 negations += 1
                 scan -= 1
-            if negations % 2 and not has_disjunction:
+            # Fail closed on ambiguous negation: a '-...' token right
+            # before the chain (other than a conjunction) may be a value
+            # predicate whose operand is the '!' itself, as in
+            # find . -printf '!' -name '.env' -exec cat {} \;
+            unambiguous = (
+                scan < 0
+                or not args[scan].startswith('-')
+                or args[scan] in {'-a', '-and', '(', ')'}
+            )
+            if negations % 2 and unambiguous and not has_disjunction:
                 continue
             if arg in path_predicates and (
                     _names_dotenv(pattern)
