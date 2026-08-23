@@ -128,6 +128,9 @@ class TestBlocked(unittest.TestCase):
         self.assertBlocked("grep --include='[^a]env' SECRET .")
         self.assertBlocked("grep -r SECRET --include='*env' .")
         self.assertBlocked("grep -r SECRET --include='*env*' .")
+        self.assertBlocked("grep -r SECRET --include='*nv' .")
+        self.assertBlocked("grep -r SECRET --include='*[e]nv' .")
+        self.assertBlocked("rg SECRET -g '*e?v' .")
 
     def test_write_and_copy(self):
         self.assertBlocked("cp " + DOTENV + " " + DOTENV + ".bak")
@@ -192,6 +195,8 @@ class TestBlocked(unittest.TestCase):
         self.assertBlocked(r"find . -regex '.*\.env' -delete")
         self.assertBlocked("find . -not -path '*/build/*' -name '.env'")
         self.assertBlocked("find . ! -name '*.log' -path '*/.env'")
+        self.assertBlocked("find . ! ! -name '.env'")
+        self.assertBlocked("find . -not -not -name '.env' -print")
 
     def test_file_literally_named_env(self):
         self.assertBlocked("cat env")
@@ -344,7 +349,7 @@ class TestAllowed(unittest.TestCase):
         self.assertAllowed("rg TODO -g '*.rs'")
         self.assertAllowed("grep -r SECRET --include='*' .")
         # Accepted trade-off: '*.local' can match '.env.local', but only by
-        # '*' expanding over the whole '.env' literal; treated as ordinary.
+        # '*' expanding over the whole '.env' core; treated as ordinary.
         self.assertAllowed("grep -r X --include='*.local' .")
 
     def test_negated_find_predicates_are_exclusions(self):
