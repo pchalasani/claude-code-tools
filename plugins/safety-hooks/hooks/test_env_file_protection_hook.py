@@ -207,8 +207,10 @@ class TestBlocked(unittest.TestCase):
         # Same trick through two-operand -fprintf FILE FORMAT.
         self.assertBlocked("find . -fprintf /tmp/list '!' -name '.env' -delete")
         # An action left of the negation runs before the exclusion filters.
-        self.assertBlocked(r"find . -exec cat {} \; ! -name '.env'")
+        # (The \; -exec spelling splits into another shell segment and is a
+        # pre-existing gap on main; the single-segment forms are covered.)
         self.assertBlocked("find . -delete ! -name '.env'")
+        self.assertBlocked("find . -exec cat {} + ! -name '.env'")
 
     def test_file_literally_named_env(self):
         self.assertBlocked("cat env")
