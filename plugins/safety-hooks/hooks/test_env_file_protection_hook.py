@@ -211,6 +211,11 @@ class TestBlocked(unittest.TestCase):
         # pre-existing gap on main; the single-segment forms are covered.)
         self.assertBlocked("find . -delete ! -name '.env'")
         self.assertBlocked("find . -exec cat {} + ! -name '.env'")
+        self.assertBlocked(r"find . -fprintf .env '%p\n' ! -name '.env'")
+        # Output actions write to their FILE operand.
+        self.assertBlocked("find . -fprintf .env '%p'")
+        self.assertBlocked("find . -fprint .env")
+        self.assertBlocked("find . -fls .env.local")
 
     def test_file_literally_named_env(self):
         self.assertBlocked("cat env")
@@ -374,6 +379,7 @@ class TestAllowed(unittest.TestCase):
         self.assertAllowed("find . -type f ! -name '.env'")
         # Exclusion before the action: -exec never sees the dotenv.
         self.assertAllowed(r"find . ! -name '.env' -exec cat {} \;")
+        self.assertAllowed("find . -fprint /tmp/list ! -name '*.log'")
 
     def test_quoted_or_escaped_shell_globs_are_literal(self):
         self.assertAllowed("cat '.[e]nv'")

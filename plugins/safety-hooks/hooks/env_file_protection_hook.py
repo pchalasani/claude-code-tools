@@ -789,7 +789,16 @@ def _reader_accesses_dotenv(command_word: str, args: List[str]) -> bool:
         # An action left of the negation runs before the exclusion filters
         # (find . -exec cat {} \; ! -name '.env' cats every file, dotenv
         # included), so negation is only honoured with no earlier action.
-        action_tokens = {'-exec', '-execdir', '-ok', '-okdir', '-delete'}
+        action_tokens = {
+            '-exec', '-execdir', '-ok', '-okdir', '-delete',
+            '-fprintf', '-fprint', '-fls',
+        }
+        # These output actions write to their FILE operand, so naming a
+        # dotenv there truncates it: find . -fprintf .env '%p'
+        for position, arg in enumerate(args[:-1]):
+            if arg in {'-fprintf', '-fprint', '-fls'} and _names_dotenv(
+                    args[position + 1]):
+                return True
         for position, arg in enumerate(args[:-1]):
             pattern = args[position + 1]
             # A predicate under an odd number of negations (-not/! -path X)
