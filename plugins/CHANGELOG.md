@@ -1,5 +1,22 @@
 # Plugin Changelog
 
+## 2026-08-23
+
+### safety-hooks 1.15.2
+
+- fix: env-file guard no longer blocks ordinary globs (issue #178)
+  - `find . -name '*.ts'`, `grep --include='*.py'`, `rg -g '*.rs'`, and
+    `find . -path '*/dist/*'` were denied because a bare `*` was allowed
+    to spell out the literal `.env`; a glob now names a dotenv only when
+    literal text or non-`*` wildcards help spell the `.env` core
+  - mixed spellings (`*env`, `*nv`, `*[e]nv`, `*e?v`) still block;
+    `*.local` is a documented accepted trade-off
+  - `find` negation (`! -path X`, `-not -name X`) is now honoured as an
+    exclusion, with fail-closed handling for double negation,
+    disjunctions (`-o`/`-or`/`,`), and `!` operands of
+    `-printf`/`-fprintf`
+  - reported in issue #178 by @tudorsss
+
 ## 2026-08-20
 
 ### safety-hooks 1.15.1
