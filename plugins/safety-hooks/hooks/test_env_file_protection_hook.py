@@ -206,6 +206,9 @@ class TestBlocked(unittest.TestCase):
         self.assertBlocked(r"find . -printf '!' -name '.env' -exec cat {} \;")
         # Same trick through two-operand -fprintf FILE FORMAT.
         self.assertBlocked("find . -fprintf /tmp/list '!' -name '.env' -delete")
+        # An action left of the negation runs before the exclusion filters.
+        self.assertBlocked(r"find . -exec cat {} \; ! -name '.env'")
+        self.assertBlocked("find . -delete ! -name '.env'")
 
     def test_file_literally_named_env(self):
         self.assertBlocked("cat env")
@@ -367,6 +370,8 @@ class TestAllowed(unittest.TestCase):
         self.assertAllowed("find . ! -path '*/.env'")
         self.assertAllowed("find . -not -name '.env'")
         self.assertAllowed("find . -type f ! -name '.env'")
+        # Exclusion before the action: -exec never sees the dotenv.
+        self.assertAllowed(r"find . ! -name '.env' -exec cat {} \;")
 
     def test_quoted_or_escaped_shell_globs_are_literal(self):
         self.assertAllowed("cat '.[e]nv'")

@@ -786,6 +786,10 @@ def _reader_accesses_dotenv(command_word: str, args: List[str]) -> bool:
         # excluded (find . ! -name '.env' -o -exec cat {} \;), so negation
         # is only honoured when the expression has no disjunction.
         has_disjunction = any(arg in {'-o', '-or', ','} for arg in args)
+        # An action left of the negation runs before the exclusion filters
+        # (find . -exec cat {} \; ! -name '.env' cats every file, dotenv
+        # included), so negation is only honoured with no earlier action.
+        action_tokens = {'-exec', '-execdir', '-ok', '-okdir', '-delete'}
         for position, arg in enumerate(args[:-1]):
             pattern = args[position + 1]
             # A predicate under an odd number of negations (-not/! -path X)
@@ -810,7 +814,10 @@ def _reader_accesses_dotenv(command_word: str, args: List[str]) -> bool:
                 # find . -fprintf /tmp/list '!' -name '.env' -delete
                 scan >= 1 and args[scan - 1] == '-fprintf'
             )
-            if negations % 2 and unambiguous and not has_disjunction:
+            no_prior_action = not any(
+                early in action_tokens for early in args[:position])
+            if (negations % 2 and unambiguous and not has_disjunction
+                    and no_prior_action):
                 continue
             if arg in path_predicates and (
                     _names_dotenv(pattern)
