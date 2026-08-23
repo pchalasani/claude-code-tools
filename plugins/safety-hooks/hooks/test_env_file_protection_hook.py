@@ -197,6 +197,11 @@ class TestBlocked(unittest.TestCase):
         self.assertBlocked("find . ! -name '*.log' -path '*/.env'")
         self.assertBlocked("find . ! ! -name '.env'")
         self.assertBlocked("find . -not -not -name '.env' -print")
+        # -o re-selects what the negation excluded, so negation is not
+        # honoured when the expression contains a disjunction.
+        self.assertBlocked(r"find . ! -name '.env' -o -exec cat {} \;")
+        self.assertBlocked("find . ! -name '.env' -or -delete")
+        self.assertBlocked("find . ! -name '.env' , -exec cat {} +")
 
     def test_file_literally_named_env(self):
         self.assertBlocked("cat env")

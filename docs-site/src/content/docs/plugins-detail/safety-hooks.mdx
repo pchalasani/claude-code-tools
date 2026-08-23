@@ -202,7 +202,10 @@ selections, so they never trigger the guard:
 `find . -not -name '.env'`, and
 `rg -g '!.env*'` are all allowed. Double negation
 (`find . ! ! -name '.env'`) selects again and is
-still blocked.
+still blocked, and negation is ignored when the
+`find` expression contains a disjunction
+(`-o`/`-or`/`,`), since an `-o` branch can re-select
+the excluded file.
 
 :::tip
 If you need to modify a `.env` file, do so

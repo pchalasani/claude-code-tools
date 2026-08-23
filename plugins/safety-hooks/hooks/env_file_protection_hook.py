@@ -782,6 +782,10 @@ def _reader_accesses_dotenv(command_word: str, args: List[str]) -> bool:
         path_predicates = {
             '-name', '-iname', '-path', '-ipath', '-wholename', '-iwholename',
         }
+        # A disjunction (-o/-or/,) can re-select what a negated predicate
+        # excluded (find . ! -name '.env' -o -exec cat {} \;), so negation
+        # is only honoured when the expression has no disjunction.
+        has_disjunction = any(arg in {'-o', '-or', ','} for arg in args)
         for position, arg in enumerate(args[:-1]):
             pattern = args[position + 1]
             # A predicate under an odd number of negations (-not/! -path X)
@@ -792,7 +796,7 @@ def _reader_accesses_dotenv(command_word: str, args: List[str]) -> bool:
             while scan >= 0 and args[scan] in {'-not', '!'}:
                 negations += 1
                 scan -= 1
-            if negations % 2:
+            if negations % 2 and not has_disjunction:
                 continue
             if arg in path_predicates and (
                     _names_dotenv(pattern)
