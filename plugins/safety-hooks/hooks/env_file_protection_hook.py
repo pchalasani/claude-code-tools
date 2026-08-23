@@ -804,6 +804,11 @@ def _reader_accesses_dotenv(command_word: str, args: List[str]) -> bool:
                 scan < 0
                 or not args[scan].startswith('-')
                 or args[scan] in {'-a', '-and', '(', ')'}
+            ) and not (
+                # -fprintf FILE FORMAT: with FILE before the chain, the
+                # chain's first '!' is the two-operand FORMAT, as in
+                # find . -fprintf /tmp/list '!' -name '.env' -delete
+                scan >= 1 and args[scan - 1] == '-fprintf'
             )
             if negations % 2 and unambiguous and not has_disjunction:
                 continue

@@ -204,6 +204,8 @@ class TestBlocked(unittest.TestCase):
         self.assertBlocked("find . ! -name '.env' , -exec cat {} +")
         # '!' here is -printf's format operand, not a negation.
         self.assertBlocked(r"find . -printf '!' -name '.env' -exec cat {} \;")
+        # Same trick through two-operand -fprintf FILE FORMAT.
+        self.assertBlocked("find . -fprintf /tmp/list '!' -name '.env' -delete")
 
     def test_file_literally_named_env(self):
         self.assertBlocked("cat env")
