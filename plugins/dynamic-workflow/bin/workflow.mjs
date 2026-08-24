@@ -4333,6 +4333,14 @@ async function spawnDetached(store) {
   const runnerToken = await store.claimRunner(process.pid);
   let handedOff = false;
   try {
+    await store.update((state) => {
+      if (TERMINAL_STATUSES.has(state.status)) {
+        state.status = "starting";
+        delete state.completedAt;
+        delete state.error;
+        delete state.result;
+      }
+    });
     const runnerLog = await open(path6.join(store.directory, "runner.log"), "a");
     try {
       const child = spawn2(
@@ -4357,11 +4365,6 @@ async function spawnDetached(store) {
       await store.update((state) => {
         state.pid = pid;
         state.pidStartedAt = pidStartedAt;
-        if (TERMINAL_STATUSES.has(state.status)) {
-          delete state.completedAt;
-          delete state.error;
-          delete state.result;
-        }
         state.status = "starting";
       });
       await store.transferRunner(runnerToken, pid);

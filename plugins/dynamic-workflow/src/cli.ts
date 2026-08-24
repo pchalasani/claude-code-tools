@@ -717,6 +717,19 @@ async function spawnDetached(store: StateStore): Promise<number> {
   const runnerToken = await store.claimRunner(process.pid);
   let handedOff = false;
   try {
+    // Leave any terminal status behind right after the claim succeeds and
+    // before the fallible detached setup, so a setup failure is recorded
+    // instead of skipped by recordBootstrapFailure's terminal-status
+    // guard. Clear the old terminal fields so no stale result survives;
+    // the engine performs the same reset when it starts.
+    await store.update((state) => {
+      if (TERMINAL_STATUSES.has(state.status)) {
+        state.status = "starting";
+        delete state.completedAt;
+        delete state.error;
+        delete state.result;
+      }
+    });
     const runnerLog = await open(path.join(store.directory, "runner.log"), "a");
     try {
       const child = spawn(
@@ -741,14 +754,6 @@ async function spawnDetached(store: StateStore): Promise<number> {
       await store.update((state) => {
         state.pid = pid;
         state.pidStartedAt = pidStartedAt;
-        // Clear old terminal fields when leaving a terminal status, so a
-        // detached bootstrap failure cannot keep a stale result; the
-        // engine performs the same reset when it starts.
-        if (TERMINAL_STATUSES.has(state.status)) {
-          delete state.completedAt;
-          delete state.error;
-          delete state.result;
-        }
         state.status = "starting";
       });
       await store.transferRunner(runnerToken, pid);

@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -558,6 +558,37 @@ test("detached resume --recover records a bootstrap failure", async () => {
   );
   expect(failed.error).toMatch(/Runner bootstrap failed/);
   expect(failed.result).toBeUndefined();
+});
+
+test("detached recovery records a failure when runner setup fails", async () => {
+  const workflowPath = path.join(temporaryDirectory, "recover-setup.js");
+  await writeFile(
+    workflowPath,
+    'const finding = await agent("inspect", { id: "inspect" });\n' +
+      "return { approved: false, finding }\n",
+    "utf8",
+  );
+  const run = await invoke(["run", workflowPath, "--json"]);
+  const halted = JSON.parse(run.stdout) as RunState;
+  expect(halted.status).toBe("completed");
+
+  // Occupy the runner.log path with a directory so the detached setup
+  // fails after the runner claim succeeds.
+  await mkdir(
+    path.join(
+      environment.CODEX_WORKFLOW_HOME as string,
+      "runs",
+      halted.runId,
+      "runner.log",
+    ),
+  );
+  await expect(invoke(["resume", halted.runId, "--recover", "--json"]))
+    .rejects.toMatchObject({ code: 1 });
+  const status = await invoke(["status", halted.runId, "--json"]);
+  const state = JSON.parse(status.stdout) as RunState;
+  expect(state.status).toBe("failed");
+  expect(state.error).toMatch(/Runner bootstrap failed/);
+  expect(state.result).toBeUndefined();
 });
 
 test("resume --recover is refused for non-completed runs", async () => {
