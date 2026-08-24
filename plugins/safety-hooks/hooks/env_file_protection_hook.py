@@ -184,21 +184,25 @@ def _glob_names_dotenv(pattern: str) -> bool:
         index += 1
     alphabet = {chr(code) for code in range(32, 127)}
     alphabet.update(basename_pattern)
-    pending = [(0, 0)]
+    # Third state component: whether a non-'*' token has spelled part of
+    # the '.env' core. A bare '*' can expand to anything, so a match that
+    # exists only because '*' spelled out '.env' (e.g. '*.ts' matching
+    # '.env.ts') does not count as the pattern naming a dotenv.
+    pending = [(0, 0, False)]
     seen = set()
     while pending:
-        token_index, dotenv_state = pending.pop()
-        state = (token_index, dotenv_state)
+        token_index, dotenv_state, contributed = pending.pop()
+        state = (token_index, dotenv_state, contributed)
         if state in seen:
             continue
         seen.add(state)
         if token_index == len(tokens):
-            if dotenv_state in {4, 5}:
+            if dotenv_state in {4, 5} and contributed:
                 return True
             continue
         token = tokens[token_index]
         if token == '*':
-            pending.append((token_index + 1, dotenv_state))
+            pending.append((token_index + 1, dotenv_state, contributed))
         for candidate in alphabet:
             negated = token.startswith(('[!', '[^'))
             bracket_body = token[2:-1] if negated else token[1:-1]
@@ -232,7 +236,9 @@ def _glob_names_dotenv(pattern: str) -> bool:
             else:
                 next_state = 5
             next_token = token_index if token == '*' else token_index + 1
-            pending.append((next_token, next_state))
+            next_contributed = contributed or (
+                token != '*' and dotenv_state < 4)
+            pending.append((next_token, next_state, next_contributed))
     return False
 
 
@@ -776,8 +782,52 @@ def _reader_accesses_dotenv(command_word: str, args: List[str]) -> bool:
         path_predicates = {
             '-name', '-iname', '-path', '-ipath', '-wholename', '-iwholename',
         }
+        # A disjunction (-o/-or/,) can re-select what a negated predicate
+        # excluded (find . ! -name '.env' -o -exec cat {} \;), so negation
+        # is only honoured when the expression has no disjunction.
+        has_disjunction = any(arg in {'-o', '-or', ','} for arg in args)
+        # An action left of the negation runs before the exclusion filters
+        # (find . -exec cat {} \; ! -name '.env' cats every file, dotenv
+        # included), so negation is only honoured with no earlier action.
+        action_tokens = {
+            '-exec', '-execdir', '-ok', '-okdir', '-delete',
+            '-fprintf', '-fprint', '-fls',
+        }
+        # These output actions write to their FILE operand, so naming a
+        # dotenv there truncates it: find . -fprintf .env '%p'
+        for position, arg in enumerate(args[:-1]):
+            if arg in {'-fprintf', '-fprint', '-fls'} and _names_dotenv(
+                    args[position + 1]):
+                return True
         for position, arg in enumerate(args[:-1]):
             pattern = args[position + 1]
+            # A predicate under an odd number of negations (-not/! -path X)
+            # excludes matches rather than selecting them, so it cannot be
+            # used to read a dotenv. Even counts (! ! -name X) still select.
+            negations = 0
+            scan = position - 1
+            while scan >= 0 and args[scan] in {'-not', '!'}:
+                negations += 1
+                scan -= 1
+            # Fail closed on ambiguous negation: a '-...' token right
+            # before the chain (other than a conjunction) may be a value
+            # predicate whose operand is the '!' itself, as in
+            # find . -printf '!' -name '.env' -exec cat {} \;
+            unambiguous = (
+                scan < 0
+                or not args[scan].startswith('-')
+                or args[scan] in {'-a', '-and', '(', ')'}
+            ) and not (
+                # -fprintf FILE FORMAT: with FILE before the chain, the
+                # chain's first '!' is the two-operand FORMAT, as in
+                # find . -fprintf /tmp/list '!' -name '.env' -delete
+                scan >= 1 and args[scan - 1] == '-fprintf'
+            )
+            no_prior_action = not any(
+                early in action_tokens for early in args[:position])
+            if (negations % 2 and unambiguous and not has_disjunction
+                    and no_prior_action):
+                continue
             if arg in path_predicates and (
                     _names_dotenv(pattern)
                     or _glob_names_dotenv(pattern)):

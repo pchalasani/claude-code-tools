@@ -168,6 +168,47 @@ The hook directs users to the
 [env-safe](../../tools/env-safe/) CLI for safe
 inspection of environment variables.
 
+#### Globs in find / grep / ripgrep
+
+The guard also inspects filename globs passed to
+`find`, `grep`, and `rg`, and blocks a command only
+when its glob *targets* a dotenv name. A glob counts
+as targeting a dotenv when its literal characters or
+its non-`*` wildcards (`?`, bracket classes) help
+spell the `.env` name:
+
+- Blocked: `find . -name '.env'`,
+  `find . -path '*/.env'`,
+  `grep -r --include='*.env*'`, `rg -g '*env'`,
+  `find . -name '.?nv'`, `rg -g '*e?v'`
+- Allowed: `find . -name '*.ts'`,
+  `find . -path '*/dist/*'`,
+  `grep -rn TODO --include='*.py' .`,
+  `rg TODO -g '*.rs'`
+
+A bare `*` on its own is never treated as spelling
+`.env`, even though it could match one at runtime --
+otherwise every ordinary include-glob would be
+denied. This is consistent with the guard allowing
+`grep -r SECRET .` (no glob at all), which reads the
+same files. The known trade-off: a glob like
+`--include='*.local'` can match `.env.local` but is
+allowed, because it reaches a dotenv only by `*`
+expanding over the entire `.env` core.
+
+Negated predicates and globs are exclusions, not
+selections, so they never trigger the guard:
+`find . ! -path '*/.env'`,
+`find . -not -name '.env'`, and
+`rg -g '!.env*'` are all allowed. Double negation
+(`find . ! ! -name '.env'`) selects again and is
+still blocked, and negation is ignored when the
+`find` expression contains a disjunction
+(`-o`/`-or`/`,`), since an `-o` branch can re-select
+the excluded file. Parenthesised `\( ... \)`
+expressions are not analysed as a unit; the guard
+inspects predicates token by token.
+
 :::tip
 If you need to modify a `.env` file, do so
 manually outside of Claude Code. Use `env-safe`

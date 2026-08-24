@@ -126,6 +126,11 @@ class TestBlocked(unittest.TestCase):
         self.assertBlocked("rg -g '.[e]nv.[0-9]*' SECRET .")
         self.assertBlocked("rg -g '[^a]env' SECRET .")
         self.assertBlocked("grep --include='[^a]env' SECRET .")
+        self.assertBlocked("grep -r SECRET --include='*env' .")
+        self.assertBlocked("grep -r SECRET --include='*env*' .")
+        self.assertBlocked("grep -r SECRET --include='*nv' .")
+        self.assertBlocked("grep -r SECRET --include='*[e]nv' .")
+        self.assertBlocked("rg SECRET -g '*e?v' .")
 
     def test_write_and_copy(self):
         self.assertBlocked("cp " + DOTENV + " " + DOTENV + ".bak")
@@ -188,6 +193,29 @@ class TestBlocked(unittest.TestCase):
         self.assertBlocked(r"find . -regex '.*/\.env' -delete")
         self.assertBlocked("find . -regex '.*[.]env' -delete")
         self.assertBlocked(r"find . -regex '.*\.env' -delete")
+        self.assertBlocked("find . -not -path '*/build/*' -name '.env'")
+        self.assertBlocked("find . ! -name '*.log' -path '*/.env'")
+        self.assertBlocked("find . ! ! -name '.env'")
+        self.assertBlocked("find . -not -not -name '.env' -print")
+        # -o re-selects what the negation excluded, so negation is not
+        # honoured when the expression contains a disjunction.
+        self.assertBlocked(r"find . ! -name '.env' -o -exec cat {} \;")
+        self.assertBlocked("find . ! -name '.env' -or -delete")
+        self.assertBlocked("find . ! -name '.env' , -exec cat {} +")
+        # '!' here is -printf's format operand, not a negation.
+        self.assertBlocked(r"find . -printf '!' -name '.env' -exec cat {} \;")
+        # Same trick through two-operand -fprintf FILE FORMAT.
+        self.assertBlocked("find . -fprintf /tmp/list '!' -name '.env' -delete")
+        # An action left of the negation runs before the exclusion filters.
+        # (The \; -exec spelling splits into another shell segment and is a
+        # pre-existing gap on main; the single-segment forms are covered.)
+        self.assertBlocked("find . -delete ! -name '.env'")
+        self.assertBlocked("find . -exec cat {} + ! -name '.env'")
+        self.assertBlocked(r"find . -fprintf .env '%p\n' ! -name '.env'")
+        # Output actions write to their FILE operand.
+        self.assertBlocked("find . -fprintf .env '%p'")
+        self.assertBlocked("find . -fprint .env")
+        self.assertBlocked("find . -fls .env.local")
 
     def test_file_literally_named_env(self):
         self.assertBlocked("cat env")
@@ -331,6 +359,27 @@ class TestAllowed(unittest.TestCase):
         self.assertAllowed("rg -g '!.env*' SECRET .")
         self.assertAllowed("rg --glob='!**/.env*' SECRET .")
         self.assertAllowed("rg -g '[a-z]*.py' SECRET .")
+
+    def test_ordinary_globs_do_not_select_dotenv(self):
+        """A '*' must not be allowed to spell out the literal '.env'."""
+        self.assertAllowed("find . -name '*.ts'")
+        self.assertAllowed("find . -path '*/dist/*'")
+        self.assertAllowed("grep -rn TODO --include='*.py' .")
+        self.assertAllowed("rg TODO -g '*.rs'")
+        self.assertAllowed("grep -r SECRET --include='*' .")
+        # Accepted trade-off: '*.local' can match '.env.local', but only by
+        # '*' expanding over the whole '.env' core; treated as ordinary.
+        self.assertAllowed("grep -r X --include='*.local' .")
+
+    def test_negated_find_predicates_are_exclusions(self):
+        self.assertAllowed("find . ! -path '*/build/*'")
+        self.assertAllowed("find . -not -path '*/build/*' -name '*.go'")
+        self.assertAllowed("find . ! -path '*/.env'")
+        self.assertAllowed("find . -not -name '.env'")
+        self.assertAllowed("find . -type f ! -name '.env'")
+        # Exclusion before the action: -exec never sees the dotenv.
+        self.assertAllowed(r"find . ! -name '.env' -exec cat {} \;")
+        self.assertAllowed("find . -fprint /tmp/list ! -name '*.log'")
 
     def test_quoted_or_escaped_shell_globs_are_literal(self):
         self.assertAllowed("cat '.[e]nv'")
