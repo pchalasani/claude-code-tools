@@ -419,6 +419,102 @@ test("resume refuses to signal a reused process ID", async () => {
   }
 });
 
+test("resume keeps a successful completion terminal and refuses --recover", async () => {
+  const workflowPath = path.join(temporaryDirectory, "success.js");
+  await writeFile(
+    workflowPath,
+    'return { approved: true, value: await agent("ok", { id: "ok" }) }\n',
+    "utf8",
+  );
+  const run = await invoke(["run", workflowPath, "--json"]);
+  const state = JSON.parse(run.stdout) as RunState;
+  expect(state.status).toBe("completed");
+
+  const resumed = await invoke(["resume", state.runId, "--json"]);
+  expect((JSON.parse(resumed.stdout) as RunState).status).toBe("completed");
+
+  await expect(invoke(["resume", state.runId, "--recover", "--json"]))
+    .rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringMatching(/refusing --recover/),
+    });
+  const codexLog = await readFile(
+    environment.FAKE_CODEX_LOG as string,
+    "utf8",
+  );
+  expect(codexLog.trim().split("\n")).toHaveLength(1);
+});
+
+test("resume without --recover reports a semantic halt without replaying", async () => {
+  const workflowPath = path.join(temporaryDirectory, "halt.js");
+  await writeFile(
+    workflowPath,
+    'const finding = await agent("inspect", { id: "inspect" });\n' +
+      "return { approved: false, finding }\n",
+    "utf8",
+  );
+  const run = await invoke(["run", workflowPath, "--json"]);
+  const state = JSON.parse(run.stdout) as RunState;
+  expect(state.status).toBe("completed");
+  expect(state.result).toMatchObject({ approved: false });
+
+  const resumed = await invoke(["resume", state.runId, "--json"]);
+  expect((JSON.parse(resumed.stdout) as RunState).status).toBe("completed");
+  expect(resumed.stderr).toMatch(/pass --recover to replay/);
+  const codexLog = await readFile(
+    environment.FAKE_CODEX_LOG as string,
+    "utf8",
+  );
+  expect(codexLog.trim().split("\n")).toHaveLength(1);
+});
+
+test("resume --recover replays a semantic halt and reuses cached steps", async () => {
+  const workflowPath = path.join(temporaryDirectory, "recover.js");
+  await writeFile(
+    workflowPath,
+    'const first = await agent("one", { id: "one" });\n' +
+      'const second = await agent("two", { id: "two" });\n' +
+      "return { approved: false, first, second }\n",
+    "utf8",
+  );
+  const run = await invoke(["run", workflowPath, "--json"]);
+  const halted = JSON.parse(run.stdout) as RunState;
+  expect(halted.status).toBe("completed");
+  expect(halted.result).toMatchObject({ approved: false });
+
+  await writeFile(
+    workflowPath,
+    'const first = await agent("one", { id: "one" });\n' +
+      'const second = await agent("two-changed", { id: "two" });\n' +
+      "return { approved: true, first, second }\n",
+    "utf8",
+  );
+  const recovered = await invoke([
+    "resume",
+    halted.runId,
+    "--recover",
+    "--foreground",
+    "--json",
+  ]);
+  const state = JSON.parse(recovered.stdout) as RunState;
+  expect(state.status).toBe("completed");
+  expect(state.result).toEqual({
+    approved: true,
+    first: "result:one",
+    second: "result:two-changed",
+  });
+
+  const codexLog = await readFile(
+    environment.FAKE_CODEX_LOG as string,
+    "utf8",
+  );
+  const prompts = codexLog
+    .trim()
+    .split("\n")
+    .map((line) => (JSON.parse(line) as { prompt: string }).prompt);
+  expect(prompts).toEqual(["one", "two", "two-changed"]);
+});
+
 async function invoke(args: string[]): Promise<{ stderr: string; stdout: string }> {
   return await execFileAsync(process.execPath, [cliPath, ...args], {
     cwd: temporaryDirectory,
