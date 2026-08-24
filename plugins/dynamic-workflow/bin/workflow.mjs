@@ -4944,6 +4944,9 @@ async function resumeCommand(parsed) {
     current.authorization = authorization;
   });
   if (parsed.flags.has("foreground")) {
+    await store.update((current) => {
+      current.status = "starting";
+    });
     const finalState = await executeRun(runId, parsed.flags.has("json"));
     if (!parsed.flags.has("json")) {
       outputState(finalState, false);

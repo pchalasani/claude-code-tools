@@ -1397,6 +1397,11 @@ async function resumeCommand(parsed: ParsedArguments): Promise<number> {
     current.authorization = authorization;
   });
   if (parsed.flags.has("foreground")) {
+    // Leave the terminal status behind before execution so a bootstrap
+    // failure is recorded instead of skipped by its terminal-status guard.
+    await store.update((current) => {
+      current.status = "starting";
+    });
     const finalState = await executeRun(runId, parsed.flags.has("json"));
     if (!parsed.flags.has("json")) {
       outputState(finalState, false);

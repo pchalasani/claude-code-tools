@@ -515,6 +515,28 @@ test("resume --recover replays a semantic halt and reuses cached steps", async (
   expect(prompts).toEqual(["one", "two", "two-changed"]);
 });
 
+test("resume --recover --foreground records a bootstrap failure", async () => {
+  const workflowPath = path.join(temporaryDirectory, "recover-broken.js");
+  await writeFile(
+    workflowPath,
+    'const finding = await agent("inspect", { id: "inspect" });\n' +
+      "return { approved: false, finding }\n",
+    "utf8",
+  );
+  const run = await invoke(["run", workflowPath, "--json"]);
+  const halted = JSON.parse(run.stdout) as RunState;
+  expect(halted.status).toBe("completed");
+
+  await writeFile(workflowPath, "this is not JavaScript {\n", "utf8");
+  await expect(
+    invoke(["resume", halted.runId, "--recover", "--foreground", "--json"]),
+  ).rejects.toMatchObject({ code: 1 });
+  const status = await invoke(["status", halted.runId, "--json"]);
+  const state = JSON.parse(status.stdout) as RunState;
+  expect(state.status).toBe("failed");
+  expect(state.error).toMatch(/Runner bootstrap failed/);
+});
+
 async function invoke(args: string[]): Promise<{ stderr: string; stdout: string }> {
   return await execFileAsync(process.execPath, [cliPath, ...args], {
     cwd: temporaryDirectory,
