@@ -57,6 +57,7 @@ const BOOLEAN_OPTIONS = new Set([
   "json",
   "no-notify-current-thread",
   "notify-current-thread",
+  "recover",
 ]);
 const TERMINAL_STATUSES = new Set<RunStatus>([
   "canceled",
@@ -99,7 +100,7 @@ Usage:
   codex-workflow wait <run-id> [--json]
   codex-workflow notify <run-id> [--force] [--json]
   codex-workflow pause <run-id>
-  codex-workflow resume <run-id> [--foreground] [--json]
+  codex-workflow resume <run-id> [--recover] [--foreground] [--json]
                         [--allow-workspace-write]
                         [--allow-danger-full-access]
   codex-workflow cancel <run-id>
@@ -112,7 +113,13 @@ Environment:
                             Callback default set by codex-dynamic
 
 Workflow scripts receive agent(), pipeline(), parallel(), checkpoint(), log(),
-args, and workflow.runId. Workers default to the read-only Codex sandbox.`);
+args, and workflow.runId. Workers default to the read-only Codex sandbox.
+
+resume --recover replays a completed run whose result is a semantic halt (a
+result object with "approved": false). Steps whose fingerprints still match
+return cached results; changed steps rerun. Other completed runs stay
+non-resumable. Write sandboxes need the --allow-* flag again after a script
+edit.`);
 }
 
 function parseArguments(args: string[]): ParsedArguments {
@@ -220,6 +227,15 @@ function authorizationFromFlags(
     workspaceWrite:
       dangerFullAccess || parsed.flags.has("allow-workspace-write"),
   };
+}
+
+function isSemanticHalt(result: JsonValue | undefined): boolean {
+  return (
+    typeof result === "object" &&
+    result !== null &&
+    !Array.isArray(result) &&
+    result.approved === false
+  );
 }
 
 function summary(state: RunState): string {
@@ -353,6 +369,17 @@ async function executeClaimedRun(
       state.pid = process.pid;
       state.pidStartedAt = pidStartedAt;
       state.runnerStartedAt = nowIso();
+      // Leave any terminal status behind only after the runner claim
+      // succeeded, so a bootstrap failure is recorded instead of skipped
+      // by recordBootstrapFailure's terminal-status guard. Clear the old
+      // terminal fields so a pre-engine failure cannot keep a stale
+      // result; the engine performs the same reset when it starts.
+      if (TERMINAL_STATUSES.has(state.status)) {
+        state.status = "starting";
+        delete state.completedAt;
+        delete state.error;
+        delete state.result;
+      }
     });
     const state = await superviseEngine(store);
     finalState = state;
@@ -690,6 +717,19 @@ async function spawnDetached(store: StateStore): Promise<number> {
   const runnerToken = await store.claimRunner(process.pid);
   let handedOff = false;
   try {
+    // Leave any terminal status behind right after the claim succeeds and
+    // before the fallible detached setup, so a setup failure is recorded
+    // instead of skipped by recordBootstrapFailure's terminal-status
+    // guard. Clear the old terminal fields so no stale result survives;
+    // the engine performs the same reset when it starts.
+    await store.update((state) => {
+      if (TERMINAL_STATUSES.has(state.status)) {
+        state.status = "starting";
+        delete state.completedAt;
+        delete state.error;
+        delete state.result;
+      }
+    });
     const runnerLog = await open(path.join(store.directory, "runner.log"), "a");
     try {
       const child = spawn(
@@ -1304,11 +1344,25 @@ async function resumeCommand(parsed: ParsedArguments): Promise<number> {
     "allow-workspace-write",
     "foreground",
     "json",
+    "recover",
   ]);
   const runId = requirePositional(parsed, 0, "run ID");
   let store = await StateStore.load(runId);
   let state = store.snapshot();
-  if (state.status === "completed") {
+  if (parsed.flags.has("recover") && state.status !== "completed") {
+    throw new Error(
+      `--recover only applies to completed semantic halts ` +
+        `(run ${runId} is ${state.status}); use plain resume`,
+    );
+  }
+  const recovering = state.status === "completed" && parsed.flags.has("recover");
+  if (state.status === "completed" && !recovering) {
+    if (isSemanticHalt(state.result)) {
+      console.error(
+        `codex-workflow: run ${runId} completed as a semantic halt ` +
+          "(result.approved is false); pass --recover to replay it",
+      );
+    }
     outputState(
       state,
       parsed.flags.has("json"),
@@ -1316,10 +1370,28 @@ async function resumeCommand(parsed: ParsedArguments): Promise<number> {
     );
     return 0;
   }
+  if (recovering && !isSemanticHalt(state.result)) {
+    throw new Error(
+      `Run ${runId} completed without a semantic halt ` +
+        "(result.approved is not false); refusing --recover",
+    );
+  }
   const runnerAlive = processIdentityMatches(
     state.pid,
     state.pidStartedAt,
   );
+  if (recovering) {
+    if (runnerAlive) {
+      throw new Error(
+        `Run ${runId} still has an active runner (PID ${state.pid}); ` +
+          "wait for it to exit before --recover",
+      );
+    }
+    await store.appendEvent("resume.recover", {
+      completedAt: state.completedAt ?? null,
+      result: state.result ?? null,
+    });
+  }
   if (!runnerAlive) {
     const cleaned = await terminateOrphanedExecution(
       store,
@@ -1328,6 +1400,15 @@ async function resumeCommand(parsed: ParsedArguments): Promise<number> {
     store = cleaned;
     state = cleaned.snapshot();
     await stopCompletionNotifierForResume(store);
+    if (
+      recovering &&
+      (state.status !== "completed" || !isSemanticHalt(state.result))
+    ) {
+      throw new Error(
+        `Run ${runId} changed state during recovery (now ${state.status}); ` +
+          "check status and retry",
+      );
+    }
   }
   const changingAuthorization =
     parsed.flags.has("allow-danger-full-access") ||

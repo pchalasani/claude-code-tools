@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -417,6 +417,199 @@ test("resume refuses to signal a reused process ID", async () => {
     killProcessGroup(oldEnginePid);
     killProcessGroup(launch.pid);
   }
+});
+
+test("resume keeps a successful completion terminal and refuses --recover", async () => {
+  const workflowPath = path.join(temporaryDirectory, "success.js");
+  await writeFile(
+    workflowPath,
+    'return { approved: true, value: await agent("ok", { id: "ok" }) }\n',
+    "utf8",
+  );
+  const run = await invoke(["run", workflowPath, "--json"]);
+  const state = JSON.parse(run.stdout) as RunState;
+  expect(state.status).toBe("completed");
+
+  const resumed = await invoke(["resume", state.runId, "--json"]);
+  expect((JSON.parse(resumed.stdout) as RunState).status).toBe("completed");
+
+  await expect(invoke(["resume", state.runId, "--recover", "--json"]))
+    .rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringMatching(/refusing --recover/),
+    });
+  const codexLog = await readFile(
+    environment.FAKE_CODEX_LOG as string,
+    "utf8",
+  );
+  expect(codexLog.trim().split("\n")).toHaveLength(1);
+});
+
+test("resume without --recover reports a semantic halt without replaying", async () => {
+  const workflowPath = path.join(temporaryDirectory, "halt.js");
+  await writeFile(
+    workflowPath,
+    'const finding = await agent("inspect", { id: "inspect" });\n' +
+      "return { approved: false, finding }\n",
+    "utf8",
+  );
+  const run = await invoke(["run", workflowPath, "--json"]);
+  const state = JSON.parse(run.stdout) as RunState;
+  expect(state.status).toBe("completed");
+  expect(state.result).toMatchObject({ approved: false });
+
+  const resumed = await invoke(["resume", state.runId, "--json"]);
+  expect((JSON.parse(resumed.stdout) as RunState).status).toBe("completed");
+  expect(resumed.stderr).toMatch(/pass --recover to replay/);
+  const codexLog = await readFile(
+    environment.FAKE_CODEX_LOG as string,
+    "utf8",
+  );
+  expect(codexLog.trim().split("\n")).toHaveLength(1);
+});
+
+test("resume --recover replays a semantic halt and reuses cached steps", async () => {
+  const workflowPath = path.join(temporaryDirectory, "recover.js");
+  await writeFile(
+    workflowPath,
+    'const first = await agent("one", { id: "one" });\n' +
+      'const second = await agent("two", { id: "two" });\n' +
+      "return { approved: false, first, second }\n",
+    "utf8",
+  );
+  const run = await invoke(["run", workflowPath, "--json"]);
+  const halted = JSON.parse(run.stdout) as RunState;
+  expect(halted.status).toBe("completed");
+  expect(halted.result).toMatchObject({ approved: false });
+
+  await writeFile(
+    workflowPath,
+    'const first = await agent("one", { id: "one" });\n' +
+      'const second = await agent("two-changed", { id: "two" });\n' +
+      "return { approved: true, first, second }\n",
+    "utf8",
+  );
+  const recovered = await invoke([
+    "resume",
+    halted.runId,
+    "--recover",
+    "--foreground",
+    "--json",
+  ]);
+  const state = JSON.parse(recovered.stdout) as RunState;
+  expect(state.status).toBe("completed");
+  expect(state.result).toEqual({
+    approved: true,
+    first: "result:one",
+    second: "result:two-changed",
+  });
+
+  const codexLog = await readFile(
+    environment.FAKE_CODEX_LOG as string,
+    "utf8",
+  );
+  const prompts = codexLog
+    .trim()
+    .split("\n")
+    .map((line) => (JSON.parse(line) as { prompt: string }).prompt);
+  expect(prompts).toEqual(["one", "two", "two-changed"]);
+});
+
+test("resume --recover --foreground records a bootstrap failure", async () => {
+  const workflowPath = path.join(temporaryDirectory, "recover-broken.js");
+  await writeFile(
+    workflowPath,
+    'const finding = await agent("inspect", { id: "inspect" });\n' +
+      "return { approved: false, finding }\n",
+    "utf8",
+  );
+  const run = await invoke(["run", workflowPath, "--json"]);
+  const halted = JSON.parse(run.stdout) as RunState;
+  expect(halted.status).toBe("completed");
+
+  await writeFile(workflowPath, "this is not JavaScript {\n", "utf8");
+  await expect(
+    invoke(["resume", halted.runId, "--recover", "--foreground", "--json"]),
+  ).rejects.toMatchObject({ code: 1 });
+  const status = await invoke(["status", halted.runId, "--json"]);
+  const state = JSON.parse(status.stdout) as RunState;
+  expect(state.status).toBe("failed");
+  expect(state.error).toMatch(/Runner bootstrap failed/);
+  expect(state.result).toBeUndefined();
+});
+
+test("detached resume --recover records a bootstrap failure", async () => {
+  const workflowPath = path.join(temporaryDirectory, "recover-detached.js");
+  await writeFile(
+    workflowPath,
+    'const finding = await agent("inspect", { id: "inspect" });\n' +
+      "return { approved: false, finding }\n",
+    "utf8",
+  );
+  const run = await invoke(["run", workflowPath, "--json"]);
+  const halted = JSON.parse(run.stdout) as RunState;
+  expect(halted.status).toBe("completed");
+
+  await writeFile(workflowPath, "this is not JavaScript {\n", "utf8");
+  await invoke(["resume", halted.runId, "--recover", "--json"]);
+  const failed = await waitForRun(
+    halted.runId,
+    (state) => state.status === "failed",
+  );
+  expect(failed.error).toMatch(/Runner bootstrap failed/);
+  expect(failed.result).toBeUndefined();
+});
+
+test("detached recovery records a failure when runner setup fails", async () => {
+  const workflowPath = path.join(temporaryDirectory, "recover-setup.js");
+  await writeFile(
+    workflowPath,
+    'const finding = await agent("inspect", { id: "inspect" });\n' +
+      "return { approved: false, finding }\n",
+    "utf8",
+  );
+  const run = await invoke(["run", workflowPath, "--json"]);
+  const halted = JSON.parse(run.stdout) as RunState;
+  expect(halted.status).toBe("completed");
+
+  // Occupy the runner.log path with a directory so the detached setup
+  // fails after the runner claim succeeds.
+  await mkdir(
+    path.join(
+      environment.CODEX_WORKFLOW_HOME as string,
+      "runs",
+      halted.runId,
+      "runner.log",
+    ),
+  );
+  await expect(invoke(["resume", halted.runId, "--recover", "--json"]))
+    .rejects.toMatchObject({ code: 1 });
+  const status = await invoke(["status", halted.runId, "--json"]);
+  const state = JSON.parse(status.stdout) as RunState;
+  expect(state.status).toBe("failed");
+  expect(state.error).toMatch(/Runner bootstrap failed/);
+  expect(state.result).toBeUndefined();
+});
+
+test("resume --recover is refused for non-completed runs", async () => {
+  const workflowPath = path.join(temporaryDirectory, "recover-failed.js");
+  await writeFile(
+    workflowPath,
+    'return await agent("[fail] boom", { id: "boom" })\n',
+    "utf8",
+  );
+  const error = (await invoke(["run", workflowPath, "--json"]).catch(
+    (rejection: unknown) => rejection,
+  )) as { code: number; stdout: string };
+  expect(error.code).toBe(1);
+  const failed = JSON.parse(error.stdout) as RunState;
+  expect(failed.status).toBe("failed");
+
+  await expect(invoke(["resume", failed.runId, "--recover", "--json"]))
+    .rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringMatching(/only applies to completed semantic halts/),
+    });
 });
 
 async function invoke(args: string[]): Promise<{ stderr: string; stdout: string }> {

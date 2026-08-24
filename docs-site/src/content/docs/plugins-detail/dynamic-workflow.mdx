@@ -113,6 +113,25 @@ Pause is cooperative: active workers finish, while new workers wait. Resume
 replays the JavaScript and returns cached results for compatible completed
 steps. This works across Codex CLI sessions because state lives on disk.
 
+A workflow can also end in a semantic halt: it returns an object with
+`approved: false` (for example, a review gate that found blocking problems),
+and the run records status `completed`. Plain `resume` leaves completed runs
+alone; for a semantic halt it prints a hint instead of replaying. After
+repairing the workflow script, replay the same run — keeping its cached
+steps — with:
+
+```bash
+node bin/workflow.mjs resume <run-id> --recover
+```
+
+Steps whose prompts and options are unchanged return cached results; changed
+steps rerun. If workers need a write sandbox, pass `--allow-workspace-write`
+(or `--allow-danger-full-access`) again, since a script edit invalidates the
+earlier write approval. `--recover` only applies to completed semantic
+halts: it is refused for runs that completed successfully (`approved` is
+`true` or absent), for failed, canceled, or active runs (plain `resume`
+covers those), and while a prior runner process is still alive.
+
 ## Completion callbacks
 
 A detached `wait` process can observe completion without making model calls,

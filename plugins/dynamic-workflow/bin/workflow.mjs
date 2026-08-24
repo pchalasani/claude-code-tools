@@ -3794,7 +3794,8 @@ var BOOLEAN_OPTIONS = /* @__PURE__ */ new Set([
   "help",
   "json",
   "no-notify-current-thread",
-  "notify-current-thread"
+  "notify-current-thread",
+  "recover"
 ]);
 var TERMINAL_STATUSES = /* @__PURE__ */ new Set([
   "canceled",
@@ -3834,7 +3835,7 @@ Usage:
   codex-workflow wait <run-id> [--json]
   codex-workflow notify <run-id> [--force] [--json]
   codex-workflow pause <run-id>
-  codex-workflow resume <run-id> [--foreground] [--json]
+  codex-workflow resume <run-id> [--recover] [--foreground] [--json]
                         [--allow-workspace-write]
                         [--allow-danger-full-access]
   codex-workflow cancel <run-id>
@@ -3847,7 +3848,13 @@ Environment:
                             Callback default set by codex-dynamic
 
 Workflow scripts receive agent(), pipeline(), parallel(), checkpoint(), log(),
-args, and workflow.runId. Workers default to the read-only Codex sandbox.`);
+args, and workflow.runId. Workers default to the read-only Codex sandbox.
+
+resume --recover replays a completed run whose result is a semantic halt (a
+result object with "approved": false). Steps whose fingerprints still match
+return cached results; changed steps rerun. Other completed runs stay
+non-resumable. Write sandboxes need the --allow-* flag again after a script
+edit.`);
 }
 function parseArguments(args) {
   const parsed = {
@@ -3926,6 +3933,9 @@ function authorizationFromFlags(parsed, workflowHash, current) {
     workflowHash,
     workspaceWrite: dangerFullAccess || parsed.flags.has("allow-workspace-write")
   };
+}
+function isSemanticHalt(result) {
+  return typeof result === "object" && result !== null && !Array.isArray(result) && result.approved === false;
 }
 function summary(state) {
   const completed = Object.values(state.steps).filter(
@@ -4033,6 +4043,12 @@ async function executeClaimedRun(store, json, requestedToken) {
       state2.pid = process.pid;
       state2.pidStartedAt = pidStartedAt;
       state2.runnerStartedAt = nowIso();
+      if (TERMINAL_STATUSES.has(state2.status)) {
+        state2.status = "starting";
+        delete state2.completedAt;
+        delete state2.error;
+        delete state2.result;
+      }
     });
     const state = await superviseEngine(store);
     finalState = state;
@@ -4317,6 +4333,14 @@ async function spawnDetached(store) {
   const runnerToken = await store.claimRunner(process.pid);
   let handedOff = false;
   try {
+    await store.update((state) => {
+      if (TERMINAL_STATUSES.has(state.status)) {
+        state.status = "starting";
+        delete state.completedAt;
+        delete state.error;
+        delete state.result;
+      }
+    });
     const runnerLog = await open(path6.join(store.directory, "runner.log"), "a");
     try {
       const child = spawn2(
@@ -4864,12 +4888,24 @@ async function resumeCommand(parsed) {
     "allow-danger-full-access",
     "allow-workspace-write",
     "foreground",
-    "json"
+    "json",
+    "recover"
   ]);
   const runId = requirePositional(parsed, 0, "run ID");
   let store = await StateStore.load(runId);
   let state = store.snapshot();
-  if (state.status === "completed") {
+  if (parsed.flags.has("recover") && state.status !== "completed") {
+    throw new Error(
+      `--recover only applies to completed semantic halts (run ${runId} is ${state.status}); use plain resume`
+    );
+  }
+  const recovering = state.status === "completed" && parsed.flags.has("recover");
+  if (state.status === "completed" && !recovering) {
+    if (isSemanticHalt(state.result)) {
+      console.error(
+        `codex-workflow: run ${runId} completed as a semantic halt (result.approved is false); pass --recover to replay it`
+      );
+    }
     outputState(
       state,
       parsed.flags.has("json"),
@@ -4877,10 +4913,26 @@ async function resumeCommand(parsed) {
     );
     return 0;
   }
+  if (recovering && !isSemanticHalt(state.result)) {
+    throw new Error(
+      `Run ${runId} completed without a semantic halt (result.approved is not false); refusing --recover`
+    );
+  }
   const runnerAlive = processIdentityMatches(
     state.pid,
     state.pidStartedAt
   );
+  if (recovering) {
+    if (runnerAlive) {
+      throw new Error(
+        `Run ${runId} still has an active runner (PID ${state.pid}); wait for it to exit before --recover`
+      );
+    }
+    await store.appendEvent("resume.recover", {
+      completedAt: state.completedAt ?? null,
+      result: state.result ?? null
+    });
+  }
   if (!runnerAlive) {
     const cleaned = await terminateOrphanedExecution(
       store,
@@ -4889,6 +4941,11 @@ async function resumeCommand(parsed) {
     store = cleaned;
     state = cleaned.snapshot();
     await stopCompletionNotifierForResume(store);
+    if (recovering && (state.status !== "completed" || !isSemanticHalt(state.result))) {
+      throw new Error(
+        `Run ${runId} changed state during recovery (now ${state.status}); check status and retry`
+      );
+    }
   }
   const changingAuthorization = parsed.flags.has("allow-danger-full-access") || parsed.flags.has("allow-workspace-write");
   const workflowHash = changingAuthorization && !runnerAlive ? sha256(await readFile4(state.workflowPath, "utf8")) : state.workflowHash;

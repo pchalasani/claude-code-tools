@@ -1,6 +1,6 @@
 {
   "name": "@cctools/dynamic-workflow",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Durable JavaScript workflows with Codex thread callbacks",
   "private": true,
   "type": "module",

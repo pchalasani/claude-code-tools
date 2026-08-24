@@ -384,6 +384,19 @@ On failure, inspect the failed step and logs. Fix the script or environment,
 then use `resume`; completed compatible steps remain cached. Do not delete the
 run directory merely to retry.
 
+A workflow can finish deliberately with a semantic halt: it returns an object
+whose `approved` property is `false`, and the run still records status
+`completed`. Plain `resume` leaves any completed run untouched and, for a
+semantic halt, prints a hint instead of replaying. After reviewing and
+repairing the script, replay the same run with
+`resume <run-id> --recover`; it follows the script-edit checklist above, so
+renew `--allow-workspace-write` or `--allow-danger-full-access` when the
+script changed and workers need a write sandbox. `--recover` is refused when
+the stored result is not a semantic halt or a prior runner process is still
+alive, and it only applies to completed runs; failed, canceled, or active
+runs use plain `resume`. Runs whose result has `approved` `true` or absent
+stay non-resumable.
+
 Treat a context-capacity error as non-retryable. Reduce or chunk the failing
 prompt, replace large fan-in with a tree reduction, validate the edit, and then
 resume so compatible completed siblings stay cached.
