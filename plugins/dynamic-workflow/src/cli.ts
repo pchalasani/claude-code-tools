@@ -371,9 +371,14 @@ async function executeClaimedRun(
       state.runnerStartedAt = nowIso();
       // Leave any terminal status behind only after the runner claim
       // succeeded, so a bootstrap failure is recorded instead of skipped
-      // by recordBootstrapFailure's terminal-status guard.
+      // by recordBootstrapFailure's terminal-status guard. Clear the old
+      // terminal fields so a pre-engine failure cannot keep a stale
+      // result; the engine performs the same reset when it starts.
       if (TERMINAL_STATUSES.has(state.status)) {
         state.status = "starting";
+        delete state.completedAt;
+        delete state.error;
+        delete state.result;
       }
     });
     const state = await superviseEngine(store);
@@ -1382,6 +1387,15 @@ async function resumeCommand(parsed: ParsedArguments): Promise<number> {
     store = cleaned;
     state = cleaned.snapshot();
     await stopCompletionNotifierForResume(store);
+    if (
+      recovering &&
+      (state.status !== "completed" || !isSemanticHalt(state.result))
+    ) {
+      throw new Error(
+        `Run ${runId} changed state during recovery (now ${state.status}); ` +
+          "check status and retry",
+      );
+    }
   }
   const changingAuthorization =
     parsed.flags.has("allow-danger-full-access") ||

@@ -535,6 +535,7 @@ test("resume --recover --foreground records a bootstrap failure", async () => {
   const state = JSON.parse(status.stdout) as RunState;
   expect(state.status).toBe("failed");
   expect(state.error).toMatch(/Runner bootstrap failed/);
+  expect(state.result).toBeUndefined();
 });
 
 test("resume --recover is refused for non-completed runs", async () => {

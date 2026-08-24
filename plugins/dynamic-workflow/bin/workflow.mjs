@@ -4045,6 +4045,9 @@ async function executeClaimedRun(store, json, requestedToken) {
       state2.runnerStartedAt = nowIso();
       if (TERMINAL_STATUSES.has(state2.status)) {
         state2.status = "starting";
+        delete state2.completedAt;
+        delete state2.error;
+        delete state2.result;
       }
     });
     const state = await superviseEngine(store);
@@ -4930,6 +4933,11 @@ async function resumeCommand(parsed) {
     store = cleaned;
     state = cleaned.snapshot();
     await stopCompletionNotifierForResume(store);
+    if (recovering && (state.status !== "completed" || !isSemanticHalt(state.result))) {
+      throw new Error(
+        `Run ${runId} changed state during recovery (now ${state.status}); check status and retry`
+      );
+    }
   }
   const changingAuthorization = parsed.flags.has("allow-danger-full-access") || parsed.flags.has("allow-workspace-write");
   const workflowHash = changingAuthorization && !runnerAlive ? sha256(await readFile4(state.workflowPath, "utf8")) : state.workflowHash;
