@@ -538,6 +538,28 @@ test("resume --recover --foreground records a bootstrap failure", async () => {
   expect(state.result).toBeUndefined();
 });
 
+test("detached resume --recover records a bootstrap failure", async () => {
+  const workflowPath = path.join(temporaryDirectory, "recover-detached.js");
+  await writeFile(
+    workflowPath,
+    'const finding = await agent("inspect", { id: "inspect" });\n' +
+      "return { approved: false, finding }\n",
+    "utf8",
+  );
+  const run = await invoke(["run", workflowPath, "--json"]);
+  const halted = JSON.parse(run.stdout) as RunState;
+  expect(halted.status).toBe("completed");
+
+  await writeFile(workflowPath, "this is not JavaScript {\n", "utf8");
+  await invoke(["resume", halted.runId, "--recover", "--json"]);
+  const failed = await waitForRun(
+    halted.runId,
+    (state) => state.status === "failed",
+  );
+  expect(failed.error).toMatch(/Runner bootstrap failed/);
+  expect(failed.result).toBeUndefined();
+});
+
 test("resume --recover is refused for non-completed runs", async () => {
   const workflowPath = path.join(temporaryDirectory, "recover-failed.js");
   await writeFile(

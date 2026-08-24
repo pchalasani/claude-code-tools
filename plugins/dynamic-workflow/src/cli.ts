@@ -741,6 +741,14 @@ async function spawnDetached(store: StateStore): Promise<number> {
       await store.update((state) => {
         state.pid = pid;
         state.pidStartedAt = pidStartedAt;
+        // Clear old terminal fields when leaving a terminal status, so a
+        // detached bootstrap failure cannot keep a stale result; the
+        // engine performs the same reset when it starts.
+        if (TERMINAL_STATUSES.has(state.status)) {
+          delete state.completedAt;
+          delete state.error;
+          delete state.result;
+        }
         state.status = "starting";
       });
       await store.transferRunner(runnerToken, pid);
