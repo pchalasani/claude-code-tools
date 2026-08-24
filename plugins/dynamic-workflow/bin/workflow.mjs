@@ -4043,6 +4043,9 @@ async function executeClaimedRun(store, json, requestedToken) {
       state2.pid = process.pid;
       state2.pidStartedAt = pidStartedAt;
       state2.runnerStartedAt = nowIso();
+      if (TERMINAL_STATUSES.has(state2.status)) {
+        state2.status = "starting";
+      }
     });
     const state = await superviseEngine(store);
     finalState = state;
@@ -4880,6 +4883,11 @@ async function resumeCommand(parsed) {
   const runId = requirePositional(parsed, 0, "run ID");
   let store = await StateStore.load(runId);
   let state = store.snapshot();
+  if (parsed.flags.has("recover") && state.status !== "completed") {
+    throw new Error(
+      `--recover only applies to completed semantic halts (run ${runId} is ${state.status}); use plain resume`
+    );
+  }
   const recovering = state.status === "completed" && parsed.flags.has("recover");
   if (state.status === "completed" && !recovering) {
     if (isSemanticHalt(state.result)) {
@@ -4944,9 +4952,6 @@ async function resumeCommand(parsed) {
     current.authorization = authorization;
   });
   if (parsed.flags.has("foreground")) {
-    await store.update((current) => {
-      current.status = "starting";
-    });
     const finalState = await executeRun(runId, parsed.flags.has("json"));
     if (!parsed.flags.has("json")) {
       outputState(finalState, false);

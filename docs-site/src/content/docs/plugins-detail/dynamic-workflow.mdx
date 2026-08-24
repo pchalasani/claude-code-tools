@@ -127,9 +127,10 @@ node bin/workflow.mjs resume <run-id> --recover
 Steps whose prompts and options are unchanged return cached results; changed
 steps rerun. If workers need a write sandbox, pass `--allow-workspace-write`
 (or `--allow-danger-full-access`) again, since a script edit invalidates the
-earlier write approval. `--recover` is refused for runs that completed
-successfully (`approved` is `true` or absent) and while a prior runner
-process is still alive.
+earlier write approval. `--recover` only applies to completed semantic
+halts: it is refused for runs that completed successfully (`approved` is
+`true` or absent), for failed, canceled, or active runs (plain `resume`
+covers those), and while a prior runner process is still alive.
 
 ## Completion callbacks
 

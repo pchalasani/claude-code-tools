@@ -537,6 +537,27 @@ test("resume --recover --foreground records a bootstrap failure", async () => {
   expect(state.error).toMatch(/Runner bootstrap failed/);
 });
 
+test("resume --recover is refused for non-completed runs", async () => {
+  const workflowPath = path.join(temporaryDirectory, "recover-failed.js");
+  await writeFile(
+    workflowPath,
+    'return await agent("[fail] boom", { id: "boom" })\n',
+    "utf8",
+  );
+  const error = (await invoke(["run", workflowPath, "--json"]).catch(
+    (rejection: unknown) => rejection,
+  )) as { code: number; stdout: string };
+  expect(error.code).toBe(1);
+  const failed = JSON.parse(error.stdout) as RunState;
+  expect(failed.status).toBe("failed");
+
+  await expect(invoke(["resume", failed.runId, "--recover", "--json"]))
+    .rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringMatching(/only applies to completed semantic halts/),
+    });
+});
+
 async function invoke(args: string[]): Promise<{ stderr: string; stdout: string }> {
   return await execFileAsync(process.execPath, [cliPath, ...args], {
     cwd: temporaryDirectory,

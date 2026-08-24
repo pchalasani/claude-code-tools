@@ -393,7 +393,9 @@ repairing the script, replay the same run with
 renew `--allow-workspace-write` or `--allow-danger-full-access` when the
 script changed and workers need a write sandbox. `--recover` is refused when
 the stored result is not a semantic halt or a prior runner process is still
-alive. Runs whose result has `approved` `true` or absent stay non-resumable.
+alive, and it only applies to completed runs; failed, canceled, or active
+runs use plain `resume`. Runs whose result has `approved` `true` or absent
+stay non-resumable.
 
 Treat a context-capacity error as non-retryable. Reduce or chunk the failing
 prompt, replace large fan-in with a tree reduction, validate the edit, and then

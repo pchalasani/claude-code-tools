@@ -369,6 +369,12 @@ async function executeClaimedRun(
       state.pid = process.pid;
       state.pidStartedAt = pidStartedAt;
       state.runnerStartedAt = nowIso();
+      // Leave any terminal status behind only after the runner claim
+      // succeeded, so a bootstrap failure is recorded instead of skipped
+      // by recordBootstrapFailure's terminal-status guard.
+      if (TERMINAL_STATUSES.has(state.status)) {
+        state.status = "starting";
+      }
     });
     const state = await superviseEngine(store);
     finalState = state;
@@ -1325,6 +1331,12 @@ async function resumeCommand(parsed: ParsedArguments): Promise<number> {
   const runId = requirePositional(parsed, 0, "run ID");
   let store = await StateStore.load(runId);
   let state = store.snapshot();
+  if (parsed.flags.has("recover") && state.status !== "completed") {
+    throw new Error(
+      `--recover only applies to completed semantic halts ` +
+        `(run ${runId} is ${state.status}); use plain resume`,
+    );
+  }
   const recovering = state.status === "completed" && parsed.flags.has("recover");
   if (state.status === "completed" && !recovering) {
     if (isSemanticHalt(state.result)) {
@@ -1397,11 +1409,6 @@ async function resumeCommand(parsed: ParsedArguments): Promise<number> {
     current.authorization = authorization;
   });
   if (parsed.flags.has("foreground")) {
-    // Leave the terminal status behind before execution so a bootstrap
-    // failure is recorded instead of skipped by its terminal-status guard.
-    await store.update((current) => {
-      current.status = "starting";
-    });
     const finalState = await executeRun(runId, parsed.flags.has("json"));
     if (!parsed.flags.has("json")) {
       outputState(finalState, false);
