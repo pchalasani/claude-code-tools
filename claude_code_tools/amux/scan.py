@@ -47,6 +47,20 @@ def _tmux(*args: str) -> str:
     return out.stdout if out.returncode == 0 else ""
 
 
+def _tmux_target(socket_path: str | None, *args: str) -> str:
+    """Run tmux against one exact server socket."""
+    command = ["tmux"]
+    if socket_path:
+        command.extend(("-S", socket_path))
+    try:
+        out = subprocess.run(
+            [*command, *args], capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
 def _children_by_ppid() -> dict[int, list[tuple[int, str]]]:
     """Map each PID to its direct children as ``(pid, command_line)`` pairs.
 
@@ -131,6 +145,50 @@ def capture(pane: str, lines: int = 40) -> str:
     text = _ANSI.sub("", raw)
     kept = [ln for ln in text.splitlines() if ln.strip()]
     return "\n".join(kept[-lines:])
+
+
+def resolve_pane_agent(pane: str, tmux_socket: str | None = None) -> Agent | None:
+    """Resolve one pane to its exact long-lived Claude or Codex process."""
+    fmt = _SEP.join(
+        (
+            "#{pane_id}",
+            "#{session_name}",
+            "#{pane_pid}",
+            "#{pane_current_path}",
+            "#{session_name}:#{window_index}.#{pane_index}",
+        )
+    )
+    record = _tmux_target(
+        tmux_socket, "display-message", "-t", pane, "-p", fmt,
+    )
+    parts = record.split(_SEP)
+    if len(parts) != 5:
+        return None
+    pane_id, session, pane_pid, cwd, display_addr = parts
+    try:
+        root_pid = int(pane_pid)
+    except ValueError:
+        return None
+    children = descendants(_children_by_ppid(), root_pid)
+    kinds = {
+        kind
+        for _pid, command in children
+        if (kind := detect.classify_argv(command)) is not None
+    }
+    if len(kinds) != 1:
+        return None
+    kind = kinds.pop()
+    pid = agent_pid(children, kind)
+    if pid <= 0:
+        return None
+    return Agent(
+        pane=display_addr,
+        session=session,
+        kind=kind,  # type: ignore[arg-type]
+        cwd=cwd,
+        pid=pid,
+        extra={"pane_id": pane_id},
+    )
 
 
 def _git_context(cwd: str) -> tuple[str, str]:

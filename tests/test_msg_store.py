@@ -381,6 +381,207 @@ class TestAgentRegistration:
 
         assert store.get_agent_by_id(moving.session_id).pane_id == "%2"
 
+    @pytest.mark.parametrize(
+        ("source_kind", "target_kind"),
+        (
+            (AgentKind.CLAUDE, AgentKind.CODEX),
+            (AgentKind.CODEX, AgentKind.CLAUDE),
+        ),
+    )
+    def test_retarget_refreshes_long_lived_tui_identity(
+        self, store, source_kind, target_kind,
+    ):
+        agent = store.register_agent(
+            "control", "%1", "test", source_kind,
+            pid=101, cwd="/old", process_start_identity="linux:101:10",
+        )
+
+        moved = store.retarget_agent(
+            agent.session_id,
+            "%9",
+            "test",
+            agent_kind=target_kind,
+            pid=202,
+            cwd="/new",
+            process_start_identity="linux:202:20",
+        )
+
+        assert (
+            moved.session_id,
+            moved.agent_kind,
+            moved.pid,
+            moved.cwd,
+            moved.process_start_identity,
+        ) == (
+            agent.session_id,
+            target_kind,
+            202,
+            "/new",
+            "linux:202:20",
+        )
+
+    def test_retarget_replace_candidate_is_atomic_and_preserves_history(self, store):
+        sender = store.register_agent("sender", "%1", "test", AgentKind.CLAUDE)
+        stable = store.register_agent(
+            "control", "%2", "test", AgentKind.CLAUDE,
+            pid=102, cwd="/old", process_start_identity="linux:102:10",
+        )
+        candidate = store.register_agent(
+            "candidate", "%9", "test", AgentKind.CODEX,
+            pid=909, cwd="/new", process_start_identity="linux:909:90",
+        )
+        thread = store.create_thread(
+            "control", sender.session_id, [sender.session_id, stable.session_id],
+        )
+        store.send_message(thread.id, sender.session_id, "keep unread")
+        before = store.get_inbox(stable.session_id)
+
+        moved = store.retarget_agent(
+            stable.session_id,
+            "%9",
+            "test",
+            agent_kind=AgentKind.CODEX,
+            pid=909,
+            cwd="/new",
+            process_start_identity="linux:909:90",
+            replace_candidate_session_id=candidate.session_id,
+        )
+
+        assert moved.session_id == stable.session_id
+        assert moved.pane_id == "%9"
+        assert moved.agent_kind is AgentKind.CODEX
+        assert candidate.session_id not in {
+            item.session_id for item in store.list_agents("test")
+        }
+        assert store.get_inbox(stable.session_id) == before
+        assert [item.id for item in store.list_threads(stable.session_id)] == [thread.id]
+        assert [item.session_id for item in store.list_agents("test")] == [
+            sender.session_id,
+            stable.session_id,
+        ]
+
+    def test_retarget_replace_candidate_retry_returns_committed_stable_identity(
+        self, store,
+    ):
+        stable = store.register_agent(
+            "control", "%2", "test", AgentKind.CLAUDE,
+            pid=102, cwd="/old", process_start_identity="linux:102:10",
+        )
+        candidate = store.register_agent(
+            "candidate", "%9", "test", AgentKind.CODEX,
+            pid=909, cwd="/new", process_start_identity="linux:909:90",
+        )
+        kwargs = {
+            "agent_kind": AgentKind.CODEX,
+            "pid": 909,
+            "cwd": "/new",
+            "process_start_identity": "linux:909:90",
+            "replace_candidate_session_id": candidate.session_id,
+        }
+        first = store.retarget_agent(stable.session_id, "%9", "test", **kwargs)
+
+        retried = store.retarget_agent(stable.session_id, "%9", "test", **kwargs)
+
+        assert retried == first
+        assert [item.session_id for item in store.list_agents("test")] == [
+            stable.session_id,
+        ]
+
+    @pytest.mark.parametrize(
+        "stage",
+        (
+            "before_candidate_deactivate",
+            "after_candidate_deactivate",
+            "after_stable_update",
+        ),
+    )
+    def test_retarget_replace_candidate_rolls_back_every_failpoint(self, store, stage):
+        stable = store.register_agent(
+            "control", "%2", "test", AgentKind.CLAUDE,
+            pid=102, cwd="/old", process_start_identity="linux:102:10",
+        )
+        candidate = store.register_agent(
+            "candidate", "%9", "test", AgentKind.CODEX,
+            pid=909, cwd="/new", process_start_identity="linux:909:90",
+        )
+
+        def failpoint(actual):
+            if actual == stage:
+                raise RuntimeError(stage)
+
+        with pytest.raises(RuntimeError, match=stage):
+            store.retarget_agent(
+                stable.session_id,
+                "%9",
+                "test",
+                agent_kind=AgentKind.CODEX,
+                pid=909,
+                cwd="/new",
+                process_start_identity="linux:909:90",
+                replace_candidate_session_id=candidate.session_id,
+                _failpoint=failpoint,
+            )
+
+        assert store.get_agent_by_id(stable.session_id).pane_id == "%2"
+        assert candidate.session_id in {
+            item.session_id for item in store.list_agents("test")
+        }
+
+    def test_retarget_replace_candidate_requires_exact_target_identity(self, store):
+        stable = store.register_agent("control", "%2", "test", AgentKind.CLAUDE)
+        candidate = store.register_agent(
+            "candidate", "%9", "test", AgentKind.CODEX,
+            pid=909, cwd="/new", process_start_identity="linux:909:90",
+        )
+
+        with pytest.raises(ValueError, match="candidate identity mismatch"):
+            store.retarget_agent(
+                stable.session_id,
+                "%9",
+                "test",
+                agent_kind=AgentKind.CODEX,
+                pid=909,
+                cwd="/new",
+                process_start_identity="linux:909:reused",
+                replace_candidate_session_id=candidate.session_id,
+            )
+
+        assert store.get_agent_by_id(stable.session_id).pane_id == "%2"
+        assert candidate.session_id in {
+            item.session_id for item in store.list_agents("test")
+        }
+
+    def test_retarget_replace_candidate_refuses_unread_candidate_inbox(self, store):
+        sender = store.register_agent("sender", "%1", "test", AgentKind.CLAUDE)
+        stable = store.register_agent("control", "%2", "test", AgentKind.CLAUDE)
+        candidate = store.register_agent(
+            "candidate", "%9", "test", AgentKind.CODEX,
+            pid=909, cwd="/new", process_start_identity="linux:909:90",
+        )
+        thread = store.create_thread(
+            "candidate work",
+            sender.session_id,
+            [sender.session_id, candidate.session_id],
+        )
+        store.send_message(thread.id, sender.session_id, "candidate must drain")
+
+        with pytest.raises(ValueError, match="candidate has 1 unread delivery"):
+            store.retarget_agent(
+                stable.session_id,
+                "%9",
+                "test",
+                agent_kind=AgentKind.CODEX,
+                pid=909,
+                cwd="/new",
+                process_start_identity="linux:909:90",
+                replace_candidate_session_id=candidate.session_id,
+            )
+
+        assert store.get_agent_by_id(stable.session_id).pane_id == "%2"
+        assert candidate.session_id in {
+            item.session_id for item in store.list_agents("test")
+        }
+
     def test_touch_agent(self, store, two_agents):
         a, _ = two_agents
         old_seen = a.last_seen

@@ -7,7 +7,14 @@ import sys
 from collections.abc import Mapping
 from typing import Any
 
-from .models import Agent, Delivery, DeliveryState, Message, WatcherHeartbeat
+from .models import (
+    Agent,
+    ContinuationStatus,
+    Delivery,
+    DeliveryState,
+    Message,
+    WatcherHeartbeat,
+)
 
 SCHEMA = "msg.cli.v1"
 
@@ -90,7 +97,26 @@ def watcher_payload(watcher: WatcherHeartbeat) -> dict[str, Any]:
     }
 
 
+def continuation_payload(status: ContinuationStatus) -> dict[str, Any]:
+    return {
+        "state": status.state.value,
+        "generation": status.generation,
+        "heartbeat_expires_at": status.heartbeat_expires_at,
+        "updated_at": status.updated_at,
+    }
+
+
 def emit_json(operation: str, data: dict[str, Any]) -> None:
     """Write exactly one machine-readable success envelope to stdout."""
     payload = {"schema": SCHEMA, "operation": operation, "data": data}
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def emit_error(operation: str, code: str, message: str) -> None:
+    """Write exactly one machine-readable error envelope to stdout."""
+    payload = {
+        "schema": SCHEMA,
+        "operation": operation,
+        "error": {"code": code, "message": message},
+    }
     sys.stdout.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")

@@ -15,6 +15,72 @@ from claude_code_tools.msg.prompt_detect import PromptState
 from claude_code_tools.msg import store as store_module
 from claude_code_tools.msg import watcher as watcher_module
 from claude_code_tools.msg.watcher import Watcher, run_watcher
+from claude_code_tools.msg.migrations import CURRENT_SCHEMA_VERSION
+
+
+def test_watcher_heartbeat_records_exact_runtime_identity(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "claude_code_tools.msg.watcher.process_start_identity",
+        lambda pid: f"linux:{pid}:777",
+    )
+    monkeypatch.setattr(
+        "claude_code_tools.msg.watcher.distribution_version",
+        lambda: "1.25.6",
+    )
+    monkeypatch.setattr(
+        "claude_code_tools.msg.watcher.watcher_module_sha256",
+        lambda: "a" * 64,
+    )
+    watcher = Watcher(str(tmp_path / "msg.db"))
+
+    watcher._write_heartbeat()
+
+    heartbeat = watcher.store.get_watcher_info()[0]
+    assert heartbeat.pid == watcher.pid
+    assert heartbeat.process_start_identity == f"linux:{watcher.pid}:777"
+    assert heartbeat.distribution_version == "1.25.6"
+    assert heartbeat.module_sha256 == "a" * 64
+    assert heartbeat.db_schema_version == CURRENT_SCHEMA_VERSION
+
+
+def test_watcher_heartbeat_keeps_loaded_release_identity(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "claude_code_tools.msg.watcher.process_start_identity",
+        lambda pid: f"linux:{pid}:1",
+    )
+    monkeypatch.setattr(
+        "claude_code_tools.msg.watcher.distribution_version", lambda: "old-version",
+    )
+    monkeypatch.setattr(
+        "claude_code_tools.msg.watcher.watcher_module_sha256", lambda: "old-hash",
+    )
+    watcher = Watcher(str(tmp_path / "msg.db"))
+    monkeypatch.setattr(
+        "claude_code_tools.msg.watcher.distribution_version", lambda: "new-version",
+    )
+    monkeypatch.setattr(
+        "claude_code_tools.msg.watcher.watcher_module_sha256", lambda: "new-hash",
+    )
+
+    watcher._write_heartbeat()
+
+    heartbeat = watcher.store.get_watcher_info()[0]
+    assert heartbeat.distribution_version == "old-version"
+    assert heartbeat.module_sha256 == "old-hash"
+
+
+def test_watcher_heartbeat_reads_actual_database_schema(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "claude_code_tools.msg.watcher.process_start_identity",
+        lambda pid: f"linux:{pid}:1",
+    )
+    watcher = Watcher(str(tmp_path / "msg.db"))
+    with sqlite3.connect(watcher.store.db_path) as connection:
+        connection.execute("PRAGMA user_version = 3")
+
+    watcher._write_heartbeat()
+
+    assert watcher.store.get_watcher_info()[0].db_schema_version == 3
 
 
 def test_retired_agent_is_not_injected(monkeypatch, tmp_path):

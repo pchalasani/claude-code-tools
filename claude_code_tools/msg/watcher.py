@@ -14,14 +14,18 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import hashlib
+import importlib.metadata
 import logging
 import os
 import signal
 from collections import defaultdict
+from pathlib import Path
 
 from .models import _new_uuid
 from .prompt_detect import PromptState, detect_prompt_state
 from .store import MsgStore, DEFAULT_DB_PATH
+from claude_code_tools.process_identity import process_start_identity
 
 logger = logging.getLogger("msg.watcher")
 
@@ -36,6 +40,33 @@ SEND_MAX_SECS = SEND_TIMEOUT + SEND_CLEANUP_TIMEOUT
 SEND_LEASE_SECS = SEND_MAX_SECS + 5
 
 
+def _read_distribution_version() -> str:
+    """Return the installed distribution version used by this watcher."""
+    try:
+        return importlib.metadata.version("claude-code-tools")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
+def _read_watcher_module_sha256() -> str:
+    """Fingerprint the loaded watcher module bytes."""
+    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
+
+_LOADED_DISTRIBUTION_VERSION = _read_distribution_version()
+_LOADED_MODULE_SHA256 = _read_watcher_module_sha256()
+
+
+def distribution_version() -> str:
+    """Return the distribution identity captured when this module loaded."""
+    return _LOADED_DISTRIBUTION_VERSION
+
+
+def watcher_module_sha256() -> str:
+    """Return the module-byte identity captured when this module loaded."""
+    return _LOADED_MODULE_SHA256
+
+
 class Watcher:
     """Async delivery watcher daemon."""
 
@@ -46,6 +77,8 @@ class Watcher:
         self.store = MsgStore(db_path)
         self.watcher_id = _new_uuid()
         self.pid = os.getpid()
+        self.distribution_version = distribution_version()
+        self.module_sha256 = watcher_module_sha256()
         self._running = True
 
     async def run(self) -> None:
@@ -85,12 +118,21 @@ class Watcher:
         """Periodically update heartbeat in DB."""
         while True:
             try:
-                self.store.update_heartbeat(
-                    self.watcher_id, self.pid,
-                )
+                self._write_heartbeat()
             except Exception as e:
                 logger.warning("Heartbeat failed: %s", e)
             await asyncio.sleep(HEARTBEAT_INTERVAL)
+
+    def _write_heartbeat(self) -> None:
+        """Record enough identity to reject stale or wrong watcher processes."""
+        self.store.update_heartbeat(
+            self.watcher_id,
+            self.pid,
+            process_start_identity=process_start_identity(self.pid),
+            distribution_version=self.distribution_version,
+            module_sha256=self.module_sha256,
+            db_schema_version=self.store.get_schema_version(),
+        )
 
     async def _process_pending(self) -> None:
         """Claim and process pending deliveries."""

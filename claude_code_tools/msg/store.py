@@ -6,6 +6,7 @@ import os
 import sqlite3
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from collections.abc import Callable
 
 from .migrations import adopt_unique_legacy_registration, initialize_database
 from .models import (
@@ -53,6 +54,14 @@ class MsgStore:
         conn = self._get_conn()
         try:
             initialize_database(conn)
+        finally:
+            conn.close()
+
+    def get_schema_version(self) -> int:
+        """Return the actual schema version of this exact database."""
+        conn = self._get_conn()
+        try:
+            return int(conn.execute("PRAGMA user_version").fetchone()[0])
         finally:
             conn.close()
 
@@ -303,8 +312,14 @@ class MsgStore:
         tmux_session: str,
         tmux_socket: str | None = None,
         display_addr: str | None = None,
+        agent_kind: AgentKind | None = None,
+        pid: int | None = None,
+        cwd: str | None = None,
+        process_start_identity: str | None = None,
+        replace_candidate_session_id: str | None = None,
+        _failpoint: Callable[[str], None] | None = None,
     ) -> Agent:
-        """Move one exact active agent within its existing tmux scope."""
+        """Move one active identity, optionally replacing an exact candidate."""
         conn = self._get_conn()
         try:
             conn.execute("BEGIN IMMEDIATE")
@@ -329,18 +344,119 @@ class MsgStore:
             if claimed:
                 raise ValueError("agent has an actively claimed delivery")
             occupied = conn.execute(
-                """SELECT 1 FROM agents WHERE active = 1 AND pane_id = ?
+                """SELECT * FROM agents WHERE active = 1 AND pane_id = ?
                 AND tmux_session = ? AND (tmux_socket IS ? OR tmux_socket = ?)
                 AND session_id != ?""",
                 (pane_id, tmux_session, tmux_socket, tmux_socket, session_id),
-            ).fetchone()
-            if occupied:
-                raise ValueError("target pane already has an active msg registration")
-            conn.execute(
-                """UPDATE agents SET pane_id = ?, display_addr = ?, last_seen = ?
-                WHERE session_id = ? AND active = 1""",
-                (pane_id, display_addr, _now_iso(), session_id),
+            ).fetchall()
+            if replace_candidate_session_id is None:
+                if occupied:
+                    raise ValueError("target pane already has an active msg registration")
+            else:
+                requested_kind = agent_kind or AgentKind(current["agent_kind"])
+                expected_identity = (
+                    pane_id,
+                    tmux_session,
+                    tmux_socket,
+                    requested_kind.value,
+                    pid,
+                    process_start_identity,
+                    cwd,
+                )
+                if not occupied:
+                    candidate = conn.execute(
+                        "SELECT * FROM agents WHERE session_id = ? AND active = 0",
+                        (replace_candidate_session_id,),
+                    ).fetchone()
+                    current_identity = (
+                        current["pane_id"],
+                        current["tmux_session"],
+                        current["tmux_socket"],
+                        current["agent_kind"],
+                        current["pid"],
+                        current["process_start_identity"],
+                        current["cwd"],
+                    )
+                    candidate_identity = (
+                        candidate["pane_id"],
+                        candidate["tmux_session"],
+                        candidate["tmux_socket"],
+                        candidate["agent_kind"],
+                        candidate["pid"],
+                        candidate["process_start_identity"],
+                        candidate["cwd"],
+                    ) if candidate else None
+                    if (
+                        current_identity == expected_identity
+                        and candidate_identity == expected_identity
+                    ):
+                        conn.commit()
+                        return self._row_to_agent(current)
+                if len(occupied) != 1:
+                    raise ValueError("replace candidate is not the sole target registration")
+                candidate = occupied[0]
+                if candidate["session_id"] != replace_candidate_session_id:
+                    raise ValueError("replace candidate is not the target registration")
+                candidate_identity = (
+                    candidate["pane_id"],
+                    candidate["tmux_session"],
+                    candidate["tmux_socket"],
+                    candidate["agent_kind"],
+                    candidate["pid"],
+                    candidate["process_start_identity"],
+                    candidate["cwd"],
+                )
+                if expected_identity != candidate_identity:
+                    raise ValueError("candidate identity mismatch")
+                conn.execute(
+                    RELEASE_EXPIRED_SQL,
+                    (now, candidate["session_id"], candidate["session_id"]),
+                )
+                unread = conn.execute(
+                    """SELECT count(*) FROM deliveries
+                    WHERE recipient_id = ? AND state NOT IN ('read', 'retired')""",
+                    (candidate["session_id"],),
+                ).fetchone()[0]
+                if unread:
+                    raise ValueError(
+                        f"candidate has {unread} unread delivery; drain it first"
+                    )
+                if _failpoint:
+                    _failpoint("before_candidate_deactivate")
+                conn.execute(
+                    "DELETE FROM continuation_leases WHERE agent_id = ?",
+                    (candidate["session_id"],),
+                )
+                changed = conn.execute(
+                    """UPDATE agents SET active = 0, display_addr = NULL,
+                        last_seen = ? WHERE session_id = ? AND active = 1""",
+                    (now, candidate["session_id"]),
+                ).rowcount
+                if changed != 1:
+                    raise ValueError("replace candidate changed concurrently")
+                if _failpoint:
+                    _failpoint("after_candidate_deactivate")
+
+            next_kind = agent_kind or AgentKind(current["agent_kind"])
+            next_pid = current["pid"] if pid is None else pid
+            next_cwd = current["cwd"] if cwd is None else cwd
+            next_start = (
+                current["process_start_identity"]
+                if process_start_identity is None
+                else process_start_identity
             )
+            conn.execute(
+                """UPDATE agents SET pane_id = ?, display_addr = ?,
+                    agent_kind = ?, pid = ?, cwd = ?, process_start_identity = ?,
+                    last_seen = ?
+                WHERE session_id = ? AND active = 1""",
+                (
+                    pane_id, display_addr, next_kind.value, next_pid, next_cwd,
+                    next_start, _now_iso(), session_id,
+                ),
+            )
+            if _failpoint:
+                _failpoint("after_stable_update")
             conn.execute(
                 """UPDATE deliveries SET state = 'pending', claimed_by = NULL,
                     claim_expires_at = NULL, notify_attempts = 0,
@@ -799,6 +915,26 @@ class MsgStore:
             conn.close()
         return msg
 
+    def get_deliveries_for_message(self, message_id: str) -> list[dict]:
+        """Return stable delivery identifiers and states for one message."""
+        conn = self._get_conn()
+        try:
+            rows = conn.execute(
+                """SELECT id, recipient_id, state FROM deliveries
+                WHERE message_id = ? ORDER BY id""",
+                (message_id,),
+            ).fetchall()
+            return [
+                {
+                    "delivery_id": row["id"],
+                    "recipient_id": row["recipient_id"],
+                    "state": row["state"],
+                }
+                for row in rows
+            ]
+        finally:
+            conn.close()
+
     def get_inbox(
         self,
         agent_id: str,
@@ -1185,6 +1321,19 @@ class MsgStore:
                 )
                 for r in rows
             ]
+        finally:
+            conn.close()
+
+    def remove_watcher(self, watcher_id: str) -> bool:
+        """Remove one exact watcher heartbeat after its process is gone."""
+        conn = self._get_conn()
+        try:
+            changed = conn.execute(
+                "DELETE FROM watcher_heartbeat WHERE watcher_id = ?",
+                (watcher_id,),
+            ).rowcount
+            conn.commit()
+            return changed == 1
         finally:
             conn.close()
 
