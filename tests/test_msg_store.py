@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from claude_code_tools.msg.models import (
     AgentKind,
+    ConsumerProtocol,
+    ContinuationState,
+    RegistrationIdentity,
 )
 from claude_code_tools.msg.store import MsgStore
 
@@ -43,7 +48,42 @@ def two_agents(store):
     return a, b
 
 
+def register_first_mate(
+    store,
+    name="control",
+    pane_id="%1",
+    kind=AgentKind.CLAUDE,
+    pid=101,
+    process_start_identity="linux:101:1",
+):
+    agent = store.register_agent(
+        name,
+        pane_id,
+        "test",
+        kind,
+        pid=pid,
+        consumer_protocol=ConsumerProtocol.FIRST_MATE_V1,
+        process_start_identity=process_start_identity,
+    )
+    return agent, RegistrationIdentity.from_agent(agent)
+
+
 class TestAgentRegistration:
+
+    def test_register_persists_first_mate_consumer_and_process_identity(self, store):
+        agent = store.register_agent(
+            name="executor",
+            pane_id="%7",
+            tmux_session="test",
+            agent_kind=AgentKind.CODEX,
+            consumer_protocol=ConsumerProtocol.FIRST_MATE_V1,
+            process_start_identity="linux:4242:100",
+        )
+
+        loaded = store.get_agent_by_id(agent.session_id)
+        assert loaded is not None
+        assert loaded.consumer_protocol is ConsumerProtocol.FIRST_MATE_V1
+        assert loaded.process_start_identity == "linux:4242:100"
 
     def test_register_new_agent(self, store):
         agent = store.register_agent(
@@ -347,6 +387,222 @@ class TestAgentRegistration:
         store.touch_agent(a.session_id)
         updated = store.get_agent_by_id(a.session_id)
         assert updated.last_seen >= old_seen
+
+
+class TestContinuationRecords:
+
+    @pytest.mark.parametrize("generation", ("", "x" * 129, "bad\nvalue"))
+    def test_set_rejects_invalid_generation(self, store, generation):
+        _agent, caller = register_first_mate(store)
+
+        with pytest.raises(ValueError, match="generation"):
+            store.set_continuation(caller, generation, ttl_secs=90)
+
+    @pytest.mark.parametrize("ttl_secs", (False, 0, 1.5, 121))
+    def test_set_rejects_invalid_ttl(self, store, ttl_secs):
+        _agent, caller = register_first_mate(store)
+
+        with pytest.raises(ValueError, match="ttl_secs"):
+            store.set_continuation(
+                caller, "assignment", ttl_secs=ttl_secs,
+            )
+
+    def test_set_rejects_naive_timestamp(self, store):
+        _agent, caller = register_first_mate(store)
+
+        with pytest.raises(ValueError, match="timezone-aware"):
+            store.set_continuation(
+                caller,
+                "assignment",
+                ttl_secs=90,
+                now=datetime(2026, 1, 1),
+            )
+
+    def test_legacy_registration_cannot_arm_continuation(self, store):
+        legacy = store.register_agent(
+            "legacy", "%1", "test", AgentKind.CLAUDE,
+        )
+
+        with pytest.raises(ValueError, match="first-mate.v1"):
+            store.set_continuation(
+                RegistrationIdentity.from_agent(legacy),
+                "assignment",
+                ttl_secs=90,
+            )
+
+    def test_retarget_preserves_armed_generation(self, store):
+        agent, caller = register_first_mate(
+            store, name="executor", kind=AgentKind.CODEX,
+        )
+        store.set_continuation(caller, "assignment", ttl_secs=90)
+
+        moved = store.retarget_agent(agent.session_id, "%9", "test")
+
+        assert moved.session_id == agent.session_id
+        assert store.get_continuation_status(agent.session_id).generation == (
+            "assignment"
+        )
+
+    def test_malformed_heartbeat_is_stale_not_idle(self, store):
+        agent, caller = register_first_mate(
+            store, name="executor", kind=AgentKind.CODEX,
+        )
+        store.set_continuation(caller, "assignment", ttl_secs=90)
+        with sqlite3.connect(store.db_path) as conn:
+            conn.execute(
+                "UPDATE continuation_leases SET expires_at = 'not-a-time'"
+            )
+
+        status = store.get_continuation_status(agent.session_id)
+
+        assert status.state is ContinuationState.ACTIVE_STALE
+        assert status.generation == "assignment"
+
+    def test_expired_heartbeat_remains_armed_and_routes_to_recovery(self, store):
+        agent, caller = register_first_mate(store)
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+        fresh = store.set_continuation(
+            caller, "assignment-1", ttl_secs=90, now=now,
+        )
+        stale = store.get_continuation_status(
+            agent.session_id, now=now + timedelta(seconds=91),
+        )
+
+        assert fresh.state is ContinuationState.ACTIVE_FRESH
+        assert stale.state is ContinuationState.ACTIVE_STALE
+        assert stale.generation == "assignment-1"
+
+    def test_touch_refreshes_existing_generation_but_never_creates_one(self, store):
+        _agent, caller = register_first_mate(
+            store, name="executor", pane_id="%2", kind=AgentKind.CODEX,
+        )
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+        idle = store.touch_continuation(
+            caller, "assignment-2", ttl_secs=90, now=now,
+        )
+        store.set_continuation(
+            caller, "assignment-2", ttl_secs=90, now=now,
+        )
+        touched = store.touch_continuation(
+            caller,
+            "assignment-2",
+            ttl_secs=90,
+            now=now + timedelta(seconds=120),
+        )
+
+        assert idle.state is ContinuationState.IDLE
+        assert touched.state is ContinuationState.ACTIVE_FRESH
+        assert touched.generation == "assignment-2"
+
+    def test_clear_requires_exact_generation_and_retirement_clears_record(self, store):
+        agent, caller = register_first_mate(
+            store, name="builder", pane_id="%3", kind=AgentKind.CODEX,
+        )
+        store.set_continuation(caller, "current", ttl_secs=90)
+
+        assert not store.clear_continuation(caller, "stale")
+        assert store.get_continuation_status(agent.session_id).state is (
+            ContinuationState.ACTIVE_FRESH
+        )
+        assert store.clear_continuation(caller, "current")
+        assert store.get_continuation_status(agent.session_id).state is (
+            ContinuationState.IDLE
+        )
+
+        store.set_continuation(caller, "next", ttl_secs=90)
+        assert store.retire_agent(agent.session_id)
+        assert store.get_continuation_status(agent.session_id).state is (
+            ContinuationState.IDLE
+        )
+
+    def test_future_over_limit_heartbeat_is_stale(self, store):
+        agent, caller = register_first_mate(store)
+        store.set_continuation(caller, "assignment", ttl_secs=90)
+        with sqlite3.connect(store.db_path) as conn:
+            conn.execute(
+                "UPDATE continuation_leases SET expires_at = ?",
+                ("2099-01-01T00:00:00+00:00",),
+            )
+
+        status = store.get_continuation_status(agent.session_id)
+
+        assert status.state is ContinuationState.ACTIVE_STALE
+
+    def test_retargeted_old_identity_cannot_touch_or_clear(self, store):
+        agent, old_caller = register_first_mate(store)
+        store.set_continuation(old_caller, "assignment", ttl_secs=90)
+        store.retarget_agent(agent.session_id, "%9", "test")
+        current_caller = replace(old_caller, pane_id="%9")
+
+        with pytest.raises(ValueError, match="identity mismatch"):
+            store.touch_continuation(
+                old_caller, "assignment", ttl_secs=90,
+            )
+        with pytest.raises(ValueError, match="identity mismatch"):
+            store.clear_continuation(old_caller, "assignment")
+        assert store.touch_continuation(
+            current_caller, "assignment", ttl_secs=90,
+        ).state is ContinuationState.ACTIVE_FRESH
+
+    def test_pid_reuse_start_identity_cannot_touch(self, store):
+        agent, old_caller = register_first_mate(store)
+        store.set_continuation(old_caller, "assignment", ttl_secs=90)
+        store.register_agent(
+            agent.name,
+            agent.pane_id,
+            agent.tmux_session,
+            agent.agent_kind,
+            pid=agent.pid,
+            consumer_protocol=ConsumerProtocol.FIRST_MATE_V1,
+            process_start_identity="linux:101:2",
+        )
+
+        with pytest.raises(ValueError, match="identity mismatch"):
+            store.touch_continuation(
+                old_caller, "assignment", ttl_secs=90,
+            )
+
+    def test_old_wait_cannot_touch_replacement_generation(self, store):
+        _agent, caller = register_first_mate(store)
+        store.set_continuation(caller, "old", ttl_secs=90)
+        store.set_continuation(caller, "new", ttl_secs=90)
+
+        with pytest.raises(ValueError, match="generation mismatch"):
+            store.touch_continuation(caller, "old", ttl_secs=90)
+        assert store.touch_continuation(
+            caller, "new", ttl_secs=90,
+        ).generation == "new"
+
+    def test_armed_registration_cannot_downgrade_to_legacy(self, store):
+        agent, caller = register_first_mate(store)
+        store.set_continuation(caller, "assignment", ttl_secs=90)
+
+        with pytest.raises(ValueError, match="clear continuation"):
+            store.register_agent(
+                agent.name,
+                agent.pane_id,
+                agent.tmux_session,
+                agent.agent_kind,
+            )
+
+        assert store.get_agent_by_id(agent.session_id).consumer_protocol is (
+            ConsumerProtocol.FIRST_MATE_V1
+        )
+
+        assert store.clear_continuation(caller, "assignment")
+        downgraded = store.register_agent(
+            agent.name,
+            agent.pane_id,
+            agent.tmux_session,
+            agent.agent_kind,
+        )
+        assert downgraded.session_id == agent.session_id
+        assert downgraded.consumer_protocol is ConsumerProtocol.LEGACY
+        assert store.get_continuation_status(agent.session_id).state is (
+            ContinuationState.IDLE
+        )
 
 
 class TestThreads:
@@ -866,10 +1122,21 @@ class TestWatcherHeartbeat:
         assert not store.is_watcher_alive()
 
     def test_get_watcher_info(self, store):
-        store.update_heartbeat("watcher-1", pid=1234)
+        store.update_heartbeat(
+            "watcher-1",
+            pid=1234,
+            process_start_identity="linux:1234:55",
+            distribution_version="1.26.0",
+            module_sha256="a" * 64,
+            db_schema_version=4,
+        )
         info = store.get_watcher_info()
         assert len(info) == 1
         assert info[0].pid == 1234
+        assert info[0].process_start_identity == "linux:1234:55"
+        assert info[0].distribution_version == "1.26.0"
+        assert info[0].module_sha256 == "a" * 64
+        assert info[0].db_schema_version == 4
 
 
 class TestThreeAgentThread:

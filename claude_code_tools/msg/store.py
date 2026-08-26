@@ -11,8 +11,12 @@ from .migrations import adopt_unique_legacy_registration, initialize_database
 from .models import (
     Agent,
     AgentKind,
+    ConsumerProtocol,
+    ContinuationState,
+    ContinuationStatus,
     Message,
     Thread,
+    RegistrationIdentity,
     WatcherHeartbeat,
     _new_uuid,
     _now_iso,
@@ -64,6 +68,8 @@ class MsgStore:
         display_addr: str | None = None,
         pid: int | None = None,
         cwd: str | None = None,
+        consumer_protocol: ConsumerProtocol = ConsumerProtocol.LEGACY,
+        process_start_identity: str | None = None,
     ) -> Agent:
         """Register an agent, preserving active-session idempotency."""
         now = _now_iso()
@@ -123,16 +129,36 @@ class MsgStore:
 
             if existing:
                 session_id = existing["session_id"]
+                existing_protocol = conn.execute(
+                    """SELECT consumer_protocol FROM agents
+                    WHERE session_id = ?""",
+                    (session_id,),
+                ).fetchone()["consumer_protocol"]
+                if (
+                    existing_protocol == ConsumerProtocol.FIRST_MATE_V1.value
+                    and consumer_protocol is ConsumerProtocol.LEGACY
+                    and conn.execute(
+                        """SELECT 1 FROM continuation_leases
+                        WHERE agent_id = ?""",
+                        (session_id,),
+                    ).fetchone()
+                ):
+                    raise ValueError(
+                        "clear continuation before changing consumer protocol"
+                    )
                 conn.execute(
                     """UPDATE agents SET
                         pane_id = ?, display_addr = ?,
                         agent_kind = ?, pid = ?, cwd = ?,
-                        last_seen = ?, tmux_socket = ?, active = 1
+                        last_seen = ?, tmux_socket = ?,
+                        consumer_protocol = ?, process_start_identity = ?,
+                        active = 1
                     WHERE session_id = ?""",
                     (
                         pane_id, display_addr,
                         agent_kind.value, pid, cwd,
-                        now, tmux_socket, session_id,
+                        now, tmux_socket, consumer_protocol.value,
+                        process_start_identity, session_id,
                     ),
                 )
             else:
@@ -142,13 +168,15 @@ class MsgStore:
                         session_id, name, pane_id,
                         tmux_session, tmux_socket,
                         display_addr, agent_kind, pid, cwd,
-                        registered_at, last_seen
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        registered_at, last_seen,
+                        consumer_protocol, process_start_identity
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         session_id, name, pane_id,
                         tmux_session, tmux_socket,
                         display_addr, agent_kind.value,
                         pid, cwd, now, now,
+                        consumer_protocol.value, process_start_identity,
                     ),
                 )
             conn.commit()
@@ -167,6 +195,8 @@ class MsgStore:
             cwd=cwd,
             registered_at=now,
             last_seen=now,
+            consumer_protocol=consumer_protocol,
+            process_start_identity=process_start_identity,
         )
 
     def get_agent_by_name(
@@ -252,6 +282,10 @@ class MsgStore:
             ).fetchone()
             if in_flight:
                 raise ValueError("agent has a delivery in flight; retry unregister")
+            conn.execute(
+                "DELETE FROM continuation_leases WHERE agent_id = ?",
+                (session_id,),
+            )
             changed = conn.execute(
                 "UPDATE agents SET active = 0, display_addr = NULL, last_seen = ? "
                 "WHERE session_id = ? AND active = 1",
@@ -336,6 +370,213 @@ class MsgStore:
             conn.commit()
         finally:
             conn.close()
+
+    # --- Continuation responsibility operations ---
+
+    @staticmethod
+    def _continuation_now(now: datetime | None) -> datetime:
+        value = now or datetime.now(timezone.utc)
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("continuation timestamp must be timezone-aware")
+        return value.astimezone(timezone.utc)
+
+    @staticmethod
+    def _continuation_expiry(now: datetime, ttl_secs: int) -> str:
+        if (
+            isinstance(ttl_secs, bool)
+            or not isinstance(ttl_secs, int)
+            or not 1 <= ttl_secs <= 120
+        ):
+            raise ValueError("continuation ttl_secs must be between 1 and 120")
+        return (now + timedelta(seconds=ttl_secs)).isoformat()
+
+    @staticmethod
+    def _idle_continuation() -> ContinuationStatus:
+        return ContinuationStatus(state=ContinuationState.IDLE)
+
+    def _require_first_mate_agent(
+        self, conn: sqlite3.Connection, caller: RegistrationIdentity,
+    ) -> None:
+        row = conn.execute(
+            """SELECT consumer_protocol, tmux_session, tmux_socket,
+                pane_id, pid, process_start_identity FROM agents
+            WHERE session_id = ? AND active = 1""",
+            (caller.session_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError("active registration not found")
+        if row["consumer_protocol"] != ConsumerProtocol.FIRST_MATE_V1.value:
+            raise ValueError("continuation requires first-mate.v1 registration")
+        if (
+            caller.pid is None
+            or not caller.process_start_identity
+            or row["tmux_session"] != caller.tmux_session
+            or row["tmux_socket"] != caller.tmux_socket
+            or row["pane_id"] != caller.pane_id
+            or row["pid"] != caller.pid
+            or row["process_start_identity"] != caller.process_start_identity
+        ):
+            raise ValueError("continuation registration identity mismatch")
+
+    def set_continuation(
+        self,
+        caller: RegistrationIdentity,
+        generation: str,
+        ttl_secs: int,
+        now: datetime | None = None,
+    ) -> ContinuationStatus:
+        """Arm or replace one responsibility generation for an active agent."""
+        if (
+            not isinstance(generation, str)
+            or not 1 <= len(generation) <= 128
+            or any(ord(character) < 32 or ord(character) == 127 for character in generation)
+        ):
+            raise ValueError("continuation generation must be 1-128 characters")
+        current = self._continuation_now(now)
+        current_iso = current.isoformat()
+        expires_at = self._continuation_expiry(current, ttl_secs)
+        conn = self._get_conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_first_mate_agent(conn, caller)
+            conn.execute(
+                """INSERT INTO continuation_leases (
+                    agent_id, generation, expires_at, updated_at
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(agent_id) DO UPDATE SET
+                    generation = excluded.generation,
+                    expires_at = excluded.expires_at,
+                    updated_at = excluded.updated_at""",
+                (caller.session_id, generation, expires_at, current_iso),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return ContinuationStatus(
+            state=ContinuationState.ACTIVE_FRESH,
+            generation=generation,
+            heartbeat_expires_at=expires_at,
+            updated_at=current_iso,
+        )
+
+    def touch_continuation(
+        self,
+        caller: RegistrationIdentity,
+        expected_generation: str,
+        ttl_secs: int,
+        now: datetime | None = None,
+    ) -> ContinuationStatus:
+        """Refresh an existing generation without ever creating one."""
+        current = self._continuation_now(now)
+        current_iso = current.isoformat()
+        expires_at = self._continuation_expiry(current, ttl_secs)
+        conn = self._get_conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_first_mate_agent(conn, caller)
+            row = conn.execute(
+                """SELECT generation FROM continuation_leases
+                WHERE agent_id = ?""",
+                (caller.session_id,),
+            ).fetchone()
+            if row and row["generation"] != expected_generation:
+                raise ValueError("continuation generation mismatch")
+            changed = 0
+            if row:
+                changed = conn.execute(
+                    """UPDATE continuation_leases
+                    SET expires_at = ?, updated_at = ?
+                    WHERE agent_id = ? AND generation = ?""",
+                    (
+                        expires_at, current_iso, caller.session_id,
+                        expected_generation,
+                    ),
+                ).rowcount
+            conn.commit()
+        finally:
+            conn.close()
+        if not changed or not row:
+            return self._idle_continuation()
+        return ContinuationStatus(
+            state=ContinuationState.ACTIVE_FRESH,
+            generation=row["generation"],
+            heartbeat_expires_at=expires_at,
+            updated_at=current_iso,
+        )
+
+    def clear_continuation(
+        self, caller: RegistrationIdentity, generation: str,
+    ) -> bool:
+        """Disarm only the caller's exact responsibility generation."""
+        conn = self._get_conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_first_mate_agent(conn, caller)
+            changed = conn.execute(
+                """DELETE FROM continuation_leases
+                WHERE agent_id = ? AND generation = ?""",
+                (caller.session_id, generation),
+            ).rowcount
+            conn.commit()
+            return changed == 1
+        finally:
+            conn.close()
+
+    def get_continuation_status(
+        self, agent_id: str, now: datetime | None = None,
+    ) -> ContinuationStatus:
+        """Return fresh/stale armed state; expiry never implies idle."""
+        current = self._continuation_now(now)
+        conn = self._get_conn()
+        try:
+            row = conn.execute(
+                """SELECT c.generation, c.expires_at, c.updated_at
+                FROM continuation_leases c
+                JOIN agents a ON a.session_id = c.agent_id
+                WHERE c.agent_id = ? AND a.active = 1
+                    AND a.consumer_protocol = ?""",
+                (agent_id, ConsumerProtocol.FIRST_MATE_V1.value),
+            ).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return self._idle_continuation()
+        try:
+            expiry = datetime.fromisoformat(row["expires_at"])
+        except (TypeError, ValueError):
+            state = ContinuationState.ACTIVE_STALE
+        else:
+            try:
+                updated = datetime.fromisoformat(row["updated_at"])
+            except (TypeError, ValueError):
+                state = ContinuationState.ACTIVE_STALE
+            else:
+                if (
+                    expiry.tzinfo is None
+                    or expiry.utcoffset() is None
+                    or updated.tzinfo is None
+                    or updated.utcoffset() is None
+                ):
+                    state = ContinuationState.ACTIVE_STALE
+                else:
+                    expiry_utc = expiry.astimezone(timezone.utc)
+                    updated_utc = updated.astimezone(timezone.utc)
+                    lifetime = (expiry_utc - updated_utc).total_seconds()
+                    if (
+                        updated_utc > current
+                        or not 1 <= lifetime <= 120
+                    ):
+                        state = ContinuationState.ACTIVE_STALE
+                    elif expiry_utc > current:
+                        state = ContinuationState.ACTIVE_FRESH
+                    else:
+                        state = ContinuationState.ACTIVE_STALE
+        return ContinuationStatus(
+            state=state,
+            generation=row["generation"],
+            heartbeat_expires_at=row["expires_at"],
+            updated_at=row["updated_at"],
+        )
 
     # --- Thread operations ---
 
@@ -858,6 +1099,10 @@ class MsgStore:
         self,
         watcher_id: str,
         pid: int,
+        process_start_identity: str | None = None,
+        distribution_version: str | None = None,
+        module_sha256: str | None = None,
+        db_schema_version: int | None = None,
     ) -> None:
         """Update or create watcher heartbeat."""
         now = _now_iso()
@@ -871,17 +1116,29 @@ class MsgStore:
             if existing:
                 conn.execute(
                     """UPDATE watcher_heartbeat SET
-                        last_heartbeat = ?, pid = ?
+                        last_heartbeat = ?, pid = ?,
+                        process_start_identity = ?, distribution_version = ?,
+                        module_sha256 = ?, db_schema_version = ?
                     WHERE watcher_id = ?""",
-                    (now, pid, watcher_id),
+                    (
+                        now, pid, process_start_identity,
+                        distribution_version, module_sha256,
+                        db_schema_version, watcher_id,
+                    ),
                 )
             else:
                 conn.execute(
                     """INSERT INTO watcher_heartbeat
                         (watcher_id, started_at,
-                         last_heartbeat, pid)
-                    VALUES (?, ?, ?, ?)""",
-                    (watcher_id, now, now, pid),
+                         last_heartbeat, pid, process_start_identity,
+                         distribution_version, module_sha256,
+                         db_schema_version)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        watcher_id, now, now, pid,
+                        process_start_identity, distribution_version,
+                        module_sha256, db_schema_version,
+                    ),
                 )
             conn.commit()
         finally:
@@ -921,6 +1178,10 @@ class MsgStore:
                     started_at=r["started_at"],
                     last_heartbeat=r["last_heartbeat"],
                     pid=r["pid"],
+                    process_start_identity=r["process_start_identity"],
+                    distribution_version=r["distribution_version"],
+                    module_sha256=r["module_sha256"],
+                    db_schema_version=r["db_schema_version"],
                 )
                 for r in rows
             ]
@@ -943,4 +1204,6 @@ class MsgStore:
             cwd=row["cwd"],
             registered_at=row["registered_at"],
             last_seen=row["last_seen"],
+            consumer_protocol=ConsumerProtocol(row["consumer_protocol"]),
+            process_start_identity=row["process_start_identity"],
         )

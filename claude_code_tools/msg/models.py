@@ -15,6 +15,21 @@ class AgentKind(str, Enum):
     CODEX = "codex"
 
 
+class ConsumerProtocol(str, Enum):
+    """How a registered agent consumes delivery notifications."""
+
+    LEGACY = "legacy"
+    FIRST_MATE_V1 = "first-mate.v1"
+
+
+class ContinuationState(str, Enum):
+    """Whether an agent owns an armed First-mate responsibility."""
+
+    IDLE = "idle"
+    ACTIVE_FRESH = "active_fresh"
+    ACTIVE_STALE = "active_stale"
+
+
 class DeliveryState(str, Enum):
     """Delivery state machine.
 
@@ -55,6 +70,31 @@ class Agent:
     cwd: str | None = None
     registered_at: str = field(default_factory=_now_iso)
     last_seen: str = field(default_factory=_now_iso)
+    consumer_protocol: ConsumerProtocol = ConsumerProtocol.LEGACY
+    process_start_identity: str | None = None
+
+
+@dataclass(frozen=True)
+class RegistrationIdentity:
+    """Exact headed-process snapshot used to authorize store mutations."""
+
+    session_id: str
+    tmux_session: str
+    tmux_socket: str | None
+    pane_id: str
+    pid: int | None
+    process_start_identity: str | None
+
+    @classmethod
+    def from_agent(cls, agent: Agent) -> RegistrationIdentity:
+        return cls(
+            session_id=agent.session_id,
+            tmux_session=agent.tmux_session,
+            tmux_socket=agent.tmux_socket,
+            pane_id=agent.pane_id,
+            pid=agent.pid,
+            process_start_identity=agent.process_start_identity,
+        )
 
 
 @dataclass
@@ -103,3 +143,17 @@ class WatcherHeartbeat:
     started_at: str = field(default_factory=_now_iso)
     last_heartbeat: str = field(default_factory=_now_iso)
     pid: int = 0
+    process_start_identity: str | None = None
+    distribution_version: str | None = None
+    module_sha256: str | None = None
+    db_schema_version: int | None = None
+
+
+@dataclass(frozen=True)
+class ContinuationStatus:
+    """Public projection of one agent's continuation record."""
+
+    state: ContinuationState
+    generation: str | None = None
+    heartbeat_expires_at: str | None = None
+    updated_at: str | None = None

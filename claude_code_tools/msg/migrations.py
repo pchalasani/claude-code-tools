@@ -6,7 +6,11 @@ import sqlite3
 import time
 from datetime import datetime, timezone
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
+
+
+class UnsupportedSchemaVersion(RuntimeError):
+    """Raised before writes when a database comes from a newer msg."""
 
 SCHEMA_STATEMENTS = (
     """CREATE TABLE IF NOT EXISTS agents (
@@ -21,6 +25,8 @@ SCHEMA_STATEMENTS = (
         cwd TEXT,
         registered_at TEXT NOT NULL,
         last_seen TEXT NOT NULL,
+        consumer_protocol TEXT NOT NULL DEFAULT 'legacy',
+        process_start_identity TEXT,
         active INTEGER NOT NULL DEFAULT 1,
         UNIQUE(name, tmux_session, tmux_socket)
     )""",
@@ -61,7 +67,17 @@ SCHEMA_STATEMENTS = (
         watcher_id TEXT PRIMARY KEY,
         started_at TEXT NOT NULL,
         last_heartbeat TEXT NOT NULL,
-        pid INTEGER NOT NULL
+        pid INTEGER NOT NULL,
+        process_start_identity TEXT,
+        distribution_version TEXT,
+        module_sha256 TEXT,
+        db_schema_version INTEGER
+    )""",
+    """CREATE TABLE IF NOT EXISTS continuation_leases (
+        agent_id TEXT PRIMARY KEY REFERENCES agents(session_id) ON DELETE CASCADE,
+        generation TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
     )""",
 )
 
@@ -81,6 +97,12 @@ def _normalize_expiry(value: object) -> str | None:
 
 def initialize_database(conn: sqlite3.Connection) -> None:
     """Create and migrate a database in one serialized transaction."""
+    observed_version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if observed_version > CURRENT_SCHEMA_VERSION:
+        raise UnsupportedSchemaVersion(
+            f"database schema {observed_version} is newer than supported "
+            f"version {CURRENT_SCHEMA_VERSION}"
+        )
     conn.execute("PRAGMA busy_timeout=5000")
     wal_deadline = time.monotonic() + 5
     while True:
@@ -94,6 +116,12 @@ def initialize_database(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys=ON")
     try:
         conn.execute("BEGIN IMMEDIATE")
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version > CURRENT_SCHEMA_VERSION:
+            raise UnsupportedSchemaVersion(
+                f"database schema {version} is newer than supported "
+                f"version {CURRENT_SCHEMA_VERSION}"
+            )
         for statement in SCHEMA_STATEMENTS:
             conn.execute(statement)
 
@@ -111,7 +139,6 @@ def initialize_database(conn: sqlite3.Connection) -> None:
         if "sender_name" not in message_columns:
             conn.execute("ALTER TABLE messages ADD COLUMN sender_name TEXT")
 
-        version = conn.execute("PRAGMA user_version").fetchone()[0]
         if version < 1:
             conn.execute(
                 """UPDATE deliveries SET state = 'pending', notify_attempts = 0,
@@ -189,6 +216,32 @@ def initialize_database(conn: sqlite3.Connection) -> None:
                     WHERE session_id = messages.from_agent
                 ) WHERE sender_name IS NULL"""
             )
+        if version < 4:
+            if "consumer_protocol" not in agent_columns:
+                conn.execute(
+                    "ALTER TABLE agents ADD COLUMN consumer_protocol "
+                    "TEXT NOT NULL DEFAULT 'legacy'"
+                )
+            if "process_start_identity" not in agent_columns:
+                conn.execute(
+                    "ALTER TABLE agents ADD COLUMN process_start_identity TEXT"
+                )
+            watcher_columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(watcher_heartbeat)")
+            }
+            for column, declaration in (
+                ("process_start_identity", "TEXT"),
+                ("distribution_version", "TEXT"),
+                ("module_sha256", "TEXT"),
+                ("db_schema_version", "INTEGER"),
+            ):
+                if column not in watcher_columns:
+                    conn.execute(
+                        f"ALTER TABLE watcher_heartbeat ADD COLUMN "
+                        f"{column} {declaration}"
+                    )
+        if version < CURRENT_SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
         conn.commit()
     except BaseException:
