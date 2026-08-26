@@ -93,6 +93,20 @@ def _children_by_ppid() -> dict[int, list[tuple[int, str]]]:
     return children
 
 
+def _command_for_pid(pid: int) -> str:
+    """Return one process command line, or empty when it cannot be proven."""
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
 def descendants(
     tree: dict[int, list[tuple[int, str]]], root: int, limit: int = 200
 ) -> list[tuple[int, str]]:
@@ -170,6 +184,9 @@ def resolve_pane_agent(pane: str, tmux_socket: str | None = None) -> Agent | Non
     except ValueError:
         return None
     children = descendants(_children_by_ppid(), root_pid)
+    root_command = _command_for_pid(root_pid)
+    if detect.classify_argv(root_command) is not None:
+        children.insert(0, (root_pid, root_command))
     kinds = {
         kind
         for _pid, command in children
