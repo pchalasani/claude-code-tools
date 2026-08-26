@@ -10,10 +10,9 @@ reply — so you can hand work between agents instead of relaying it yourself.
 The `msg` and `msg-hook` commands are part of the `claude-code-tools` Python
 package. See [Quick Start](../../getting-started/) for installation.
 
-Claude Code watcher notifications and hook notices in either client require
-the companion `msg` plugin. Codex can receive the watcher's idle-prompt
-instruction with the CLI alone, but needs the plugin for notifications while
-it is busy or has text in its prompt. See
+Claude Code and Codex native lifecycle notices require the companion `msg`
+plugin. Codex requires you to review and trust the installed hook definition
+in `/hooks`; changed hook bytes are skipped until reviewed again. See
 [Plugin Installation](../../getting-started/plugins/) for marketplace setup,
 then install `msg@cctools-plugins` in Claude Code or
 `msg@cctools-codex-plugins` in Codex. Start a new agent session after
@@ -60,13 +59,19 @@ the same database.
 | `msg send TO BODY` | Send to one agent, or several via `a,b,c`. |
 | `msg reply TO BODY` | Send a message; this is an alias for `msg send`. |
 | `msg inbox` | Show unread messages and mark them read. |
+| `msg inbox --json --peek --limit N` | Read a bounded page without acknowledging it. |
+| `msg ack --json --delivery ID` | Explicitly acknowledge a journaled delivery. |
 | `msg thread create TITLE --with a,b` | Start a named thread. |
 | `msg threads` | List active threads. |
 | `msg status` | Watcher health and registered agents. |
-| `msg watch` | Run the watcher daemon in the foreground. |
+| `msg watch start\|status\|stop --json` | Manage and verify the exact watcher process. |
+| `msg continuation set\|touch\|status\|clear` | Manage an armed responsibility heartbeat. |
 
-`msg register` takes `--pane` and `--agent` (`claude` or `codex`) when you want
-to register a pane other than your own, or override detection.
+`msg register` takes `--pane` when you want to register another pane and
+`--consumer-protocol legacy|first-mate.v1` to select a closed notification
+route. The default is `legacy`. Registration records the target pane's
+long-lived TUI PID and process-start identity, not the short-lived `msg`
+process.
 
 `msg inbox` takes `--thread ID` to filter to one thread; the ID may be a prefix.
 
@@ -92,10 +97,10 @@ name they were sent under rather than being rewritten.
 
 ## Notifications and inbox reads
 
-A background watcher polls SQLite for pending deliveries. Any `msg` command
+A background watcher polls SQLite for pending legacy deliveries. Any `msg` command
 except `msg watch` tries to start one watcher for the selected database.
 
-When the receiving agent is idle and its prompt is empty, the watcher submits
+For a `legacy` registration, when the receiving agent is idle and its prompt is empty, the watcher submits
 an inbox instruction in that agent's pane. If the agent is busy, the prompt
 contains text, or the prompt state cannot be determined, the watcher leaves
 the delivery pending instead of typing over the session.
@@ -114,6 +119,47 @@ up or cannot safely reach the prompt.
 msg status   # is the watcher alive, and who is registered?
 msg watch    # run it in the foreground instead (debugging)
 ```
+
+### First-mate delivery
+
+A `first-mate.v1` delivery never enters the watcher's tmux/send-keys path and
+is never automatically marked read. Plugin-native `PostToolUse`, `Stop`, and
+`UserPromptSubmit` hooks expose only bounded state and keep armed work in the
+agent loop. A stale heartbeat requests recovery; expiry never clears the
+responsibility.
+
+The durable consumer sequence is:
+
+1. `msg inbox --json --peek --limit N`.
+2. Validate the envelope or bounded oversize metadata.
+3. Append the delivery to the recipient journal and fsync it.
+4. `msg ack --json --delivery DELIVERY_ID`.
+
+`read` therefore means “the recipient durably acknowledged this delivery.” It
+does not mean that the requested business task finished. Message bodies are
+limited to 65,536 UTF-8 bytes; a legacy oversized row returns byte-count and
+SHA-256 metadata so it can be rejected, journaled, and acknowledged without
+blocking later rows.
+
+### Machine contract and continuation
+
+Machine commands emit exactly one `msg.cli.v1` JSON object. Parse and command
+errors use the same versioned envelope and a non-zero exit code. IDs for
+sessions, threads, messages, and deliveries are stable; callers must not parse
+human tables or status prose.
+
+An agent registered as `first-mate.v1` can arm an opaque assignment generation:
+
+```bash
+msg continuation set --generation GENERATION --ttl 90 --json
+msg continuation touch --generation GENERATION --ttl 90 --json
+msg continuation status --json
+msg continuation clear --generation GENERATION --json
+```
+
+`touch` can refresh only an existing matching generation. A stale record
+remains armed and routes to recovery. Continuation is a short liveness hint,
+not Mission authority.
 
 ## Which database
 
