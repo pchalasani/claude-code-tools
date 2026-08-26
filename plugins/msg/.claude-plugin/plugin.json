@@ -1,7 +1,7 @@
 {
   "name": "msg",
-  "version": "1.14.0",
-  "description": "Inter-agent communication for Claude Code and Codex CLI sessions via threads and messages",
+  "version": "1.15.0",
+  "description": "Inter-agent communication with native First-mate lifecycle hooks for Claude Code and Codex CLI",
   "author": {
     "name": "Prasad Chalasani"
   }

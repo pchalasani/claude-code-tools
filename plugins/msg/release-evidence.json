@@ -1,0 +1,14 @@
+{
+  "schema": "msg.plugin.release.v1",
+  "cli_distribution": "claude-code-tools",
+  "cli_release_base": "1.25.6",
+  "cli_release_status": "unreleased",
+  "cli_contract_schema": "msg.cli.v1",
+  "db_schema_version": 4,
+  "plugin_version": "1.15.0",
+  "plugin_payload_sha256": "f60a2c2f312a8f2d68b6efed0996aa0c8632b5f06583020caabf86befdb7e1ac",
+  "hooks_manifest_sha256": "66c58c51f8cb031ec77bcd5dd1df987091913de50b467e398302e4782acda311",
+  "hook_adapter_sha256": "28d0eec330efcd10ebd6418b2cf8e2d6c20dbe95bae7119199fd00b5f5651bf4",
+  "claude_manifest_sha256": "8a3374a4c2a6238ff7f623cc339a4ecdbd697f623d68eeb1dd83ebd910d852a5",
+  "codex_manifest_sha256": "99d48fc2b2dd89a26269fd79ffcefc899c5ab87ea23f42ef2a955559c2566155"
+}

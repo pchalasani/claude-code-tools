@@ -10,6 +10,7 @@ import pytest
 from click.testing import CliRunner
 
 from claude_code_tools.amux.model import Agent as AmuxAgent
+from claude_code_tools.msg.activation import load_activation, write_activation
 from claude_code_tools.msg.cli import (
     _ensure_watcher_running,
     _get_exact_self_agent,
@@ -143,6 +144,41 @@ def test_register_json_persists_consumer_protocol(monkeypatch, tmp_path):
     assert (loaded.pid, loaded.process_start_identity, loaded.cwd) == (
         4242, "linux:4242:100", "/repo",
     )
+    marker = load_activation(store.db_path, "main", "/tmp/tmux-main", "%2")
+    assert marker["session_id"] == loaded.session_id
+
+
+def test_first_mate_register_publishes_activation_before_db_commit(
+    monkeypatch, tmp_path,
+):
+    store = MsgStore(tmp_path / "msg.db")
+    patch_cli_runtime(monkeypatch, store)
+    patch_target_agent(monkeypatch)
+    original = store.register_agent
+
+    def guarded_register(*args, **kwargs):
+        marker = load_activation(
+            store.db_path, "main", "/tmp/tmux-main", "%2",
+        )
+        assert marker is not None
+        assert marker["session_id"].startswith("provisional:")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(store, "register_agent", guarded_register)
+
+    payload = machine_payload(
+        CliRunner().invoke(
+            cli,
+            [
+                "register", "executor", "--pane", "%2",
+                "--consumer-protocol", "first-mate.v1", "--json",
+            ],
+        )
+    )
+    marker = load_activation(
+        store.db_path, "main", "/tmp/tmux-main", "%2",
+    )
+    assert marker["session_id"] == payload["data"]["agent"]["session_id"]
 
 
 def test_retarget_json_replaces_exact_candidate_and_refreshes_identity(
@@ -152,11 +188,15 @@ def test_retarget_json_replaces_exact_candidate_and_refreshes_identity(
     stable = store.register_agent(
         "control", "%1", "main", AgentKind.CLAUDE, "/tmp/tmux-main",
         pid=101, cwd="/old", process_start_identity="linux:101:10",
+        consumer_protocol=ConsumerProtocol.FIRST_MATE_V1,
     )
     candidate = store.register_agent(
         "candidate", "%2", "main", AgentKind.CODEX, "/tmp/tmux-main",
         pid=4242, cwd="/repo", process_start_identity="linux:4242:100",
+        consumer_protocol=ConsumerProtocol.FIRST_MATE_V1,
     )
+    write_activation(store.db_path, stable)
+    write_activation(store.db_path, candidate)
     patch_cli_runtime(monkeypatch, store)
     patch_target_agent(monkeypatch)
 
@@ -177,6 +217,13 @@ def test_retarget_json_replaces_exact_candidate_and_refreshes_identity(
     assert [item.session_id for item in store.list_agents("main")] == [
         stable.session_id,
     ]
+    assert load_activation(
+        store.db_path, "main", "/tmp/tmux-main", "%1",
+    ) is None
+    marker = load_activation(
+        store.db_path, "main", "/tmp/tmux-main", "%2",
+    )
+    assert marker["session_id"] == stable.session_id
 
 
 def test_list_json_returns_complete_agents(monkeypatch, tmp_path):

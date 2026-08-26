@@ -20,9 +20,10 @@ import logging
 import os
 import signal
 from collections import defaultdict
+from enum import Enum
 from pathlib import Path
 
-from .models import _new_uuid
+from .models import AgentKind, ConsumerProtocol, _new_uuid
 from .prompt_detect import PromptState, detect_prompt_state
 from .store import MsgStore, DEFAULT_DB_PATH
 from claude_code_tools.process_identity import process_start_identity
@@ -38,6 +39,33 @@ SEND_TIMEOUT = 30
 SEND_CLEANUP_TIMEOUT = 5
 SEND_MAX_SECS = SEND_TIMEOUT + SEND_CLEANUP_TIMEOUT
 SEND_LEASE_SECS = SEND_MAX_SECS + 5
+
+
+class NotificationRoute(str, Enum):
+    LEGACY_TMUX = "legacy_tmux"
+    NATIVE_HOOK_WAIT = "native_hook_wait"
+
+
+def notification_route(
+    agent_kind: AgentKind | str,
+    consumer_protocol: ConsumerProtocol | str,
+) -> NotificationRoute:
+    """Map the closed Harness/protocol pair to one notification route."""
+    kind = AgentKind(agent_kind)
+    protocol = ConsumerProtocol(consumer_protocol)
+    routes = {
+        (AgentKind.CLAUDE, ConsumerProtocol.LEGACY): NotificationRoute.LEGACY_TMUX,
+        (AgentKind.CODEX, ConsumerProtocol.LEGACY): NotificationRoute.LEGACY_TMUX,
+        (
+            AgentKind.CLAUDE,
+            ConsumerProtocol.FIRST_MATE_V1,
+        ): NotificationRoute.NATIVE_HOOK_WAIT,
+        (
+            AgentKind.CODEX,
+            ConsumerProtocol.FIRST_MATE_V1,
+        ): NotificationRoute.NATIVE_HOOK_WAIT,
+    }
+    return routes[(kind, protocol)]
 
 
 def _read_distribution_version() -> str:
@@ -137,6 +165,11 @@ class Watcher:
     async def _process_pending(self) -> None:
         """Claim and process pending deliveries."""
         try:
+            for protocol, count in self.store.unknown_pending_consumer_protocols():
+                logger.error(
+                    "Unknown consumer protocol %r blocks %d delivery(s)",
+                    protocol, count,
+                )
             released = self.store.release_expired_claims()
             if released:
                 logger.debug(
@@ -190,6 +223,21 @@ class Watcher:
             agent_kind = deliveries[0].get(
                 "recipient_agent_kind", "claude",
             )
+            consumer_protocol = deliveries[0].get(
+                "recipient_consumer_protocol",
+            )
+            try:
+                route = notification_route(agent_kind, consumer_protocol)
+            except (KeyError, ValueError):
+                logger.error(
+                    "Unknown notification route for recipient %s",
+                    recipient_id[:8],
+                )
+                self._release_deliveries(deliveries)
+                return
+            if route is not NotificationRoute.LEGACY_TMUX:
+                self._release_deliveries(deliveries)
+                return
             target = pane_id
 
             # Step 1: Quick idle check (non-blocking)

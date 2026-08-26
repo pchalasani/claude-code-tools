@@ -43,7 +43,7 @@
     {
       "name": "msg",
       "source": "./plugins/msg",
-      "description": "Inter-agent communication for Claude Code and Codex CLI sessions via threads and messages"
+      "description": "Inter-agent communication with native First-mate lifecycle hooks for Claude Code and Codex CLI"
     },
     {
       "name": "agent-tunnel",

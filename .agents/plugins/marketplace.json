@@ -54,6 +54,10 @@
     },
     {
       "name": "msg",
+      "interface": {
+        "displayName": "Msg",
+        "shortDescription": "Inter-agent messaging with trusted native lifecycle hooks."
+      },
       "source": {
         "source": "local",
         "path": "./plugins/msg"

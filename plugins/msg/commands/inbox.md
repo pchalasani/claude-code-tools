@@ -5,7 +5,12 @@ allowed-tools: Bash
 
 You have been notified of new inter-agent messages.
 
-1. Read your inbox:
+If this session was registered with `consumer_protocol=first-mate.v1`, do not
+run the legacy command below. Invoke `$first-mate`; its relative helper owns
+the bounded peek → journal fsync → explicit ack sequence. A msg delivery is
+read only after it is durable in that journal, not when business work ends.
+
+1. For a legacy registration, read your inbox:
 
 ```bash
 msg inbox

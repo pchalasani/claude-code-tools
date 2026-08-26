@@ -15,4 +15,14 @@ checks. The command auto-detects everything it needs.
 msg register $ARGUMENTS
 ```
 
+This command keeps the legacy notification route. A First-mate-managed
+session is registered by the First-mate bootstrap instead:
+
+```bash
+msg register --consumer-protocol first-mate.v1 --json $ARGUMENTS
+```
+
+Do not switch an existing registration between protocols while it owns an
+armed continuation record.
+
 Show the output to the user. You are done.

@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 
 import click
@@ -17,6 +18,11 @@ from claude_code_tools.amux.scan import resolve_pane_agent
 from claude_code_tools.process_identity import process_start_identity
 
 from . import maintenance as maintenance_mode
+from .activation import (
+    activation_generation,
+    remove_activation,
+    write_activation,
+)
 from .json_contract import (
     SCHEMA,
     agent_payload,
@@ -26,7 +32,7 @@ from .json_contract import (
     watcher_payload,
 )
 from .migrations import CURRENT_SCHEMA_VERSION
-from .models import AgentKind, ConsumerProtocol, RegistrationIdentity
+from .models import Agent, AgentKind, ConsumerProtocol, RegistrationIdentity
 from .store import (
     DEFAULT_DB_DIR,
     DEFAULT_DB_PATH,
@@ -656,6 +662,29 @@ def register(
             f"cannot prove process-start identity for pane {pane_id}"
         )
     display_addr = target.pane
+    requested_protocol = ConsumerProtocol(consumer_protocol)
+    existing_agent = store.get_agent_by_name(name, tmux_session, tmux_socket)
+    existing_generation = (
+        activation_generation(store.db_path, existing_agent)
+        if existing_agent else None
+    )
+    provisional = None
+    provisional_receipt = None
+    if requested_protocol is ConsumerProtocol.FIRST_MATE_V1:
+        provisional = Agent(
+            session_id=f"provisional:{uuid.uuid4()}",
+            name=name,
+            pane_id=pane_id,
+            tmux_session=tmux_session,
+            tmux_socket=tmux_socket,
+            display_addr=display_addr,
+            agent_kind=agent_kind,
+            pid=target.pid,
+            cwd=target.cwd,
+            consumer_protocol=requested_protocol,
+            process_start_identity=start_identity,
+        )
+        provisional_receipt = write_activation(store.db_path, provisional)
 
     try:
         result = store.register_agent(
@@ -667,11 +696,30 @@ def register(
             display_addr=display_addr,
             pid=target.pid,
             cwd=target.cwd,
-            consumer_protocol=ConsumerProtocol(consumer_protocol),
+            consumer_protocol=requested_protocol,
             process_start_identity=start_identity,
         )
     except ValueError as exc:
+        if (
+            provisional
+            and provisional_receipt
+            and existing_agent is None
+        ):
+            remove_activation(
+                store.db_path,
+                provisional,
+                expected_generation=provisional_receipt.generation,
+            )
         raise click.ClickException(str(exc)) from exc
+    if result.consumer_protocol is ConsumerProtocol.FIRST_MATE_V1:
+        write_activation(store.db_path, result)
+    else:
+        if existing_generation:
+            remove_activation(
+                store.db_path,
+                result,
+                expected_generation=existing_generation,
+            )
     if json_output:
         emit_json("register", {"agent": agent_payload(result)})
     else:
@@ -705,6 +753,7 @@ def unregister(ctx: click.Context, name: str | None, session_id: str | None) -> 
     if not agent:
         click.echo("Error: registration not found.", err=True)
         sys.exit(1)
+    generation = activation_generation(store.db_path, agent)
     try:
         retired = store.retire_agent(agent.session_id)
     except ValueError as exc:
@@ -712,6 +761,10 @@ def unregister(ctx: click.Context, name: str | None, session_id: str | None) -> 
     if not retired:
         click.echo(f"Error: agent '{agent.name}' is already retired.", err=True)
         sys.exit(1)
+    if generation:
+        remove_activation(
+            store.db_path, agent, expected_generation=generation,
+        )
     click.echo(f"Unregistered '{agent.name}' (history preserved)")
 
 
@@ -730,6 +783,17 @@ def retarget(
 ) -> None:
     """Move one exact active registration to another pane."""
     store: MsgStore = ctx.obj["store"]
+    previous = store.get_agent_by_id(session_id)
+    candidate = (
+        store.get_agent_by_id(replace_candidate)
+        if replace_candidate else None
+    )
+    previous_generation = (
+        activation_generation(store.db_path, previous) if previous else None
+    )
+    candidate_generation = (
+        activation_generation(store.db_path, candidate) if candidate else None
+    )
     tmux_socket = _detect_tmux_socket(pane)
     target = resolve_pane_agent(pane, tmux_socket)
     if target is None:
@@ -742,6 +806,25 @@ def retarget(
         raise click.ClickException(
             f"cannot prove process-start identity for pane {pane}"
         )
+    projected = None
+    if (
+        previous
+        and previous.consumer_protocol is ConsumerProtocol.FIRST_MATE_V1
+    ):
+        projected = Agent(
+            session_id=previous.session_id,
+            name=previous.name,
+            pane_id=pane,
+            tmux_session=tmux_session,
+            tmux_socket=tmux_socket,
+            display_addr=target.pane,
+            agent_kind=AgentKind(target.kind),
+            pid=target.pid,
+            cwd=target.cwd,
+            consumer_protocol=ConsumerProtocol.FIRST_MATE_V1,
+            process_start_identity=start_identity,
+        )
+        write_activation(store.db_path, projected)
     try:
         agent = store.retarget_agent(
             session_id=session_id,
@@ -757,6 +840,21 @@ def retarget(
         )
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
+    if previous:
+        if previous_generation:
+            remove_activation(
+                store.db_path,
+                previous,
+                expected_generation=previous_generation,
+            )
+    if agent.consumer_protocol is ConsumerProtocol.FIRST_MATE_V1:
+        write_activation(store.db_path, agent)
+    elif candidate and candidate_generation:
+        remove_activation(
+            store.db_path,
+            candidate,
+            expected_generation=candidate_generation,
+        )
     if json_output:
         emit_json("retarget", {"agent": agent_payload(agent)})
     else:

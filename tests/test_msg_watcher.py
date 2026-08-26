@@ -10,12 +10,163 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from claude_code_tools.msg.models import AgentKind
+from claude_code_tools.msg.models import AgentKind, ConsumerProtocol
 from claude_code_tools.msg.prompt_detect import PromptState
 from claude_code_tools.msg import store as store_module
 from claude_code_tools.msg import watcher as watcher_module
-from claude_code_tools.msg.watcher import Watcher, run_watcher
+from claude_code_tools.msg.watcher import (
+    NotificationRoute,
+    Watcher,
+    notification_route,
+    run_watcher,
+)
 from claude_code_tools.msg.migrations import CURRENT_SCHEMA_VERSION
+
+
+@pytest.mark.parametrize(
+    ("kind", "protocol", "route"),
+    (
+        (AgentKind.CLAUDE, ConsumerProtocol.LEGACY, NotificationRoute.LEGACY_TMUX),
+        (AgentKind.CODEX, ConsumerProtocol.LEGACY, NotificationRoute.LEGACY_TMUX),
+        (
+            AgentKind.CLAUDE,
+            ConsumerProtocol.FIRST_MATE_V1,
+            NotificationRoute.NATIVE_HOOK_WAIT,
+        ),
+        (
+            AgentKind.CODEX,
+            ConsumerProtocol.FIRST_MATE_V1,
+            NotificationRoute.NATIVE_HOOK_WAIT,
+        ),
+    ),
+)
+def test_notification_route_is_closed(kind, protocol, route):
+    assert notification_route(kind, protocol) is route
+
+
+@pytest.mark.parametrize(
+    "prompt_state", (PromptState.EMPTY, PromptState.HAS_TEXT, PromptState.UNKNOWN),
+)
+@pytest.mark.parametrize("kind", (AgentKind.CLAUDE, AgentKind.CODEX))
+def test_first_mate_delivery_stays_pending_and_never_touches_tmux(
+    monkeypatch, tmp_path, prompt_state, kind,
+):
+    watcher = Watcher(str(tmp_path / "msg.db"))
+    sender = watcher.store.register_agent("sender", "%1", "test", AgentKind.CLAUDE)
+    recipient = watcher.store.register_agent(
+        "receiver", "%2", "test", kind,
+        consumer_protocol=ConsumerProtocol.FIRST_MATE_V1,
+    )
+    thread = watcher.store.create_thread(
+        "first-mate", sender.session_id, [sender.session_id, recipient.session_id],
+    )
+    watcher.store.send_message(thread.id, sender.session_id, "native only")
+
+    async def forbidden(*_args):
+        pytest.fail("First-mate delivery reached tmux watcher path")
+
+    monkeypatch.setattr(watcher, "_check_idle", forbidden)
+    monkeypatch.setattr(watcher, "_tmux_send", forbidden)
+    monkeypatch.setattr(
+        "claude_code_tools.msg.watcher.detect_prompt_state",
+        lambda *_args: prompt_state,
+    )
+
+    asyncio.run(watcher._process_pending())
+
+    inbox = watcher.store.get_inbox(recipient.session_id)
+    assert len(inbox) == 1
+    assert inbox[0]["state"] == "pending"
+
+
+def test_watcher_claims_legacy_but_not_first_mate_recipient(tmp_path):
+    watcher = Watcher(str(tmp_path / "msg.db"))
+    sender = watcher.store.register_agent("sender", "%1", "test", AgentKind.CLAUDE)
+    legacy = watcher.store.register_agent("legacy", "%2", "test", AgentKind.CODEX)
+    first_mate = watcher.store.register_agent(
+        "first-mate", "%3", "test", AgentKind.CODEX,
+        consumer_protocol=ConsumerProtocol.FIRST_MATE_V1,
+    )
+    thread = watcher.store.create_thread(
+        "mixed", sender.session_id,
+        [sender.session_id, legacy.session_id, first_mate.session_id],
+    )
+    watcher.store.send_message(thread.id, sender.session_id, "mixed")
+
+    claimed = watcher.store.claim_pending_deliveries(watcher.watcher_id)
+
+    assert [row["recipient_id"] for row in claimed] == [legacy.session_id]
+    assert claimed[0]["recipient_consumer_protocol"] == "legacy"
+    assert watcher.store.get_inbox(first_mate.session_id)[0]["state"] == "pending"
+
+
+def test_unknown_consumer_protocol_fails_closed_and_records_error(caplog, tmp_path):
+    watcher = Watcher(str(tmp_path / "msg.db"))
+    sender = watcher.store.register_agent("sender", "%1", "test", AgentKind.CLAUDE)
+    recipient = watcher.store.register_agent("receiver", "%2", "test", AgentKind.CODEX)
+    with sqlite3.connect(watcher.store.db_path) as connection:
+        connection.execute(
+            "UPDATE agents SET consumer_protocol = 'unknown' WHERE session_id = ?",
+            (recipient.session_id,),
+        )
+    thread = watcher.store.create_thread(
+        "unknown", sender.session_id, [sender.session_id, recipient.session_id],
+    )
+    watcher.store.send_message(thread.id, sender.session_id, "do not inject")
+
+    with caplog.at_level("ERROR", logger="msg.watcher"):
+        asyncio.run(watcher._process_pending())
+
+    assert "unknown" in caplog.text.lower()
+    with sqlite3.connect(watcher.store.db_path) as connection:
+        state = connection.execute(
+            "SELECT state FROM deliveries WHERE recipient_id = ?",
+            (recipient.session_id,),
+        ).fetchone()[0]
+    assert state == "pending"
+
+
+def test_protocol_upgrade_cannot_race_an_inflight_legacy_claim(
+    monkeypatch, tmp_path,
+):
+    watcher = Watcher(str(tmp_path / "msg.db"))
+    sender = watcher.store.register_agent("sender", "%1", "test", AgentKind.CLAUDE)
+    recipient = watcher.store.register_agent("receiver", "%2", "test", AgentKind.CODEX)
+    thread = watcher.store.create_thread(
+        "upgrade", sender.session_id, [sender.session_id, recipient.session_id],
+    )
+    watcher.store.send_message(thread.id, sender.session_id, "pending")
+    claimed = watcher.store.claim_pending_deliveries(watcher.watcher_id)
+
+    with pytest.raises(ValueError, match="delivery in flight"):
+        watcher.store.register_agent(
+            recipient.name,
+            recipient.pane_id,
+            recipient.tmux_session,
+            recipient.agent_kind,
+            recipient.tmux_socket,
+            consumer_protocol=ConsumerProtocol.FIRST_MATE_V1,
+        )
+    watcher.store.release_delivery(claimed[0]["id"], watcher.watcher_id)
+    upgraded = watcher.store.register_agent(
+        recipient.name,
+        recipient.pane_id,
+        recipient.tmux_session,
+        recipient.agent_kind,
+        recipient.tmux_socket,
+        consumer_protocol=ConsumerProtocol.FIRST_MATE_V1,
+    )
+    sent = []
+
+    async def record_send(*args):
+        sent.append(args)
+
+    monkeypatch.setattr(watcher, "_tmux_send", record_send)
+    asyncio.run(watcher._deliver_to_recipient(recipient.session_id, claimed))
+
+    assert upgraded.consumer_protocol is ConsumerProtocol.FIRST_MATE_V1
+    assert sent == []
+    assert watcher.store.get_inbox(recipient.session_id)[0]["state"] == "pending"
 
 
 def test_watcher_heartbeat_records_exact_runtime_identity(monkeypatch, tmp_path):

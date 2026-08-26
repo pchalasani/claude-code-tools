@@ -186,6 +186,20 @@ class MsgStore:
                     WHERE session_id = ?""",
                     (session_id,),
                 ).fetchone()["consumer_protocol"]
+                if existing_protocol != consumer_protocol.value:
+                    conn.execute(
+                        RELEASE_EXPIRED_SQL,
+                        (now, session_id, session_id),
+                    )
+                    if conn.execute(
+                        """SELECT 1 FROM deliveries
+                        WHERE recipient_id = ? AND claimed_by IS NOT NULL
+                        LIMIT 1""",
+                        (session_id,),
+                    ).fetchone():
+                        raise ValueError(
+                            "agent has a delivery in flight; retry protocol change"
+                        )
                 if (
                     existing_protocol == ConsumerProtocol.FIRST_MATE_V1.value
                     and consumer_protocol is ConsumerProtocol.LEGACY
@@ -1030,6 +1044,43 @@ class MsgStore:
         finally:
             conn.close()
 
+    def count_pending_deliveries(self, agent_id: str) -> int:
+        """Count durable deliveries that still require explicit acknowledgement."""
+        conn = self._get_conn()
+        try:
+            return int(conn.execute(
+                """SELECT count(*) FROM deliveries
+                WHERE recipient_id = ? AND state NOT IN ('read', 'retired')""",
+                (agent_id,),
+            ).fetchone()[0])
+        finally:
+            conn.close()
+
+    def unknown_pending_consumer_protocols(self) -> list[tuple[str, int]]:
+        """Return corrupt protocol values that are blocking pending delivery."""
+        conn = self._get_conn()
+        try:
+            rows = conn.execute(
+                """SELECT a.consumer_protocol, count(*) AS delivery_count
+                FROM agents a
+                JOIN deliveries d ON d.recipient_id = a.session_id
+                WHERE a.active = 1
+                    AND a.consumer_protocol NOT IN (?, ?)
+                    AND d.state NOT IN ('read', 'retired')
+                GROUP BY a.consumer_protocol
+                ORDER BY a.consumer_protocol""",
+                (
+                    ConsumerProtocol.LEGACY.value,
+                    ConsumerProtocol.FIRST_MATE_V1.value,
+                ),
+            ).fetchall()
+            return [
+                (row["consumer_protocol"], int(row["delivery_count"]))
+                for row in rows
+            ]
+        finally:
+            conn.close()
+
     def peek_inbox(
         self,
         agent_id: str,
@@ -1219,6 +1270,7 @@ class MsgStore:
         claimer_id: str,
         claim_duration_secs: int = 60,
         recipient_id: str | None = None,
+        consumer_protocol: ConsumerProtocol = ConsumerProtocol.LEGACY,
     ) -> list[dict]:
         """Claim pending deliveries for notification.
 
@@ -1242,12 +1294,16 @@ class MsgStore:
                     claimed_by = ?,
                     claim_expires_at = ?
                 WHERE recipient_id IN (
-                    SELECT session_id FROM agents WHERE active = 1
+                    SELECT session_id FROM agents
+                    WHERE active = 1 AND consumer_protocol = ?
                 ) AND (? IS NULL OR recipient_id = ?) AND (
                     state = 'pending'
                     OR (state = 'claimed' AND claim_expires_at < ?)
                 )""",
-                (claimer_id, expires_iso, recipient_id, recipient_id, now),
+                (
+                    claimer_id, expires_iso, consumer_protocol.value,
+                    recipient_id, recipient_id, now,
+                ),
             )
             conn.commit()
 
@@ -1259,7 +1315,8 @@ class MsgStore:
                     r.name as recipient_name,
                     r.pane_id as recipient_pane_id,
                     r.tmux_socket as recipient_tmux_socket,
-                    r.agent_kind as recipient_agent_kind
+                    r.agent_kind as recipient_agent_kind,
+                    r.consumer_protocol as recipient_consumer_protocol
                 FROM deliveries d
                 JOIN messages m ON d.message_id = m.id
                 JOIN threads t ON m.thread_id = t.id
@@ -1268,8 +1325,9 @@ class MsgStore:
                 WHERE d.claimed_by = ?
                     AND d.state = 'claimed'
                     AND r.active = 1
+                    AND r.consumer_protocol = ?
                 ORDER BY d.recipient_id, m.created_at""",
-                (claimer_id,),
+                (claimer_id, consumer_protocol.value),
             ).fetchall()
             return [dict(r) for r in rows]
         finally:
@@ -1284,8 +1342,11 @@ class MsgStore:
                 JOIN agents a ON a.session_id = d.recipient_id
                 WHERE d.id = ? AND d.claimed_by = ?
                     AND d.state = 'claimed' AND d.claim_expires_at >= ?
-                    AND a.active = 1""",
-                (delivery_id, claimer_id, _now_iso()),
+                    AND a.active = 1 AND a.consumer_protocol = ?""",
+                (
+                    delivery_id, claimer_id, _now_iso(),
+                    ConsumerProtocol.LEGACY.value,
+                ),
             ).fetchone() is not None
         finally:
             conn.close()
@@ -1313,8 +1374,11 @@ class MsgStore:
                 WHERE d.id IN ({placeholders}) AND d.claimed_by = ?
                     AND d.state IN ('claimed', 'read')
                     AND d.claim_expires_at >= ?
-                    AND a.active = 1""",
-                (*delivery_ids, claimer_id, now),
+                    AND a.active = 1 AND a.consumer_protocol = ?""",
+                (
+                    *delivery_ids, claimer_id, now,
+                    ConsumerProtocol.LEGACY.value,
+                ),
             ).fetchone()[0]
             if current != len(delivery_ids):
                 conn.rollback()

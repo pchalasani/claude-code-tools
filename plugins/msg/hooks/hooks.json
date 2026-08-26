@@ -1,13 +1,25 @@
 {
-  "description": "Hooks for msg inter-agent communication. Checks inbox on Stop and UserPromptSubmit.",
+  "description": "Native lifecycle hooks for legacy msg and first-mate.v1 consumers.",
   "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/hooks/msg_hook.py\" post-tool-use",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "msg-hook stop",
+            "command": "python3 \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/hooks/msg_hook.py\" stop",
             "timeout": 5
           }
         ]
@@ -19,7 +31,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "msg-hook prompt-submit",
+            "command": "python3 \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/hooks/msg_hook.py\" prompt-submit",
             "timeout": 5
           }
         ]
