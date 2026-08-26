@@ -161,6 +161,42 @@ def test_real_console_parse_errors_are_one_machine_object(tmp_path, tail):
         stop_watcher(db_path)
 
 
+def test_oversize_send_preflight_has_no_db_or_watcher_side_effect(tmp_path):
+    db_path = tmp_path / "absent.db"
+
+    result = run_msg(
+        [
+            "--db", str(db_path), "send", "recipient", "x" * 65537,
+            "--json",
+        ]
+    )
+
+    assert result.returncode != 0
+    assert result.stderr == ""
+    assert json.loads(result.stdout)["error"]["code"] == "send_rejected"
+    for suffix in ("", "-wal", "-shm", ".watcher.lock"):
+        assert not Path(f"{db_path}{suffix}").exists()
+
+
+def test_oversize_send_preflight_does_not_migrate_existing_v3_database(tmp_path):
+    db_path = tmp_path / "legacy-v3.db"
+    create_frozen_v3_fixture(db_path)
+    before = file_snapshot(db_path)
+    before_rows = row_count_snapshot(db_path)
+
+    result = run_msg(
+        [
+            "--db", str(db_path), "send", "recipient", "x" * 65537,
+            "--json",
+        ]
+    )
+
+    assert result.returncode != 0
+    assert json.loads(result.stdout)["error"]["code"] == "send_rejected"
+    assert file_snapshot(db_path) == before
+    assert row_count_snapshot(db_path) == before_rows
+
+
 @pytest.mark.parametrize(
     ("source_kind", "target_kind"),
     (("claude", "claude"), ("claude", "codex"), ("codex", "claude")),
@@ -299,6 +335,94 @@ def test_real_tmux_register_retarget_and_continuation_identity(
         finally:
             if db_path.exists():
                 MsgStore(db_path).remove_watcher("test-non-delivering-heartbeat")
+            stop_watcher(db_path, env=base_env)
+
+
+def test_real_tmux_peek_then_explicit_ack(tmp_path):
+    db_path = tmp_path / "peek.db"
+    with disposable_tmux(tmp_path, ("claude", "codex")) as (
+        socket_path, session, panes,
+    ):
+        sender_pane, recipient_pane = panes
+        base_env = os.environ.copy()
+        base_env["TMUX"] = f"{socket_path},0,0"
+        fake_watcher_id = "test-non-delivering-heartbeat"
+        try:
+            sender = json_result(
+                run_msg(
+                    [
+                        "--db", str(db_path), "register", "sender",
+                        "--pane", sender_pane, "--consumer-protocol",
+                        "first-mate.v1", "--json",
+                    ],
+                    env=base_env,
+                )
+            )["data"]["agent"]
+            recipient = json_result(
+                run_msg(
+                    [
+                        "--db", str(db_path), "register", "recipient",
+                        "--pane", recipient_pane, "--consumer-protocol",
+                        "first-mate.v1", "--json",
+                    ],
+                    env=base_env,
+                )
+            )["data"]["agent"]
+            stop_watcher(db_path, env=base_env)
+            store = MsgStore(db_path)
+            sender_process = resolve_pane_agent(sender_pane, str(socket_path))
+            assert sender_process is not None
+            store.update_heartbeat(
+                fake_watcher_id,
+                sender_process.pid,
+                process_start_identity=process_start_identity(sender_process.pid),
+                distribution_version=distribution_version(),
+                module_sha256=watcher_module_sha256(),
+                db_schema_version=store.get_schema_version(),
+            )
+            thread = store.create_thread(
+                "real peek", sender["session_id"],
+                [sender["session_id"], recipient["session_id"]],
+            )
+            store.send_message(thread.id, sender["session_id"], "journal first")
+            recipient_env = {**base_env, "TMUX_PANE": recipient_pane}
+
+            peeked = json_result(
+                run_msg(
+                    [
+                        "--db", str(db_path), "inbox", "--json", "--peek",
+                        "--limit", "50",
+                    ],
+                    env=recipient_env,
+                )
+            )
+            row = peeked["data"]["messages"][0]
+            assert row["body"] == "journal first"
+            assert store.get_inbox(recipient["session_id"])
+
+            acked = json_result(
+                run_msg(
+                    [
+                        "--db", str(db_path), "ack", "--delivery",
+                        row["delivery_id"], "--json",
+                    ],
+                    env=recipient_env,
+                )
+            )
+            assert acked["data"]["delivery_ids"] == [row["delivery_id"]]
+            empty = json_result(
+                run_msg(
+                    [
+                        "--db", str(db_path), "inbox", "--json", "--peek",
+                        "--limit", "50",
+                    ],
+                    env=recipient_env,
+                )
+            )
+            assert empty["data"]["messages"] == []
+        finally:
+            if db_path.exists():
+                MsgStore(db_path).remove_watcher(fake_watcher_id)
             stop_watcher(db_path, env=base_env)
 
 

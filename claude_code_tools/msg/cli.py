@@ -18,6 +18,7 @@ from claude_code_tools.process_identity import process_start_identity
 
 from . import maintenance as maintenance_mode
 from .json_contract import (
+    SCHEMA,
     agent_payload,
     continuation_payload,
     emit_error,
@@ -26,8 +27,17 @@ from .json_contract import (
 )
 from .migrations import CURRENT_SCHEMA_VERSION
 from .models import AgentKind, ConsumerProtocol, RegistrationIdentity
-from .store import DEFAULT_DB_DIR, DEFAULT_DB_PATH, MsgStore
+from .store import (
+    DEFAULT_DB_DIR,
+    DEFAULT_DB_PATH,
+    DEFAULT_PEEK_LIMIT,
+    MAX_PEEK_LIMIT,
+    MsgStore,
+    validate_message_body,
+)
 from .watcher import distribution_version, watcher_module_sha256
+
+MAX_MACHINE_OUTPUT_BYTES = 1024 * 1024
 
 
 def _operation_from_argv(argv: list[str]) -> str:
@@ -55,6 +65,33 @@ def _operation_from_argv(argv: list[str]) -> str:
 class MachineContractGroup(click.Group):
     """Convert Click parse/callback failures into the versioned JSON contract."""
 
+    def _send_body_from_argv(self, argv: list[str]) -> str | None:
+        index = 0
+        while index < len(argv):
+            value = argv[index]
+            if value == "--db":
+                index += 2
+                continue
+            if value == "--local" or value.startswith("--db="):
+                index += 1
+                continue
+            if value.startswith("-"):
+                return None
+            if value != "send":
+                return None
+            command = self.get_command(click.Context(self), "send")
+            if command is None:
+                return None
+            context = command.make_context(
+                "send", argv[index + 1:], resilient_parsing=True,
+            )
+            try:
+                body = context.params.get("body")
+                return body if isinstance(body, str) else None
+            finally:
+                context.close()
+        return None
+
     def main(
         self,
         args=None,
@@ -64,7 +101,24 @@ class MachineContractGroup(click.Group):
         **extra,
     ):
         argv = list(args if args is not None else sys.argv[1:])
-        if "--json" not in argv:
+        machine_output = "--json" in argv
+        operation = _operation_from_argv(argv)
+        body = self._send_body_from_argv(argv)
+        if body is not None:
+            try:
+                validate_message_body(body)
+            except ValueError as exc:
+                if machine_output:
+                    emit_error(
+                        operation, "send_rejected", "message send was rejected",
+                    )
+                    raise SystemExit(1) from None
+                public_error = click.ClickException(str(exc))
+                if standalone_mode:
+                    public_error.show(file=sys.stderr)
+                    raise SystemExit(public_error.exit_code) from None
+                raise public_error from exc
+        if not machine_output:
             return super().main(
                 args=argv,
                 prog_name=prog_name,
@@ -72,7 +126,6 @@ class MachineContractGroup(click.Group):
                 standalone_mode=standalone_mode,
                 **extra,
             )
-        operation = _operation_from_argv(argv)
         try:
             return super().main(
                 args=argv,
@@ -854,12 +907,25 @@ def send(
 
     me = _get_exact_self_agent(store) if json_output else _get_self_agent(store)
     if not me:
+        if json_output:
+            raise PublicCliError(
+                "registration_not_found", "active registration not found",
+            )
         click.echo(
             "Error: you are not registered. "
             "Run 'msg register <name>' first.",
             err=True,
         )
         sys.exit(1)
+
+    try:
+        validate_message_body(body)
+    except ValueError as exc:
+        if json_output:
+            raise PublicCliError(
+                "send_rejected", "message send was rejected",
+            ) from exc
+        raise click.ClickException(str(exc)) from exc
 
     store.touch_agent(me.session_id)
 
@@ -873,6 +939,10 @@ def send(
             name, tmux_session, tmux_socket,
         )
         if not agent:
+            if json_output:
+                raise PublicCliError(
+                    "recipient_not_found", "message recipient was not found",
+                )
             click.echo(
                 f"Error: agent '{name}' not found.",
                 err=True,
@@ -894,6 +964,10 @@ def send(
             body=body,
         )
     except ValueError as exc:
+        if json_output:
+            raise PublicCliError(
+                "send_rejected", "message send was rejected",
+            ) from exc
         raise click.ClickException(str(exc)) from exc
 
     watcher_alive = store.is_watcher_alive()
@@ -1011,6 +1085,68 @@ def continuation_clear(
 
 
 @cli.command()
+@click.option(
+    "--delivery", "delivery_ids", multiple=True, required=True,
+    help="Exact delivery ID to acknowledge; repeat for a batch.",
+)
+@json_option
+@click.pass_context
+def ack(
+    ctx: click.Context, delivery_ids: tuple[str, ...], json_output: bool,
+) -> None:
+    """Acknowledge only explicitly journaled deliveries."""
+    store: MsgStore = ctx.obj["store"]
+    me = _get_exact_self_agent(store)
+    if not me:
+        raise PublicCliError("ack_rejected", "active registration not found")
+    try:
+        acknowledged = store.ack_deliveries(me.session_id, list(delivery_ids))
+    except ValueError as exc:
+        raise PublicCliError(
+            "ack_rejected", "delivery acknowledgement was rejected",
+        ) from exc
+    if json_output:
+        emit_json("ack", {"delivery_ids": acknowledged})
+    else:
+        click.echo(f"Acknowledged {len(acknowledged)} delivery(s).")
+
+
+def _bounded_peek_data(messages: list[dict], requested_limit: int) -> dict:
+    selected: list[dict] = []
+    truncated = False
+    for message in messages:
+        candidate = [*selected, message]
+        data = {
+            "messages": candidate,
+            "requested_limit": requested_limit,
+            "returned": len(candidate),
+            "truncated_by_output_limit": False,
+        }
+        envelope = {
+            "schema": SCHEMA,
+            "operation": "inbox.peek",
+            "data": data,
+        }
+        encoded = json.dumps(
+            envelope, ensure_ascii=False, sort_keys=True,
+        ).encode("utf-8") + b"\n"
+        if len(encoded) >= MAX_MACHINE_OUTPUT_BYTES:
+            if not selected:
+                raise PublicCliError(
+                    "peek_row_too_large", "one inbox row exceeds the output limit",
+                )
+            truncated = True
+            break
+        selected = candidate
+    return {
+        "messages": selected,
+        "requested_limit": requested_limit,
+        "returned": len(selected),
+        "truncated_by_output_limit": truncated,
+    }
+
+
+@cli.command()
 @click.argument("to")
 @click.argument("body")
 @click.pass_context
@@ -1028,15 +1164,32 @@ def reply(
     "--thread", "thread_id", default=None,
     help="Filter by thread ID (prefix match supported)",
 )
+@click.option("--peek", is_flag=True, help="Read without acknowledging.")
+@click.option(
+    "--limit", type=click.IntRange(1, MAX_PEEK_LIMIT), default=DEFAULT_PEEK_LIMIT,
+    show_default=True,
+)
+@json_option
 @click.pass_context
 def inbox(
     ctx: click.Context,
     thread_id: str | None,
+    peek: bool,
+    limit: int,
+    json_output: bool,
 ) -> None:
     """Show unread messages."""
     store: MsgStore = ctx.obj["store"]
-    me = _get_self_agent(store)
+    if peek and not json_output:
+        raise click.UsageError("--peek requires --json")
+    if json_output and not peek:
+        raise click.UsageError("--json requires --peek")
+    me = _get_exact_self_agent(store) if json_output else _get_self_agent(store)
     if not me:
+        if json_output:
+            raise PublicCliError(
+                "registration_not_found", "active registration not found",
+            )
         click.echo(
             "Error: you are not registered. "
             "Run 'msg register <name>' first.",
@@ -1048,10 +1201,19 @@ def inbox(
 
     resolved_id = None
     if thread_id:
-        resolved = _resolve_thread(store, thread_id, me)
+        resolved = _resolve_thread(
+            store, thread_id, me, machine_output=json_output,
+        )
         if not resolved:
             return
         resolved_id = resolved.id
+
+    if peek:
+        messages = store.peek_inbox(
+            me.session_id, thread_id=resolved_id, limit=limit,
+        )
+        emit_json("inbox.peek", _bounded_peek_data(messages, limit))
+        return
 
     messages = store.get_inbox(
         me.session_id, thread_id=resolved_id,
@@ -1190,6 +1352,7 @@ def _resolve_thread(
     store: MsgStore,
     thread_id: str,
     me: object,
+    machine_output: bool = False,
 ) -> object | None:
     """Resolve a thread ID prefix to a Thread object."""
     threads = store.list_threads(
@@ -1199,12 +1362,18 @@ def _resolve_thread(
         t for t in threads if t.id.startswith(thread_id)
     ]
     if len(matches) == 0:
+        if machine_output:
+            raise PublicCliError("thread_not_found", "thread was not found")
         click.echo(
             f"Error: no thread matching '{thread_id}'.",
             err=True,
         )
         return None
     if len(matches) > 1:
+        if machine_output:
+            raise PublicCliError(
+                "thread_ambiguous", "thread prefix matched multiple threads",
+            )
         click.echo(
             f"Error: '{thread_id}' matches multiple "
             f"threads. Be more specific.",

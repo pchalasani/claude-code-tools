@@ -70,6 +70,14 @@ def register_first_mate(
 
 class TestAgentRegistration:
 
+    def test_register_rejects_name_over_utf8_limit(self, store):
+        with pytest.raises(ValueError, match="256 UTF-8 bytes"):
+            store.register_agent(
+                "界" * 86, "%1", "test", AgentKind.CLAUDE,
+            )
+
+        assert store.list_agents("test") == []
+
     def test_register_persists_first_mate_consumer_and_process_identity(self, store):
         agent = store.register_agent(
             name="executor",
@@ -984,6 +992,265 @@ class TestMessages:
         # Inbox should be empty now
         inbox = store.get_inbox(b.session_id)
         assert len(inbox) == 0
+
+    def test_send_rejects_body_over_utf8_limit_before_insert(self, store, two_agents):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "bounded", sender.session_id, [sender.session_id, recipient.session_id],
+        )
+
+        with pytest.raises(ValueError, match="65536 UTF-8 bytes"):
+            store.send_message(thread.id, sender.session_id, "x" * 65537)
+
+        with sqlite3.connect(store.db_path) as connection:
+            assert connection.execute("SELECT count(*) FROM messages").fetchone()[0] == 0
+
+    def test_send_accepts_exact_mixed_width_utf8_boundary(self, store, two_agents):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "bounded", sender.session_id, [sender.session_id, recipient.session_id],
+        )
+        legal = "界" * 21845 + "x"
+        assert len(legal.encode("utf-8")) == 65536
+
+        message = store.send_message(thread.id, sender.session_id, legal)
+        with pytest.raises(ValueError, match="65536 UTF-8 bytes"):
+            store.send_message(thread.id, sender.session_id, legal + "x")
+
+        assert message.body == legal
+        with sqlite3.connect(store.db_path) as connection:
+            assert connection.execute("SELECT count(*) FROM messages").fetchone()[0] == 1
+
+    def test_peek_is_stable_bounded_and_does_not_mark_read(self, store, two_agents):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "peek", sender.session_id, [sender.session_id, recipient.session_id],
+        )
+        first = store.send_message(thread.id, sender.session_id, "first")
+        second = store.send_message(thread.id, sender.session_id, "second")
+        with sqlite3.connect(store.db_path) as connection:
+            connection.execute(
+                "UPDATE messages SET created_at = ? WHERE id IN (?, ?)",
+                ("2026-01-01T00:00:00+00:00", first.id, second.id),
+            )
+            connection.execute(
+                "UPDATE agents SET name = 'renamed' WHERE session_id = ?",
+                (sender.session_id,),
+            )
+
+        page = store.peek_inbox(recipient.session_id, limit=1)
+
+        assert len(page) == 1
+        assert page[0]["message_id"] == min(first.id, second.id)
+        assert page[0]["sender_session_id"] == sender.session_id
+        assert page[0]["sender_name"] == sender.name
+        assert page[0]["body"] in {"first", "second"}
+        assert page[0]["body_too_large"] is False
+        assert len(store.get_inbox(recipient.session_id)) == 2
+
+    def test_peek_default_limit_is_fifty(self, store, two_agents):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "default", sender.session_id, [sender.session_id, recipient.session_id],
+        )
+        for index in range(60):
+            store.send_message(thread.id, sender.session_id, f"message-{index}")
+
+        assert len(store.peek_inbox(recipient.session_id)) == 50
+
+    def test_peek_returns_bounded_metadata_for_legacy_oversize_row(
+        self, store, two_agents,
+    ):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "poison", sender.session_id, [sender.session_id, recipient.session_id],
+        )
+        message = store.send_message(thread.id, sender.session_id, "small")
+        oversized = "z" * 70000
+        with sqlite3.connect(store.db_path) as connection:
+            connection.execute(
+                "UPDATE messages SET body = ? WHERE id = ?",
+                (oversized, message.id),
+            )
+
+        row = store.peek_inbox(recipient.session_id, limit=1)[0]
+
+        assert row["body"] is None
+        assert row["body_too_large"] is True
+        assert row["body_bytes"] == 70000
+        assert row["body_sha256"] == __import__("hashlib").sha256(
+            oversized.encode()
+        ).hexdigest()
+
+    def test_peek_streams_legacy_oversize_body_in_bounded_chunks(
+        self, store, two_agents, monkeypatch,
+    ):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "poison", sender.session_id, [sender.session_id, recipient.session_id],
+        )
+        message = store.send_message(thread.id, sender.session_id, "small")
+        with sqlite3.connect(store.db_path) as connection:
+            connection.execute(
+                "UPDATE messages SET body = ? WHERE id = ?",
+                ("z" * (2 * 1024 * 1024), message.id),
+            )
+        real_connection = store._get_conn()
+        read_sizes = []
+
+        class BlobProxy:
+            def __init__(self, blob):
+                self.blob = blob
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                self.blob.close()
+
+            def read(self, size=-1):
+                assert 0 < size <= 65536
+                read_sizes.append(size)
+                return self.blob.read(size)
+
+        class ConnectionProxy:
+            def execute(self, sql, parameters=()):
+                assert "SELECT CAST(body AS BLOB)" not in sql
+                return real_connection.execute(sql, parameters)
+
+            def blobopen(self, *args, **kwargs):
+                return BlobProxy(real_connection.blobopen(*args, **kwargs))
+
+            def close(self):
+                real_connection.close()
+
+        monkeypatch.setattr(store, "_get_conn", lambda: ConnectionProxy())
+
+        row = store.peek_inbox(recipient.session_id, limit=1)[0]
+
+        assert row["body_too_large"] is True
+        assert len(read_sizes) > 1
+
+    def test_peek_bounds_legacy_sender_name_and_omits_thread_title(
+        self, store, two_agents,
+    ):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "t" * (2 * 1024 * 1024),
+            sender.session_id,
+            [sender.session_id, recipient.session_id],
+        )
+        message = store.send_message(thread.id, sender.session_id, "body")
+        legacy_name = "n" * 70000
+        with sqlite3.connect(store.db_path) as connection:
+            connection.execute(
+                "UPDATE messages SET sender_name = ? WHERE id = ?",
+                (legacy_name, message.id),
+            )
+
+        row = store.peek_inbox(recipient.session_id, limit=1)[0]
+
+        assert "thread_title" not in row
+        assert row["sender_name"] is None
+        assert row["sender_name_too_large"] is True
+        assert row["sender_name_bytes"] == 70000
+        assert row["sender_name_sha256"] == __import__("hashlib").sha256(
+            legacy_name.encode()
+        ).hexdigest()
+
+    def test_ack_is_scoped_and_idempotent_without_rewriting_read_at(
+        self, store, two_agents,
+    ):
+        sender, recipient = two_agents
+        other = store.register_agent("other", "%3", "test", AgentKind.CLAUDE)
+        thread = store.create_thread(
+            "scope", sender.session_id,
+            [sender.session_id, recipient.session_id, other.session_id],
+        )
+        store.send_message(thread.id, sender.session_id, "body")
+        recipient_delivery = store.get_inbox(recipient.session_id)[0]["delivery_id"]
+        other_delivery = store.get_inbox(other.session_id)[0]["delivery_id"]
+
+        assert store.ack_deliveries(
+            recipient.session_id, [recipient_delivery],
+        ) == [recipient_delivery]
+        with sqlite3.connect(store.db_path) as connection:
+            first_read_at = connection.execute(
+                "SELECT read_at FROM deliveries WHERE id = ?",
+                (recipient_delivery,),
+            ).fetchone()[0]
+        assert store.ack_deliveries(
+            recipient.session_id, [recipient_delivery],
+        ) == [recipient_delivery]
+        with sqlite3.connect(store.db_path) as connection:
+            second_read_at = connection.execute(
+                "SELECT read_at FROM deliveries WHERE id = ?",
+                (recipient_delivery,),
+            ).fetchone()[0]
+        assert second_read_at == first_read_at
+
+        with pytest.raises(ValueError, match="not owned by current recipient"):
+            store.ack_deliveries(recipient.session_id, [other_delivery])
+        assert store.get_inbox(other.session_id)[0]["delivery_id"] == other_delivery
+
+    def test_ack_batch_rolls_back_when_one_delivery_has_wrong_owner(
+        self, store, two_agents,
+    ):
+        sender, recipient = two_agents
+        other = store.register_agent("other", "%3", "test", AgentKind.CLAUDE)
+        thread = store.create_thread(
+            "scope", sender.session_id,
+            [sender.session_id, recipient.session_id, other.session_id],
+        )
+        store.send_message(thread.id, sender.session_id, "body")
+        own = store.get_inbox(recipient.session_id)[0]["delivery_id"]
+        foreign = store.get_inbox(other.session_id)[0]["delivery_id"]
+
+        with pytest.raises(ValueError, match="not owned by current recipient"):
+            store.ack_deliveries(recipient.session_id, [own, foreign])
+
+        assert store.get_inbox(recipient.session_id)[0]["delivery_id"] == own
+
+    def test_ack_claimed_delivery_clears_claim_fields(self, store, two_agents):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "claim", sender.session_id, [sender.session_id, recipient.session_id],
+        )
+        store.send_message(thread.id, sender.session_id, "body")
+        delivery = store.claim_pending_deliveries("watcher", recipient_id=recipient.session_id)[0]
+
+        store.ack_deliveries(recipient.session_id, [delivery["id"]])
+
+        with sqlite3.connect(store.db_path) as connection:
+            state, read_at, claimed_by, expires_at = connection.execute(
+                """SELECT state, read_at, claimed_by, claim_expires_at
+                FROM deliveries WHERE id = ?""",
+                (delivery["id"],),
+            ).fetchone()
+        assert state == "read"
+        assert read_at is not None
+        assert claimed_by is None
+        assert expires_at is None
+
+    def test_ack_missing_or_retired_delivery_rolls_back_batch(self, store, two_agents):
+        sender, recipient = two_agents
+        thread = store.create_thread(
+            "missing", sender.session_id, [sender.session_id, recipient.session_id],
+        )
+        store.send_message(thread.id, sender.session_id, "body")
+        delivery_id = store.get_inbox(recipient.session_id)[0]["delivery_id"]
+
+        with pytest.raises(ValueError, match="not found"):
+            store.ack_deliveries(recipient.session_id, [delivery_id, "missing"])
+        assert store.get_inbox(recipient.session_id)
+
+        with sqlite3.connect(store.db_path) as connection:
+            connection.execute(
+                "UPDATE deliveries SET state = 'retired' WHERE id = ?",
+                (delivery_id,),
+            )
+        with pytest.raises(ValueError, match="retired"):
+            store.ack_deliveries(recipient.session_id, [delivery_id])
 
     def test_inbox_shows_unnotified_messages(
         self, store, two_agents,

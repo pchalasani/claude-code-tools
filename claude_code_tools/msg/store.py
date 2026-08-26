@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sqlite3
 from datetime import datetime, timezone, timedelta
@@ -34,6 +35,47 @@ RELEASE_EXPIRED_SQL = """UPDATE deliveries SET
     claimed_by = NULL, claim_expires_at = NULL
 WHERE claimed_by IS NOT NULL AND claim_expires_at < ?
     AND (? IS NULL OR recipient_id = ?)"""
+
+MAX_MESSAGE_BODY_BYTES = 65_536
+MAX_AGENT_NAME_BYTES = 256
+MAX_SENDER_NAME_BYTES = MAX_AGENT_NAME_BYTES
+DEFAULT_PEEK_LIMIT = 50
+MAX_PEEK_LIMIT = 100
+
+
+def validate_message_body(body: str) -> None:
+    """Reject non-text, invalid UTF-8, or over-limit message bodies."""
+    if not isinstance(body, str):
+        raise ValueError("message body must be text")
+    try:
+        body_bytes = len(body.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise ValueError("message body must be valid UTF-8") from exc
+    if body_bytes > MAX_MESSAGE_BODY_BYTES:
+        raise ValueError(
+            f"message body exceeds {MAX_MESSAGE_BODY_BYTES} UTF-8 bytes"
+        )
+
+
+def _validate_agent_name(name: str) -> None:
+    if not isinstance(name, str) or not name:
+        raise ValueError("agent name must be non-empty text")
+    try:
+        size = len(name.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise ValueError("agent name must be valid UTF-8") from exc
+    if size > MAX_AGENT_NAME_BYTES:
+        raise ValueError(f"agent name exceeds {MAX_AGENT_NAME_BYTES} UTF-8 bytes")
+
+
+def _blob_sha256(
+    conn: sqlite3.Connection, table: str, column: str, rowid: int,
+) -> str:
+    digest = hashlib.sha256()
+    with conn.blobopen(table, column, rowid, readonly=True) as blob:
+        while chunk := blob.read(65_536):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 class MsgStore:
@@ -81,6 +123,7 @@ class MsgStore:
         process_start_identity: str | None = None,
     ) -> Agent:
         """Register an agent, preserving active-session idempotency."""
+        _validate_agent_name(name)
         now = _now_iso()
         conn = self._get_conn()
         try:
@@ -866,6 +909,7 @@ class MsgStore:
         Creates delivery rows for all participants except
         the sender.
         """
+        validate_message_body(body)
         msg = Message(
             thread_id=thread_id,
             from_agent=from_agent,
@@ -983,6 +1027,138 @@ class MsgStore:
                     (agent_id,),
                 ).fetchall()
             return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def peek_inbox(
+        self,
+        agent_id: str,
+        thread_id: str | None = None,
+        limit: int = DEFAULT_PEEK_LIMIT,
+        max_body_bytes: int = MAX_MESSAGE_BODY_BYTES,
+    ) -> list[dict]:
+        """Return one stable unread page without changing delivery state."""
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise ValueError("peek limit must be an integer")
+        if not 1 <= limit <= MAX_PEEK_LIMIT:
+            raise ValueError(f"peek limit must be between 1 and {MAX_PEEK_LIMIT}")
+        if (
+            isinstance(max_body_bytes, bool)
+            or not isinstance(max_body_bytes, int)
+            or max_body_bytes < 1
+        ):
+            raise ValueError("max_body_bytes must be a positive integer")
+        conn = self._get_conn()
+        try:
+            where_thread = "AND m.thread_id = ?" if thread_id else ""
+            parameters: list[object] = [
+                MAX_SENDER_NAME_BYTES, max_body_bytes, agent_id,
+            ]
+            if thread_id:
+                parameters.append(thread_id)
+            parameters.append(limit)
+            rows = conn.execute(
+                f"""SELECT
+                    d.id AS delivery_id,
+                    m.id AS message_id,
+                    m.thread_id AS thread_id,
+                    m.from_agent AS sender_session_id,
+                    CASE WHEN length(CAST(
+                        COALESCE(m.sender_name, a.name) AS BLOB
+                    )) <= ? THEN COALESCE(m.sender_name, a.name)
+                        ELSE NULL END AS sender_name,
+                    length(CAST(
+                        COALESCE(m.sender_name, a.name) AS BLOB
+                    )) AS sender_name_bytes,
+                    m.sender_name IS NOT NULL AS sender_name_is_snapshot,
+                    m.rowid AS message_rowid,
+                    a.rowid AS sender_agent_rowid,
+                    CASE WHEN length(CAST(m.body AS BLOB)) <= ?
+                        THEN m.body ELSE NULL END AS body,
+                    length(CAST(m.body AS BLOB)) AS body_bytes,
+                    m.created_at AS created_at,
+                    d.state AS delivery_state
+                FROM deliveries d
+                JOIN messages m ON m.id = d.message_id
+                JOIN agents a ON a.session_id = m.from_agent
+                WHERE d.recipient_id = ?
+                    AND d.state NOT IN ('read', 'retired')
+                    {where_thread}
+                ORDER BY m.created_at ASC, m.id ASC, d.id ASC
+                LIMIT ?""",
+                parameters,
+            ).fetchall()
+            result = []
+            for row in rows:
+                item = dict(row)
+                body_too_large = item["body"] is None
+                sender_too_large = item["sender_name"] is None
+                item["body_too_large"] = body_too_large
+                item["body_sha256"] = None
+                item["sender_name_too_large"] = sender_too_large
+                item["sender_name_sha256"] = None
+                if body_too_large:
+                    item["body_sha256"] = _blob_sha256(
+                        conn, "messages", "body", item["message_rowid"],
+                    )
+                if sender_too_large:
+                    if item["sender_name_is_snapshot"]:
+                        table, column, rowid = (
+                            "messages", "sender_name", item["message_rowid"],
+                        )
+                    else:
+                        table, column, rowid = (
+                            "agents", "name", item["sender_agent_rowid"],
+                        )
+                    item["sender_name_sha256"] = _blob_sha256(
+                        conn, table, column, rowid,
+                    )
+                for internal in (
+                    "message_rowid", "sender_agent_rowid", "sender_name_is_snapshot",
+                ):
+                    item.pop(internal)
+                result.append(item)
+                if body_too_large or sender_too_large:
+                    break
+            return result
+        finally:
+            conn.close()
+
+    def ack_deliveries(
+        self, agent_id: str, delivery_ids: list[str],
+    ) -> list[str]:
+        """Idempotently acknowledge an exact recipient-owned delivery set."""
+        if not delivery_ids:
+            raise ValueError("at least one delivery id is required")
+        ordered_ids = list(dict.fromkeys(delivery_ids))
+        if any(not isinstance(value, str) or not value for value in ordered_ids):
+            raise ValueError("delivery ids must be non-empty strings")
+        placeholders = ",".join("?" for _ in ordered_ids)
+        conn = self._get_conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                f"""SELECT id, recipient_id, state FROM deliveries
+                WHERE id IN ({placeholders})""",
+                ordered_ids,
+            ).fetchall()
+            by_id = {row["id"]: row for row in rows}
+            if len(by_id) != len(ordered_ids):
+                raise ValueError("delivery was not found")
+            if any(by_id[value]["recipient_id"] != agent_id for value in ordered_ids):
+                raise ValueError("delivery is not owned by current recipient")
+            if any(by_id[value]["state"] == "retired" for value in ordered_ids):
+                raise ValueError("retired delivery cannot be acknowledged")
+            now = _now_iso()
+            conn.execute(
+                f"""UPDATE deliveries SET state = 'read', read_at = ?,
+                    claimed_by = NULL, claim_expires_at = NULL
+                WHERE recipient_id = ? AND state != 'read'
+                    AND id IN ({placeholders})""",
+                (now, agent_id, *ordered_ids),
+            )
+            conn.commit()
+            return ordered_ids
         finally:
             conn.close()
 

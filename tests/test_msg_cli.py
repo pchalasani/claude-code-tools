@@ -572,6 +572,404 @@ def test_send_json_returns_message_and_delivery_ids(monkeypatch, tmp_path):
     assert "first-mate.v1" not in result.stderr
 
 
+def test_inbox_json_peek_is_non_destructive_and_ack_is_idempotent(
+    monkeypatch, tmp_path,
+):
+    store = MsgStore(tmp_path / "msg.db")
+    sender = store.register_agent(
+        "sender", "%1", "main", AgentKind.CLAUDE, "/tmp/tmux-main",
+    )
+    recipient = store.register_agent(
+        "recipient", "%2", "main", AgentKind.CODEX, "/tmp/tmux-main",
+        pid=202,
+        consumer_protocol=ConsumerProtocol.FIRST_MATE_V1,
+        process_start_identity="linux:202:2",
+    )
+    thread = store.create_thread(
+        "peek", sender.session_id, [sender.session_id, recipient.session_id],
+    )
+    store.send_message(thread.id, sender.session_id, "journal me")
+    patch_cli_runtime(monkeypatch, store, self_agent=recipient)
+    runner = CliRunner()
+
+    peeked = machine_payload(
+        runner.invoke(cli, ["inbox", "--json", "--peek", "--limit", "1"])
+    )
+
+    assert peeked["operation"] == "inbox.peek"
+    messages = peeked["data"]["messages"]
+    assert len(messages) == 1
+    assert messages[0]["sender_session_id"] == sender.session_id
+    assert messages[0]["sender_name"] == sender.name
+    assert messages[0]["body"] == "journal me"
+    assert len(store.get_inbox(recipient.session_id)) == 1
+
+    delivery_id = messages[0]["delivery_id"]
+    first = machine_payload(
+        runner.invoke(cli, ["ack", "--delivery", delivery_id, "--json"])
+    )
+    second = machine_payload(
+        runner.invoke(cli, ["ack", "--delivery", delivery_id, "--json"])
+    )
+    assert first["data"]["delivery_ids"] == [delivery_id]
+    assert second["data"]["delivery_ids"] == [delivery_id]
+    assert store.get_inbox(recipient.session_id) == []
+
+
+@pytest.mark.parametrize("limit", (0, 101))
+def test_inbox_json_peek_rejects_invalid_limit(monkeypatch, tmp_path, limit):
+    store = MsgStore(tmp_path / "msg.db")
+    recipient = store.register_agent(
+        "recipient", "%2", "main", AgentKind.CODEX, "/tmp/tmux-main",
+        pid=202,
+        consumer_protocol=ConsumerProtocol.FIRST_MATE_V1,
+        process_start_identity="linux:202:2",
+    )
+    patch_cli_runtime(monkeypatch, store, self_agent=recipient)
+
+    result = CliRunner().invoke(
+        cli, ["inbox", "--json", "--peek", "--limit", str(limit)],
+    )
+
+    assert result.exit_code != 0
+    assert json.loads(result.stdout)["error"]["code"] == "invalid_value"
+
+
+def test_inbox_peek_requires_json(monkeypatch, tmp_path):
+    store = MsgStore(tmp_path / "msg.db")
+    patch_cli_runtime(monkeypatch, store)
+
+    result = CliRunner().invoke(cli, ["inbox", "--peek"])
+
+    assert result.exit_code != 0
+    assert "--peek requires --json" in result.output
+
+
+def test_inbox_json_thread_prefix_and_machine_errors(monkeypatch, tmp_path):
+    store = MsgStore(tmp_path / "msg.db")
+    sender = store.register_agent(
+        "sender", "%1", "main", AgentKind.CLAUDE, "/tmp/tmux-main",
+    )
+    recipient = store.register_agent(
+        "recipient", "%2", "main", AgentKind.CODEX, "/tmp/tmux-main",
+        pid=202,
+        consumer_protocol=ConsumerProtocol.FIRST_MATE_V1,
+        process_start_identity="linux:202:2",
+    )
+    threads = [
+        store.create_thread(
+            f"thread-{index}", sender.session_id,
+            [sender.session_id, recipient.session_id],
+        )
+        for index in range(17)
+    ]
+    target = threads[0]
+    store.send_message(target.id, sender.session_id, "target")
+    patch_cli_runtime(monkeypatch, store, self_agent=recipient)
+    runner = CliRunner()
+
+    valid = machine_payload(
+        runner.invoke(
+            cli,
+            [
+                "inbox", "--json", "--peek", "--thread", target.id[:8],
+                "--limit", "50",
+            ],
+        )
+    )
+    assert [row["body"] for row in valid["data"]["messages"]] == ["target"]
+
+    missing = runner.invoke(
+        cli,
+        [
+            "inbox", "--json", "--peek", "--thread", "not-found",
+            "--limit", "50",
+        ],
+    )
+    assert missing.exit_code != 0
+    assert missing.stderr == ""
+    assert json.loads(missing.stdout)["error"]["code"] == "thread_not_found"
+
+    by_prefix = {}
+    for thread in threads:
+        by_prefix.setdefault(thread.id[0], []).append(thread)
+    ambiguous_prefix = next(
+        prefix for prefix, matches in by_prefix.items() if len(matches) > 1
+    )
+    ambiguous = runner.invoke(
+        cli,
+        [
+            "inbox", "--json", "--peek", "--thread", ambiguous_prefix,
+            "--limit", "50",
+        ],
+    )
+    assert ambiguous.exit_code != 0
+    assert ambiguous.stderr == ""
+    assert json.loads(ambiguous.stdout)["error"]["code"] == "thread_ambiguous"
+
+
+def test_send_and_peek_missing_identity_errors_are_machine_only(monkeypatch, tmp_path):
+    store = MsgStore(tmp_path / "msg.db")
+    sender = store.register_agent(
+        "sender", "%1", "main", AgentKind.CLAUDE, "/tmp/tmux-main",
+        pid=101,
+        process_start_identity="linux:101:1",
+    )
+    patch_cli_runtime(monkeypatch, store, self_agent=sender)
+
+    recipient_missing = CliRunner().invoke(
+        cli, ["send", "missing", "body", "--json"],
+    )
+
+    assert recipient_missing.exit_code != 0
+    assert recipient_missing.stderr == ""
+    assert json.loads(recipient_missing.stdout)["error"]["code"] == (
+        "recipient_not_found"
+    )
+
+    with monkeypatch.context() as patch:
+        patch_cli_runtime(patch, store)
+        patch.setattr(
+            "claude_code_tools.msg.cli._get_exact_self_agent", lambda _store: None,
+        )
+        no_identity = CliRunner().invoke(
+            cli, ["inbox", "--json", "--peek", "--limit", "50"],
+        )
+    assert no_identity.exit_code != 0
+    assert no_identity.stderr == ""
+    assert json.loads(no_identity.stdout)["error"]["code"] == (
+        "registration_not_found"
+    )
+
+
+def test_peek_pages_stay_under_one_mib_and_can_drain_backlog(monkeypatch, tmp_path):
+    store = MsgStore(tmp_path / "msg.db")
+    sender = store.register_agent(
+        "sender", "%1", "main", AgentKind.CLAUDE, "/tmp/tmux-main",
+    )
+    recipient = store.register_agent(
+        "recipient", "%2", "main", AgentKind.CODEX, "/tmp/tmux-main",
+        pid=202,
+        consumer_protocol=ConsumerProtocol.FIRST_MATE_V1,
+        process_start_identity="linux:202:2",
+    )
+    thread = store.create_thread(
+        "bulk", sender.session_id, [sender.session_id, recipient.session_id],
+    )
+    body = "\x01" * 65536
+    for _ in range(20):
+        store.send_message(thread.id, sender.session_id, body)
+    patch_cli_runtime(monkeypatch, store, self_agent=recipient)
+    runner = CliRunner()
+    drained = []
+
+    while True:
+        result = runner.invoke(
+            cli, ["inbox", "--json", "--peek", "--limit", "50"],
+        )
+        payload = machine_payload(result)
+        assert len(result.stdout.encode("utf-8")) < 1024 * 1024
+        page = payload["data"]["messages"]
+        if not page:
+            break
+        ids = [item["delivery_id"] for item in page]
+        drained.extend(ids)
+        ack_argv = ["ack", "--json"]
+        for delivery_id in ids:
+            ack_argv.extend(("--delivery", delivery_id))
+        machine_payload(runner.invoke(cli, ack_argv))
+
+    assert len(drained) == 20
+    assert len(set(drained)) == 20
+
+
+def test_more_than_one_mib_backlog_drains_with_repeated_limit_one(
+    monkeypatch, tmp_path,
+):
+    store = MsgStore(tmp_path / "msg.db")
+    sender = store.register_agent(
+        "sender", "%1", "main", AgentKind.CLAUDE, "/tmp/tmux-main",
+    )
+    recipient = store.register_agent(
+        "recipient", "%2", "main", AgentKind.CODEX, "/tmp/tmux-main",
+        pid=202,
+        consumer_protocol=ConsumerProtocol.FIRST_MATE_V1,
+        process_start_identity="linux:202:2",
+    )
+    thread = store.create_thread(
+        "limit-one", sender.session_id, [sender.session_id, recipient.session_id],
+    )
+    body = "x" * 65536
+    for _ in range(17):
+        store.send_message(thread.id, sender.session_id, body)
+    patch_cli_runtime(monkeypatch, store, self_agent=recipient)
+    runner = CliRunner()
+    drained = []
+
+    while True:
+        peeked = machine_payload(
+            runner.invoke(
+                cli, ["inbox", "--json", "--peek", "--limit", "1"],
+            )
+        )
+        page = peeked["data"]["messages"]
+        if not page:
+            break
+        assert len(page) == 1
+        delivery_id = page[0]["delivery_id"]
+        drained.append(delivery_id)
+        machine_payload(
+            runner.invoke(
+                cli, ["ack", "--delivery", delivery_id, "--json"],
+            )
+        )
+
+    assert len(drained) == 17
+    assert 17 * len(body.encode("utf-8")) > 1024 * 1024
+
+
+def test_peek_then_ack_does_not_consume_later_message(monkeypatch, tmp_path):
+    store = MsgStore(tmp_path / "msg.db")
+    sender = store.register_agent(
+        "sender", "%1", "main", AgentKind.CLAUDE, "/tmp/tmux-main",
+    )
+    recipient = store.register_agent(
+        "recipient", "%2", "main", AgentKind.CODEX, "/tmp/tmux-main",
+        pid=202,
+        consumer_protocol=ConsumerProtocol.FIRST_MATE_V1,
+        process_start_identity="linux:202:2",
+    )
+    thread = store.create_thread(
+        "race", sender.session_id, [sender.session_id, recipient.session_id],
+    )
+    store.send_message(thread.id, sender.session_id, "first")
+    patch_cli_runtime(monkeypatch, store, self_agent=recipient)
+    runner = CliRunner()
+    page = machine_payload(
+        runner.invoke(cli, ["inbox", "--json", "--peek", "--limit", "50"])
+    )["data"]["messages"]
+    store.send_message(thread.id, sender.session_id, "later")
+
+    machine_payload(
+        runner.invoke(
+            cli, ["ack", "--delivery", page[0]["delivery_id"], "--json"],
+        )
+    )
+
+    assert [item["body"] for item in store.get_inbox(recipient.session_id)] == [
+        "later",
+    ]
+
+
+def test_ack_cross_recipient_batch_is_all_or_nothing(monkeypatch, tmp_path):
+    store = MsgStore(tmp_path / "msg.db")
+    sender = store.register_agent(
+        "sender", "%1", "main", AgentKind.CLAUDE, "/tmp/tmux-main",
+    )
+    recipient = store.register_agent(
+        "recipient", "%2", "main", AgentKind.CODEX, "/tmp/tmux-main",
+        pid=202,
+        consumer_protocol=ConsumerProtocol.FIRST_MATE_V1,
+        process_start_identity="linux:202:2",
+    )
+    other = store.register_agent(
+        "other", "%3", "main", AgentKind.CLAUDE, "/tmp/tmux-main",
+    )
+    thread = store.create_thread(
+        "scope", sender.session_id,
+        [sender.session_id, recipient.session_id, other.session_id],
+    )
+    store.send_message(thread.id, sender.session_id, "body")
+    own = store.get_inbox(recipient.session_id)[0]["delivery_id"]
+    foreign = store.get_inbox(other.session_id)[0]["delivery_id"]
+    patch_cli_runtime(monkeypatch, store, self_agent=recipient)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "ack", "--delivery", own, "--delivery", foreign, "--json",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert json.loads(result.stdout)["error"]["code"] == "ack_rejected"
+    assert store.get_inbox(recipient.session_id)[0]["delivery_id"] == own
+
+
+def test_cli_send_rejects_oversize_before_database_insert(monkeypatch, tmp_path):
+    store = MsgStore(tmp_path / "msg.db")
+    sender = store.register_agent(
+        "sender", "%1", "main", AgentKind.CLAUDE, "/tmp/tmux-main",
+        pid=101,
+        process_start_identity="linux:101:1",
+    )
+    store.register_agent(
+        "recipient", "%2", "main", AgentKind.CODEX, "/tmp/tmux-main",
+    )
+    patch_cli_runtime(monkeypatch, store, self_agent=sender)
+
+    result = CliRunner().invoke(
+        cli, ["send", "recipient", "界" * 21846, "--json"],
+    )
+
+    assert result.exit_code != 0
+    assert json.loads(result.stdout)["error"]["code"] == "send_rejected"
+    with sqlite3.connect(store.db_path) as connection:
+        assert connection.execute("SELECT count(*) FROM messages").fetchone()[0] == 0
+        assert connection.execute("SELECT count(*) FROM threads").fetchone()[0] == 0
+
+
+def test_legacy_oversize_peek_metadata_can_be_acked(monkeypatch, tmp_path):
+    store = MsgStore(tmp_path / "msg.db")
+    sender = store.register_agent(
+        "sender", "%1", "main", AgentKind.CLAUDE, "/tmp/tmux-main",
+    )
+    recipient = store.register_agent(
+        "recipient", "%2", "main", AgentKind.CODEX, "/tmp/tmux-main",
+        pid=202,
+        consumer_protocol=ConsumerProtocol.FIRST_MATE_V1,
+        process_start_identity="linux:202:2",
+    )
+    thread = store.create_thread(
+        "poison", sender.session_id, [sender.session_id, recipient.session_id],
+    )
+    message = store.send_message(thread.id, sender.session_id, "small")
+    with sqlite3.connect(store.db_path) as connection:
+        connection.execute(
+            "UPDATE messages SET body = ?, sender_name = ? WHERE id = ?",
+            ("p" * 70000, "n" * 70000, message.id),
+        )
+        connection.execute(
+            "UPDATE threads SET title = ? WHERE id = ?",
+            ("t" * (2 * 1024 * 1024), thread.id),
+        )
+    patch_cli_runtime(monkeypatch, store, self_agent=recipient)
+    runner = CliRunner()
+
+    peeked = machine_payload(
+        runner.invoke(cli, ["inbox", "--json", "--peek", "--limit", "1"])
+    )
+    row = peeked["data"]["messages"][0]
+    assert row["body"] is None
+    assert row["body_too_large"] is True
+    assert row["body_bytes"] == 70000
+    assert row["body_sha256"]
+    assert "thread_title" not in row
+    assert row["sender_name"] is None
+    assert row["sender_name_too_large"] is True
+    assert row["sender_name_bytes"] == 70000
+    assert row["sender_name_sha256"]
+    assert "p" * 100 not in json.dumps(peeked)
+    assert len(json.dumps(peeked).encode()) < 1024 * 1024
+
+    machine_payload(
+        runner.invoke(
+            cli, ["ack", "--delivery", row["delivery_id"], "--json"],
+        )
+    )
+    assert store.get_inbox(recipient.session_id) == []
+
+
 def test_continuation_json_lifecycle_uses_exact_registration(monkeypatch, tmp_path):
     store = MsgStore(tmp_path / "msg.db")
     agent = store.register_agent(
