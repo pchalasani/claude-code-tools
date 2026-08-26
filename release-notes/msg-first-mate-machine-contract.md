@@ -12,7 +12,10 @@ and `UserPromptSubmit` hooks keep `first-mate.v1` responsibilities in the agent
 loop. First-mate deliveries never use watcher tmux injection; legacy behavior
 remains the default.
 
+Completed evidence includes real disposable Claude/Codex plugin installation,
+Codex hook-hash trust, and native UserPromptSubmit/PostToolUse/Stop lifecycle.
+
 `plugins/msg/release-evidence.json` binds the current contract, exact source
 commit, built wheel SHA-256, and plugin payload hashes. The immutable external
-version ledger, real Claude/Codex hook trust, and warm-cache negative test are
-release gates and remain pending while this branch is unreleased.
+version ledger, 1.14→1.15 upgrade, warm-cache negative test, and complete tmux
+smoke bundle remain release gates while this branch is unreleased.

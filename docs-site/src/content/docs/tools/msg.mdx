@@ -106,9 +106,10 @@ contains text, or the prompt state cannot be determined, the watcher leaves
 the delivery pending instead of typing over the session.
 
 For Claude Code, the companion plugin supplies the inbox slash command. In
-both clients, its Stop and UserPromptSubmit hooks can add a short notice such
-as "Run msg inbox when ready" to the receiving agent's context. These notices
-contain the sender name and unread count, not the message body.
+both clients, legacy Stop and UserPromptSubmit hooks can add a short notice
+with sender names, unread count, and "Run msg inbox when ready." First-mate
+hooks instead expose only bounded pending-delivery and continuation state.
+Neither route includes the message body.
 
 `msg inbox` reads unread message bodies directly from SQLite and marks only the
 messages it displayed as read. It still works when the watcher is not running,

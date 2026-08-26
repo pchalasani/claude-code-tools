@@ -410,6 +410,20 @@ class TestScanWithStubbedTmux:
         assert agent is not None
         assert (agent.kind, agent.pid, agent.cwd) == ("claude", 700, "/repo")
 
+    def test_scan_accepts_harness_as_pane_root(self, monkeypatch) -> None:
+        from claude_code_tools.amux import scan as scan_mod
+
+        rows = [("s:1.1", "s", "700", "claude", "/repo")]
+        monkeypatch.setattr(scan_mod, "_tmux", lambda *args: (
+            self._listing(rows) if args[0] == "list-panes" else "screen"
+        ))
+        monkeypatch.setattr(scan_mod, "_children_by_ppid", lambda: {})
+        monkeypatch.setattr(scan_mod, "_command_for_pid", lambda pid: "claude")
+
+        agents = scan_mod.scan(workers=1)
+
+        assert [(agent.kind, agent.pid) for agent in agents] == [("claude", 700)]
+
 
 class TestGitContext:
     def test_plain_repo(self, tmp_path) -> None:

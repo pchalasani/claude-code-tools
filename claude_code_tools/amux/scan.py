@@ -141,6 +141,17 @@ def argv_of(children: list[tuple[int, str]]) -> str:
     return "\n".join(cmd for _, cmd in children)
 
 
+def agent_processes(
+    tree: dict[int, list[tuple[int, str]]], root: int,
+) -> list[tuple[int, str]]:
+    """Return a pane root when it is a harness, plus all descendants."""
+    processes = descendants(tree, root)
+    root_command = _command_for_pid(root)
+    if detect.classify_argv(root_command) is not None:
+        processes.insert(0, (root, root_command))
+    return processes
+
+
 def agent_pid(children: list[tuple[int, str]], kind: str) -> int:
     """PID of the process matching *kind*, else the first, else 0.
 
@@ -183,10 +194,7 @@ def resolve_pane_agent(pane: str, tmux_socket: str | None = None) -> Agent | Non
         root_pid = int(pane_pid)
     except ValueError:
         return None
-    children = descendants(_children_by_ppid(), root_pid)
-    root_command = _command_for_pid(root_pid)
-    if detect.classify_argv(root_command) is not None:
-        children.insert(0, (root_pid, root_command))
+    children = agent_processes(_children_by_ppid(), root_pid)
     kinds = {
         kind
         for _pid, command in children
@@ -276,7 +284,7 @@ def scan(workers: int = 16) -> list[Agent]:
             ppid = int(pid_s)
         except ValueError:
             continue
-        children = descendants(child_map, ppid)
+        children = agent_processes(child_map, ppid)
         kind = detect.classify_argv(argv_of(children))
         if kind is None:
             continue
@@ -302,14 +310,14 @@ def scan(workers: int = 16) -> list[Agent]:
                 kind=kind,  # type: ignore[arg-type]
                 state=detect.detect_state(screen, kind),  # type: ignore[arg-type]
                 name=detect.extract_name(
-                    argv_of(descendants(child_map, ppid)), title, screen
+                    argv_of(agent_processes(child_map, ppid)), title, screen
                 ),
                 cwd=cwd,
                 repo=repo,
                 branch=branch,
                 model=detect.extract_model(screen, kind),  # type: ignore[arg-type]
                 info=detect.extract_info(screen, kind),  # type: ignore[arg-type]
-                pid=agent_pid(descendants(child_map, ppid), kind),
+                pid=agent_pid(agent_processes(child_map, ppid), kind),
             )
         )
 
