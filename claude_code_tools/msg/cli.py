@@ -13,6 +13,16 @@ from .models import AgentKind
 from .store import MsgStore, DEFAULT_DB_PATH, DEFAULT_DB_DIR
 
 
+def json_option(function):
+    """Add the per-command machine-output flag without changing legacy syntax."""
+    return click.option(
+        "--json",
+        "json_output",
+        is_flag=True,
+        help="Emit one versioned JSON object.",
+    )(function)
+
+
 def _check_db_writable(db_dir: str) -> bool:
     """Check if we can write to the DB directory."""
     from pathlib import Path
