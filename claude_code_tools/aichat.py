@@ -184,7 +184,11 @@ def main(ctx, claude_home, codex_home):
     skip_auto_index_cmds = ['build-index', 'clear-index', 'index-stats']
     cli_args = sys.argv[1:]
     if '--' in cli_args:
-        cli_args = cli_args[:cli_args.index('--')]
+        separator_index = cli_args.index('--')
+        after_separator = cli_args[separator_index + 1:]
+        cli_args = cli_args[:separator_index]
+        if after_separator and after_separator[0] in ctx.command.commands:
+            cli_args.extend(after_separator)
     help_mode = any(arg in cli_args for arg in ('-h', '--help'))
     should_skip = (
         help_mode
