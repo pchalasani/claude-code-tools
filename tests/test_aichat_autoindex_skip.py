@@ -50,6 +50,9 @@ def _invoke(runner, argv):
     [
         ["--help"],
         ["search", "--help"],
+        # Click treats a group-level ``--`` as ending only the group's
+        # options, so this still renders search help.
+        ["--", "search", "--help"],
         ["trim-in-place", "--help"],
         ["port", "--help"],
         ["resolve", "--help"],

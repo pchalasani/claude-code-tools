@@ -182,7 +182,15 @@ def main(ctx, claude_home, codex_home):
     # time out. Trimming also rewrites the file, so indexing its
     # pre-trim content first is wasted work twice over.
     skip_auto_index_cmds = ['build-index', 'clear-index', 'index-stats']
+    # A help request must not index. Scan argv rather than click's parsed
+    # options, since -h/--help never reaches this callback as a value.
+    # Anchor the scan at the subcommand so a group-level separator
+    # ('aichat -- search --help') does not hide the flag, and stop at the
+    # subcommand's own separator so a literal '--help' *query*
+    # ('aichat search -- --help') still refreshes the index first.
     cli_args = sys.argv[1:]
+    if ctx.invoked_subcommand and ctx.invoked_subcommand in cli_args:
+        cli_args = cli_args[cli_args.index(ctx.invoked_subcommand):]
     if '--' in cli_args:
         cli_args = cli_args[:cli_args.index('--')]
     help_mode = any(arg in cli_args for arg in ('-h', '--help'))
