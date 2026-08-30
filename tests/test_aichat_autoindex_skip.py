@@ -48,6 +48,8 @@ def _invoke(runner, argv):
 @pytest.mark.parametrize(
     "argv",
     [
+        ["--help"],
+        ["search", "--help"],
         ["trim-in-place", "--help"],
         ["port", "--help"],
         ["resolve", "--help"],
@@ -62,10 +64,9 @@ def test_index_free_commands_do_not_auto_index(
     mock_auto_index.assert_not_called()
 
 
-def test_search_still_auto_indexes(runner, mock_auto_index):
-    """The skip list must stay narrow: search reads the index, so it
-    still has to refresh it first."""
-    _invoke(runner, ["search", "--help"])
+def test_search_still_auto_indexes_for_a_real_query(runner, mock_auto_index):
+    """A real search reads the index, so it still refreshes it first."""
+    _invoke(runner, ["search", "query"])
     mock_auto_index.assert_called_once()
 
 
