@@ -84,6 +84,19 @@ def test_search_help_after_group_separator_skips_auto_indexing(
     _invoke(runner, ["--", "search", "--help"])
     mock_auto_index.assert_not_called()
 
+
+def test_search_help_after_separator_with_colliding_option_value_skips_indexing(
+    runner, mock_auto_index, tmp_path
+):
+    """A group option value matching the command must not hide its help."""
+    claude_home = tmp_path / "search"
+    claude_home.mkdir()
+    _invoke(
+        runner,
+        ["--claude-home", str(claude_home), "--", "search", "--help"],
+    )
+    mock_auto_index.assert_not_called()
+
 def test_trim_in_place_skips_indexing_on_a_real_run(
     runner, mock_auto_index, tmp_path
 ):
