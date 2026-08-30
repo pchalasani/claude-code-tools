@@ -53,6 +53,9 @@ def _invoke(runner, argv):
         # Click treats a group-level ``--`` as ending only the group's
         # options, so this still renders search help.
         ["--", "search", "--help"],
+        # Routed to the synthesized ``menu`` subcommand, whose name never
+        # appears in argv, so there is no anchor to truncate from.
+        ["--", "--help"],
         ["trim-in-place", "--help"],
         ["port", "--help"],
         ["resolve", "--help"],
