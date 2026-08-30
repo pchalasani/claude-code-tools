@@ -67,6 +67,21 @@ def test_index_free_commands_do_not_auto_index(
     mock_auto_index.assert_not_called()
 
 
+def test_help_after_a_home_named_like_a_subcommand_does_not_index(
+    runner, mock_auto_index, tmp_path, monkeypatch
+):
+    """A ``--claude-home`` value that happens to equal the subcommand name
+    must not be mistaken for the subcommand when locating the help flag."""
+    (tmp_path / "resume").mkdir()
+    monkeypatch.chdir(tmp_path)
+    result = _invoke(
+        runner, ["--claude-home", "resume", "--", "resume", "--help"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "Usage:" in result.output
+    mock_auto_index.assert_not_called()
+
+
 def test_search_still_auto_indexes_for_a_real_query(runner, mock_auto_index):
     """A real search reads the index, so it still refreshes it first."""
     _invoke(runner, ["search", "query"])

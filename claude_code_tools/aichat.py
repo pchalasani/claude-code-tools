@@ -188,9 +188,17 @@ def main(ctx, claude_home, codex_home):
     # ('aichat -- search --help') does not hide the flag, and stop at the
     # subcommand's own separator so a literal '--help' *query*
     # ('aichat search -- --help') still refreshes the index first.
+    # Skip the values of the group's own value-taking options while
+    # looking for the subcommand, so 'aichat --claude-home resume ...'
+    # does not anchor on the directory named 'resume'.
+    group_value_opts = ('--claude-home', '--codex-home')
     cli_args = sys.argv[1:]
-    if ctx.invoked_subcommand and ctx.invoked_subcommand in cli_args:
-        cli_args = cli_args[cli_args.index(ctx.invoked_subcommand):]
+    for i, arg in enumerate(cli_args):
+        if i and cli_args[i - 1] in group_value_opts:
+            continue
+        if arg == ctx.invoked_subcommand:
+            cli_args = cli_args[i:]
+            break
     if '--' in cli_args:
         cli_args = cli_args[:cli_args.index('--')]
     help_mode = any(arg in cli_args for arg in ('-h', '--help'))
