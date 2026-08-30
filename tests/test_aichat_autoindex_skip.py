@@ -70,6 +70,12 @@ def test_search_still_auto_indexes_for_a_real_query(runner, mock_auto_index):
     mock_auto_index.assert_called_once()
 
 
+def test_search_literal_help_query_still_auto_indexes(runner, mock_auto_index):
+    """A query after ``--`` is data, not a help request."""
+    _invoke(runner, ["search", "--", "--help"])
+    mock_auto_index.assert_called_once()
+
+
 def test_trim_in_place_skips_indexing_on_a_real_run(
     runner, mock_auto_index, tmp_path
 ):

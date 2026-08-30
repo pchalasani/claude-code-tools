@@ -63,7 +63,7 @@ class TestClaudeHomeResolution:
         alt_home.mkdir()
         argv = [
             "aichat", "search",
-            "--claude-home", str(alt_home), "--help",
+            "--claude-home", str(alt_home), "query",
         ]
         with patch.object(sys, "argv", argv):
             runner.invoke(main, argv[1:])
@@ -80,7 +80,7 @@ class TestClaudeHomeResolution:
         alt_home.mkdir()
         argv = [
             "aichat",
-            "--claude-home", str(alt_home), "search", "--help",
+            "--claude-home", str(alt_home), "search", "query",
         ]
         with patch.object(sys, "argv", argv):
             runner.invoke(main, argv[1:])
@@ -95,7 +95,7 @@ class TestClaudeHomeResolution:
         """CLAUDE_CONFIG_DIR env var used when no CLI arg."""
         alt_home = tmp_path / ".claude-env"
         alt_home.mkdir()
-        argv = ["aichat", "search", "--help"]
+        argv = ["aichat", "search", "query"]
         with (
             patch.object(sys, "argv", argv),
             patch.dict(
@@ -119,7 +119,7 @@ class TestClaudeHomeResolution:
         cli_home.mkdir()
         argv = [
             "aichat", "search",
-            "--claude-home", str(cli_home), "--help",
+            "--claude-home", str(cli_home), "query",
         ]
         with (
             patch.object(sys, "argv", argv),
@@ -143,7 +143,7 @@ class TestClaudeHomeResolution:
         alt_codex.mkdir()
         argv = [
             "aichat", "search",
-            "--codex-home", str(alt_codex), "--help",
+            "--codex-home", str(alt_codex), "query",
         ]
         with patch.object(sys, "argv", argv):
             runner.invoke(main, argv[1:])

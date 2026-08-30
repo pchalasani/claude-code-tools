@@ -182,7 +182,10 @@ def main(ctx, claude_home, codex_home):
     # time out. Trimming also rewrites the file, so indexing its
     # pre-trim content first is wasted work twice over.
     skip_auto_index_cmds = ['build-index', 'clear-index', 'index-stats']
-    help_mode = any(arg in sys.argv for arg in ('-h', '--help'))
+    cli_args = sys.argv[1:]
+    if '--' in cli_args:
+        cli_args = cli_args[:cli_args.index('--')]
+    help_mode = any(arg in cli_args for arg in ('-h', '--help'))
     should_skip = (
         help_mode
         or ctx.invoked_subcommand in ('port', 'resolve', 'trim-in-place')
