@@ -86,14 +86,15 @@ def test_search_help_after_group_separator_skips_auto_indexing(
 
 
 def test_search_help_after_separator_with_colliding_option_value_skips_indexing(
-    runner, mock_auto_index, tmp_path
+    runner, mock_auto_index, tmp_path, monkeypatch
 ):
     """A group option value matching the command must not hide its help."""
     claude_home = tmp_path / "search"
     claude_home.mkdir()
+    monkeypatch.chdir(tmp_path)
     _invoke(
         runner,
-        ["--claude-home", str(claude_home), "--", "search", "--help"],
+        ["--claude-home", "search", "--", "search", "--help"],
     )
     mock_auto_index.assert_not_called()
 
