@@ -404,6 +404,8 @@ def test_resolve_skips_auto_index_without_changing_other_commands(
     assert resolve_result.returncode == 0
     assert not index_path.exists()
 
+    # A real query, not ``--help``: help requests deliberately skip
+    # auto-indexing, so they cannot show that other commands still index.
     search_result = _run_cli(
         [
             "search",
@@ -412,7 +414,7 @@ def test_resolve_skips_auto_index_without_changing_other_commands(
             "--codex-home",
             str(codex_home),
             "--json",
-            "--help",
+            "Selected",
         ],
         env,
     )

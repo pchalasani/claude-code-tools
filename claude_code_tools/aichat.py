@@ -182,8 +182,35 @@ def main(ctx, claude_home, codex_home):
     # time out. Trimming also rewrites the file, so indexing its
     # pre-trim content first is wasted work twice over.
     skip_auto_index_cmds = ['build-index', 'clear-index', 'index-stats']
+    # A help request must not index. Scan argv rather than click's parsed
+    # options, since -h/--help never reaches this callback as a value.
+    # Anchor the scan at the subcommand so a group-level separator
+    # ('aichat -- search --help') does not hide the flag, and stop at the
+    # subcommand's own separator so a literal '--help' *query*
+    # ('aichat search -- --help') still refreshes the index first.
+    # Skip the values of the group's own value-taking options while
+    # looking for the subcommand, so 'aichat --claude-home resume ...'
+    # does not anchor on the directory named 'resume'.
+    # Only truncate once anchored: SessionReferenceGroup synthesizes a
+    # subcommand for bare session references ('aichat -- --help' routes to
+    # 'menu'), so the name is not always present in argv, and there is then
+    # no subcommand-level separator to respect.
+    group_value_opts = ('--claude-home', '--codex-home')
+    cli_args = sys.argv[1:]
+    anchored = False
+    for i, arg in enumerate(cli_args):
+        if i and cli_args[i - 1] in group_value_opts:
+            continue
+        if arg == ctx.invoked_subcommand:
+            cli_args = cli_args[i:]
+            anchored = True
+            break
+    if anchored and '--' in cli_args:
+        cli_args = cli_args[:cli_args.index('--')]
+    help_mode = any(arg in cli_args for arg in ('-h', '--help'))
     should_skip = (
-        ctx.invoked_subcommand in ('port', 'resolve', 'trim-in-place')
+        help_mode
+        or ctx.invoked_subcommand in ('port', 'resolve', 'trim-in-place')
         or ctx.invoked_subcommand in skip_auto_index_cmds
         or any(cmd in sys.argv for cmd in skip_auto_index_cmds)
     )

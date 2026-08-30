@@ -48,6 +48,14 @@ def _invoke(runner, argv):
 @pytest.mark.parametrize(
     "argv",
     [
+        ["--help"],
+        ["search", "--help"],
+        # Click treats a group-level ``--`` as ending only the group's
+        # options, so this still renders search help.
+        ["--", "search", "--help"],
+        # Routed to the synthesized ``menu`` subcommand, whose name never
+        # appears in argv, so there is no anchor to truncate from.
+        ["--", "--help"],
         ["trim-in-place", "--help"],
         ["port", "--help"],
         ["resolve", "--help"],
@@ -62,10 +70,30 @@ def test_index_free_commands_do_not_auto_index(
     mock_auto_index.assert_not_called()
 
 
-def test_search_still_auto_indexes(runner, mock_auto_index):
-    """The skip list must stay narrow: search reads the index, so it
-    still has to refresh it first."""
-    _invoke(runner, ["search", "--help"])
+def test_help_after_a_home_named_like_a_subcommand_does_not_index(
+    runner, mock_auto_index, tmp_path, monkeypatch
+):
+    """A ``--claude-home`` value that happens to equal the subcommand name
+    must not be mistaken for the subcommand when locating the help flag."""
+    (tmp_path / "resume").mkdir()
+    monkeypatch.chdir(tmp_path)
+    result = _invoke(
+        runner, ["--claude-home", "resume", "--", "resume", "--help"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "Usage:" in result.output
+    mock_auto_index.assert_not_called()
+
+
+def test_search_still_auto_indexes_for_a_real_query(runner, mock_auto_index):
+    """A real search reads the index, so it still refreshes it first."""
+    _invoke(runner, ["search", "query"])
+    mock_auto_index.assert_called_once()
+
+
+def test_search_literal_help_query_still_auto_indexes(runner, mock_auto_index):
+    """A query after ``--`` is data, not a help request."""
+    _invoke(runner, ["search", "--", "--help"])
     mock_auto_index.assert_called_once()
 
 
