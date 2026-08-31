@@ -60,6 +60,58 @@ describe("row birth defaults", () => {
 });
 
 describe("tab-lifetime openness", () => {
+  it("collapses the former latest briefing when a new one arrives", () => {
+    createRoot((dispose) => {
+      const [rows, setRows] = createSignal(outline(sampleBrief()));
+      const openness = createOpenness(rows, () => ({}), () => ({}));
+
+      expect(openness.isOpen(row(rows(), "newest"))).toBe(true);
+      expect(openness.isOpen(row(rows(), "older"))).toBe(false);
+
+      const appended = sampleBrief();
+      appended.updates.push({
+        id: "after-work",
+        timestamp: "2026-07-28T09:00:00Z",
+        headline: "The requested work is ready",
+        summary: "A new briefing arrived while the page stayed open.",
+        lanes: [],
+      });
+      setRows(outline(appended));
+
+      expect(openness.isOpen(row(rows(), "after-work"))).toBe(true);
+      expect(openness.isOpen(row(rows(), "newest"))).toBe(false);
+      expect(openness.isOpen(row(rows(), "older"))).toBe(false);
+      dispose();
+    });
+  });
+
+  it("keeps an archived briefing open only while it has active work", () => {
+    createRoot((dispose) => {
+      const [rows, setRows] = createSignal(outline(sampleBrief()));
+      const [active, setActive] = createSignal(true);
+      const openness = createOpenness(
+        rows,
+        () => ({}),
+        () => ({}),
+        (rowId) => rowId === "newest" && active(),
+      );
+      const appended = sampleBrief();
+      appended.updates.push({
+        id: "after-work",
+        timestamp: "2026-07-28T09:00:00Z",
+        headline: "The requested work is ready",
+        summary: "A new briefing arrived while the page stayed open.",
+        lanes: [],
+      });
+      setRows(outline(appended));
+
+      expect(openness.isOpen(row(rows(), "newest"))).toBe(true);
+      setActive(false);
+      expect(openness.isOpen(row(rows(), "newest"))).toBe(false);
+      dispose();
+    });
+  });
+
   it("keeps an awaiting thread open when its answer arrives", () => {
     createRoot((dispose) => {
       const [rows, setRows] = createSignal(outline(sampleBrief()));

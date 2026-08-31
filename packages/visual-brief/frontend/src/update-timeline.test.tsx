@@ -119,6 +119,7 @@ describe("the append-only update timeline", () => {
 
     expect(paintedUpdates()[0]).toBe("just-published");
     expect(paintedOpen("just-published")).toBe("true");
+    expect(paintedOpen("newest")).toBe("false");
   });
 
   it("composes at the selected briefing root with c", () => {
@@ -133,7 +134,7 @@ describe("the append-only update timeline", () => {
       .toBe("newest");
   });
 
-  it("keeps the old latest row, folds, and draft when it enters the ledger",
+  it("keeps an active draft visible when its briefing enters the ledger",
     () => {
       const { publish } = mountLive();
       composeAt("newest/changed/beta");
@@ -156,6 +157,7 @@ describe("the append-only update timeline", () => {
       publish(next);
 
       expect(rowNode("newest")).toBe(oldLatest);
+      expect(paintedOpen("newest")).toBe("true");
       expect(document.querySelector(".composer textarea")).toBe(draft);
       expect(draft?.value).toBe("A draft tied to the stable briefing id");
       expect(paintedOpen("newest/next")).toBe("false");
@@ -163,6 +165,24 @@ describe("the append-only update timeline", () => {
         document.querySelector(".ledger-briefing > [data-row-id='newest']"),
       ).toBe(oldLatest);
     });
+
+  it("does not pin a briefing after an empty root composer closes", () => {
+    const { publish } = mountLive();
+    composeAt("newest");
+    press("Escape");
+    const next = sampleBrief();
+    next.updates.push({
+      id: "after-root-composer",
+      timestamp: "2026-07-25T14:00:00Z",
+      headline: "A newer briefing arrived",
+      summary: "The inactive prior briefing should fold into the ledger.",
+      lanes: [],
+    });
+
+    publish(next);
+
+    expect(paintedOpen("newest")).toBe("false");
+  });
 
   it("handles zero, one, and legacy-plus-update documents", () => {
     const empty = sampleBrief();

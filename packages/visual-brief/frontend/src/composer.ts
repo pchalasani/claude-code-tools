@@ -37,6 +37,7 @@ export interface Composer {
     suggestion: SuggestedReply,
   ) => Promise<void>;
   signalStatus: (rowId: string) => string;
+  signalPendingAt: (rowId: string) => boolean;
   signalWorkingAt: (rowId: string) => boolean;
   selectedSignalAt: (rowId: string) => string | null;
 }
@@ -309,6 +310,7 @@ export function createComposer(
         ? signalOutcomes()[rowId]?.message ?? ""
         : `Sending ${latest.label}…`;
     },
+    signalPendingAt: (rowId) => (signalRequests()[rowId]?.length ?? 0) > 0,
     signalWorkingAt: signalWork.at,
     selectedSignalAt: (rowId) => {
       const current = signalSelections()[rowId];

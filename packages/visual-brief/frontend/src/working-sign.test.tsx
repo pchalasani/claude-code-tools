@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { BriefDocument } from "./document";
 import { saveAcceptedSignalWork, saveSentRecords } from "./session-store";
-import { mount, mountLive, useHarness } from "../test/harness";
+import { click, mount, mountLive, useHarness } from "../test/harness";
 import { SAMPLE_SUGGESTIONS, sampleBrief } from "../test/sample-brief";
 
 const ITEM = "newest/next/gamma";
@@ -64,6 +64,17 @@ function foldedIn(): BriefDocument {
   return brief;
 }
 
+function appendUpdate(brief: BriefDocument): BriefDocument {
+  brief.updates.push({
+    id: "after-question",
+    timestamp: "2026-07-28T09:00:00Z",
+    headline: "The agent published another briefing",
+    summary: "The unanswered conversation remains active in the prior one.",
+    lanes: [],
+  });
+  return brief;
+}
+
 /**
  * Read every waiting sign the page is painting, with the row wearing it.
  *
@@ -116,6 +127,19 @@ describe("the sign across a page load that followed a send", () => {
     mount(foldedIn());
 
     expect(signs().filter((row) => row === FOLDED)).toHaveLength(1);
+  });
+
+  it("keeps the prior briefing open while its folded question is unanswered", () => {
+    sentBeforeTheLoad();
+    const { publish } = mountLive(foldedIn());
+
+    publish(appendUpdate(foldedIn()));
+
+    expect(
+      document.querySelector('[data-row-id="newest"]')
+        ?.getAttribute("data-open"),
+    ).toBe("true");
+    expect(signs()).toContain(FOLDED);
   });
 
 });
@@ -195,6 +219,7 @@ describe("the sign after accepted feedback", () => {
 
     publish(appended);
     await Promise.resolve();
+    click("newest");
 
     expect(signs()).not.toContain(SIGNAL_ITEM);
     expect(

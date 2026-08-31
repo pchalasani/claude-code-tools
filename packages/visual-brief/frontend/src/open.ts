@@ -12,6 +12,7 @@ export function createOpenness(
   rows: Accessor<Row[]>,
   chosen: Accessor<Readonly<ChosenMap>>,
   seen: Accessor<Readonly<SeenMap>>,
+  keepUpdateOpen: (rowId: string) => boolean = () => false,
 ): Openness {
   const defaults = new Map<string, boolean>();
   const outstanding = (row: Row, current: Row[]): boolean => {
@@ -29,6 +30,9 @@ export function createOpenness(
     const choice = chosen()[row.id];
     if (choice !== undefined) {
       return choice;
+    }
+    if (row.kind === "update") {
+      return keepUpdateOpen(row.id) || bornDefault(row, rows(), seen());
     }
     let initial = defaults.get(row.id);
     if (initial === undefined) {

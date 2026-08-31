@@ -12,8 +12,8 @@
   "outputs": {
     "visual-brief-codex.mjs": "6c70f8accd699b587605b508456c7f608fab7b2ba95ad39d11c8a4a0ebe5f0d5",
     "visual-brief.css": "b15ab5fa89f890bc2604d99e0f787dc8a9dd65adb5e0471ace8ab9c00c93990a",
-    "visual-brief.js": "afbabfb220cf21d83cf2abdca61cc37cb802da8c7798a314f7007ae2727c1465"
+    "visual-brief.js": "75ee5b7d2caf3fe4f475f325d19223e1b3bbebd0fefdfc3433392743a40d29d7"
   },
-  "sources": "2b7f1bfa2e1ff828d1c1d1d8e35ce2cc098249a0e82eb1942de60fddc2d702e0",
+  "sources": "053b2129b37249d77065dd701c51b0b90d1e4b8267bc66509d619a17ac54c663",
   "theme_bootstrap_source": "bb8392e3275222a6f46e65bfda2306fe2d4492622aa016fd0add724dbeec76df"
 }

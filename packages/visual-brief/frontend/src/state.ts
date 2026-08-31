@@ -1,4 +1,9 @@
-import { createEffect, createMemo, type Accessor } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  type Accessor,
+} from "solid-js";
 import {
   createComposer,
   postJson,
@@ -18,7 +23,11 @@ import {
   type Navigation,
   type Overlay,
 } from "./navigation";
-import { CURRENT_STATE_ROOT_ID, type Row } from "./outline";
+import {
+  CURRENT_STATE_ROOT_ID,
+  outline,
+  type Row,
+} from "./outline";
 import {
   createPending,
   suggestedReplyAnswered,
@@ -47,7 +56,44 @@ export const GLOBAL_MESSAGE_ROW_ID = "//message-agent";
 export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
   const human = createHumanState();
   const pending = createPending(brief);
-  const nav = createNavigation(brief, human);
+  const [activityReady, setActivityReady] = createSignal(false);
+  let activeComposer: Composer | undefined;
+  const activeUpdateIds = createMemo<ReadonlySet<string>>(() => {
+    activityReady();
+    if (activeComposer === undefined) {
+      return new Set();
+    }
+    const rows = outline(brief());
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    const active = new Set<string>();
+    for (const row of rows) {
+      const working = activeComposer.target()?.rowId === row.id
+        || activeComposer.sendingAt(row.id)
+        || activeComposer.pendingAt(row.id).length !== 0
+        || pending.sessionActiveAt(row.id)
+        || activeComposer.signalPendingAt(row.id)
+        || activeComposer.signalWorkingAt(row.id);
+      if (!working) {
+        continue;
+      }
+      let ancestor: Row | undefined = row;
+      while (ancestor !== undefined) {
+        if (ancestor.kind === "update") {
+          active.add(ancestor.id);
+          break;
+        }
+        ancestor = ancestor.parentId === null
+          ? undefined
+          : byId.get(ancestor.parentId);
+      }
+    }
+    return active;
+  });
+  const nav = createNavigation(
+    brief,
+    human,
+    (updateId) => activeUpdateIds().has(updateId),
+  );
   const signalWork = createSignalWork({
     latestUpdateId: () => brief().updates.at(-1)?.id,
     rowExists: (rowId) => nav.row(rowId) !== undefined,
@@ -61,6 +107,8 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
     human,
     signalWork,
   );
+  activeComposer = composer;
+  setActivityReady(true);
   const globalMessageRow = createMemo<Row | null>(() => {
     const latest = brief().updates.at(-1);
     const current = brief().current_state;
@@ -230,7 +278,9 @@ export function createBriefState(brief: Accessor<BriefDocument>): BriefState {
     for (const id of [...nav.ancestors(row.id)].reverse()) {
       if (!nav.isOpen(id)) nav.setOpen(id, true);
     }
-    nav.setOpen(row.id, true);
+    if (row.kind !== "update" || !alreadyUnfolded) {
+      nav.setOpen(row.id, true);
+    }
     if (!alreadyOpen || alreadyUnfolded) {
       composer.toggleAt(target);
     }

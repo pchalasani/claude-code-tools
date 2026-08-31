@@ -211,11 +211,20 @@ describe("what a publish tells the human has changed", () => {
     });
     publish(appended);
     await Promise.resolve();
+    expect(rowNode("newest")?.getAttribute("data-open")).toBe("true");
 
     answer?.(new Response("{}", { status: 200 }));
     await vi.waitFor(() => {
-      expect(button?.getAttribute("aria-pressed")).toBe("false");
+      expect(rowNode("newest")?.getAttribute("data-open")).toBe("false");
     });
+    click("newest");
+    expect(
+      document.querySelector(
+        `[data-row-id="${ALPHA}"] [data-suggestion="${
+          SAMPLE_SUGGESTIONS[0]?.message
+        }"]`,
+      )?.getAttribute("aria-pressed"),
+    ).toBe("false");
     expect(
       rowNode(ALPHA)?.querySelector(":scope > .row-body > .working"),
     ).toBeNull();

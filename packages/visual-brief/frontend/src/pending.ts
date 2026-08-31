@@ -25,6 +25,7 @@ export interface PendingNote {
 export interface Pending {
   at: (rowId: string) => PendingNote[];
   within: (rowId: string) => boolean;
+  sessionActiveAt: (rowId: string) => boolean;
   add: (sent: SentRecord) => void;
   begin: (sent: SentRecord) => string;
   stamp: (token: string, at: string) => void;
@@ -36,6 +37,10 @@ export interface Pending {
 interface Located {
   id: string;
   turns: Thread["turns"];
+}
+interface LocatedSubmission {
+  rowId: string;
+  answered: boolean;
 }
 interface Waiting {
   token: string;
@@ -133,6 +138,14 @@ export function locateSubmissions(
   brief: BriefDocument,
   records: SentRecord[],
 ): (string | null)[] {
+  return locateSubmissionTurns(brief, records).map(
+    (match) => match?.rowId ?? null,
+  );
+}
+function locateSubmissionTurns(
+  brief: BriefDocument,
+  records: SentRecord[],
+): (LocatedSubmission | null)[] {
   const found = conversations(brief);
   const claimed = new Set<string>();
   return records.map((record) => {
@@ -150,7 +163,12 @@ export function locateSubmissions(
       });
       if (position !== -1) {
         claimed.add(turnKey(thread.id, position));
-        return thread.id;
+        return {
+          rowId: thread.id,
+          answered: thread.turns.slice(position + 1).some(
+            (turn) => turn.author === "agent",
+          ),
+        };
       }
     }
     return null;
@@ -173,7 +191,7 @@ export function createPending(
     const waiting = held();
     return document === null
       ? waiting.map(() => null)
-      : locateSubmissions(document, waiting.map((one) => one.record));
+      : locateSubmissionTurns(document, waiting.map((one) => one.record));
   });
   const live = createMemo(() =>
     held().filter((_, index) => located()[index] === null),
@@ -182,7 +200,34 @@ export function createPending(
     const document = brief();
     return document === null ? [] : outline(document);
   });
-  createComputed(() => saveSentRecords(live().map((one) => one.record)));
+  const sessionActiveRows = createMemo<ReadonlySet<string>>(() => {
+    const byId = new Map(rows().map((row) => [row.id, row]));
+    const active = new Set<string>();
+    const locations = located();
+    held().forEach((one, index) => {
+      if (one.record.failed === true) return;
+      const location = locations[index];
+      const rowId = location?.rowId;
+      const row = rowId === null || rowId === undefined
+        ? undefined
+        : byId.get(rowId);
+      if (row?.kind === "thread" && location?.answered === false) {
+        active.add(row.id);
+      }
+    });
+    return active;
+  });
+  const remembered = createMemo(() => {
+    const locations = located();
+    const active = sessionActiveRows();
+    return held().filter((_, index) => {
+      const location = locations[index];
+      return location === null
+        || location === undefined
+        || active.has(location.rowId);
+    });
+  });
+  createComputed(() => saveSentRecords(remembered().map((one) => one.record)));
   const views = new WeakMap<Waiting, PendingNote>();
   const note = (one: Waiting): PendingNote => {
     const shown = views.get(one);
@@ -225,6 +270,7 @@ export function createPending(
     within: (rowId) =>
       live().some((one) => one.record.failed !== true
         && ancestorRowIds(rows(), one.record.rowId).includes(rowId)),
+    sessionActiveAt: (rowId) => sessionActiveRows().has(rowId),
     add: (sent) => { begin(sent); },
     begin,
     stamp: (token, at) => {

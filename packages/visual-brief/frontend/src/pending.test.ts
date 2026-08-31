@@ -283,7 +283,7 @@ describe("finding what a sent message became", () => {
       `${ITEM}#q-migrated`,
     ]);
     pendingFor(() => brief);
-    expect(readSentRecords()).toEqual([]);
+    expect(readSentRecords()).toEqual([record]);
   });
 
   it("refuses a match whose timestamp is somebody else's", () => {
@@ -351,12 +351,13 @@ describe("the sign a page load carries over", () => {
     expect(pending.at(ITEM)).toHaveLength(1);
   });
 
-  it("writes back exactly what it is still waiting on", () => {
+  it("remembers both folded and not-yet-folded unanswered submissions", () => {
     saveSentRecords([sent("Why this way?"), sent("And this one?")]);
 
     pendingFor(() => briefWith([["q-late", [asked("Why this way?")]]]));
 
     expect(readSentRecords().map((record) => record.text)).toEqual([
+      "Why this way?",
       "And this one?",
     ]);
   });
@@ -434,7 +435,7 @@ describe("a submission that arrives without a page load", () => {
 
     expect(locateSubmissions(folded, [rootRecord])).toEqual(["u#q-root"]);
     expect(pending.at("u")).toHaveLength(0);
-    expect(readSentRecords()).toHaveLength(0);
+    expect(readSentRecords()).toEqual([rootRecord]);
   });
 
   it("does not mistake an older identical turn for the new submission", () => {
@@ -463,12 +464,12 @@ describe("a submission that arrives without a page load", () => {
     pending.stamp(second, "");
     publish(briefWith([["q-first", [asked("Same words")]]]));
     expect(pending.at(ITEM)).toHaveLength(1);
-    expect(readSentRecords()[0]?.after).toBe(1);
+    expect(readSentRecords().map((one) => one.after)).toEqual([0, 1]);
     const restored = pendingFor(brief);
     expect(restored.at(ITEM)).toHaveLength(1);
   });
 
-  it("retires the moment its words appear in the document", () => {
+  it("retires its provisional note when its words appear in the document", () => {
     saveSentRecords([sent("Why this way?")]);
     const [brief, publish] = createSignal<BriefDocument>(briefWith([]));
     const pending = pendingFor(brief);
@@ -477,6 +478,44 @@ describe("a submission that arrives without a page load", () => {
     publish(briefWith([["q-late", [asked("Why this way?")]]]));
 
     expect(pending.at(ITEM)).toHaveLength(0);
+    expect(readSentRecords()).toHaveLength(1);
+  });
+
+  it("tracks a folded submission until its agent answer arrives", () => {
+    saveSentRecords([sent("Why this way?")]);
+    const [brief, publish] = createSignal<BriefDocument>(briefWith([]));
+    const pending = pendingFor(brief);
+    const threadId = `${ITEM}#q-late`;
+
+    publish(briefWith([["q-late", [asked("Why this way?")]]]));
+
+    expect(pending.sessionActiveAt(threadId)).toBe(true);
+    expect(readSentRecords()).toHaveLength(1);
+    expect(pendingFor(brief).sessionActiveAt(threadId)).toBe(true);
+
+    publish(briefWith([["q-late", [
+      asked("Why this way?"),
+      {
+        author: "agent",
+        text: "Because this keeps the page stable.",
+        at: "2026-07-27T09:01:00.000Z",
+      },
+    ]]]));
+
+    expect(pending.sessionActiveAt(threadId)).toBe(false);
+    expect(readSentRecords()).toHaveLength(0);
+
+    publish(briefWith([["q-late", [
+      asked("Why this way?"),
+      {
+        author: "agent",
+        text: "Because this keeps the page stable.",
+        at: "2026-07-27T09:01:00.000Z",
+      },
+      asked("What about this follow-up?", "2026-07-27T09:02:00.000Z"),
+    ]]]));
+
+    expect(pending.sessionActiveAt(threadId)).toBe(false);
     expect(readSentRecords()).toHaveLength(0);
   });
 

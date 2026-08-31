@@ -63,6 +63,7 @@ export interface Navigation {
 export function createNavigation(
   brief: Accessor<BriefDocument>,
   human: HumanState,
+  keepUpdateOpen: (rowId: string) => boolean = () => false,
 ): Navigation {
   const index = createRowIndex(brief);
   const rows = index.rows;
@@ -70,6 +71,7 @@ export function createNavigation(
     rows,
     () => human.chosen,
     () => human.seen,
+    keepUpdateOpen,
   );
   const [query, setQuery] = createSignal("");
   const [overlay, setOverlay] = createSignal<Overlay>("none");
