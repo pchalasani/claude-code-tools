@@ -6,6 +6,11 @@
   },
   "plugins": [
     {
+      "name": "visual-brief",
+      "source": "./plugins/visual-brief",
+      "description": "Quiet milestone reminders for Visual Brief publishers"
+    },
+    {
       "name": "safety-hooks",
       "source": "./plugins/safety-hooks",
       "description": "Provides safety guards to block or require confirmation for risky CLI operations (e.g., rm, destructive git actions, .env access, large file operations)"

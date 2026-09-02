@@ -5,6 +5,18 @@
   },
   "plugins": [
     {
+      "name": "visual-brief",
+      "source": {
+        "source": "local",
+        "path": "./plugins/visual-brief"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    },
+    {
       "name": "dynamic-workflow",
       "source": {
         "source": "local",

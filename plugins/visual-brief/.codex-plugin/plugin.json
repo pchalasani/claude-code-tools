@@ -1,0 +1,20 @@
+{
+  "name": "visual-brief",
+  "version": "0.1.0",
+  "description": "Quiet milestone reminders for active Visual Brief sessions",
+  "author": {
+    "name": "Prasad Chalasani"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Visual Brief",
+    "shortDescription": "Quiet milestone reminders for Visual Brief",
+    "longDescription": "Quiet reminders after a successful Visual Brief publish.",
+    "developerName": "Prasad Chalasani",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Session-scoped milestone reminders"
+    ],
+    "defaultPrompt": "Use Visual Brief milestone reminders for this session."
+  }
+}

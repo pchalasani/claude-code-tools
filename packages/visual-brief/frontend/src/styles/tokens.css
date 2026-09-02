@@ -1,0 +1,160 @@
+:root {
+  color-scheme: light dark;
+
+  /* Configurable Signal Desk palette. */
+  --palette-fog: #f4f7fb;
+  --palette-paper: #ffffff;
+  --palette-mist: #e9f0f7;
+  --palette-ink: #132238;
+  --palette-cobalt: #3157d5;
+  --palette-teal: #087565;
+  --palette-coral: #ad354c;
+  --palette-amber: #865900;
+
+  /* Semantic light-mode surfaces and text. */
+  --color-page: var(--palette-fog);
+  --color-surface: var(--palette-paper);
+  --color-surface-quiet: var(--palette-mist);
+  --color-surface-raised: #f9fbfd;
+  --color-text: var(--palette-ink);
+  --color-text-muted: #53647a;
+  --color-text-faint: #596b82;
+  --color-agent-text: #132238;
+  --color-agent-text-muted: #42536a;
+  --color-human-text: #2447bd;
+  --color-border: #d6e0eb;
+  --color-border-strong: #798b9e;
+  --color-current: var(--palette-cobalt);
+  --color-current-strong: #2447bd;
+  --color-current-soft: #e8edff;
+  --color-active: var(--palette-teal);
+  --color-active-soft: #e0f3ef;
+  --color-warning: var(--palette-amber);
+  --color-warning-soft: #fff3d5;
+  --color-context: #b77900;
+  --color-context-wash: rgb(255 196 61 / 7%);
+  --color-limitation: var(--palette-coral);
+  --color-limitation-soft: #fde9ed;
+  --color-working-base: var(--color-text-faint);
+  --color-working-wave-leading: #006f62;
+  --color-working-wave-crest: #0f2744;
+  --color-working-wave-trailing: #2454d4;
+  --color-scrim: rgb(19 34 56 / 58%);
+
+  /* One terminal face serves the brief; Atkinson is reserved for its title. */
+  --font-display: "Atkinson Hyperlegible Next Variable",
+    "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --font-brief: SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas,
+    "Liberation Mono", monospace;
+  /* One reversible adjustment lowers or raises the entire type scale. */
+  --font-size-adjustment: -0.0625rem;
+  --font-size-xs: calc(0.875rem + var(--font-size-adjustment));
+  --font-size-sm: calc(1rem + var(--font-size-adjustment));
+  --font-size-base: calc(1.125rem + var(--font-size-adjustment));
+  --font-size-md: calc(1.125rem + var(--font-size-adjustment));
+  --font-size-lg: calc(1.375rem + var(--font-size-adjustment));
+  --font-size-xl: clamp(
+    calc(1.85rem + var(--font-size-adjustment)),
+    calc(1.3rem + 1.7vw + var(--font-size-adjustment)),
+    calc(2.65rem + var(--font-size-adjustment))
+  );
+  --line-height-reading: 1.62;
+  --line-height-tight: 1.18;
+
+  /* Page, map, content, and readable-measure widths. */
+  --width-page: 100%;
+  --width-map: 14rem;
+  --width-content: 72rem;
+  --width-reading: 68ch;
+  --width-summary: 58ch;
+  --width-dialog: 32rem;
+  --width-map-label: 8rem;
+
+  /* State field and row density. */
+  --state-card-min-width: 26rem;
+  --state-card-gap: 1rem;
+  --state-card-padding: 0.75rem;
+  --row-padding-block: 0.42rem;
+  --row-padding-inline: 0.62rem;
+  --row-indent: 0.8rem;
+  --row-density-gap: 0.5rem;
+
+  /* Meaningful component dimensions. */
+  --height-control-min: 2rem;
+  --height-composer-min: 5.75rem;
+  --height-help-max: 80vh;
+  --height-map: 100vh;
+  --width-search-input: 14rem;
+  --width-help-command: 6rem;
+  --width-help-command-compact: 5rem;
+  --width-state-claim-label-min: 6rem;
+  --width-state-claim-label-max: 8rem;
+  --width-update-title: 12rem;
+  --width-glance: 10rem;
+  --width-thread-title: 10rem;
+  --width-row-fold: 0.9em;
+  --row-scroll-margin: 35vh;
+
+  /* Shared spacing scale. */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-page-bottom: 60vh;
+
+  /* Shape, borders, signal spine, shadows, and motion. */
+  --radius-control: 0.45rem;
+  --radius-surface: 0.8rem;
+  --radius-pill: 999px;
+  --border-thin: 1px;
+  --border-emphasis: 2px;
+  --focus-ring-width: 2px;
+  --row-rail-width: 4px;
+  --signal-spine-width: 5px;
+  --map-tick-height: 3px;
+  --shadow-surface: 0 1px 2px rgb(19 34 56 / 6%),
+    0 10px 28px rgb(19 34 56 / 5%);
+  --shadow-overlay: 0 24px 70px rgb(19 34 56 / 24%);
+  --motion-fast: 140ms;
+  --motion-working-wave: 1.8s;
+  --motion-working-pulse: 1.1s;
+  --motion-ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-page: #0d1520;
+    --color-surface: #131e2b;
+    --color-surface-quiet: #192737;
+    --color-surface-raised: #172332;
+    --color-text: #e6edf5;
+    --color-text-muted: #aab8c8;
+    --color-text-faint: #8193a8;
+    --color-agent-text: #f1f5f9;
+    --color-agent-text-muted: #c7d2df;
+    --color-human-text: #91a8f8;
+    --color-border: #26384b;
+    --color-border-strong: #5f7389;
+    --color-current: #6f8df0;
+    --color-current-strong: #91a8f8;
+    --color-current-soft: #1c2948;
+    --color-active: #42b8a5;
+    --color-active-soft: #153b38;
+    --color-warning: #e0ac4f;
+    --color-warning-soft: #3b301c;
+    --color-context: #e0ac4f;
+    --color-context-wash: rgb(224 172 79 / 8%);
+    --color-limitation: #ec7c8d;
+    --color-limitation-soft: #42232d;
+    --color-working-wave-leading: #6ff5d7;
+    --color-working-wave-crest: #f5fbff;
+    --color-working-wave-trailing: #86a8ff;
+    --color-scrim: rgb(4 9 15 / 78%);
+    --shadow-surface: 0 1px 2px rgb(0 0 0 / 20%),
+      0 12px 34px rgb(0 0 0 / 16%);
+    --shadow-overlay: 0 24px 70px rgb(0 0 0 / 48%);
+  }
+}

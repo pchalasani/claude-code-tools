@@ -145,6 +145,10 @@ export default defineConfig({
           label: "Plugins",
           items: [
             {
+              label: "Visual Brief",
+              slug: "plugins-detail/visual-brief",
+            },
+            {
               label: "Safety Hooks",
               slug: "plugins-detail/safety-hooks",
             },

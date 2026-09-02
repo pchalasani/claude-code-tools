@@ -534,6 +534,35 @@ def test_final_reuse_revalidates_worker_liveness(
         ensure_server(environment)
 
 
+def test_unchanged_snapshot_preserves_stable_mismatch_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A completed stable mismatch still requests lifecycle selection retry."""
+    expected = _snapshot("expected", "expected generation")
+    changed = _snapshot("changed", "changed generation")
+    calls = 0
+
+    def snapshot(
+        _paths: object,
+        _options: object = (),
+    ) -> codex_server._PluginSnapshot:
+        nonlocal calls
+        calls += 1
+        return changed
+
+    monkeypatch.setattr(codex_server, "_plugin_configuration_snapshot", snapshot)
+
+    with pytest.raises(
+        codex_server_retry.PluginSnapshotChangedError,
+        match="changed during app-server startup",
+    ):
+        codex_server._require_unchanged_plugin_snapshot(
+            object(), expected, "app-server startup"
+        )
+
+    assert calls == 1
+
+
 def test_plugin_change_during_startup_is_not_certified(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -1,0 +1,33 @@
+html[data-design="solarized-paper"] {
+  color-scheme: light;
+
+  --color-page: #f5efdf;
+  --color-surface: #fbf6e7;
+  --color-surface-quiet: #eee6d4;
+  --color-surface-raised: #f8f2e3;
+  --color-text: #49565f;
+  --color-text-muted: #64727a;
+  --color-text-faint: #76858c;
+  --color-agent-text: #49565f;
+  --color-agent-text-muted: #5c696f;
+  --color-human-text: #2467b3;
+  --color-border: #d7ccb7;
+  --color-border-strong: #9f927f;
+  --color-current: #4c8ec2;
+  --color-current-strong: #26679d;
+  --color-current-soft: #e3edf3;
+  --color-active: #4b8a7b;
+  --color-active-soft: #e3efe8;
+  --color-warning: #8a6817;
+  --color-warning-soft: #fbf0cb;
+  --color-context: #b6861e;
+  --color-context-wash: rgb(182 134 30 / 10%);
+  --color-limitation: #a9515f;
+  --color-limitation-soft: #f4e2e3;
+  --color-working-base: #5b8178;
+  --color-working-wave-leading: #4b8a7b;
+  --color-working-wave-crest: #2b5367;
+  --color-working-wave-trailing: #7fb0d4;
+  --color-scrim: rgb(43 55 64 / 50%);
+  --shadow-overlay: 0 22px 56px rgb(43 55 64 / 18%);
+}

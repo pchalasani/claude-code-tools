@@ -20,6 +20,7 @@ This repo provides plugins for Codex and for the
 
 | Plugin | Description |
 |--------|-------------|
+| [`visual-brief`][visual-brief] | Optional milestone reminders for Visual Brief |
 | `aichat` | Hooks, commands, skills, agents for session work and search |
 | `tmux-cli` | Terminal automation skill |
 | `workflow` | Work logging, code walk-through, issue specs, UI testing |
@@ -34,15 +35,21 @@ This repo provides plugins for Codex and for the
 
 This repo also hosts a Codex marketplace (`cctools-codex-plugins`, read
 from `.agents/plugins/marketplace.json`), currently offering the
-`dynamic-workflow`, `voxtype`, and `writing` plugins. Add it once, then
-install with `codex plugin add`:
+`visual-brief`, `dynamic-workflow`, `voxtype`, and `writing` plugins. Add it
+once, then install with `codex plugin add`:
 
 ```bash
 codex plugin marketplace add pchalasani/claude-code-tools
 codex plugin marketplace upgrade cctools-codex-plugins  # refresh if already added
+codex plugin add visual-brief@cctools-codex-plugins
 codex plugin add dynamic-workflow@cctools-codex-plugins
 codex plugin add writing@cctools-codex-plugins
 ```
+
+Visual Brief requires its separate CLI, installed with `uv tool install
+visual-brief`. Its optional plugin adds quiet, session-scoped reminders after a
+successful briefing publish. See the [Visual Brief reference][visual-brief] for
+the local browser behavior and setup.
 
 ### dynamic-workflow
 
@@ -88,6 +95,7 @@ for its JavaScript API, state model, and safety boundaries.
 2. **Install plugins**
 
    ```bash
+   claude plugin install "visual-brief@cctools-plugins"
    claude plugin install "aichat@cctools-plugins"
    claude plugin install "tmux-cli@cctools-plugins"
    claude plugin install "workflow@cctools-plugins"
@@ -103,6 +111,17 @@ for its JavaScript API, state model, and safety boundaries.
    installing.
 
 </Steps>
+
+[visual-brief]: /claude-code-tools/plugins-detail/visual-brief/
+
+---
+
+## Visual Brief Plugin
+
+Visual Brief turns substantial Claude Code or Codex updates into concise local
+browser briefings. Install the `visual-brief` CLI separately, then optionally
+install this plugin for quiet milestone reminders. See the
+[Visual Brief reference][visual-brief] for the complete setup and workflow.
 
 ---
 

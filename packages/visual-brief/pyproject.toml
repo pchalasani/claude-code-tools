@@ -1,0 +1,41 @@
+[project]
+name = "visual-brief"
+version = "0.1.0"
+description = "Local multi-session visual brief dashboard"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Prasad Chalasani", email = "pchalasani@gmail.com" }]
+requires-python = ">=3.11"
+keywords = ["briefing", "dashboard", "local", "agents"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/pchalasani/claude-code-tools"
+
+[project.scripts]
+visual-brief = "visual_brief.cli:main"
+
+[build-system]
+requires = ["hatchling==1.28.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+# The Solid bundle is built once and committed, so installing needs no Node.
+# Both entries are listed explicitly because hatchling ignores the negation
+# patterns that keep them out of the repository's global VCS excludes.
+artifacts = [
+    "src/visual_brief/static/*",
+    "src/visual_brief/licenses/*",
+    "frontend/package-lock.json",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/visual_brief"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"SKILL.md" = "visual_brief/SKILL.md"

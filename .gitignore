@@ -178,6 +178,7 @@ package-lock.json
 !node_ui/package-lock.json
 !docs-site/package-lock.json
 !plugins/dynamic-workflow/package-lock.json
+!packages/visual-brief/frontend/package-lock.json
 
 # Backup files
 *.backup*

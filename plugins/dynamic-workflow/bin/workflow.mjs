@@ -1653,6 +1653,11 @@ var AppServerRpcError = class extends Error {
     this.data = error.data;
   }
 };
+var DEFAULT_CLIENT_INFO = {
+  name: "cctools_dynamic_workflow",
+  title: "Dynamic Workflow Callback",
+  version: "0.2.0"
+};
 var AppServerClient = class _AppServerClient {
   connection;
   notifications = [];
@@ -1672,7 +1677,7 @@ var AppServerClient = class _AppServerClient {
       }
     );
   }
-  static async connect(endpoint, timeoutMs = REQUEST_TIMEOUT_MS) {
+  static async connect(endpoint, timeoutMs = REQUEST_TIMEOUT_MS, clientInfo = DEFAULT_CLIENT_INFO) {
     const deadline = Date.now() + timeoutMs;
     const socketPath = socketPathFromEndpoint(endpoint);
     const connection = await UnixWebSocketConnection.connect(
@@ -1696,11 +1701,7 @@ var AppServerClient = class _AppServerClient {
               "turn/plan/updated"
             ]
           },
-          clientInfo: {
-            name: "cctools_dynamic_workflow",
-            title: "Dynamic Workflow Callback",
-            version: "0.2.0"
-          }
+          clientInfo
         },
         Math.max(1, deadline - Date.now())
       );
@@ -1907,7 +1908,7 @@ function socketPathFromEndpoint(endpoint) {
 }
 function sandboxSocketError(socketDirectory) {
   return new Error(
-    `The default Codex sandbox blocks the App Server callback socket. Obtain explicit approval to run only the trusted dynamic-workflow launcher and notifier outside the sandbox, then retry. Workers keep their declared Codex sandboxes. Blocked socket: ${socketDirectory}`
+    `The default Codex sandbox blocks the App Server callback socket. Obtain explicit approval to run only the trusted dynamic-workflow launcher, notifier, or Visual Brief watcher outside the sandbox, then retry. Worker sandboxes remain unchanged. Blocked socket: ${socketDirectory}`
   );
 }
 function requireCompatibleAppServer(value) {
@@ -2633,21 +2634,413 @@ function isMissing(error) {
   return errorCode(error) === "ENOENT";
 }
 
+// src/message-envelope.ts
+function escapeEnvelopeText(value) {
+  return value.replaceAll("&", "\\u0026").replaceAll("<", "\\u003c").replaceAll(">", "\\u003e");
+}
+
+// src/thread-message-delivery.ts
+var DELIVERY_CONFIRMATION_TIMEOUT_MS = 1e4;
+var MAX_DELIVERY_SUBMISSIONS = 5;
+var MAX_DIAGNOSTIC_BYTES = 4 * 1024;
+var RETRY_DELAY_MAX_MS = 3e4;
+var RETRY_DELAY_MIN_MS = 250;
+var RETRY_JITTER_RATIO = 0.2;
+var THREAD_POLL_MIN_MS = 1e4;
+var THREAD_POLL_MAX_MS = 3e5;
+async function verifyThreadMessageTarget(endpoint, threadId, clientInfo) {
+  const canonicalEndpoint = canonicalAppServerEndpoint(endpoint);
+  const client = await AppServerClient.connect(
+    canonicalEndpoint,
+    void 0,
+    clientInfo
+  );
+  try {
+    let response;
+    try {
+      response = await client.request(
+        "thread/read",
+        { includeTurns: false, threadId }
+      );
+    } catch (error) {
+      if (error instanceof AppServerRpcError && /not loaded/i.test(error.message)) {
+        throw threadNotLoadedError();
+      }
+      throw error;
+    }
+    if (response.thread.status.type === "notLoaded") {
+      throw threadNotLoadedError();
+    }
+    return canonicalEndpoint;
+  } finally {
+    client.close();
+  }
+}
+async function deliverThreadMessage(options) {
+  const deadline = Date.now() + options.timeoutMs;
+  let attempts = options.initialAttempts ?? 0;
+  const maximumAttempts = options.maximumAttempts ?? MAX_DELIVERY_SUBMISSIONS;
+  if (!Number.isInteger(attempts) || !Number.isInteger(maximumAttempts) || attempts < 0 || maximumAttempts < attempts || maximumAttempts > MAX_DELIVERY_SUBMISSIONS) {
+    throw new Error("Invalid thread-message delivery attempt bounds");
+  }
+  let submissionWasAmbiguous = options.initialSubmissionWasAmbiguous ?? attempts > 0;
+  let lastError = "Thread message was not accepted";
+  let retryCount = 0;
+  while (Date.now() < deadline) {
+    let client;
+    let submissionAccepted = false;
+    let submissionAttempted = false;
+    try {
+      client = await AppServerClient.connect(
+        options.endpoint,
+        remainingTimeout(deadline),
+        options.clientInfo
+      );
+      const resumed = await client.request(
+        "thread/resume",
+        { threadId: options.threadId },
+        remainingTimeout(deadline)
+      );
+      if (valueContainsClientId(resumed.thread.turns, options.clientUserMessageId)) {
+        return { attempts, status: "delivered" };
+      }
+      let thread;
+      if (submissionWasAmbiguous) {
+        const reconciled = await reconcileAmbiguousSubmission(
+          client,
+          resumed.thread,
+          options.threadId,
+          options.clientUserMessageId,
+          deadline
+        );
+        if (reconciled.delivered) {
+          return { attempts, status: "delivered" };
+        }
+        thread = reconciled.thread;
+        submissionWasAmbiguous = false;
+      } else {
+        thread = await waitForDeliverableThread(
+          client,
+          resumed.thread,
+          options.threadId,
+          deadline
+        );
+      }
+      if (attempts >= maximumAttempts) {
+        return submissionLimitResult(
+          attempts,
+          maximumAttempts,
+          submissionWasAmbiguous,
+          lastError
+        );
+      }
+      const request = deliveryRequest(
+        thread,
+        options.threadId,
+        options.clientUserMessageId,
+        options.text
+      );
+      attempts += 1;
+      await options.onAttempt?.(attempts);
+      submissionAttempted = true;
+      const response = await client.request(request.method, request.params, remainingTimeout(deadline));
+      submissionAccepted = true;
+      const turnId = response.turnId ?? response.turn?.id;
+      if (await confirmDelivery(
+        client,
+        options.threadId,
+        options.clientUserMessageId,
+        deadline
+      )) {
+        return { attempts, status: "delivered", ...turnId ? { turnId } : {} };
+      }
+      submissionWasAmbiguous = true;
+      lastError = "App Server accepted the request but did not confirm the user message";
+    } catch (error) {
+      let deliveryError = error;
+      let shouldWaitForIdle = false;
+      if (client !== void 0 && error instanceof AppServerRpcError) {
+        try {
+          shouldWaitForIdle = isActiveTurnNotSteerableRpcError(error);
+        } catch (inspectionError) {
+          deliveryError = inspectionError;
+        }
+      }
+      if (options.allowNonSteerableFallbackWithinAttempt && shouldWaitForIdle && submissionAttempted && !submissionAccepted) {
+        attempts -= 1;
+        await options.onAttempt?.(attempts);
+      }
+      if (error instanceof AppServerRpcError && !submissionAccepted) {
+        submissionAttempted = false;
+      }
+      submissionWasAmbiguous ||= submissionAttempted;
+      lastError = deliveryDiagnostic(deliveryError);
+      await options.onDiagnostic?.(lastError);
+      if (deliveryError instanceof JsonStructureLimitError) {
+        return failureResult(attempts, submissionWasAmbiguous, lastError);
+      }
+      if (shouldWaitForIdle && client) {
+        try {
+          await waitForIdleThread(client, options.threadId, deadline);
+        } catch (waitError) {
+          lastError = deliveryDiagnostic(waitError);
+          await options.onDiagnostic?.(lastError);
+        }
+      }
+      if (error instanceof AppServerRpcError && !isRetryableRpcError(error)) {
+        return failureResult(attempts, submissionWasAmbiguous, lastError);
+      }
+    } finally {
+      client?.close();
+    }
+    if (attempts >= maximumAttempts) {
+      return submissionLimitResult(
+        attempts,
+        maximumAttempts,
+        submissionWasAmbiguous,
+        lastError
+      );
+    }
+    const delay = threadMessageRetryDelayMs(retryCount);
+    retryCount += 1;
+    await sleep(Math.min(delay, Math.max(1, deadline - Date.now())));
+  }
+  return failureResult(
+    attempts,
+    submissionWasAmbiguous,
+    deliveryDiagnostic(`${lastError}; notification deadline expired`)
+  );
+}
+function threadMessageRetryDelayMs(retryCount, random = Math.random) {
+  const boundedRetryCount = Math.min(
+    7,
+    Math.max(0, Number.isFinite(retryCount) ? Math.floor(retryCount) : 0)
+  );
+  const exponentialDelay = Math.min(
+    RETRY_DELAY_MAX_MS,
+    RETRY_DELAY_MIN_MS * 2 ** boundedRetryCount
+  );
+  const sample = random();
+  const randomValue = Number.isFinite(sample) ? Math.min(1, Math.max(0, sample)) : 0.5;
+  const jitter = 1 - RETRY_JITTER_RATIO + 2 * RETRY_JITTER_RATIO * randomValue;
+  return Math.max(
+    1,
+    Math.min(RETRY_DELAY_MAX_MS, Math.round(exponentialDelay * jitter))
+  );
+}
+function failureResult(attempts, ambiguous, error) {
+  return {
+    attempts,
+    error,
+    status: ambiguous ? "unknown" : "failed"
+  };
+}
+function submissionLimitResult(attempts, maximumAttempts, ambiguous, lastError) {
+  return failureResult(
+    attempts,
+    ambiguous,
+    deliveryDiagnostic(
+      `Callback submission limit of ${maximumAttempts} reached: ${lastError}`
+    )
+  );
+}
+function deliveryRequest(thread, threadId, clientId, text) {
+  const input = [{ text, type: "text" }];
+  if (thread.status.type === "active") {
+    const activeTurn = [...thread.turns ?? []].reverse().find((turn) => turn.status === "inProgress");
+    if (!activeTurn) {
+      throw new Error("Active thread did not expose an in-progress turn");
+    }
+    return {
+      method: "turn/steer",
+      params: {
+        clientUserMessageId: clientId,
+        expectedTurnId: activeTurn.id,
+        input,
+        threadId
+      }
+    };
+  }
+  return {
+    method: "turn/start",
+    params: { clientUserMessageId: clientId, input, threadId }
+  };
+}
+async function confirmDelivery(client, threadId, clientId, deadline) {
+  const timeout = Math.min(
+    DELIVERY_CONFIRMATION_TIMEOUT_MS,
+    Math.max(1, deadline - Date.now())
+  );
+  try {
+    await client.waitForNotification(
+      (notification) => notificationHasClientId(notification, clientId),
+      timeout
+    );
+    return true;
+  } catch {
+    const thread = await readThread(client, threadId, true, deadline);
+    return valueContainsClientId(thread.turns, clientId);
+  }
+}
+async function waitForDeliverableThread(client, initial, threadId, deadline) {
+  let thread = initial;
+  let pollInterval = THREAD_POLL_MIN_MS;
+  while (Date.now() < deadline) {
+    if (thread.status.type === "idle") {
+      return thread;
+    }
+    if (thread.status.type === "active" && thread.turns?.some((turn) => turn.status === "inProgress")) {
+      return thread;
+    }
+    assertUsableThread(thread);
+    await waitForThreadChange(client, threadId, pollInterval, deadline);
+    thread = await readThread(client, threadId, true, deadline);
+    pollInterval = nextPollInterval(pollInterval);
+  }
+  throw new Error("Timed out waiting for the target Codex thread");
+}
+async function reconcileAmbiguousSubmission(client, initial, threadId, clientId, deadline) {
+  let thread = initial;
+  let pollInterval = THREAD_POLL_MIN_MS;
+  while (Date.now() < deadline) {
+    if (valueContainsClientId(thread.turns, clientId)) {
+      return { delivered: true, thread };
+    }
+    if (thread.status.type === "idle") {
+      return { delivered: false, thread };
+    }
+    assertUsableThread(thread);
+    const notification = await waitForMessageOrThreadChange(
+      client,
+      threadId,
+      clientId,
+      pollInterval,
+      deadline
+    );
+    if (notification && notificationHasClientId(notification, clientId)) {
+      return { delivered: true, thread };
+    }
+    thread = await readThread(client, threadId, true, deadline);
+    pollInterval = nextPollInterval(pollInterval);
+  }
+  throw new Error("Timed out reconciling an ambiguous callback submission");
+}
+async function waitForIdleThread(client, threadId, deadline) {
+  let interval = THREAD_POLL_MIN_MS;
+  let thread = await readThread(client, threadId, false, deadline);
+  while (Date.now() < deadline) {
+    if (thread.status.type === "idle") {
+      return;
+    }
+    assertUsableThread(thread);
+    await waitForThreadChange(client, threadId, interval, deadline);
+    thread = await readThread(client, threadId, false, deadline);
+    interval = nextPollInterval(interval);
+  }
+  throw new Error("Timed out waiting for the target Codex thread to become idle");
+}
+function assertUsableThread(thread) {
+  if (thread.status.type === "systemError") {
+    throw new Error("The target Codex thread is in a system-error state");
+  }
+  if (thread.status.type === "notLoaded") {
+    throw threadNotLoadedError();
+  }
+}
+async function readThread(client, threadId, includeTurns, deadline) {
+  const response = await client.request(
+    "thread/read",
+    { includeTurns, threadId },
+    remainingTimeout(deadline)
+  );
+  return response.thread;
+}
+async function waitForThreadChange(client, threadId, interval, deadline) {
+  try {
+    await client.waitForNotification(
+      (notification) => isTargetThreadStatusChange(notification, threadId),
+      Math.min(interval, Math.max(1, deadline - Date.now()))
+    );
+  } catch (error) {
+    if (!isNotificationTimeout(error)) {
+      throw error;
+    }
+  }
+}
+async function waitForMessageOrThreadChange(client, threadId, clientId, interval, deadline) {
+  try {
+    return await client.waitForNotification(
+      (notification) => notificationHasClientId(notification, clientId) || isTargetThreadStatusChange(notification, threadId),
+      Math.min(interval, Math.max(1, deadline - Date.now()))
+    );
+  } catch (error) {
+    if (isNotificationTimeout(error)) {
+      return void 0;
+    }
+    throw error;
+  }
+}
+function isTargetThreadStatusChange(notification, threadId) {
+  return notification.method === "thread/status/changed" && isRecord2(notification.params) && notification.params.threadId === threadId;
+}
+function isRetryableRpcError(error) {
+  if (isActiveTurnNotSteerableRpcError(error)) {
+    return true;
+  }
+  return error.code === -32001 || /thread .* is closing; retry thread\/resume after the thread is closed/i.test(
+    error.message
+  ) || /active turn|expected.*turn|no active turn|not.*steerable|not idle/i.test(
+    error.message
+  );
+}
+function isActiveTurnNotSteerableRpcError(error) {
+  return boundedJsonValueMatches(
+    error.data,
+    (item) => isRecord2(item) && "activeTurnNotSteerable" in item,
+    128,
+    25e4
+  ) || /cannot steer a (review|compact) turn/i.test(error.message);
+}
+function threadNotLoadedError() {
+  return new Error(
+    "The current thread is not loaded on this App Server. Start or resume the session through codex-dynamic."
+  );
+}
+function isNotificationTimeout(error) {
+  return error instanceof Error && error.message === "Timed out waiting for App Server notification";
+}
+function nextPollInterval(current) {
+  return Math.min(THREAD_POLL_MAX_MS, current * 2);
+}
+function remainingTimeout(deadline) {
+  return Math.min(3e4, Math.max(1, deadline - Date.now()));
+}
+function deliveryDiagnostic(error) {
+  const value = errorMessage(error);
+  const encoded = Buffer.from(value, "utf8");
+  if (encoded.length <= MAX_DIAGNOSTIC_BYTES) {
+    return value;
+  }
+  const suffix = "\n[truncated callback diagnostic]";
+  const suffixBytes = Buffer.byteLength(suffix, "utf8");
+  let end = MAX_DIAGNOSTIC_BYTES - suffixBytes;
+  while (end > 0 && (encoded[end] & 192) === 128) {
+    end -= 1;
+  }
+  return `${encoded.subarray(0, end).toString("utf8")}${suffix}`;
+}
+function isRecord2(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 // src/completion-notification.ts
 var DEFAULT_NOTIFY_TIMEOUT_MS = 864e5;
 var MAX_NOTIFY_TIMEOUT_MS = 6048e5;
-var DELIVERY_CONFIRMATION_TIMEOUT_MS = 1e4;
-var MAX_DELIVERY_SUBMISSIONS = 5;
 var MAX_CALLBACK_DIAGNOSTIC_BYTES = 4 * 1024;
 var MAX_NOTIFICATION_ERROR_BYTES = 768;
 var MAX_NOTIFICATION_PATH_BYTES = 384;
 var MAX_NOTIFICATION_RESULT_BYTES = 1536;
 var MAX_NOTIFICATION_TEXT_BYTES = 4 * 1024;
-var RETRY_DELAY_MAX_MS = 3e4;
-var RETRY_DELAY_MIN_MS = 250;
-var RETRY_JITTER_RATIO = 0.2;
-var THREAD_RECONCILIATION_POLL_MIN_MS = 1e4;
-var THREAD_RECONCILIATION_POLL_MAX_MS = 3e5;
 var DARWIN_PROCARGS_BYTES = 1024 * 1024;
 var DARWIN_NOTIFIER_PROCESS_SCRIPT = String.raw`
 function decode(value) {
@@ -2753,150 +3146,39 @@ async function deliverCompletionNotification(runId, requestedToken) {
       current.status = "sending";
     });
     const deadline = notificationDeadline(notification);
-    let submissionWasAmbiguous = notification.attempts > 0;
-    let lastError = "Completion notification was not accepted";
-    let retryCount = 0;
-    while (Date.now() < deadline) {
-      let client;
-      let submissionAccepted = false;
-      let submissionAttempted = false;
-      try {
-        client = await AppServerClient.connect(
-          notification.endpoint,
-          remainingTimeout(deadline)
-        );
-        const resumed = await client.request(
-          "thread/resume",
-          { threadId: notification.threadId },
-          remainingTimeout(deadline)
-        );
-        const clientId = requireClientId(notification);
-        if (valueContainsClientId(resumed.thread.turns, clientId)) {
-          return await markDelivered(runId);
-        }
-        let thread;
-        if (submissionWasAmbiguous) {
-          const reconciled = await reconcileAmbiguousSubmission(
-            client,
-            resumed.thread,
-            notification.threadId,
-            clientId,
-            deadline
-          );
-          if (reconciled.delivered) {
-            return await markDelivered(runId);
-          }
-          thread = reconciled.thread;
-          submissionWasAmbiguous = false;
-        } else {
-          thread = await waitForDeliverableThread(
-            client,
-            resumed.thread,
-            notification.threadId,
-            deadline
-          );
-        }
-        if (notification.attempts >= MAX_DELIVERY_SUBMISSIONS) {
-          return await markSubmissionLimitReached(
-            runId,
-            submissionWasAmbiguous,
-            lastError
-          );
-        }
-        const request = deliveryRequest(
-          thread,
-          notification.threadId,
-          clientId,
-          completionMessage(store.snapshot())
-        );
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error("Completion notification deadline expired");
+    }
+    const result = await deliverThreadMessage({
+      clientUserMessageId: requireClientId(notification),
+      endpoint: notification.endpoint,
+      initialAttempts: notification.attempts,
+      initialSubmissionWasAmbiguous: notification.attempts > 0,
+      onAttempt: async (attempts) => {
         notification = await updateNotification(runId, (current) => {
-          current.attempts += 1;
+          current.attempts = attempts;
           current.lastAttemptAt = nowIso();
           current.status = "sending";
           delete current.error;
         });
-        submissionAttempted = true;
-        const response = await client.request(
-          request.method,
-          request.params,
-          remainingTimeout(deadline)
-        );
-        submissionAccepted = true;
-        const turnId = response.turnId ?? response.turn?.id;
-        const accepted = await confirmDelivery(
-          client,
-          notification.threadId,
-          clientId,
-          deadline
-        );
-        if (accepted) {
-          return await markDelivered(runId, turnId);
-        }
-        submissionWasAmbiguous = true;
-        lastError = "App Server accepted the request but did not confirm the user message";
-      } catch (error) {
-        let deliveryError = error;
-        let shouldWaitForIdle = false;
-        if (client !== void 0 && error instanceof AppServerRpcError) {
-          try {
-            shouldWaitForIdle = isActiveTurnNotSteerableRpcError(error);
-          } catch (inspectionError) {
-            deliveryError = inspectionError;
-          }
-        }
-        if (error instanceof AppServerRpcError && !submissionAccepted) {
-          submissionAttempted = false;
-        }
-        submissionWasAmbiguous ||= submissionAttempted;
-        lastError = callbackDiagnostic(deliveryError);
-        if (deliveryError instanceof JsonStructureLimitError) {
-          return await updateNotification(runId, (current) => {
-            current.error = lastError;
-            current.status = submissionWasAmbiguous ? "unknown" : "failed";
-          });
-        }
+      },
+      onDiagnostic: async (diagnostic) => {
         await updateNotification(runId, (current) => {
-          current.error = lastError;
+          current.error = callbackDiagnostic(diagnostic);
         });
-        if (shouldWaitForIdle && client) {
-          try {
-            await waitForIdleThread(
-              client,
-              notification.threadId,
-              deadline
-            );
-          } catch (waitError) {
-            lastError = callbackDiagnostic(waitError);
-            await updateNotification(runId, (current) => {
-              current.error = lastError;
-            });
-          }
-        }
-        if (error instanceof AppServerRpcError && !isRetryableRpcError(error)) {
-          return await updateNotification(runId, (current) => {
-            current.status = submissionWasAmbiguous ? "unknown" : "failed";
-            current.error = lastError;
-          });
-        }
-      } finally {
-        client?.close();
-      }
-      if (notification.attempts >= MAX_DELIVERY_SUBMISSIONS) {
-        return await markSubmissionLimitReached(
-          runId,
-          submissionWasAmbiguous,
-          lastError
-        );
-      }
-      const delay = completionRetryDelayMs(retryCount);
-      retryCount += 1;
-      await sleep(Math.min(delay, Math.max(1, deadline - Date.now())));
+      },
+      text: completionMessage(store.snapshot()),
+      threadId: notification.threadId,
+      timeoutMs: remainingMs
+    });
+    if (result.status === "delivered") {
+      return await markDelivered(runId, result.turnId);
     }
     return await updateNotification(runId, (current) => {
-      current.status = submissionWasAmbiguous ? "unknown" : "failed";
-      current.error = callbackDiagnostic(
-        `${lastError}; notification deadline expired`
-      );
+      current.attempts = result.attempts;
+      current.error = callbackDiagnostic(result.error ?? "Delivery failed");
+      current.status = result.status;
     });
   } catch (error) {
     return await updateNotification(runId, (current) => {
@@ -2929,23 +3211,6 @@ async function deliverCompletionNotification(runId, requestedToken) {
       });
     }
   }
-}
-function completionRetryDelayMs(retryCount, random = Math.random) {
-  const boundedRetryCount = Math.min(
-    7,
-    Math.max(0, Number.isFinite(retryCount) ? Math.floor(retryCount) : 0)
-  );
-  const exponentialDelay = Math.min(
-    RETRY_DELAY_MAX_MS,
-    RETRY_DELAY_MIN_MS * 2 ** boundedRetryCount
-  );
-  const sample = random();
-  const randomValue = Number.isFinite(sample) ? Math.min(1, Math.max(0, sample)) : 0.5;
-  const jitter = 1 - RETRY_JITTER_RATIO + 2 * RETRY_JITTER_RATIO * randomValue;
-  return Math.max(
-    1,
-    Math.min(RETRY_DELAY_MAX_MS, Math.round(exponentialDelay * jitter))
-  );
 }
 async function completionNotifierProcess(runId, expectedEntryPath) {
   const lockDirectory = notificationLockDirectory(runId);
@@ -3062,33 +3327,7 @@ async function resetCompletionNotification(runId, force) {
   }
 }
 async function verifyNotificationTarget(endpoint, threadId) {
-  const canonicalEndpoint = canonicalAppServerEndpoint(endpoint);
-  const client = await AppServerClient.connect(canonicalEndpoint);
-  try {
-    let response;
-    try {
-      response = await client.request(
-        "thread/read",
-        { includeTurns: false, threadId }
-      );
-    } catch (error) {
-      if (error instanceof AppServerRpcError && /not loaded/i.test(error.message)) {
-        throw threadNotLoadedError();
-      }
-      throw error;
-    }
-    if (response.thread.status.type === "notLoaded") {
-      throw threadNotLoadedError();
-    }
-    return canonicalEndpoint;
-  } finally {
-    client.close();
-  }
-}
-function threadNotLoadedError() {
-  return new Error(
-    "The current thread is not loaded on this App Server. Start Codex with --remote pointing at the same endpoint."
-  );
+  return await verifyThreadMessageTarget(endpoint, threadId);
 }
 async function completionNotificationExists(runId) {
   return await fileExists(notificationPath(runId));
@@ -3144,47 +3383,6 @@ function completionMessage(state) {
   );
   return boundedSections.join("\n");
 }
-function escapeEnvelopeText(value) {
-  return value.replaceAll("&", "\\u0026").replaceAll("<", "\\u003c").replaceAll(">", "\\u003e");
-}
-async function confirmDelivery(client, threadId, clientId, deadline) {
-  const timeout = Math.min(
-    DELIVERY_CONFIRMATION_TIMEOUT_MS,
-    Math.max(1, deadline - Date.now())
-  );
-  try {
-    await client.waitForNotification(
-      (notification) => notificationHasClientId(notification, clientId),
-      timeout
-    );
-    return true;
-  } catch {
-    const thread = await readThread(client, threadId, true, deadline);
-    return valueContainsClientId(thread.turns, clientId);
-  }
-}
-function deliveryRequest(thread, threadId, clientId, text) {
-  const input = [{ text, type: "text" }];
-  if (thread.status.type === "active") {
-    const activeTurn = [...thread.turns ?? []].reverse().find((turn) => turn.status === "inProgress");
-    if (!activeTurn) {
-      throw new Error("Active thread did not expose an in-progress turn");
-    }
-    return {
-      method: "turn/steer",
-      params: {
-        clientUserMessageId: clientId,
-        expectedTurnId: activeTurn.id,
-        input,
-        threadId
-      }
-    };
-  }
-  return {
-    method: "turn/start",
-    params: { clientUserMessageId: clientId, input, threadId }
-  };
-}
 function isTerminalStatus(status) {
   return status === "canceled" || status === "completed" || status === "failed";
 }
@@ -3203,14 +3401,6 @@ function notificationPath(runId) {
 }
 function notificationLockDirectory(runId) {
   return path5.join(StateStore.runDirectory(runId), "notification.lock");
-}
-async function readThread(client, threadId, includeTurns, deadline) {
-  const response = await client.request(
-    "thread/read",
-    { includeTurns, threadId },
-    remainingTimeout(deadline)
-  );
-  return response.thread;
 }
 function requireClientId(notification) {
   if (!notification.clientUserMessageId) {
@@ -3237,134 +3427,7 @@ function truncateUtf8(value, maximumBytes, suffix = "\n[truncated; full details 
   }
   return `${encoded.subarray(0, end).toString("utf8")}${suffix}`;
 }
-async function waitForDeliverableThread(client, initial, threadId, deadline) {
-  let thread = initial;
-  let pollInterval = THREAD_RECONCILIATION_POLL_MIN_MS;
-  while (Date.now() < deadline) {
-    if (thread.status.type === "idle") {
-      return thread;
-    }
-    if (thread.status.type === "active" && thread.turns?.some((turn) => turn.status === "inProgress")) {
-      return thread;
-    }
-    if (thread.status.type === "systemError") {
-      throw new Error("The target Codex thread is in a system-error state");
-    }
-    if (thread.status.type === "notLoaded") {
-      throw threadNotLoadedError();
-    }
-    await waitForThreadChange(client, threadId, pollInterval, deadline);
-    thread = await readThread(client, threadId, true, deadline);
-    pollInterval = nextReconciliationInterval(pollInterval);
-  }
-  throw new Error("Timed out waiting for the target Codex thread");
-}
-async function reconcileAmbiguousSubmission(client, initial, threadId, clientId, deadline) {
-  let thread = initial;
-  let pollInterval = THREAD_RECONCILIATION_POLL_MIN_MS;
-  while (Date.now() < deadline) {
-    if (valueContainsClientId(thread.turns, clientId)) {
-      return { delivered: true, thread };
-    }
-    if (thread.status.type === "idle") {
-      return { delivered: false, thread };
-    }
-    if (thread.status.type === "systemError") {
-      throw new Error("The target Codex thread is in a system-error state");
-    }
-    if (thread.status.type === "notLoaded") {
-      throw threadNotLoadedError();
-    }
-    const notification = await waitForCallbackOrThreadChange(
-      client,
-      threadId,
-      clientId,
-      pollInterval,
-      deadline
-    );
-    if (notification && notificationHasClientId(notification, clientId)) {
-      return { delivered: true, thread };
-    }
-    thread = await readThread(client, threadId, true, deadline);
-    pollInterval = nextReconciliationInterval(pollInterval);
-  }
-  throw new Error("Timed out reconciling an ambiguous callback submission");
-}
-function isRetryableRpcError(error) {
-  if (isActiveTurnNotSteerableRpcError(error)) {
-    return true;
-  }
-  return error.code === -32001 || /thread .* is closing; retry thread\/resume after the thread is closed/i.test(
-    error.message
-  ) || /active turn|expected.*turn|no active turn|not.*steerable|not idle/i.test(
-    error.message
-  );
-}
-function isActiveTurnNotSteerableRpcError(error) {
-  return hasActiveTurnNotSteerable(error.data) || /cannot steer a (review|compact) turn/i.test(error.message);
-}
-async function waitForIdleThread(client, threadId, deadline) {
-  let interval = THREAD_RECONCILIATION_POLL_MIN_MS;
-  let thread = await readThread(client, threadId, false, deadline);
-  while (Date.now() < deadline) {
-    if (thread.status.type === "idle") {
-      return;
-    }
-    if (thread.status.type === "systemError") {
-      throw new Error("The target Codex thread is in a system-error state");
-    }
-    if (thread.status.type === "notLoaded") {
-      throw threadNotLoadedError();
-    }
-    await waitForThreadChange(client, threadId, interval, deadline);
-    thread = await readThread(client, threadId, false, deadline);
-    interval = nextReconciliationInterval(interval);
-  }
-  throw new Error("Timed out waiting for the target Codex thread to become idle");
-}
-async function waitForThreadChange(client, threadId, interval, deadline) {
-  try {
-    await client.waitForNotification(
-      (notification) => isTargetThreadStatusChange(notification, threadId),
-      Math.min(interval, Math.max(1, deadline - Date.now()))
-    );
-  } catch (error) {
-    if (!isNotificationTimeout(error)) {
-      throw error;
-    }
-  }
-}
-async function waitForCallbackOrThreadChange(client, threadId, clientId, interval, deadline) {
-  try {
-    return await client.waitForNotification(
-      (notification) => notificationHasClientId(notification, clientId) || isTargetThreadStatusChange(notification, threadId),
-      Math.min(interval, Math.max(1, deadline - Date.now()))
-    );
-  } catch (error) {
-    if (isNotificationTimeout(error)) {
-      return void 0;
-    }
-    throw error;
-  }
-}
-function isTargetThreadStatusChange(notification, threadId) {
-  return notification.method === "thread/status/changed" && isRecord2(notification.params) && notification.params.threadId === threadId;
-}
-function isNotificationTimeout(error) {
-  return error instanceof Error && error.message === "Timed out waiting for App Server notification";
-}
-function nextReconciliationInterval(current) {
-  return Math.min(THREAD_RECONCILIATION_POLL_MAX_MS, current * 2);
-}
-function hasActiveTurnNotSteerable(value) {
-  return boundedJsonValueMatches(
-    value,
-    (item) => isRecord2(item) && "activeTurnNotSteerable" in item,
-    128,
-    25e4
-  );
-}
-function isRecord2(value) {
+function isRecord3(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function notificationDeadline(notification) {
@@ -3388,17 +3451,6 @@ function notificationDeadline(notification) {
     );
   }
   return deadline;
-}
-async function markSubmissionLimitReached(runId, submissionWasAmbiguous, lastError) {
-  return await updateNotification(runId, (current) => {
-    current.status = submissionWasAmbiguous ? "unknown" : "failed";
-    current.error = callbackDiagnostic(
-      `Callback submission limit of ${MAX_DELIVERY_SUBMISSIONS} reached: ${lastError}`
-    );
-  });
-}
-function remainingTimeout(deadline) {
-  return Math.min(3e4, Math.max(1, deadline - Date.now()));
 }
 async function updateNotification(runId, mutator) {
   const notification = await readCompletionNotification(runId);
@@ -3558,7 +3610,7 @@ async function releaseNotificationClaim(runId, token) {
   }
 }
 function isNotificationLockOwner(value) {
-  if (!isRecord2(value)) {
+  if (!isRecord3(value)) {
     return false;
   }
   return (value.phase === "launching" || value.phase === "running") && Number.isInteger(value.pid) && value.pid > 0 && typeof value.pidStartedAt === "string" && value.pidStartedAt !== "" && (value.kernelStartedAt === void 0 || typeof value.kernelStartedAt === "string" && value.kernelStartedAt !== "") && typeof value.token === "string" && value.token !== "" && typeof value.updatedAt === "string";
