@@ -140,6 +140,13 @@ watcher for that run so the agent can receive page questions.
     ```
   </TabItem>
   <TabItem label="Codex">
+    Install the `claude-code-tools` package if `codex-dynamic` is not already
+    available:
+
+    ```bash
+    uv tool install claude-code-tools
+    ```
+
     Launch Codex with [`codex-dynamic`](/claude-code-tools/tools/codex-dynamic/),
     rather than plain `codex`, when you want page questions to arrive in the
     running session:
