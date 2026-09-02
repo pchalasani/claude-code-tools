@@ -266,6 +266,9 @@ def test_reminder_module_import_does_not_require_fcntl(
         {"success": "true"},
         {"filePath": "src/app.py"},
         {"filePath": "src/app.py", "type": "unknown"},
+        {"filePath": "src/app.py", "type": "update", "error": True},
+        {"filePath": "src/app.py", "type": "update", "stderr": "failed"},
+        {"filePath": "src/app.py", "type": "update", "interrupted": True},
     ],
 )
 def test_incomplete_tool_results_do_not_count_as_meaningful_work(

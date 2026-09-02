@@ -160,6 +160,16 @@ def is_meaningful_completion(
 
 def _is_canonical_write_response(result: dict[str, object]) -> bool:
     """Recognize Claude's successful file-write response without a status code."""
+    if "interrupted" in result and result["interrupted"] is not False:
+        return False
+    stderr = result.get("stderr", "")
+    if not isinstance(stderr, str) or stderr:
+        return False
+    if any(
+        key in result and result[key] is not False
+        for key in ("error", "is_error", "isError")
+    ):
+        return False
     return (
         isinstance(result.get("filePath"), str)
         and bool(result["filePath"])
