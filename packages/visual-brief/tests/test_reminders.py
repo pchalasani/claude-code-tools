@@ -170,7 +170,7 @@ def test_reminder_module_import_does_not_require_fcntl(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Reminder support stays usable without the optional fcntl lock."""
+    """Reminder support uses the Windows lock when fcntl is unavailable."""
     module_path = Path(reminder_module().__file__)
     spec = importlib.util.spec_from_file_location(
         "visual_brief._reminders_without_fcntl",
@@ -180,10 +180,21 @@ def test_reminder_module_import_does_not_require_fcntl(
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     real_import = builtins.__import__
+    msvcrt = ModuleType("msvcrt")
+    msvcrt.LK_LOCK = 1
+    msvcrt.LK_UNLCK = 2
+    lock_calls: list[tuple[int, int, int]] = []
+
+    def locking(descriptor: int, mode: int, length: int) -> None:
+        lock_calls.append((descriptor, mode, length))
+
+    msvcrt.locking = locking
 
     def import_without_fcntl(name: str, *args: object, **kwargs: object) -> object:
         if name == "fcntl":
             raise ModuleNotFoundError("No module named 'fcntl'")
+        if name == "msvcrt":
+            return msvcrt
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", import_without_fcntl)
@@ -191,6 +202,11 @@ def test_reminder_module_import_does_not_require_fcntl(
     module.activate_session(tmp_path, "codex", "windows-session", now=100.0)
 
     assert len(list((tmp_path / ".reminders").glob("*.json"))) == 1
+    assert [mode for _, mode, _ in lock_calls] == [
+        msvcrt.LK_LOCK,
+        msvcrt.LK_UNLCK,
+    ]
+    assert [length for _, _, length in lock_calls] == [1, 1]
 
 
 @pytest.mark.parametrize(
