@@ -435,6 +435,21 @@ def test_non_finite_state_timestamps_fail_closed(
     assert state_path.read_text(encoding="utf-8") == invalid
 
 
+@pytest.mark.parametrize("field", ["activation_time", "last_gate_time"])
+def test_huge_integer_state_timestamps_are_valid(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    """Integer timestamps must not be coerced to floats during validation."""
+    activate(tmp_path)
+    state_path = next((tmp_path / ".reminders").glob("*.json"))
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state[field] = 10**400
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    assert reminder_module()._read_state(state_path, "claude") == state
+
+
 def test_concurrent_updates_are_not_lost(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

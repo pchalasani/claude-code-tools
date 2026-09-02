@@ -412,13 +412,19 @@ def _read_state(path: Path, provider: str) -> dict[str, Any] | None:
     if not isinstance(activation_time, (int, float)) or isinstance(
         activation_time,
         bool,
-    ) or not math.isfinite(activation_time):
+    ) or (
+        isinstance(activation_time, float)
+        and not math.isfinite(activation_time)
+    ):
         return None
     last_gate_time = value.get("last_gate_time")
     if not isinstance(last_gate_time, (int, float)) or isinstance(
         last_gate_time,
         bool,
-    ) or not math.isfinite(last_gate_time):
+    ) or (
+        isinstance(last_gate_time, float)
+        and not math.isfinite(last_gate_time)
+    ):
         return None
     count = value.get("meaningful_work_count")
     if not isinstance(count, int) or isinstance(count, bool) or count < 0:
