@@ -247,7 +247,11 @@ def _contains_publish_segment(command: str) -> bool:
     segment: list[str] = []
     pipeline: list[list[str]] = []
     final_group_has_publish = False
-    for word in [*words, ";"]:
+    token_stream = [*words, ";"]
+    for index, word in enumerate(token_stream):
+        if word == "&" and _is_standard_fd_redirection(token_stream, index):
+            segment.append(word)
+            continue
         if word == "|":
             pipeline.append(segment)
             segment = []
@@ -262,6 +266,17 @@ def _contains_publish_segment(command: str) -> bool:
         else:
             segment.append(word)
     return final_group_has_publish
+
+
+def _is_standard_fd_redirection(words: list[str], index: int) -> bool:
+    """Keep a ``2>&1`` file-descriptor redirection inside its command."""
+    return (
+        index > 0
+        and index + 1 < len(words)
+        and words[index - 1][:-1].isdigit()
+        and words[index - 1].endswith(">")
+        and words[index + 1].isdigit()
+    )
 
 
 def _pipeline_has_receipt_eligible_publish(pipeline: list[list[str]]) -> bool:
@@ -383,9 +398,48 @@ def _meaningful_command(command: str) -> bool:
             ):
                 continue
             return True
-        if executable == "git" and index + 1 < len(words):
-            if words[index + 1] == "commit":
+        if executable == "git":
+            if _git_commit_follows_global_options(words[index + 1 :]):
                 return True
+    return False
+
+
+def _git_commit_follows_global_options(arguments: list[str]) -> bool:
+    """Recognize a commit after Git's ordinary global options."""
+    index = 0
+    options_with_values = {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
+    options_without_values = {
+        "--bare",
+        "--no-pager",
+        "--paginate",
+        "--no-optional-locks",
+        "--no-replace-objects",
+        "--literal-pathspecs",
+        "--no-literal-pathspecs",
+        "--glob-pathspecs",
+        "--noglob-pathspecs",
+        "--icase-pathspecs",
+    }
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "commit":
+            return True
+        if argument in options_without_values:
+            index += 1
+            continue
+        if argument in options_with_values:
+            index += 2
+            continue
+        if argument.startswith("-C") or argument.startswith("-c"):
+            index += 1
+            continue
+        if any(
+            argument.startswith(f"{option}=")
+            for option in options_with_values - {"-C", "-c"}
+        ):
+            index += 1
+            continue
+        return False
     return False
 
 

@@ -453,6 +453,26 @@ def test_successful_publish_pipeline_with_receipt_activates(
     assert len(reminder_states(tmp_path)) == 1
 
 
+def test_successful_publish_with_standard_stderr_redirection_activates(
+    tmp_path: Path,
+) -> None:
+    """A publish receipt remains eligible when stderr joins stdout."""
+    completed = run_adapter(
+        "codex",
+        {
+            "session_id": "redirection-session",
+            "tool_name": "exec_command",
+            "tool_input": {"cmd": "visual-brief publish - 2>&1"},
+            "tool_response": "publish: appended update; rendered index.html\n",
+        },
+        tmp_path,
+    )
+
+    assert completed.returncode == 0
+    assert json.loads(completed.stdout) == {}
+    assert len(reminder_states(tmp_path)) == 1
+
+
 def test_downstream_pipeline_receipt_does_not_activate(tmp_path: Path) -> None:
     """A downstream pipeline stage cannot vouch for a failed publish."""
     completed = run_adapter(

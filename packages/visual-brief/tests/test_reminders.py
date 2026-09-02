@@ -215,6 +215,24 @@ def test_classifier_keeps_package_progress_commands_meaningful(
     assert actual is True
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git -C src commit -m 'record reminder work'",
+        "git --no-pager commit -m 'record reminder work'",
+    ],
+)
+def test_classifier_counts_git_commit_after_global_options(command: str) -> None:
+    """Git's standard global options precede the commit subcommand."""
+    actual = reminder_module().is_meaningful_completion(
+        "Bash",
+        {"command": command},
+        {"exit_code": 0},
+    )
+
+    assert actual is True
+
+
 def test_reminder_module_import_does_not_require_fcntl(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
