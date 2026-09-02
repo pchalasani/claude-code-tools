@@ -231,7 +231,7 @@ def _reported_success(result: dict[str, object]) -> bool:
 
 
 def _contains_publish_segment(command: str) -> bool:
-    """Find a receipt-eligible publish in the final executable command group."""
+    """Find a receipt-eligible publish in the final shell command list."""
     try:
         lexer = shlex.shlex(
             _separate_unquoted_newlines(command),
@@ -246,26 +246,30 @@ def _contains_publish_segment(command: str) -> bool:
 
     segment: list[str] = []
     pipeline: list[list[str]] = []
-    final_group_has_publish = False
-    token_stream = [*words, ";"]
-    for index, word in enumerate(token_stream):
-        if word == "&" and _is_standard_fd_redirection(token_stream, index):
+    and_list_has_publish = False
+    for index, word in enumerate(words):
+        if word == "&" and _is_standard_fd_redirection(words, index):
             segment.append(word)
             continue
-        if word == "|":
+        if word in {"|", "|&"}:
             pipeline.append(segment)
             segment = []
-        elif word in {";", "&&", "||", "&", "|&"}:
+        elif word in {";", "&&", "||", "&"}:
             pipeline.append(segment)
-            if any(pipeline):
-                final_group_has_publish = _pipeline_has_receipt_eligible_publish(
-                    pipeline
-                )
+            group_has_publish = _pipeline_has_receipt_eligible_publish(pipeline)
+            if word == "&&":
+                and_list_has_publish |= group_has_publish
+            else:
+                and_list_has_publish = False
             segment = []
             pipeline = []
         else:
             segment.append(word)
-    return final_group_has_publish
+    pipeline.append(segment)
+    return (
+        and_list_has_publish
+        or _pipeline_has_receipt_eligible_publish(pipeline)
+    )
 
 
 def _is_standard_fd_redirection(words: list[str], index: int) -> bool:
@@ -299,11 +303,21 @@ def _is_receipt_preserving_stage(words: list[str]) -> bool:
 
 
 def _separate_unquoted_newlines(command: str) -> str:
-    """Turn executable newlines into standalone semicolon separators."""
+    """Remove continuations and turn executable newlines into separators."""
     normalized: list[str] = []
     quote: str | None = None
     escaped = False
-    for character in command:
+    index = 0
+    while index < len(command):
+        character = command[index]
+        if (
+            character == "\\"
+            and quote is None
+            and index + 1 < len(command)
+            and command[index + 1] == "\n"
+        ):
+            index += 2
+            continue
         if escaped:
             normalized.append(character)
             escaped = False
@@ -320,6 +334,7 @@ def _separate_unquoted_newlines(command: str) -> str:
             normalized.append(" ; ")
         else:
             normalized.append(character)
+        index += 1
     return "".join(normalized)
 
 

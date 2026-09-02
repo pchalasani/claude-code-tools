@@ -354,6 +354,71 @@ def test_failed_publish_before_newline_fallback_is_not_successful() -> None:
     assert actual is False
 
 
+@pytest.mark.parametrize("operator", ["|", "|&"])
+def test_publish_pipeline_receipt_must_pass_through_tee(operator: str) -> None:
+    """Both Bash pipeline forms retain a receipt only through ``tee``."""
+    actual = reminder_module().is_successful_publish_completion(
+        "Bash",
+        {"command": f"visual-brief publish - {operator} tee brief.log"},
+        {
+            "exit_code": 0,
+            "stdout": "publish: appended briefing; rendered index.html\n",
+        },
+    )
+
+    assert actual is True
+
+
+def test_receipt_backed_publish_survives_only_and_list() -> None:
+    """A proved publish remains valid when only a following ``&&`` runs."""
+    actual = reminder_module().is_successful_publish_completion(
+        "Bash",
+        {"command": "visual-brief publish - && printf done"},
+        {
+            "exit_code": 0,
+            "stdout": "publish: appended briefing; rendered index.html\ndone",
+        },
+    )
+
+    assert actual is True
+
+
+@pytest.mark.parametrize("operator", [";", "||"])
+def test_receipt_backed_publish_does_not_survive_other_list_operators(
+    operator: str,
+) -> None:
+    """Only ``&&`` may retain a prior receipt-backed publish segment."""
+    actual = reminder_module().is_successful_publish_completion(
+        "Bash",
+        {"command": f"visual-brief publish - {operator} printf done"},
+        {
+            "exit_code": 0,
+            "stdout": "publish: appended briefing; rendered index.html\ndone",
+        },
+    )
+
+    assert actual is False
+
+
+def test_unquoted_line_continuation_is_removed_before_publish_parsing() -> None:
+    """A Bash backslash-newline joins words instead of splitting a segment."""
+    actual = reminder_module().is_successful_publish_completion(
+        "Bash",
+        {
+            "command": (
+                "visual-brief \\\n"
+                "publish --file brief.json"
+            )
+        },
+        {
+            "exit_code": 0,
+            "stdout": "publish: appended briefing; rendered index.html\n",
+        },
+    )
+
+    assert actual is True
+
+
 def test_publish_before_forged_receipt_command_is_not_successful() -> None:
     """A publish is ineligible when a later command forges its receipt."""
     actual = reminder_module().is_successful_publish_completion(
