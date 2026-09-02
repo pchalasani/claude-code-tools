@@ -12,6 +12,7 @@ import errno
 import http.client
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import NoReturn
@@ -19,6 +20,12 @@ from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 from visual_brief.bridge import watch_command
+from visual_brief.reminders import (
+    activate_session,
+    is_meaningful_completion,
+    is_successful_publish_completion,
+    record_tool_completion,
+)
 from visual_brief.server.daemon import DEFAULT_PORT, create_server
 from visual_brief.server.registry import discover_runs
 from visual_brief.writes import (
@@ -37,6 +44,11 @@ from visual_brief.writes import (
     resolve_run,
 )
 from visual_brief.writes.runfiles import write_transaction
+
+_CODEX_ERROR_OUTPUT = re.compile(
+    r"\b(?:error|failed|failure)\b|process exited",
+    re.IGNORECASE,
+)
 
 DEFAULT_RUNS_ROOT = Path("~/.claude/visual-brief/runs/")
 
@@ -134,6 +146,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="exit 2 when anything is reported",
     )
+    reminder_parser = subparsers.add_parser(
+        "reminder-hook",
+        help="handle a provider PostToolUse event",
+    )
+    reminder_parser.add_argument(
+        "--provider",
+        choices=["auto", "claude", "codex"],
+        required=True,
+    )
     return parser
 
 
@@ -216,7 +237,87 @@ def _dispatch(args: argparse.Namespace) -> int:
         )
     if args.command == "lint":
         return lint_command(runs_root, args.run, args.strict)
+    if args.command == "reminder-hook":
+        return reminder_hook_command(runs_root, args.provider)
     return list_command(runs_root)
+
+
+def reminder_hook_command(runs_root: Path, provider: str) -> int:
+    """Normalize PostToolUse JSON and emit quiet provider context."""
+    response: dict[str, object] = {}
+    try:
+        provider = _resolve_reminder_provider(provider)
+        payload = json.load(sys.stdin)
+        if not isinstance(payload, dict):
+            raise ValueError("payload is not an object")
+        session_id = payload.get("session_id")
+        tool_name = payload.get("tool_name")
+        tool_input = payload.get("tool_input", {})
+        tool_result = payload.get(
+            "tool_response",
+            payload.get("tool_result", {}),
+        )
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise ValueError("missing session identity")
+        if not isinstance(tool_name, str):
+            raise ValueError("missing tool name")
+        if not isinstance(tool_input, dict):
+            raise ValueError("invalid tool fields")
+        tool_result = _normalize_reminder_result(provider, tool_result)
+        if is_successful_publish_completion(tool_name, tool_input, tool_result):
+            activate_session(runs_root, provider, session_id.strip())
+            print("{}")
+            return 0
+        meaningful = is_meaningful_completion(
+            tool_name,
+            tool_input,
+            tool_result,
+        )
+        reminder = record_tool_completion(
+            runs_root,
+            provider,
+            session_id.strip(),
+            meaningful=meaningful,
+        )
+        if reminder is not None:
+            response = {
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                    "additionalContext": reminder,
+                }
+            }
+    except Exception:
+        pass
+    print(json.dumps(response, separators=(",", ":")))
+    return 0
+
+
+def _normalize_reminder_result(
+    provider: str,
+    tool_result: object,
+) -> dict[str, object]:
+    """Normalize provider output without weakening Claude's object contract."""
+    if isinstance(tool_result, dict):
+        return tool_result
+    if provider != "codex" or not isinstance(tool_result, str):
+        raise ValueError("invalid tool result")
+    output = tool_result.strip()
+    if not output or _CODEX_ERROR_OUTPUT.search(output):
+        return {"success": False, "_codex_string_output": tool_result}
+    return {"success": True, "_codex_string_output": tool_result}
+
+
+def _resolve_reminder_provider(provider: str) -> str:
+    """Resolve auto mode from provider-guaranteed plugin-root variables."""
+    if provider in {"claude", "codex"}:
+        return provider
+    if provider != "auto":
+        raise ValueError("unsupported reminder provider")
+    if os.environ.get("PLUGIN_ROOT", "").strip():
+        return "codex"
+    if os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip():
+        return "claude"
+    raise ValueError("auto provider requires a plugin root")
 
 
 def serve_command(runs_root: Path, port: int) -> int:
