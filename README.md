@@ -139,12 +139,6 @@ docs. Click a card below to jump to a feature, or
      alt="github-watch: wake on a GitHub comment" width="200"/>
 </a>
 </td>
-<td align="center" colspan="2">
-<a href="https://pchalasani.github.io/claude-code-tools/guides/claude-to-codex/">
-<img src="assets/card-codex-dynamic-workflows.svg"
-     alt="Codex Dynamic Workflows" width="416"/>
-</a>
-</td>
 <td align="center">
 <a href="https://pchalasani.github.io/claude-code-tools/tools/msg/">
 <img src="assets/card-msg.svg" alt="msg: inter-agent comms" width="200"/>
@@ -153,6 +147,14 @@ docs. Click a card below to jump to a feature, or
 <td align="center">
 <a href="https://pchalasani.github.io/claude-code-tools/plugins-detail/visual-brief/">
 <img src="assets/card-visual-brief.svg" alt="Visual Brief" width="200"/>
+</a>
+</td>
+</tr>
+<tr>
+<td align="center" colspan="4">
+<a href="https://pchalasani.github.io/claude-code-tools/guides/claude-to-codex/">
+<img src="assets/card-codex-dynamic-workflows.svg"
+     alt="Codex Dynamic Workflows" width="416"/>
 </a>
 </td>
 </tr>

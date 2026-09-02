@@ -6,10 +6,15 @@ description: >-
 
 import { Tabs, TabItem } from "@astrojs/starlight/components";
 
-Visual Brief helps you return to substantial Claude Code or Codex work and
-quickly understand its current state. It turns verbose agent updates into a
-concise structured briefing in your browser: the latest update is prominent,
-and earlier updates remain available in a quieter ledger.
+Visual Brief makes substantial Claude Code or Codex work easier to comprehend.
+Instead of another wall of terminal text, it constrains the agent's update to a
+concise structure built around **progressive disclosure**: the essential
+summary stays visible, while lanes, items, nested details, and evidence expand
+only when you need them.
+
+Each update is quick to scan during the session and easy to recover after time
+away. The latest briefing stays prominent, and earlier briefings remain
+available in a quieter ledger.
 
 It is for meaningful implementation, investigation, review, and design work.
 Routine progress messages, quick answers, and small fixes belong in the normal
@@ -57,6 +62,21 @@ terminal.
 The page is keyboard-first. Its visible shortcut bar documents navigation,
 folding, and conversation controls, so the experience stays fast and
 terminal-like without hiding the controls behind a mouse-only interface.
+
+### Ask About Any Part of a Briefing
+
+The briefing root, every lane, and every item can hold its own conversation.
+Use the arrow keys, `j` and `k`, or the numbered shortcuts to select the part
+you want to discuss, then press `c` to open its chat box. You can also click
+the row's **Chat** control. Type your question and send it with
+<kbd>Command</kbd> + <kbd>Enter</kbd> on macOS or <kbd>Ctrl</kbd> +
+<kbd>Enter</kbd> elsewhere.
+
+The page keeps your question beside the selected content, shows when the agent
+is working, and places the answer in the same inline thread. This works on the
+latest briefing and on earlier briefings in the ledger. Press `a`, or use the
+**Message agent** control above the latest briefing, when your message is
+about the session as a whole rather than one section.
 
 ## Use It with Claude Code or Codex
 
@@ -120,15 +140,32 @@ watcher for that run so the agent can receive page questions.
     ```
   </TabItem>
   <TabItem label="Codex">
-    For a session launched through `codex-dynamic`, start:
+    Install the `claude-code-tools` package if `codex-dynamic` is not already
+    available:
+
+    ```bash
+    uv tool install claude-code-tools
+    ```
+
+    Launch Codex with [`codex-dynamic`](/claude-code-tools/tools/codex-dynamic/),
+    rather than plain `codex`, when you want page questions to arrive in the
+    running session:
+
+    ```bash
+    codex-dynamic
+    ```
+
+    From that callback-ready session, start the watcher:
 
     ```bash
     visual-brief watch --agent codex --run <RUN>
     ```
 
-    The watcher needs the Codex bridge environment. Obtain approval to run this
-    trusted watcher outside the default sandbox. Re-arm it after a session
-    boundary, and stop an existing watcher before starting another one.
+    `codex-dynamic` starts the normal Codex TUI with the callback bridge that
+    delivers each Visual Brief question as a live notification. A session
+    launched with plain `codex` does not provide that bridge. Obtain approval
+    to run this trusted watcher outside the default sandbox. Re-arm it after a
+    session boundary, and stop an existing watcher before starting another one.
   </TabItem>
 </Tabs>
 
