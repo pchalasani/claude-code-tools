@@ -58,7 +58,8 @@ def test_plugin_has_both_manifests_and_hook_definitions() -> None:
     assert "Edit" in serialized_hooks
     assert "apply_patch" in serialized_hooks
     assert "exec_command" in serialized_hooks
-    assert "${CLAUDE_PLUGIN_ROOT}/hooks/reminder-hook" in serialized_hooks
+    command = hooks["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
+    assert command == '"${CLAUDE_PLUGIN_ROOT}/hooks/reminder-hook"'
 
     assert "hooks" not in codex_manifest
     for manifest in (claude_manifest, codex_manifest):

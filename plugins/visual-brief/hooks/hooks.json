@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/reminder-hook",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/reminder-hook\"",
             "timeout": 5
           }
         ]
