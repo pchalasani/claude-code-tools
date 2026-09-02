@@ -234,9 +234,12 @@ def _reported_success(result: dict[str, object]) -> bool:
 
 def _contains_publish_segment(command: str) -> bool:
     """Find a receipt-eligible publish in the final shell command list."""
+    command_without_here_documents = _strip_here_document_bodies(command)
+    if command_without_here_documents is None:
+        return False
     try:
         lexer = shlex.shlex(
-            _separate_unquoted_newlines(command),
+            _separate_unquoted_newlines(command_without_here_documents),
             posix=True,
             punctuation_chars=";&|",
         )
@@ -347,6 +350,81 @@ def _separate_unquoted_newlines(command: str) -> str:
     return "".join(normalized)
 
 
+def _strip_here_document_bodies(command: str) -> str | None:
+    """Remove ordinary here-document bodies before splitting command newlines."""
+    lines = command.splitlines(keepends=True)
+    normalized: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        here_document = _here_document_delimiter(line)
+        if here_document is None:
+            normalized.append(line)
+            index += 1
+            continue
+        normalized.append(line.rstrip("\r\n"))
+        delimiter, strip_tabs = here_document
+        index += 1
+        while index < len(lines):
+            body_line = lines[index].rstrip("\r\n")
+            comparable = body_line.lstrip("\t") if strip_tabs else body_line
+            index += 1
+            if comparable == delimiter:
+                break
+        else:
+            return None
+        if index < len(lines):
+            normalized.append("\n")
+    return "".join(normalized)
+
+
+def _here_document_delimiter(line: str) -> tuple[str, bool] | None:
+    """Return one ordinary Bash here-document delimiter from a command line."""
+    quote: str | None = None
+    escaped = False
+    index = 0
+    while index + 1 < len(line):
+        character = line[index]
+        if escaped:
+            escaped = False
+            index += 1
+            continue
+        if character == "\\" and quote != "'":
+            escaped = True
+            index += 1
+            continue
+        if character in {"'", '"'}:
+            if quote == character:
+                quote = None
+            elif quote is None:
+                quote = character
+            index += 1
+            continue
+        if quote is not None or character != "<" or line[index + 1] != "<":
+            index += 1
+            continue
+        index += 2
+        strip_tabs = index < len(line) and line[index] == "-"
+        if strip_tabs:
+            index += 1
+        while index < len(line) and line[index] in " \t":
+            index += 1
+        if index >= len(line) or line[index] in "\r\n":
+            return None
+        delimiter_quote = line[index] if line[index] in {"'", '"'} else None
+        if delimiter_quote is not None:
+            index += 1
+            end = line.find(delimiter_quote, index)
+            if end == -1:
+                return None
+            return line[index:end], strip_tabs
+        end = index
+        while end < len(line) and line[end] not in " \t\r\n;|&":
+            end += 1
+        return line[index:end], strip_tabs
+    return None
+
+
 def _unquoted_backslash_run_length(command: str, index: int) -> int:
     """Count the consecutive backslashes ending at ``index``."""
     start = index
@@ -407,13 +485,11 @@ def _meaningful_command(command: str) -> bool:
             return True
         if executable in _PROGRESS_COMMANDS:
             arguments = words[index + 1 :]
-            if (
-                executable in _PACKAGE_MANAGERS
-                and len(arguments) == 1
-                and arguments[0] in _PACKAGE_MANAGER_INFORMATION_FLAGS
+            while (
+                arguments
+                and arguments[0].startswith("-")
+                and arguments[0] not in _PACKAGE_MANAGER_INFORMATION_FLAGS
             ):
-                continue
-            while arguments and arguments[0].startswith("-"):
                 option = arguments[0]
                 arguments = arguments[1:]
                 if (
@@ -421,6 +497,12 @@ def _meaningful_command(command: str) -> bool:
                     and arguments
                 ):
                     arguments = arguments[1:]
+            if (
+                executable in _PACKAGE_MANAGERS
+                and len(arguments) == 1
+                and arguments[0] in _PACKAGE_MANAGER_INFORMATION_FLAGS
+            ):
+                continue
             if (
                 executable in _READ_ONLY_PACKAGE_MANAGERS
                 and arguments

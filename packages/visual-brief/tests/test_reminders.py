@@ -168,6 +168,7 @@ def test_classifier_counts_only_completed_meaningful_work(
         "cargo -h",
         "cargo --version",
         "cargo -V",
+        "cargo --color always --version",
         "npm --help",
         "npm -h",
         "npm --version",
@@ -382,6 +383,26 @@ def test_failed_publish_before_newline_fallback_is_not_successful() -> None:
     )
 
     assert actual is False
+
+
+def test_publish_with_ordinary_here_document_is_successful() -> None:
+    """A here-document body is stdin, not a later shell command list."""
+    actual = reminder_module().is_successful_publish_completion(
+        "Bash",
+        {
+            "command": (
+                "visual-brief publish - <<'JSON'\n"
+                '{"headline": "Published from a here-document"}\n'
+                "JSON"
+            )
+        },
+        {
+            "exit_code": 0,
+            "stdout": "publish: appended briefing; rendered index.html\n",
+        },
+    )
+
+    assert actual is True
 
 
 @pytest.mark.parametrize("operator", ["|", "|&"])
