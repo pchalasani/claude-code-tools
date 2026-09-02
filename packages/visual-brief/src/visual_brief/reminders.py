@@ -400,7 +400,13 @@ def _here_document_delimiter(line: str) -> tuple[str, bool] | None:
                 quote = character
             index += 1
             continue
-        if quote is not None or character != "<" or line[index + 1] != "<":
+        if (
+            quote is not None
+            or character != "<"
+            or line[index + 1] != "<"
+            or (index > 0 and line[index - 1] == "<")
+            or (index + 2 < len(line) and line[index + 2] == "<")
+        ):
             index += 1
             continue
         index += 2

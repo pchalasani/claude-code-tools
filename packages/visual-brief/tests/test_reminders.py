@@ -405,6 +405,25 @@ def test_publish_with_ordinary_here_document_is_successful() -> None:
     assert actual is True
 
 
+def test_publish_with_bash_here_string_is_successful() -> None:
+    """A here-string is command input, not a here-document body."""
+    actual = reminder_module().is_successful_publish_completion(
+        "Bash",
+        {
+            "command": (
+                "visual-brief publish - "
+                "<<< '{\"headline\": \"Published from a here-string\"}'"
+            )
+        },
+        {
+            "exit_code": 0,
+            "stdout": "publish: appended update; rendered /tmp/brief/index.html\n",
+        },
+    )
+
+    assert actual is True
+
+
 @pytest.mark.parametrize("operator", ["|", "|&"])
 def test_publish_pipeline_receipt_must_pass_through_tee(operator: str) -> None:
     """Both Bash pipeline forms retain a receipt only through ``tee``."""
