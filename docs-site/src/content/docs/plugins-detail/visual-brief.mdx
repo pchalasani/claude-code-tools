@@ -58,6 +58,21 @@ The page is keyboard-first. Its visible shortcut bar documents navigation,
 folding, and conversation controls, so the experience stays fast and
 terminal-like without hiding the controls behind a mouse-only interface.
 
+### Ask About Any Part of a Briefing
+
+The briefing root, every lane, and every item can hold its own conversation.
+Use the arrow keys, `j` and `k`, or the numbered shortcuts to select the part
+you want to discuss, then press `c` to open its chat box. You can also click
+the row's **Chat** control. Type your question and send it with
+<kbd>Command</kbd> + <kbd>Enter</kbd> on macOS or <kbd>Ctrl</kbd> +
+<kbd>Enter</kbd> elsewhere.
+
+The page keeps your question beside the selected content, shows when the agent
+is working, and places the answer in the same inline thread. This works on the
+latest briefing and on earlier briefings in the ledger. Press `a`, or use the
+**Message the agent** control above the latest briefing, when your message is
+about the session as a whole rather than one section.
+
 ## Use It with Claude Code or Codex
 
 The same `visual-brief` CLI works with either agent provider. Install the
@@ -120,15 +135,25 @@ watcher for that run so the agent can receive page questions.
     ```
   </TabItem>
   <TabItem label="Codex">
-    For a session launched through `codex-dynamic`, start:
+    Launch Codex with [`codex-dynamic`](/claude-code-tools/tools/codex-dynamic/),
+    rather than plain `codex`, when you want page questions to arrive in the
+    running session:
+
+    ```bash
+    codex-dynamic
+    ```
+
+    From that callback-ready session, start the watcher:
 
     ```bash
     visual-brief watch --agent codex --run <RUN>
     ```
 
-    The watcher needs the Codex bridge environment. Obtain approval to run this
-    trusted watcher outside the default sandbox. Re-arm it after a session
-    boundary, and stop an existing watcher before starting another one.
+    `codex-dynamic` starts the normal Codex TUI with the callback bridge that
+    delivers each Visual Brief question as a live notification. A session
+    launched with plain `codex` does not provide that bridge. Obtain approval
+    to run this trusted watcher outside the default sandbox. Re-arm it after a
+    session boundary, and stop an existing watcher before starting another one.
   </TabItem>
 </Tabs>
 
