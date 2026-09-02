@@ -409,27 +409,25 @@ def _read_state(path: Path, provider: str) -> dict[str, Any] | None:
     if value.get("provider") != provider:
         return None
     activation_time = value.get("activation_time")
-    if not isinstance(activation_time, (int, float)) or isinstance(
-        activation_time,
-        bool,
-    ) or (
-        isinstance(activation_time, float)
-        and not math.isfinite(activation_time)
-    ):
+    if not _is_finite_timestamp(activation_time):
         return None
     last_gate_time = value.get("last_gate_time")
-    if not isinstance(last_gate_time, (int, float)) or isinstance(
-        last_gate_time,
-        bool,
-    ) or (
-        isinstance(last_gate_time, float)
-        and not math.isfinite(last_gate_time)
-    ):
+    if not _is_finite_timestamp(last_gate_time):
         return None
     count = value.get("meaningful_work_count")
     if not isinstance(count, int) or isinstance(count, bool) or count < 0:
         return None
     return value
+
+
+def _is_finite_timestamp(value: Any) -> bool:
+    """Return whether a value is numeric and representable as a finite float."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _write_state(path: Path, state: dict[str, Any]) -> None:
