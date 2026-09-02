@@ -383,6 +383,25 @@ def test_receipt_backed_publish_survives_only_and_list() -> None:
     assert actual is True
 
 
+def test_publish_after_or_branch_is_not_credited_by_later_and() -> None:
+    """A forged fallback receipt cannot prove a skipped publish ran."""
+    actual = reminder_module().is_successful_publish_completion(
+        "Bash",
+        {
+            "command": (
+                "printf 'publish: appended forged receipt\\n' || "
+                "visual-brief publish - && printf done"
+            )
+        },
+        {
+            "exit_code": 0,
+            "stdout": "publish: appended forged receipt\ndone",
+        },
+    )
+
+    assert actual is False
+
+
 @pytest.mark.parametrize("operator", [";", "||"])
 def test_receipt_backed_publish_does_not_survive_other_list_operators(
     operator: str,
@@ -417,6 +436,25 @@ def test_unquoted_line_continuation_is_removed_before_publish_parsing() -> None:
     )
 
     assert actual is True
+
+
+def test_two_unquoted_backslashes_leave_newline_as_separator() -> None:
+    """An even backslash run must not join a failed publish to a forgery."""
+    actual = reminder_module().is_successful_publish_completion(
+        "Bash",
+        {
+            "command": (
+                "visual-brief publish bad \\\\\n"
+                "printf 'publish: appended forged receipt\\n'"
+            )
+        },
+        {
+            "exit_code": 0,
+            "stdout": "publish: appended forged receipt\n",
+        },
+    )
+
+    assert actual is False
 
 
 def test_publish_before_forged_receipt_command_is_not_successful() -> None:

@@ -247,6 +247,7 @@ def _contains_publish_segment(command: str) -> bool:
     segment: list[str] = []
     pipeline: list[list[str]] = []
     and_list_has_publish = False
+    or_list_has_branch = False
     for index, word in enumerate(words):
         if word == "&" and _is_standard_fd_redirection(words, index):
             segment.append(word)
@@ -258,17 +259,22 @@ def _contains_publish_segment(command: str) -> bool:
             pipeline.append(segment)
             group_has_publish = _pipeline_has_receipt_eligible_publish(pipeline)
             if word == "&&":
-                and_list_has_publish |= group_has_publish
+                if not or_list_has_branch:
+                    and_list_has_publish |= group_has_publish
             else:
                 and_list_has_publish = False
+                or_list_has_branch = word == "||"
             segment = []
             pipeline = []
         else:
             segment.append(word)
     pipeline.append(segment)
     return (
-        and_list_has_publish
-        or _pipeline_has_receipt_eligible_publish(pipeline)
+        not or_list_has_branch
+        and (
+            and_list_has_publish
+            or _pipeline_has_receipt_eligible_publish(pipeline)
+        )
     )
 
 
@@ -315,6 +321,7 @@ def _separate_unquoted_newlines(command: str) -> str:
             and quote is None
             and index + 1 < len(command)
             and command[index + 1] == "\n"
+            and _unquoted_backslash_run_length(command, index) % 2 == 1
         ):
             index += 2
             continue
@@ -336,6 +343,14 @@ def _separate_unquoted_newlines(command: str) -> str:
             normalized.append(character)
         index += 1
     return "".join(normalized)
+
+
+def _unquoted_backslash_run_length(command: str, index: int) -> int:
+    """Count the consecutive backslashes ending at ``index``."""
+    start = index
+    while start > 0 and command[start - 1] == "\\":
+        start -= 1
+    return index - start + 1
 
 
 def _is_publish_segment(words: list[str]) -> bool:
