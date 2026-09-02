@@ -7,7 +7,7 @@ Codex sessions, following the pattern of tools like git, docker, etc.
 
 All session-related tools are accessible as subcommands:
     aichat search          - Full-text search across all sessions
-    aichat resume          - Resume a session (latest or by ID)
+    aichat resume          - Resume a session (latest or by name/ID/path)
     aichat menu            - Interactive session menu
     aichat trim            - Trim session content
     ... and more
@@ -18,15 +18,72 @@ etc.) are still available.
 
 import click
 
+from claude_code_tools.session_cli_resolution import (
+    resolve_cli_session as _resolve_cli_session,
+    resolve_export_session as _resolve_export_session,
+    session_homes as _session_homes,
+)
 
-class SessionIDGroup(click.Group):
-    """Custom group that treats unknown commands as session IDs for menu."""
+
+def _consume_export_agent(
+    args: list[str], parsed_agent: str | None
+) -> tuple[str | None, list[str]]:
+    """Consume ``--agent`` from exporter passthrough arguments."""
+    agent = parsed_agent
+    remaining: list[str] = []
+    index = 0
+    while index < len(args):
+        argument = args[index]
+        if argument == "--agent":
+            if index + 1 >= len(args):
+                raise click.UsageError("Option '--agent' requires an argument.")
+            value = args[index + 1].lower()
+            if value not in ("claude", "codex"):
+                raise click.BadParameter(
+                    value,
+                    param_hint="--agent",
+                    param_type_hint="choice",
+                )
+            agent = value
+            index += 2
+            continue
+        if argument.startswith("--agent="):
+            value = argument.partition("=")[2].lower()
+            if value not in ("claude", "codex"):
+                raise click.BadParameter(
+                    value,
+                    param_hint="--agent",
+                    param_type_hint="choice",
+                )
+            agent = value
+            index += 1
+            continue
+        remaining.append(argument)
+        index += 1
+    return agent, remaining
+
+
+class SessionReferenceGroup(click.Group):
+    """Treat an unknown command token as a session reference for ``menu``."""
 
     def parse_args(self, ctx, args):
-        # If the first arg looks like a session ID (not a known command), route to menu
-        if args and args[0] not in self.commands and not args[0].startswith('-'):
-            # Treat as session ID - prepend 'menu' to make it a menu command
-            args = ['menu'] + args
+        from claude_code_tools.cli_passthrough import (
+            MissingPositionalError,
+            positional_index,
+        )
+
+        try:
+            command_index = positional_index(
+                args,
+                value_options=("--claude-home", "--codex-home"),
+            )
+        except MissingPositionalError:
+            command_index = None
+        if (
+            command_index is not None
+            and args[command_index] not in self.commands
+        ):
+            args.insert(command_index, "menu")
         return super().parse_args(ctx, args)
 
 
@@ -50,7 +107,7 @@ class ResolveCommand(click.Command):
             ctx.exit(1)
 
 
-@click.group(cls=SessionIDGroup, invoke_without_command=True)
+@click.group(cls=SessionReferenceGroup, invoke_without_command=True)
 @click.version_option()
 @click.option(
     '--claude-home',
@@ -118,9 +175,42 @@ def main(ctx, claude_home, codex_home):
     # 'port' is also skipped: its contract requires the detected
     # direction line to be the FIRST output, so the indexer's progress
     # bar must never print before it.
+    # 'trim-in-place' is skipped because it never queries the index
+    # (it resolves a path directly) and it runs under the >trim hook's
+    # time budget: indexing ~13.6k session files took 2-30s depending
+    # on the backlog, against a ~0.3s trim, which is what made >trim
+    # time out. Trimming also rewrites the file, so indexing its
+    # pre-trim content first is wasted work twice over.
     skip_auto_index_cmds = ['build-index', 'clear-index', 'index-stats']
+    # A help request must not index. Scan argv rather than click's parsed
+    # options, since -h/--help never reaches this callback as a value.
+    # Anchor the scan at the subcommand so a group-level separator
+    # ('aichat -- search --help') does not hide the flag, and stop at the
+    # subcommand's own separator so a literal '--help' *query*
+    # ('aichat search -- --help') still refreshes the index first.
+    # Skip the values of the group's own value-taking options while
+    # looking for the subcommand, so 'aichat --claude-home resume ...'
+    # does not anchor on the directory named 'resume'.
+    # Only truncate once anchored: SessionReferenceGroup synthesizes a
+    # subcommand for bare session references ('aichat -- --help' routes to
+    # 'menu'), so the name is not always present in argv, and there is then
+    # no subcommand-level separator to respect.
+    group_value_opts = ('--claude-home', '--codex-home')
+    cli_args = sys.argv[1:]
+    anchored = False
+    for i, arg in enumerate(cli_args):
+        if i and cli_args[i - 1] in group_value_opts:
+            continue
+        if arg == ctx.invoked_subcommand:
+            cli_args = cli_args[i:]
+            anchored = True
+            break
+    if anchored and '--' in cli_args:
+        cli_args = cli_args[:cli_args.index('--')]
+    help_mode = any(arg in cli_args for arg in ('-h', '--help'))
     should_skip = (
-        ctx.invoked_subcommand in ('port', 'resolve')
+        help_mode
+        or ctx.invoked_subcommand in ('port', 'resolve', 'trim-in-place')
         or ctx.invoked_subcommand in skip_auto_index_cmds
         or any(cmd in sys.argv for cmd in skip_auto_index_cmds)
     )
@@ -248,6 +338,9 @@ def _find_and_run_session_ui(
     results_title: str | None = None,
     direct_action: str | None = None,
     action_kwargs: dict | None = None,
+    *,
+    claude_home: str | None = None,
+    codex_home: str | None = None,
 ) -> None:
     """
     Find session(s) and run Node UI for the specified action.
@@ -256,13 +349,15 @@ def _find_and_run_session_ui(
     Otherwise, finds latest sessions for current project/branch and shows UI.
 
     Args:
-        session_id: Optional explicit session ID or path
+        session_id: Optional explicit session name, ID/fragment, or path.
         agent_constraint: 'claude', 'codex', or 'both'
         start_screen: Screen to show when single session found
         select_target: Screen to go to after selection (multiple sessions)
         results_title: Title for selection screen
         direct_action: If set, execute this action directly instead of showing UI
         action_kwargs: Optional kwargs to pass to action
+        claude_home: Optional Claude home override
+        codex_home: Optional Codex home override
     """
     import os
     import subprocess
@@ -273,6 +368,11 @@ def _find_and_run_session_ui(
     from claude_code_tools.search_index import SessionIndex
     from claude_code_tools.session_menu_cli import execute_action
     from claude_code_tools.session_utils import default_export_path
+    root_claude_home, root_codex_home = _session_homes()
+    if claude_home is None:
+        claude_home = root_claude_home
+    if codex_home is None:
+        codex_home = root_codex_home
 
     if session_id:
         if direct_action:
@@ -280,25 +380,25 @@ def _find_and_run_session_ui(
             # This allows direct_action to be passed to Node UI for correct
             # escape behavior (exit to shell vs. go to resume menu)
             from claude_code_tools.session_utils import (
-                find_session_file,
                 default_export_path,
-                detect_agent_from_path,
                 get_session_uuid,
             )
 
-            # Find session file
-            input_path = Path(session_id).expanduser()
-            if input_path.exists() and input_path.is_file():
-                session_file = input_path
-                agent = detect_agent_from_path(session_file)
-                project_path = str(session_file.parent)
-                git_branch = None
-            else:
-                result = find_session_file(session_id)
-                if not result:
-                    print(f"Error: Session not found: {session_id}", file=sys.stderr)
-                    sys.exit(1)
-                agent, session_file, project_path, git_branch = result
+            constraint = (
+                agent_constraint
+                if agent_constraint in ("claude", "codex")
+                else None
+            )
+            resolved = _resolve_cli_session(
+                session_id,
+                constraint,
+                claude_home=claude_home,
+                codex_home=codex_home,
+            )
+            agent = resolved.agent
+            session_file = resolved.session_file
+            project_path = resolved.directory or str(session_file.parent)
+            git_branch = resolved.git_branch
 
             # Build session dict for Node UI
             session_dict = {
@@ -327,6 +427,8 @@ def _find_and_run_session_ui(
                     sess["agent"],
                     Path(sess["file_path"]),
                     sess["cwd"],
+                    claude_home=claude_home,
+                    codex_home=codex_home,
                     action_kwargs=merged_kwargs if merged_kwargs else None,
                     session_id=sess.get("session_id"),
                 )
@@ -345,11 +447,28 @@ def _find_and_run_session_ui(
             return
 
         # Normal mode (no direct_action): route through session_menu_cli
-        sys.argv = [
+        constraint = (
+            agent_constraint
+            if agent_constraint in ("claude", "codex")
+            else None
+        )
+        resolved = _resolve_cli_session(
+            session_id,
+            constraint,
+            claude_home=claude_home,
+            codex_home=codex_home,
+        )
+        menu_args = [
             sys.argv[0].replace('aichat', 'session-menu'),
             '--start-screen', start_screen,
-            session_id,
+            '--agent', resolved.agent,
+            str(resolved.session_file),
         ]
+        if claude_home:
+            menu_args.extend(["--claude-home", claude_home])
+        if codex_home:
+            menu_args.extend(["--codex-home", codex_home])
+        sys.argv = menu_args
         from claude_code_tools.session_menu_cli import main as menu_main
         menu_main()
         return
@@ -500,6 +619,8 @@ def _find_and_run_session_ui(
             sess["agent"],
             session_file,
             sess["cwd"],
+            claude_home=claude_home,
+            codex_home=codex_home,
             action_kwargs=merged_kwargs if merged_kwargs else None,
             session_id=sess.get("session_id"),
         )
@@ -613,9 +734,16 @@ Examples:
 @main.command("find-original", context_settings={"ignore_unknown_options": True, "allow_extra_args": True, "allow_interspersed_args": False})
 @click.pass_context
 def find_original(ctx):
-    """Find the original session from a trimmed/continued session."""
+    """Find the original session from a named or identified session."""
     import sys
-    sys.argv = [sys.argv[0].replace('aichat', 'find-original-session')] + ctx.args
+    from claude_code_tools.legacy_session_wrappers import (
+        resolved_find_original_args,
+    )
+
+    sys.argv = [
+        sys.argv[0].replace('aichat', 'find-original-session'),
+        *resolved_find_original_args(ctx.args),
+    ]
     from claude_code_tools.find_original_session import (
         main as find_original_main,
     )
@@ -625,9 +753,16 @@ def find_original(ctx):
 @main.command("find-derived", context_settings={"ignore_unknown_options": True, "allow_extra_args": True, "allow_interspersed_args": False})
 @click.pass_context
 def find_derived(ctx):
-    """Find derived sessions (trimmed/continued) from an original."""
+    """Find sessions derived from a named or identified original."""
     import sys
-    sys.argv = [sys.argv[0].replace('aichat', 'find-trimmed-sessions')] + ctx.args
+    from claude_code_tools.legacy_session_wrappers import (
+        resolved_find_derived_args,
+    )
+
+    sys.argv = [
+        sys.argv[0].replace('aichat', 'find-trimmed-sessions'),
+        *resolved_find_derived_args(ctx.args),
+    ]
     from claude_code_tools.find_trimmed_sessions import (
         main as find_derived_main,
     )
@@ -637,9 +772,14 @@ def find_derived(ctx):
 @main.command("menu", context_settings={"ignore_unknown_options": True, "allow_extra_args": True, "allow_interspersed_args": False})
 @click.pass_context
 def menu(ctx):
-    """Interactive menu for a specific session (by ID or path)."""
+    """Open the action menu for a session name, ID/fragment, or path."""
     import sys
-    sys.argv = [sys.argv[0].replace('aichat', 'session-menu')] + ctx.args
+    from claude_code_tools.legacy_session_wrappers import resolved_menu_args
+
+    sys.argv = [
+        sys.argv[0].replace('aichat', 'session-menu'),
+        *resolved_menu_args(ctx.args),
+    ]
     from claude_code_tools.session_menu_cli import main as menu_main
     menu_main()
 
@@ -660,7 +800,7 @@ def menu(ctx):
               help="Force agent type (auto-detected if not specified)")
 @click.option("--claude-home", help="Path to Claude home directory")
 @click.option("--simple-ui", is_flag=True,
-              help="Use simple CLI trim instead of Node UI (requires session ID)")
+              help="Use simple CLI trim instead of Node UI (requires SESSION)")
 def trim(session, tools, threshold, trim_assistant, output_dir, agent, claude_home, simple_ui):
     """Trim session to reduce size by truncating large tool outputs.
 
@@ -668,8 +808,9 @@ def trim(session, tools, threshold, trim_assistant, output_dir, agent, claude_ho
     the length threshold. Creates a new trimmed session file with lineage
     metadata linking back to the original.
 
-    If no session ID provided, finds latest session for current project/branch
-    and opens the interactive trim menu.
+    If no SESSION is provided, finds the latest session for the current
+    project/branch. SESSION accepts a name, ID/fragment, filename fragment,
+    or path. With no direct trim options, opens the interactive trim menu.
 
     \b
     Examples:
@@ -691,12 +832,18 @@ def trim(session, tools, threshold, trim_assistant, output_dir, agent, claude_ho
     if simple_ui or tools or trim_assistant or output_dir:
         # Direct CLI mode - need a session
         if not session:
-            print("Error: Direct trim options require a session ID", file=sys.stderr)
+            print("Error: Direct trim options require SESSION", file=sys.stderr)
             print("Use 'aichat trim' without options for interactive mode", file=sys.stderr)
             sys.exit(1)
 
+        resolved = _resolve_cli_session(
+            session,
+            agent,
+            claude_home=claude_home,
+        )
+
         # Build args for trim-session CLI
-        args = [session]
+        args = [str(resolved.session_file)]
         if tools:
             args.extend(["--tools", tools])
         if threshold != 500:
@@ -705,8 +852,7 @@ def trim(session, tools, threshold, trim_assistant, output_dir, agent, claude_ho
             args.extend(["--trim-assistant-messages", str(trim_assistant)])
         if output_dir:
             args.extend(["--output-dir", output_dir])
-        if agent:
-            args.extend(["--agent", agent])
+        args.extend(["--agent", resolved.agent])
         if claude_home:
             args.extend(["--claude-home", claude_home])
 
@@ -717,10 +863,11 @@ def trim(session, tools, threshold, trim_assistant, output_dir, agent, claude_ho
 
     _find_and_run_session_ui(
         session_id=session,
-        agent_constraint='both',
+        agent_constraint=agent or 'both',
         start_screen='trim_menu',
         select_target='trim_menu',
         results_title=' Which session to trim? ',
+        claude_home=claude_home,
     )
 
 
@@ -778,6 +925,9 @@ def trim_in_place_cmd(session, tools, threshold, trim_assistant, dry_run,
     This powers the `>trim` in-session trigger of the aichat plugin, and
     can also be used directly on any Claude session.
 
+    SESSION may be a Claude session name, ID/fragment, filename fragment,
+    or direct transcript path.
+
     \b
     Examples:
         aichat trim-in-place abc123 --dry-run     # Preview tokens saved
@@ -789,7 +939,6 @@ def trim_in_place_cmd(session, tools, threshold, trim_assistant, dry_run,
     import sys
     from pathlib import Path
 
-    from claude_code_tools.session_utils import resolve_session_path
     from claude_code_tools.trim_in_place import trim_session_in_place
 
     def emit_error(msg: str) -> None:
@@ -799,24 +948,50 @@ def trim_in_place_cmd(session, tools, threshold, trim_assistant, dry_run,
             print(f"Error: {msg}", file=sys.stderr)
         sys.exit(1)
 
+    root_claude_home, _ = _session_homes()
+    effective_claude_home = claude_home or root_claude_home
     try:
-        session_file = resolve_session_path(session, claude_home)
-    except SystemExit:
-        # resolve_session_path() exits directly (SystemExit is NOT an
-        # Exception) for ambiguous partial ids, after listing the
-        # matches on stderr. Under --json, convert that to the
-        # contractual single {"error": ...} stdout line.
-        if not json_output:
-            raise
-        emit_error(
-            f"Multiple sessions match '{session}'. "
-            f"Use a more specific session ID."
+        direct_path = Path(session).expanduser()
+        is_direct_file = direct_path.is_file()
+    except (OSError, RuntimeError, ValueError):
+        direct_path = None
+        is_direct_file = False
+
+    if is_direct_file and direct_path is not None:
+        session_file = direct_path.absolute()
+    elif json_output:
+        from claude_code_tools.session_cli_resolution import (
+            exact_claude_filename,
         )
-    except Exception as e:
-        # SESSION comes from the CLI/hook and may be hostile (e.g. a
-        # path long enough to raise ENAMETOOLONG): keep the --json
-        # single-line contract for any resolution failure.
-        emit_error(str(e) or type(e).__name__)
+        from claude_code_tools.session_resolution import (
+            SessionQueryError,
+            resolve_session_query,
+        )
+
+        try:
+            resolved = resolve_session_query(
+                session,
+                agent="claude",
+                claude_home=effective_claude_home,
+            )
+        except SessionQueryError as error:
+            session_file = exact_claude_filename(
+                session,
+                effective_claude_home,
+            )
+            if session_file is None:
+                emit_error(str(error))
+        else:
+            session_file = resolved.session_file
+    else:
+        resolved = _resolve_cli_session(
+            session,
+            "claude",
+            claude_home=effective_claude_home,
+            allow_legacy_claude_filename=True,
+            selection_prompt="Which Claude session do you want to trim?",
+        )
+        session_file = resolved.session_file
 
     target_tools = None
     if tools:
@@ -878,15 +1053,33 @@ def trim_in_place_cmd(session, tools, threshold, trim_assistant, dry_run,
 @click.option("--dry-run", "-n", is_flag=True,
               help="Show what would be trimmed without doing it")
 @click.option("--claude-home", help="Path to Claude home directory")
-def smart_trim(session, instructions, exclude_types, preserve_recent, content_threshold,
-               output_dir, dry_run, claude_home):
+@click.option(
+    "--agent",
+    type=click.Choice(["claude", "codex"], case_sensitive=False),
+    help="Restrict the search to this agent's home",
+)
+def smart_trim(
+    session,
+    instructions,
+    exclude_types,
+    preserve_recent,
+    content_threshold,
+    output_dir,
+    dry_run,
+    claude_home,
+    agent,
+):
     """Smart trim using Claude SDK agents (EXPERIMENTAL).
 
     Uses an LLM to intelligently analyze the session and decide what can
     be safely trimmed while preserving important context. Creates a new
     trimmed session with lineage metadata.
 
-    If no session ID provided, finds latest session for current project/branch.
+    SESSION may be a full session id, a partial id (prefix, middle,
+    or suffix fragment), a session name (set with /rename), a
+    rollout filename fragment (e.g. 2026-03-25T14-50), or a session
+    file path. If omitted, finds the latest session in the current
+    project.
 
     \b
     Examples:
@@ -908,31 +1101,30 @@ def smart_trim(session, instructions, exclude_types, preserve_recent, content_th
     import sys
     from pathlib import Path
 
-    from claude_code_tools.session_utils import (
-        find_session_file, detect_agent_from_path, get_session_uuid,
-    )
+    from claude_code_tools.session_utils import get_session_uuid
 
     # If --instructions provided, use the handler function (same as TUI)
     if instructions and session:
-        input_path = Path(session).expanduser()
-        if input_path.exists() and input_path.is_file():
-            session_file = input_path
-            detected_agent = detect_agent_from_path(session_file)
-            session_id = get_session_uuid(session_file.stem)
-            project_path = str(session_file.parent)
-        else:
-            result = find_session_file(session)
-            if not result:
-                print(f"Error: Session not found: {session}", file=sys.stderr)
-                sys.exit(1)
-            detected_agent, session_file, project_path, _ = result
-            session_id = get_session_uuid(session_file.stem)
+        root_claude_home, root_codex_home = _session_homes()
+        effective_claude_home = (
+            root_claude_home if claude_home is None else claude_home
+        )
+        resolved = _resolve_cli_session(
+            session,
+            agent,
+            claude_home=effective_claude_home,
+            codex_home=root_codex_home,
+        )
+        session_file = resolved.session_file
+        detected_agent = resolved.agent
+        session_id = get_session_uuid(session_file.stem)
+        project_path = resolved.directory or str(session_file.parent)
 
         # Use the handler function which supports custom_instructions
         if detected_agent == "claude":
             from claude_code_tools.find_claude_session import handle_smart_trim_resume_claude
             handle_smart_trim_resume_claude(
-                session_id, project_path, claude_home,
+                session_id, project_path, effective_claude_home,
                 custom_instructions=instructions,
             )
         else:
@@ -940,7 +1132,7 @@ def smart_trim(session, instructions, exclude_types, preserve_recent, content_th
             from claude_code_tools.session_utils import get_codex_home
             handle_smart_trim_resume_codex(
                 {"file_path": str(session_file), "cwd": project_path, "session_id": session_id},
-                Path(get_codex_home(cli_arg=None)),
+                Path(get_codex_home(cli_arg=root_codex_home)),
                 custom_instructions=instructions,
             )
         return
@@ -948,12 +1140,26 @@ def smart_trim(session, instructions, exclude_types, preserve_recent, content_th
     # If any direct CLI options specified (but not instructions), use smart_trim.py
     if exclude_types or preserve_recent != 10 or content_threshold != 200 or output_dir or dry_run:
         if not session:
-            print("Error: Direct smart-trim options require a session ID", file=sys.stderr)
+            print(
+                "Error: Direct smart-trim options require a session ID",
+                file=sys.stderr,
+            )
             print("Use 'aichat smart-trim' without options for interactive mode", file=sys.stderr)
             sys.exit(1)
 
+        root_claude_home, root_codex_home = _session_homes()
+        effective_claude_home = (
+            root_claude_home if claude_home is None else claude_home
+        )
+        resolved = _resolve_cli_session(
+            session,
+            agent,
+            claude_home=effective_claude_home,
+            codex_home=root_codex_home,
+        )
+
         # Build args for smart-trim CLI
-        args = [session]
+        args = [str(resolved.session_file)]
         if exclude_types:
             args.extend(["--exclude-types", exclude_types])
         if preserve_recent != 10:
@@ -964,8 +1170,8 @@ def smart_trim(session, instructions, exclude_types, preserve_recent, content_th
             args.extend(["--output-dir", output_dir])
         if dry_run:
             args.append("--dry-run")
-        if claude_home:
-            args.extend(["--claude-home", claude_home])
+        if effective_claude_home:
+            args.extend(["--claude-home", effective_claude_home])
 
         sys.argv = [sys.argv[0].replace('aichat', 'smart-trim')] + args
         from claude_code_tools.smart_trim import main as smart_trim_main
@@ -976,83 +1182,76 @@ def smart_trim(session, instructions, exclude_types, preserve_recent, content_th
     # (whether session provided or not - find latest if not)
     _find_and_run_session_ui(
         session_id=session,
-        agent_constraint='both',
+        agent_constraint=agent or 'both',
         start_screen='smart_trim_form',
         select_target='smart_trim_form',
         results_title=' Which session to smart-trim? ',
+        claude_home=claude_home,
     )
 
 
 @main.command("export", context_settings={"ignore_unknown_options": True, "allow_extra_args": True, "allow_interspersed_args": False})
-@click.option("--agent", type=click.Choice(["claude", "codex"], case_sensitive=False), help="Force export with specific agent")
+@click.option(
+    "--agent",
+    type=click.Choice(["claude", "codex"], case_sensitive=False),
+    help="Restrict the search to this agent's home",
+)
 @click.argument("session", required=False)
 @click.pass_context
 def export_session(ctx, agent, session):
     """Export session to text/markdown format.
 
-    If no session ID provided, finds latest session for current project/branch.
-    Auto-detects session type and uses matching export command.
-    Use --agent to override and force export with a specific agent.
+    SESSION may be a full session id, a partial id (prefix, middle,
+    or suffix fragment), a session name (set with /rename), a
+    rollout filename fragment (e.g. 2026-03-25T14-50), or a session
+    file path.
+    If no session is provided, searches the current project, preferring
+    the current branch.
+    Auto-detects session type and uses the matching export command.
+    Use --agent to restrict the search to that agent's home.
     """
     import sys
-    from pathlib import Path
-    from claude_code_tools.session_utils import detect_agent_from_path, find_session_file
+
+    agent, passthrough_args = _consume_export_agent(ctx.args, agent)
 
     if not session:
         # No session provided - find latest and export directly
         _find_and_run_session_ui(
             session_id=None,
-            agent_constraint='both',
+            agent_constraint=agent or 'both',
             start_screen='action',
             results_title=' Which session to export? ',
             direct_action='export',
         )
         return
 
-    # Session provided - existing behavior
-    # Try to detect session type
-    detected_agent = None
-    session_file = None
+    resolved = _resolve_export_session(
+        session, agent.lower() if agent is not None else None
+    )
+    detected_agent = resolved.agent
+    session_file = resolved.session_file
 
-    # First check if it's a file path
-    input_path = Path(session).expanduser()
-    if input_path.exists() and input_path.is_file():
-        session_file = input_path
-        detected_agent = detect_agent_from_path(session_file)
-    else:
-        # Try to find by session ID
-        result = find_session_file(session)
-        if result:
-            detected_agent, session_file, _, _ = result
-
-    # Determine which agent to use
-    if agent:
-        # User explicitly specified agent
-        export_agent = agent.lower()
-        if detected_agent and detected_agent != export_agent:
-            print(f"\nDetected {detected_agent.upper()} session")
-            print(f"Exporting with {export_agent.upper()} (user specified)")
-        else:
-            print(f"\nExporting with {export_agent.upper()} (user specified)")
-    elif detected_agent:
-        # Use detected agent
-        export_agent = detected_agent
-        print(f"\nDetected {detected_agent.upper()} session")
-        print(f"Exporting with {export_agent.upper()}")
-    else:
-        # Default to Claude if cannot detect
-        export_agent = "claude"
-        print(f"\nCould not detect session type, defaulting to CLAUDE")
+    export_agent = detected_agent
+    print(f"\nDetected {detected_agent.upper()} session")
+    print(f"Exporting with {export_agent.upper()}")
 
     print()
 
-    # Route to appropriate export command
+    resolved_argument = str(session_file)
     if export_agent == "claude":
-        sys.argv = [sys.argv[0].replace('aichat', 'export-claude-session'), session] + ctx.args
+        sys.argv = [
+            sys.argv[0].replace("aichat", "export-claude-session"),
+            resolved_argument,
+            *passthrough_args,
+        ]
         from claude_code_tools.export_claude_session import main as export_main
         export_main()
     else:
-        sys.argv = [sys.argv[0].replace('aichat', 'export-codex-session'), session] + ctx.args
+        sys.argv = [
+            sys.argv[0].replace("aichat", "export-codex-session"),
+            resolved_argument,
+            *passthrough_args,
+        ]
         from claude_code_tools.export_codex_session import main as export_main
         export_main()
 
@@ -1062,16 +1261,21 @@ def export_session(ctx, agent, session):
 def export_claude(ctx):
     """Export Claude Code session to text/markdown format.
 
-    If no session ID provided, finds latest Claude session for current
-    project/branch.
+    SESSION may be a Claude name, ID/fragment, filename fragment, or path.
+    If omitted, finds the latest Claude session for the current project.
     """
     import sys
-    args = ctx.args
-    session_id = args[0] if args and not args[0].startswith('-') else None
+    from claude_code_tools.legacy_session_wrappers import (
+        resolved_agent_export_args,
+    )
 
-    if session_id:
+    delegated = resolved_agent_export_args(ctx.args, "claude")
+    if delegated is not None:
         # Pass to existing export CLI
-        sys.argv = [sys.argv[0].replace('aichat', 'export-claude-session')] + args
+        sys.argv = [
+            sys.argv[0].replace('aichat', 'export-claude-session'),
+            *delegated,
+        ]
         from claude_code_tools.export_claude_session import (
             main as export_claude_main,
         )
@@ -1092,16 +1296,21 @@ def export_claude(ctx):
 def export_codex(ctx):
     """Export Codex session to text/markdown format.
 
-    If no session ID provided, finds latest Codex session for current
-    project/branch.
+    SESSION may be a Codex name, ID/fragment, filename fragment, or path.
+    If omitted, finds the latest Codex session for the current project.
     """
     import sys
-    args = ctx.args
-    session_id = args[0] if args and not args[0].startswith('-') else None
+    from claude_code_tools.legacy_session_wrappers import (
+        resolved_agent_export_args,
+    )
 
-    if session_id:
+    delegated = resolved_agent_export_args(ctx.args, "codex")
+    if delegated is not None:
         # Pass to existing export CLI
-        sys.argv = [sys.argv[0].replace('aichat', 'export-codex-session')] + args
+        sys.argv = [
+            sys.argv[0].replace('aichat', 'export-codex-session'),
+            *delegated,
+        ]
         from claude_code_tools.export_codex_session import (
             main as export_codex_main,
         )
@@ -1117,20 +1326,49 @@ def export_codex(ctx):
         )
 
 
-@main.command("delete", context_settings={"ignore_unknown_options": True, "allow_extra_args": True, "allow_interspersed_args": False})
-@click.pass_context
-def delete(ctx):
-    """Delete a session file with safety confirmation."""
-    import sys
-    sys.argv = [sys.argv[0].replace('aichat', 'delete-session')] + ctx.args
-    from claude_code_tools.delete_session import main as delete_main
-    delete_main()
+@main.command("delete")
+@click.argument("session", required=True)
+@click.option(
+    "--agent",
+    type=click.Choice(["claude", "codex"], case_sensitive=False),
+    help="Restrict the search to this agent's home",
+)
+@click.option("--claude-home", help="Path to Claude home directory")
+@click.option("--codex-home", help="Path to Codex home directory")
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    help="Skip the final deletion confirmation",
+)
+def delete(
+    session: str,
+    agent: str | None,
+    claude_home: str | None,
+    codex_home: str | None,
+    force: bool,
+) -> None:
+    """Delete a Claude or Codex session safely.
+
+    SESSION accepts a name, ID/fragment, filename fragment, or path. Ambiguous
+    interactive matches display a numbered picker before any deletion prompt.
+    """
+    from claude_code_tools.delete_session import delete_resolved_session
+
+    resolved = _resolve_cli_session(
+        session,
+        agent,
+        claude_home=claude_home,
+        codex_home=codex_home,
+        selection_prompt="Which session do you want to delete?",
+    )
+    delete_resolved_session(resolved.session_file, force=force)
 
 
 @main.command("info")
 @click.argument("session", required=False)
 @click.option("--agent", type=click.Choice(["claude", "codex"], case_sensitive=False),
-              help="Force agent type (auto-detected if not specified)")
+              help="Restrict the search to this agent's home")
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 def info(session, agent, json_output):
     """Show information about a session.
@@ -1138,8 +1376,11 @@ def info(session, agent, json_output):
     Displays session metadata including file path, agent type, project,
     branch, timestamps, message counts, and lineage (parent sessions).
 
-    If no session ID provided, shows info for latest session in current
-    project/branch.
+    SESSION may be a full session id, a partial id (prefix, middle,
+    or suffix fragment), a session name (set with /rename), a
+    rollout filename fragment (e.g. 2026-03-25T14-50), or a session
+    file path. If omitted, shows the latest session in the current
+    project.
 
     \b
     Examples:
@@ -1148,13 +1389,10 @@ def info(session, agent, json_output):
         aichat info --json abc123       # Output as JSON
     """
     import json as json_lib
-    import sys
     from pathlib import Path
     from datetime import datetime
 
     from claude_code_tools.session_utils import (
-        find_session_file,
-        detect_agent_from_path,
         extract_cwd_from_session,
         count_user_messages,
         default_export_path,
@@ -1164,23 +1402,18 @@ def info(session, agent, json_output):
 
     # Find session file
     if session:
-        input_path = Path(session).expanduser()
-        if input_path.exists() and input_path.is_file():
-            session_file = input_path
-            detected_agent = agent or detect_agent_from_path(session_file)
-        else:
-            result = find_session_file(session)
-            if not result:
-                print(f"Error: Session not found: {session}", file=sys.stderr)
-                sys.exit(1)
-            detected_agent, session_file, _, _ = result
-            if agent:
-                detected_agent = agent
+        resolved = _resolve_cli_session(
+            session,
+            agent,
+            interactive=not json_output,
+        )
+        session_file = resolved.session_file
+        detected_agent = resolved.agent
     else:
         # No session provided - find latest
         _find_and_run_session_ui(
             session_id=None,
-            agent_constraint='both',
+            agent_constraint=agent or 'both',
             start_screen='action',
             direct_action='path',  # Just show path for now
         )
@@ -1191,7 +1424,8 @@ def info(session, agent, json_output):
     mod_time = datetime.fromtimestamp(session_file.stat().st_mtime)
     create_time = datetime.fromtimestamp(session_file.stat().st_ctime)
     file_size = session_file.stat().st_size
-    line_count = sum(1 for _ in open(session_file))
+    with session_file.open("rb") as transcript:
+        line_count = sum(1 for _ in transcript)
 
     # Extract metadata from session
     from claude_code_tools.export_session import extract_session_metadata
@@ -1255,11 +1489,15 @@ def info(session, agent, json_output):
 @click.argument("session", required=False)
 @click.option("--dest", "-d", help="Destination path (default: prompted)")
 @click.option("--agent", type=click.Choice(["claude", "codex"], case_sensitive=False),
-              help="Force agent type (auto-detected if not specified)")
+              help="Restrict the search to this agent's home")
 def copy_session(session, dest, agent):
     """Copy a session file to a new location.
 
-    If no session ID provided, finds latest session for current project/branch.
+    SESSION may be a full session id, a partial id (prefix, middle,
+    or suffix fragment), a session name (set with /rename), a
+    rollout filename fragment (e.g. 2026-03-25T14-50), or a session
+    file path. If omitted, searches the current project, preferring
+    the current branch.
 
     \b
     Examples:
@@ -1267,33 +1505,18 @@ def copy_session(session, dest, agent):
         aichat copy abc123 -d ~/backups/       # Copy to specific directory
         aichat copy abc123 -d ./my-session.jsonl  # Copy with specific filename
     """
-    import sys
-    from pathlib import Path
-
-    from claude_code_tools.session_utils import find_session_file, detect_agent_from_path
-
     if not session:
         _find_and_run_session_ui(
             session_id=None,
-            agent_constraint='both',
+            agent_constraint=agent or 'both',
             start_screen='action',
             direct_action='copy',
         )
         return
 
-    # Find session file
-    input_path = Path(session).expanduser()
-    if input_path.exists() and input_path.is_file():
-        session_file = input_path
-        detected_agent = agent or detect_agent_from_path(session_file)
-    else:
-        result = find_session_file(session)
-        if not result:
-            print(f"Error: Session not found: {session}", file=sys.stderr)
-            sys.exit(1)
-        detected_agent, session_file, _, _ = result
-        if agent:
-            detected_agent = agent
+    resolved = _resolve_cli_session(session, agent)
+    session_file = resolved.session_file
+    detected_agent = agent or resolved.agent
 
     # Import agent-specific copy function
     if detected_agent == "claude":
@@ -1308,25 +1531,32 @@ def copy_session(session, dest, agent):
 @click.argument("session", required=True)
 @click.argument("new_project", required=True)
 @click.option("--agent", type=click.Choice(["claude", "codex"], case_sensitive=False),
-              help="Force agent type (auto-detected if not specified)")
-def move_session(session, new_project, agent):
+              help="Restrict the search to this agent's home")
+def move_session(
+    session: str, new_project: str, agent: str | None
+) -> None:
     """Move a session to a different project directory.
 
     Updates the cwd metadata in all lines and moves the session file
     to the appropriate project directory.
+    SESSION may be a full session id, a partial id (prefix, middle,
+    or suffix fragment), a session name (set with /rename), a
+    rollout filename fragment (e.g. 2026-03-25T14-50), or a session
+    file path.
 
     \b
     Examples:
         aichat move abc123 /path/to/new/project
-        aichat move abc123 ~/Git/other-repo
+        aichat move my-session-name ~/Git/other-repo
+        aichat move 2026-03-25T14-50 ~/Git/other-repo --agent codex
     """
     import json
     import sys
+    import uuid
     from pathlib import Path
 
     from claude_code_tools.session_utils import (
-        find_session_file,
-        detect_agent_from_path,
+        encode_claude_project_path,
         get_claude_home,
         get_session_uuid,
     )
@@ -1341,59 +1571,95 @@ def move_session(session, new_project, agent):
         print(f"Error: Not a directory: {new_project_path}", file=sys.stderr)
         sys.exit(1)
 
-    # Find session file
-    input_path = Path(session).expanduser()
-    if input_path.exists() and input_path.is_file():
-        session_file = input_path
-        detected_agent = agent or detect_agent_from_path(session_file)
-    else:
-        result = find_session_file(session)
-        if not result:
-            print(f"Error: Session not found: {session}", file=sys.stderr)
-            sys.exit(1)
-        detected_agent, session_file, _, _ = result
-        if agent:
-            detected_agent = agent
+    resolved = _resolve_cli_session(session, agent)
+    session_file = resolved.session_file
+    detected_agent = resolved.agent
 
     # Read and update the session file
     print(f"Reading session: {session_file}")
     lines = []
     old_cwd = None
-    with open(session_file, "r") as f:
+    content_session_id = None
+    with open(
+        session_file,
+        "r",
+        encoding="utf-8",
+        errors="surrogateescape",
+    ) as f:
         for line in f:
             try:
-                data = json.loads(line)
+                parseable_line, raw_byte_markers = (
+                    _protect_surrogateescape_bytes(
+                        line,
+                        reserved_text=str(new_project_path),
+                    )
+                )
+                data = json.loads(parseable_line)
+                if not isinstance(data, dict):
+                    lines.append(line)
+                    continue
                 if detected_agent == "claude":
                     # Claude: cwd is at top level
+                    record_session_id = data.get("sessionId")
+                    if (
+                        content_session_id is None
+                        and isinstance(record_session_id, str)
+                        and record_session_id.strip()
+                    ):
+                        content_session_id = record_session_id.strip()
                     if old_cwd is None and "cwd" in data:
                         old_cwd = data["cwd"]
                     if "cwd" in data:
                         data["cwd"] = str(new_project_path)
                 else:
-                    # Codex: cwd is in session_meta payload or response_item payload
-                    if data.get("type") == "session_meta":
-                        payload = data.get("payload", {})
+                    # Codex: cwd is stored in several payload record types.
+                    record_type = data.get("type")
+                    payload = data.get("payload")
+                    if (
+                        isinstance(record_type, str)
+                        and record_type in {"session_meta", "turn_context"}
+                        and isinstance(payload, dict)
+                    ):
                         if old_cwd is None and "cwd" in payload:
                             old_cwd = payload["cwd"]
                         if "cwd" in payload:
                             payload["cwd"] = str(new_project_path)
                     # Also check response_item with message payloads
-                    elif data.get("type") == "response_item":
-                        payload = data.get("payload", {})
+                    elif (
+                        record_type == "response_item"
+                        and isinstance(payload, dict)
+                    ):
                         if "cwd" in payload:
                             payload["cwd"] = str(new_project_path)
-                lines.append(json.dumps(data) + "\n")
-            except json.JSONDecodeError:
+                serialized = json.dumps(data)
+                for marker, raw_byte in raw_byte_markers.items():
+                    serialized = serialized.replace(marker, raw_byte)
+                lines.append(serialized + "\n")
+            except (ValueError, RecursionError):
                 lines.append(line)
 
     if detected_agent == "claude":
         # Claude: move file to new project directory
-        # Claude stores sessions in: ~/.claude/projects/<encoded-path>/<session-id>.jsonl
-        encoded_path = str(new_project_path).replace("/", "-").replace("_", "-").replace(".", "-")
-        claude_home = get_claude_home()
+        # Claude stores sessions under:
+        # ~/.claude/projects/<encoded-path>/<session-id>.jsonl
+        encoded_path = encode_claude_project_path(str(new_project_path))
+        configured_claude_home, _ = _session_homes()
+        claude_home = get_claude_home(cli_arg=configured_claude_home)
         new_project_dir = claude_home / "projects" / encoded_path
+        if content_session_id is not None:
+            try:
+                session_id = str(uuid.UUID(content_session_id))
+            except ValueError:
+                print(
+                    "Error: Invalid sessionId in Claude transcript: "
+                    f"{content_session_id}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+        else:
+            session_id = session_file.stem
         new_project_dir.mkdir(parents=True, exist_ok=True)
-        new_file_path = new_project_dir / session_file.name
+        new_file_path = new_project_dir / f"{session_id}.jsonl"
 
         # Check if destination already exists
         if new_file_path.exists() and new_file_path != session_file:
@@ -1403,8 +1669,11 @@ def move_session(session, new_project, agent):
 
         # Write updated content to new location
         print(f"Moving session to: {new_file_path}")
-        with open(new_file_path, "w") as f:
-            f.writelines(lines)
+        _write_lines_atomically(
+            new_file_path,
+            lines,
+            mode_source=session_file,
+        )
 
         # Remove old file if different location
         if new_file_path != session_file:
@@ -1414,20 +1683,16 @@ def move_session(session, new_project, agent):
         print(f"\n[green]Session moved successfully![/green]")
         print(f"  From: {old_cwd}")
         print(f"  To:   {new_project_path}")
-        session_id = session_file.stem
-        agent_cmd = "claude"
         resume_cmd = f"cd {new_project_path} && claude --resume {session_id}"
     else:
         # Codex: just update file in place (sessions organized by date, not project)
         print(f"Updating session in place: {session_file}")
-        with open(session_file, "w") as f:
-            f.writelines(lines)
+        _write_lines_atomically(session_file, lines)
 
         print(f"\n[green]Session updated successfully![/green]")
         print(f"  From: {old_cwd}")
         print(f"  To:   {new_project_path}")
         session_id = get_session_uuid(session_file.stem)
-        agent_cmd = "codex"
         resume_cmd = f"cd {new_project_path} && codex resume {session_id}"
 
     # Ask user if they want to switch directory and resume
@@ -1439,7 +1704,6 @@ def move_session(session, new_project, agent):
     if Confirm.ask(f"[cyan]Switch to {new_project_path} and resume session?[/cyan]",
                    default=True):
         import os
-        import subprocess
         os.chdir(new_project_path)
         console.print(f"\n[green]Switching to {new_project_path}...[/green]")
         if detected_agent == "claude":
@@ -1449,6 +1713,145 @@ def move_session(session, new_project, agent):
     else:
         console.print(f"\n[dim]To resume later:[/dim]")
         console.print(f"  [cyan]{resume_cmd}[/cyan]")
+
+
+@main.command("move-account")
+@click.argument("session", required=True)
+@click.option("--to", "to_home", required=True,
+              help="Target config dir (account), e.g. ~/.claude or ~/.codex")
+@click.option("--from", "from_home", default=None,
+              help="Source config dir (default: search all local homes — "
+                   "env-var home, ~/.claude / ~/.codex, and "
+                   "~/.claude-* / ~/.codex-* siblings)")
+@click.option("--agent",
+              type=click.Choice(["claude", "codex"], case_sensitive=False),
+              default=None,
+              help="Agent type (auto-detected from the config dirs "
+                   "if not specified)")
+@click.option("--keep", is_flag=True,
+              help="Copy instead of move (leave source account untouched)")
+def move_account(session, to_home, from_home, agent, keep):
+    """Move a session to a different account (config dir).
+
+    Accounts are config dirs like ~/.claude vs ~/.claude-rja (or
+    ~/.codex vs ~/.codex-rja), normally selected via CLAUDE_CONFIG_DIR
+    / CODEX_HOME. The session stays in the same project. Claude moves
+    relocate the transcript and its sidecar dir (subagents,
+    tool-results, workflows); Codex moves relocate the rollout file
+    and its thread-name entries in session_index.jsonl.
+
+    SESSION may be a session UUID (full or partial), a Claude session name
+    assigned with /rename, or a Codex thread name. Ambiguous interactive
+    matches display a numbered picker including each source account.
+
+    \b
+    Examples:
+        aichat move-account cowrite-fable-21jul2026 \\
+            --from ~/.claude-rja --to ~/.claude
+        aichat move-account af574e84 --to ~/.claude-rja --keep
+        aichat move-account my-codex-thread \\
+            --from ~/.codex-rja --to ~/.codex
+    """
+    from claude_code_tools.move_account import run_move_account
+
+    run_move_account(session, to_home, from_home, keep, agent)
+
+
+def _protect_surrogateescape_bytes(
+    line: str,
+    *,
+    reserved_text: str,
+) -> tuple[str, dict[str, str]]:
+    """Replace raw undecodable bytes with JSON-safe temporary markers.
+
+    Args:
+        line: Transcript line decoded with ``surrogateescape``.
+        reserved_text: Replacement text that markers must not collide with.
+
+    Returns:
+        The parseable line and a mapping from markers to surrogate characters.
+    """
+    import json
+
+    protected = line
+    markers: dict[str, str] = {}
+    decoded_serialization = json.dumps(json.loads(line))
+    raw_bytes = sorted(
+        {
+            character
+            for character in line
+            if "\udc80" <= character <= "\udcff"
+        }
+    )
+    for index, raw_byte in enumerate(raw_bytes):
+        marker = f"__aichat_raw_byte_{ord(raw_byte):04x}_{index}__"
+        while (
+            marker in protected
+            or marker in decoded_serialization
+            or marker in reserved_text
+        ):
+            marker = f"_{marker}"
+        protected = protected.replace(raw_byte, marker)
+        markers[marker] = raw_byte
+    return protected, markers
+
+
+def _write_lines_atomically(
+    path: "Path",
+    lines: list[str],
+    *,
+    mode_source: "Path | None" = None,
+) -> None:
+    """Atomically replace a path with the supplied transcript lines.
+
+    Args:
+        path: Destination transcript path.
+        lines: Complete serialized transcript lines.
+        mode_source: Existing transcript whose mode should be preserved when
+            the destination does not exist.
+    """
+    import os
+    import stat
+    import tempfile
+    from pathlib import Path
+
+    existing_mode = None
+    try:
+        existing_status = path.lstat()
+        if stat.S_ISREG(existing_status.st_mode):
+            existing_mode = stat.S_IMODE(existing_status.st_mode)
+    except FileNotFoundError:
+        pass
+    if existing_mode is None and mode_source is not None:
+        try:
+            source_status = mode_source.stat()
+            if stat.S_ISREG(source_status.st_mode):
+                existing_mode = stat.S_IMODE(source_status.st_mode)
+        except FileNotFoundError:
+            pass
+
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.stem}.",
+        suffix=".tmp",
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        if existing_mode is not None:
+            os.fchmod(descriptor, existing_mode)
+        with os.fdopen(
+            descriptor,
+            "w",
+            encoding="utf-8",
+            errors="surrogateescape",
+        ) as transcript:
+            transcript.writelines(lines)
+            transcript.flush()
+            os.fsync(transcript.fileno())
+        os.replace(temporary_path, path)
+    except BaseException:
+        temporary_path.unlink(missing_ok=True)
+        raise
 
 
 @main.command("port")
@@ -1483,7 +1886,9 @@ def port_session(
     """
     import sys
 
+    from claude_code_tools.port_render import PortDisplay
     from claude_code_tools.port_service import (
+        PortAmbiguityError,
         PortSessionError,
         port_claude_session,
         port_codex_session,
@@ -1497,68 +1902,70 @@ def port_session(
     claude_home = claude_home or root_obj.get("claude_home")
     codex_home = codex_home or root_obj.get("codex_home")
 
+    display = PortDisplay(session)
+    display.start()
     try:
-        resolved = resolve_port_session(
-            session, claude_home=claude_home, codex_home=codex_home
-        )
+        with display.resolving():
+            resolved = resolve_port_session(
+                session,
+                claude_home=claude_home,
+                codex_home=codex_home,
+            )
+    except PortAmbiguityError as error:
+        try:
+            resolved = display.choose_candidate(error)
+        except (EOFError, KeyboardInterrupt):
+            display.error(str(error))
+            sys.exit(1)
+        if resolved is None:
+            display.cancelled()
+            sys.exit(1)
     except PortSessionError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        display.error(str(e))
         sys.exit(1)
 
+    display.resolved(resolved)
     if resolved.agent == "claude":
-        print("Detected source agent: claude — porting to Codex")
         try:
-            result = port_claude_session(
-                resolved.session_file, codex_home=codex_home
-            )
+            with display.porting(resolved.agent):
+                result = port_claude_session(
+                    resolved.session_file,
+                    codex_home=codex_home,
+                )
         except PortSessionError as e:
-            print(f"Error: {e}", file=sys.stderr)
+            display.error(str(e))
             sys.exit(1)
-
-        print()
-        print(f"New Codex session id:  {result.new_session_id}")
-        print(f"Output file:           {result.output_file}")
-        print(f"Session cwd:           {result.cwd}")
-        print()
-        print("To resume:")
-        print(f"  {result.resume_hint}")
-        print()
-        print(
-            "Tip: codex's /import can also import Claude sessions "
-            "natively (interactive alternative)."
-        )
+        display.complete(result, resolved.agent)
         return
 
-    print("Detected source agent: codex — porting to Claude Code")
     try:
-        result = port_codex_session(
-            resolved.session_file, claude_home=claude_home
-        )
+        with display.porting(resolved.agent):
+            result = port_codex_session(
+                resolved.session_file,
+                claude_home=claude_home,
+            )
     except PortSessionError as e:
         # Expected failure modes (missing/empty session, filesystem
         # or encoding errors) become a clean error, not a traceback.
-        print(f"Error: {e}", file=sys.stderr)
+        display.error(str(e))
         sys.exit(1)
-
-    print()
-    print(f"New Claude session id: {result.new_session_id}")
-    print(f"Output file:           {result.output_file}")
-    print(f"Session cwd:           {result.cwd}")
-    print()
-    print("To resume:")
-    print(f"  {result.resume_hint}")
+    display.complete(result, resolved.agent)
 
 
 @main.command("query")
 @click.argument("session", required=False)
 @click.argument("question", required=False)
 @click.option("--agent", type=click.Choice(["claude", "codex"], case_sensitive=False),
-              help="Force agent type (auto-detected if not specified)")
+              help="Restrict the search to this agent's home")
 def query_session(session, question, agent):
     """Query a session with a question using an AI agent.
 
     Exports the session and uses Claude to answer questions about its content.
     If no question provided, opens interactive query mode.
+    SESSION may be a full session id, a partial id (prefix, middle,
+    or suffix fragment), a session name (set with /rename), a
+    rollout filename fragment (e.g. 2026-03-25T14-50), or a session
+    file path.
 
     \b
     Examples:
@@ -1566,35 +1973,23 @@ def query_session(session, question, agent):
         aichat query abc123 "Summarize the changes made"
         aichat query                           # Interactive mode for latest session
     """
-    import sys
     from pathlib import Path
 
-    from claude_code_tools.session_utils import (
-        find_session_file, detect_agent_from_path, get_session_uuid,
-    )
+    from claude_code_tools.session_utils import get_session_uuid
 
     if not session:
         _find_and_run_session_ui(
             session_id=None,
-            agent_constraint='both',
+            agent_constraint=agent or 'both',
             start_screen='query',
             direct_action='query',
         )
         return
 
-    # Find session file
-    input_path = Path(session).expanduser()
-    if input_path.exists() and input_path.is_file():
-        session_file = input_path
-        detected_agent = agent or detect_agent_from_path(session_file)
-    else:
-        result = find_session_file(session)
-        if not result:
-            print(f"Error: Session not found: {session}", file=sys.stderr)
-            sys.exit(1)
-        detected_agent, session_file, cwd, _ = result
-        if agent:
-            detected_agent = agent
+    resolved = _resolve_cli_session(session, agent)
+    session_file = resolved.session_file
+    detected_agent = resolved.agent
+    cwd = resolved.directory or str(session_file.parent)
 
     # If no question, show interactive query UI
     if not question:
@@ -1606,13 +2001,17 @@ def query_session(session, question, agent):
             "session_id": get_session_uuid(session_file.stem),
             "agent": detected_agent,
             "file_path": str(session_file),
-            "cwd": str(session_file.parent),
+            "cwd": cwd,
         }
 
         def handler(sess, action, kwargs=None):
+            claude_home, codex_home = _session_homes()
             return execute_action(
                 action, sess["agent"], Path(sess["file_path"]),
-                sess["cwd"], action_kwargs=kwargs
+                sess["cwd"],
+                claude_home=claude_home,
+                codex_home=codex_home,
+                action_kwargs=kwargs,
             )
 
         run_node_menu_ui(
@@ -1643,60 +2042,63 @@ def query_session(session, question, agent):
 @main.command("clone")
 @click.argument("session", required=False)
 @click.option("--agent", type=click.Choice(["claude", "codex"], case_sensitive=False),
-              help="Force agent type (auto-detected if not specified)")
+              help="Restrict the search to this agent's home")
 def clone_session_cmd(session, agent):
     """Clone a session and resume the clone.
 
     Creates a copy of the session with a new ID and resumes it,
     leaving the original session untouched.
 
-    If no session ID provided, finds latest session for current project/branch.
+    SESSION may be a full session id, a partial id (prefix, middle,
+    or suffix fragment), a session name (set with /rename), a
+    rollout filename fragment (e.g. 2026-03-25T14-50), or a session
+    file path. If omitted, finds the latest session in the current
+    project.
 
     \b
     Examples:
         aichat clone abc123-def456    # Clone specific session
         aichat clone                  # Clone latest session
     """
-    import sys
-    from pathlib import Path
-
-    from claude_code_tools.session_utils import (
-        find_session_file, detect_agent_from_path, get_session_uuid,
-    )
+    from claude_code_tools.session_utils import get_session_uuid
 
     if not session:
         _find_and_run_session_ui(
             session_id=None,
-            agent_constraint='both',
+            agent_constraint=agent or 'both',
             start_screen='resume',
             direct_action='clone',
         )
         return
 
-    # Find session file
-    input_path = Path(session).expanduser()
-    if input_path.exists() and input_path.is_file():
-        session_file = input_path
-        detected_agent = agent or detect_agent_from_path(session_file)
-        cwd = str(session_file.parent)
-    else:
-        result = find_session_file(session)
-        if not result:
-            print(f"Error: Session not found: {session}", file=sys.stderr)
-            sys.exit(1)
-        detected_agent, session_file, cwd, _ = result
-        if agent:
-            detected_agent = agent
+    resolved = _resolve_cli_session(session, agent)
+    session_file = resolved.session_file
+    detected_agent = resolved.agent
+    cwd = resolved.directory or str(session_file.parent)
 
     session_id = get_session_uuid(session_file.stem)
 
     # Execute clone
     if detected_agent == "claude":
         from claude_code_tools.find_claude_session import clone_session
-        clone_session(session_id, cwd, shell_mode=False)
+        claude_home, _ = _session_homes()
+        clone_session(
+            session_id,
+            cwd,
+            shell_mode=False,
+            claude_home=claude_home,
+            source_path=session_file,
+        )
     else:
         from claude_code_tools.find_codex_session import clone_session
-        clone_session(str(session_file), session_id, cwd, shell_mode=False)
+        _, codex_home = _session_homes()
+        clone_session(
+            str(session_file),
+            session_id,
+            cwd,
+            shell_mode=False,
+            codex_home=codex_home,
+        )
 
 
 @main.command("rollover")
@@ -1705,13 +2107,17 @@ def clone_session_cmd(session, agent):
               help="Quick rollover without context extraction (just preserve lineage)")
 @click.option("--prompt", "-p", help="Custom prompt for context extraction")
 @click.option("--agent", type=click.Choice(["claude", "codex"], case_sensitive=False),
-              help="Force agent type (auto-detected if not specified)")
+              help="Restrict the search to this agent's home")
 def rollover(session, quick, prompt, agent):
     """Rollover: hand off work to a fresh session with preserved lineage.
 
     Creates a new session with a summary of the current work and links back
     to the parent session. The new session starts with full context available
     while the parent session is preserved intact.
+    SESSION may be a full session id, a partial id (prefix, middle,
+    or suffix fragment), a session name (set with /rename), a
+    rollout filename fragment (e.g. 2026-03-25T14-50), or a session
+    file path.
 
     \b
     Options:
@@ -1726,42 +2132,29 @@ def rollover(session, quick, prompt, agent):
         aichat rollover                     # Rollover latest session
     """
     import sys
-    from pathlib import Path
-
-    from claude_code_tools.session_utils import (
-        find_session_file,
-        detect_agent_from_path,
-        continue_with_options,
-    )
+    from claude_code_tools.session_utils import continue_with_options
 
     # If CLI options provided, use direct handler (backward compatible)
-    if quick or prompt or agent:
+    if quick or prompt:
         if not session:
-            print("Error: --quick, --prompt, or --agent require a session ID",
+            print("Error: --quick or --prompt require SESSION",
                   file=sys.stderr)
             print("Use 'aichat rollover' without options for interactive mode",
                   file=sys.stderr)
             sys.exit(1)
 
-        # Find session file
-        input_path = Path(session).expanduser()
-        if input_path.exists() and input_path.is_file():
-            session_file = input_path
-            detected_agent = agent or detect_agent_from_path(session_file)
-        else:
-            result = find_session_file(session)
-            if not result:
-                print(f"Error: Session not found: {session}", file=sys.stderr)
-                sys.exit(1)
-            detected_agent, session_file, _, _ = result
-            if agent:
-                detected_agent = agent
+        resolved = _resolve_cli_session(session, agent)
+        session_file = resolved.session_file
+        detected_agent = resolved.agent
 
         # Execute rollover directly
         rollover_type = "quick" if quick else "context"
+        claude_home, codex_home = _session_homes()
         continue_with_options(
             str(session_file),
             detected_agent,
+            claude_home=claude_home,
+            codex_home=codex_home,
             preset_prompt=prompt,
             rollover_type=rollover_type,
         )
@@ -1772,7 +2165,7 @@ def rollover(session, quick, prompt, agent):
     # Start at lineage screen, with direct_action for proper escape behavior
     _find_and_run_session_ui(
         session_id=session,
-        agent_constraint='both',
+        agent_constraint=agent or 'both',
         start_screen='lineage',
         select_target='lineage',
         results_title=' Which session to rollover? ',
@@ -1783,13 +2176,17 @@ def rollover(session, quick, prompt, agent):
 @main.command("lineage")
 @click.argument("session", required=False)
 @click.option("--agent", type=click.Choice(["claude", "codex"], case_sensitive=False),
-              help="Force agent type (auto-detected if not specified)")
+              help="Restrict the search to this agent's home")
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 def lineage(session, agent, json_output):
     """Show the parent lineage chain of a session.
 
     Traces back through continue_metadata and trim_metadata to find
     all ancestor sessions, from the current session back to the original.
+    SESSION may be a full session id, a partial id (prefix, middle,
+    or suffix fragment), a session name (set with /rename), a
+    rollout filename fragment (e.g. 2026-03-25T14-50), or a session
+    file path.
 
     \b
     Examples:
@@ -1798,36 +2195,26 @@ def lineage(session, agent, json_output):
         aichat lineage abc123 --json    # Output as JSON
     """
     import json as json_lib
-    import sys
     from pathlib import Path
     from datetime import datetime
 
-    from claude_code_tools.session_utils import (
-        find_session_file, detect_agent_from_path, get_session_uuid,
-    )
+    from claude_code_tools.session_utils import get_session_uuid
     from claude_code_tools.session_lineage import get_full_lineage_chain
 
     if not session:
         _find_and_run_session_ui(
             session_id=None,
-            agent_constraint='both',
+            agent_constraint=agent or 'both',
             start_screen='lineage',
         )
         return
 
-    # Find session file
-    input_path = Path(session).expanduser()
-    if input_path.exists() and input_path.is_file():
-        session_file = input_path
-        detected_agent = agent or detect_agent_from_path(session_file)
-    else:
-        result = find_session_file(session)
-        if not result:
-            print(f"Error: Session not found: {session}", file=sys.stderr)
-            sys.exit(1)
-        detected_agent, session_file, _, _ = result
-        if agent:
-            detected_agent = agent
+    resolved = _resolve_cli_session(
+        session,
+        agent,
+        interactive=not json_output,
+    )
+    session_file = resolved.session_file
 
     # Get lineage (returns newest-first, ending with original)
     lineage_chain = get_full_lineage_chain(session_file)
@@ -1884,12 +2271,18 @@ def lineage(session, agent, json_output):
     type=click.Path(exists=True, file_okay=False, dir_okay=True),
     help='Codex home directory (default: ~/.codex or CODEX_HOME)',
 )
+@click.option(
+    "--agent",
+    type=click.Choice(["claude", "codex"], case_sensitive=False),
+    help="Restrict the search to this agent's home",
+)
 @click.pass_context
-def resume_session(ctx, claude_home, codex_home):
+def resume_session(ctx, claude_home, codex_home, agent):
     """Resume a session with various options (resume, clone, trim, continue).
 
-    If no session ID provided, finds latest session for current project/branch.
-    Shows resume menu with options: resume as-is, clone, trim+resume,
+    If no SESSION is provided, finds the latest session for the current
+    project/branch. SESSION accepts a name, ID/fragment, filename fragment,
+    or path. The resume menu offers resume as-is, clone, trim+resume,
     smart-trim, or continue with context.
 
     \b
@@ -1898,17 +2291,21 @@ def resume_session(ctx, claude_home, codex_home):
         CODEX_HOME         - Default Codex home (overridden by --codex-home)
     """
     # Merge with parent context options (CLI arg takes precedence)
-    claude_home = claude_home or (ctx.obj or {}).get('claude_home')
-    codex_home = codex_home or (ctx.obj or {}).get('codex_home')
+    if claude_home is None:
+        claude_home = (ctx.obj or {}).get('claude_home')
+    if codex_home is None:
+        codex_home = (ctx.obj or {}).get('codex_home')
 
-    args = ctx.args
+    agent, args = _consume_export_agent(ctx.args, agent)
     session_id = args[0] if args and not args[0].startswith('-') else None
     _find_and_run_session_ui(
         session_id=session_id,
-        agent_constraint='both',
+        agent_constraint=agent or 'both',
         start_screen='resume',
         select_target='resume',
         results_title=' Which session to resume? ',
+        claude_home=claude_home,
+        codex_home=codex_home,
     )
 
 
@@ -2436,6 +2833,8 @@ def index_stats(index, cwd, claude_home, codex_home):
               help='Limit number of results displayed')
 @click.option('--no-original', is_flag=True, help='Exclude original sessions')
 @click.option('--sub-agent', is_flag=True, help='Include sub-agent sessions (additive)')
+@click.option('--exec-runs', 'exec_runs', is_flag=True,
+              help='Include headless `codex exec` runs (additive)')
 @click.option('--no-trimmed', is_flag=True, help='Exclude trimmed sessions')
 @click.option('--no-rollover', is_flag=True, help='Exclude rollover sessions')
 @click.option('--live', is_flag=True, help='Show only currently running sessions')
@@ -2451,14 +2850,14 @@ def index_stats(index, cwd, claude_home, codex_home):
               help='Output as JSONL for AI agents. Fields per line: session_id, '
                    'agent, project, branch, cwd, lines, created, modified, '
                    'first_msg, last_msg, file_path, derivation_type, '
-                   'is_sidechain, snippet')
+                   'is_sidechain, is_exec_run, snippet')
 @click.option('--by-time', 'by_time', is_flag=True,
               help='Sort results by last-modified time (default: sort by relevance)')
 @click.argument('query', required=False)
 def search(
     claude_home_arg, codex_home_arg, global_search, filter_dir, filter_branch,
-    num_results, no_original, sub_agent, no_trimmed, no_rollover, live, min_lines,
-    after, before, agent, json_output, by_time, query
+    num_results, no_original, sub_agent, exec_runs, no_trimmed, no_rollover, live,
+    min_lines, after, before, agent, json_output, by_time, query
 ):
     """Launch interactive TUI for full-text session search.
 
@@ -2554,6 +2953,8 @@ def search(
         rust_args.append("--no-original")
     if sub_agent:
         rust_args.append("--sub-agent")
+    if exec_runs:
+        rust_args.append("--exec-runs")
     if live:
         rust_args.append("--live")
     if no_trimmed:
@@ -2734,6 +3135,8 @@ def search(
                 rust_args.append("--no-original")
             if filter_state.get("include_sub"):
                 rust_args.append("--sub-agent")
+            if filter_state.get("include_exec"):
+                rust_args.append("--exec-runs")
             if filter_state.get("include_live_only"):
                 rust_args.append("--live")
             if not filter_state.get("include_trimmed", True):

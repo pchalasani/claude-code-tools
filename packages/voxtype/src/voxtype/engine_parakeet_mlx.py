@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import tempfile
 import threading
+import time
 import wave
 from pathlib import Path
 from typing import Callable
@@ -30,6 +31,13 @@ from .engine_parakeet import (
 )
 from .engines import StatusFn
 
+# Seconds the keepalive holds off after any cross-thread command
+# (toggle/hold/flush/reset). A just-activated user is about to speak;
+# by the time the grace expires, either their first utterance has
+# been decoded (restamping the keepalive clock) or the session went
+# quiet again and the keepalive is safe to run.
+KEEPALIVE_COMMAND_GRACE = 30.0
+
 
 class ParakeetMlxEngine(ParakeetEngine):
     """Mic -> Silero VAD -> Parakeet-TDT v3 on the MLX GPU."""
@@ -45,6 +53,9 @@ class ParakeetMlxEngine(ParakeetEngine):
                 "(Apple Silicon only)"
             ) from e
         super().__init__(cfg, status)
+        # Time of the last decode (warmup, take, or keepalive); read
+        # only on the capture thread, where every decode also happens.
+        self._last_decode = time.monotonic()
 
     def start(
         self,
@@ -199,6 +210,73 @@ class ParakeetMlxEngine(ParakeetEngine):
         """
         self._deliver_take(take, on_utterance)
 
+    def _keepalive_tick(self) -> None:
+        """Keep the model's memory recently-used by decoding periodically.
+
+        Under system-wide memory pressure macOS evicts the idle
+        model's ~1.7 GB to compressed memory/swap, and the first take
+        after a long pause then stalls for seconds paging it back in
+        (observed: 8.4 s of audio decoded in 6.16 s on a machine deep
+        in swap, vs ~0.2 s warm). Decoding a half-second silent clip
+        whenever ``keepalive_minutes`` have passed without a decode
+        keeps those pages recently-touched, so the paging cost lands
+        here — in an idle moment — instead of on the user's take.
+
+        Runs on the capture thread between reads (MLX is thread-local;
+        see ``start``), so a keepalive that itself pages the model in
+        can block capture for its duration; audio arriving meanwhile
+        is retained by the input stream's buffer, exactly as during an
+        inline take decode. To keep that window away from real speech
+        the tick is skipped while a take or VAD segment is open, while
+        an unprocessed activation command (e.g. a hotkey press) is
+        queued, and for ``KEEPALIVE_COMMAND_GRACE`` seconds after any
+        command — a just-activated user (whose activation command was
+        already drained) is about to speak.
+
+        Known limitation: the checks narrow that window but cannot
+        close it, since a hotkey press can land just after them or
+        mid-decode. Capture is then blocked for the rest of the
+        decode; PortAudio's input buffer holds well under a second, so
+        speech beyond that is dropped rather than merely delayed (the
+        blocking read's overflow flag is not surfaced either). Inline
+        decoding on this thread is pre-existing — an ordinary take
+        decode blocks capture the same way — and closing the window
+        needs capture decoupled from decoding (callback-driven capture
+        feeding a queue), which is deliberately out of scope here. In
+        practice the exposure is small: a keepalive on a warm model
+        takes ~0.2 s, and the feature keeps the model warm precisely
+        so it stays that way; a multi-second keepalive means the model
+        was already evicted, which is the case this option exists to
+        prevent. Opt-in: 0 (the default) disables.
+        """
+        secs = float(getattr(self.cfg, "keepalive_minutes", 0.0)) * 60.0
+        if secs <= 0 or self._holding or self._speech_since is not None:
+            return
+        now = time.monotonic()
+        if now - self._last_decode < secs:
+            return
+        if now - self._last_command < KEEPALIVE_COMMAND_GRACE:
+            return
+        with self._cmd_lock:
+            if self._commands:
+                return
+        import numpy as np
+
+        try:
+            self.transcribe(
+                np.zeros(SAMPLE_RATE // 2, dtype=np.float32), SAMPLE_RATE
+            )
+        except Exception:
+            # Cosmetic feature: a failed keepalive must never disturb
+            # capture.
+            pass
+        finally:
+            # Restamp even when transcribe failed before reaching its
+            # own finally (e.g. temp-file creation raised): a
+            # persistent failure retries once per interval, not once
+            # per ~0.1 s loop iteration.
+            self._last_decode = time.monotonic()
+
     def transcribe(self, samples, sample_rate: int) -> str:  # noqa: ANN001
         """Decode one float32 mono segment via a temp wav file.
 
@@ -226,8 +304,13 @@ class ParakeetMlxEngine(ParakeetEngine):
             text = getattr(result, "text", None)
             return text.strip() if isinstance(text, str) else ""
         finally:
-            tmp.unlink(missing_ok=True)
-            self._release_gpu_cache()
+            # Stamp FIRST: a raising unlink must not skip the stamp
+            # (the keepalive clock) or the cache release below.
+            self._last_decode = time.monotonic()
+            try:
+                tmp.unlink(missing_ok=True)
+            finally:
+                self._release_gpu_cache()
 
     @staticmethod
     def _release_gpu_cache() -> None:

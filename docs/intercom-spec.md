@@ -144,6 +144,7 @@ CREATE TABLE agents (
     cwd TEXT,
     registered_at TEXT NOT NULL,
     last_seen TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1, -- live routing eligibility
     UNIQUE(name, tmux_session,       -- names unique per
            tmux_socket)              -- tmux session+socket
 );
@@ -267,11 +268,20 @@ CREATE TABLE watcher_heartbeat (
 ### Stale Agent Handling
 
 - `last_seen` updated on every `msg` CLI call
-- Liveness also validated by checking tmux pane existence
-  (is the pane_id still alive?) and pid
-- `msg list` shows stale agents as "(stale)"
-- `msg register` with existing name in same tmux session
-  re-registers (updates pane address, keeps session_id)
+- Only rows with `agents.active = 1` participate in name lookup, listing,
+  message routing, and notification claims.
+- Register is idempotent when the same active name and pane are reused. An active
+  name cannot move to another pane through registration; use retarget instead.
+- Unregister retires the exact session by setting `active = 0` and clearing its
+  display address. It refuses retirement until unread deliveries are drained and
+  no unexpired delivery claim remains. Expired claims are released first.
+- Reusing a retired name creates a fresh session ID. The retired session and its
+  thread history remain intact, so late messages cannot reach the replacement.
+- Retarget operates only on an exact active session and stays within the same tmux
+  session and socket. The destination pane must not have another active agent.
+- Retarget refuses to move while an unexpired delivery claim is in flight. It
+  releases expired claims, preserves the session ID and unread history, and
+  requeues unclaimed unread deliveries with a fresh notification retry budget.
 
 ### Loop Prevention
 
@@ -358,9 +368,8 @@ plugins/msg/
 4. **No reply_visibility for v1** — all thread
    participants see all replies. Simplify first.
 
-5. **Notifications typed into pane** — safe for Claude
-   Code and Codex CLI because their input prompt always
-   accepts text, even while busy.
+5. **Notifications typed into pane** — only after the native tmux idle check and
+   an empty-prompt check; otherwise hooks deliver at the next agent boundary.
 
 6. **Tmux socket path in schema** — disambiguates
    across tmux servers.

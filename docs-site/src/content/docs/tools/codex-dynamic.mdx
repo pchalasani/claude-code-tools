@@ -103,6 +103,103 @@ was started outside the helper.
 
 </Steps>
 
+## Choose a permissions mode
+
+The main Codex TUI and each headless workflow worker have separate permission
+boundaries. Starting the TUI with full access removes restrictions from tools
+run by that TUI. It does not silently widen a worker's declared sandbox.
+
+### Trusted projects: full access
+
+For a trusted repository, trusted workflow, and trusted local services, start
+the callback-ready TUI in YOLO mode:
+
+```bash
+codex-dynamic --yolo
+```
+
+This is the lowest-friction setup. It disables the main TUI's sandbox and
+approval prompts, so the TUI can create workflow files, launch the trusted
+supervisor, use local tool caches, and reach local services without separate
+approvals. Do not use it with an untrusted repository or workflow.
+
+Workflow workers remain independently sandboxed. They default to `read-only`
+and use the sandbox declared by each `agent()` call. If a trusted worker itself
+needs unrestricted host or network access, the reviewed workflow must declare:
+
+```javascript
+agent(prompt, {
+  sandbox: "danger-full-access",
+})
+```
+
+The workflow launch must also include `--allow-danger-full-access`. The
+dynamic-workflow skill requests that authorization after showing the reviewed
+source. Starting the main TUI with `--yolo` never adds it silently.
+
+### Restricted projects: configure each boundary
+
+Use an interactive approval policy when you want the main TUI sandboxed:
+
+```bash
+codex-dynamic \
+  --sandbox workspace-write \
+  --ask-for-approval on-request
+```
+
+Approve the exact reviewed workflow `run` or `resume` supervisor command. That
+command needs host execution so it can write durable state and launch headless
+Codex processes without inheriting the outer tool sandbox. Approve only that
+exact command, never a reusable `node` prefix.
+
+`workspace-write` controls filesystem writes; it does not enable command
+network access. A worker that must reach a local service or the internet needs
+network access in `~/.codex/config.toml` or the trusted project's Codex config:
+
+```toml
+[sandbox_workspace_write]
+network_access = true
+```
+
+When Codex's network proxy is enabled, allow the required destinations. For a
+local service, prefer exact loopback entries instead of broad private-network
+access:
+
+```toml
+[features.network_proxy]
+enabled = true
+domains = { "127.0.0.1" = "allow", "localhost" = "allow" }
+```
+
+Merge these values into existing tables instead of defining a TOML table
+twice. Enterprise policy can still disallow network access.
+
+A worker that edits project files must declare `sandbox: "workspace-write"`.
+The reviewed launch must also include `--allow-workspace-write`; the skill adds
+that flag only after the user authorizes the writes. Headless workers use
+approval policy `never`, so missing permissions fail instead of waiting for a
+prompt that nobody can answer.
+
+Restricted Codex sandboxes can protect `.codex/` and `.agents/` recursively,
+even when the rest of the workspace is writable. If a generated workflow or
+artifact cannot be written there, use an ordinary workspace directory such as
+`codex-workflows/` or a permitted temporary directory. Existing files in
+protected directories remain readable.
+
+Sandboxed workers may also be unable to read a user-level package cache. When
+a helper uses only the Python standard library, invoke the interpreter
+directly. Otherwise, configure the tool to use a permitted workspace or
+temporary cache, such as `UV_CACHE_DIR=/tmp/uv-cache`.
+
+<Aside type="caution" title="Permissions do not prove tool execution">
+  A schema-valid worker response proves only that the worker returned the
+  requested data shape. It does not prove that a prompted shell command or HTTP
+  request ran. When success depends on an observable side effect, validate an
+  application-specific log, ledger, test result, or other external evidence.
+  Permission changes also cannot correct inconsistent workflow limits, such as
+  a batch count that exceeds `maxItems`.
+</Aside>
+
 ### Import Claude Code Data
 
 Codex disables `/import` in a remote TUI, including a TUI started by
@@ -158,8 +255,9 @@ idle; otherwise it steers into and extends the active turn. Either reporting
 path invokes the model and consumes tokens.
 
 `codex-dynamic` marks its tool environment as callback-ready. It supplies the
-marker both to the TUI process and through Codex's shell-environment policy, so
-the default survives restrictive settings such as `inherit = "core"`. The
+marker to the TUI and configures it in the managed App Server's
+shell-environment policy, where tool processes are actually created. The
+default therefore survives restrictive settings such as `inherit = "core"`. The
 workflow runner therefore arms a callback for detached runs even if the agent
 forgets to add `--notify-current-thread`. Pass `--no-notify-current-thread`
 only when you intentionally want to disable this default.
@@ -392,11 +490,13 @@ visible as diagnostics instead of hiding otherwise readable runs. Set
   callback retry. `codex-workflows` deliberately has no control operations.
 </Aside>
 
-## Plugin updates without restarts
+## Plugin updates and server generations
 
-An app server loads its plugin catalog once, and Codex currently has no
-in-session plugin-reload command. `codex-dynamic` handles this automatically by
-using versioned server generations instead of replacing the shared server.
+Codex refreshes installed plugin caches inside the long-running app server and
+invalidates its own in-memory plugin state when the effective plugins change.
+Those cache files and Codex-maintained marketplace fields such as
+`last_updated` and `last_revision` are therefore runtime state, not immutable
+app-server inputs.
 
 <Steps>
 
@@ -414,17 +514,30 @@ using versioned server generations instead of replacing the shared server.
 
 </Steps>
 
-The launcher fingerprints the selected Codex executable, plugin catalog, and
-server-affecting options. If they match an existing healthy generation, it
-reuses that generation. Otherwise it starts and certifies a new socket before
-making it the default. Existing TUIs and in-flight callbacks remain connected
-to the old socket, so they are not interrupted and keep the plugin snapshot
-with which they started.
+The launcher fingerprints the selected Codex executable, user-selected plugin
+and marketplace configuration, plugin feature gates, and server-affecting
+options. If they match an existing healthy generation, it reuses that
+generation. Otherwise it starts and certifies a new socket before making it the
+default. Existing TUIs and in-flight callbacks remain connected to the old
+socket, so they are not interrupted. Codex-managed plugin caches, catalog
+downloads, sync timestamps, and observed marketplace revisions do not create
+new generations.
 
-Plugin installation can rewrite the catalog while the launcher reads it. The
-launcher cleans up the uncertified attempt, takes a fresh snapshot, and retries
-with a small fixed limit. Persistent catalog changes still fail closed; wait
-for the installation to finish and run `codex-dynamic` again.
+When resuming an explicit session ID or name, the launcher first asks every
+compatible managed generation which threads it already has loaded. If an older
+generation owns that thread, the new TUI reconnects to that socket instead of
+trying to load a second in-memory copy on the current generation. A bare resume
+picker and the `--last` form stay on the current generation because the launcher
+cannot safely reproduce Codex's native selection rules. After a rollover, use
+the explicit session ID or name if that thread is still loaded by an older
+generation. Older generations are eligible only when their Codex executable,
+version, server options, and process-level plugin configuration match the
+current configuration.
+
+The launcher reads configuration through a race-checked descriptor. If a user
+or Codex rewrites `config.toml` during that read, the launcher retries with a
+small fixed limit. Cache refreshes can continue independently without blocking
+or rolling the shared server.
 
 Codex does not expose a reliable count of clients attached to an app server,
 so the helper never guesses that an old generation is unused and kills it.
@@ -533,19 +646,20 @@ codex-dynamic
 1. **Establish a callback-capable session**
 
    `codex-dynamic` resolves the exact Codex executable, checks its version, and
-   fingerprints that executable together with the effective plugin catalog and
-   server options. It reuses the matching healthy generation or starts a
-   supervised app server on a generation-specific Unix socket. The current
-   generation marker changes only after the new listener passes ownership,
-   process-identity, plugin-snapshot, and socket-peer checks. A failed rollout
-   therefore leaves the previous default untouched.
+   fingerprints that executable together with process-level plugin
+   configuration and server options. It reuses the matching healthy generation
+   or starts a supervised app server on a
+   generation-specific Unix socket. The current generation marker changes only
+   after the new listener passes ownership, process-identity, plugin-snapshot,
+   and socket-peer checks. A failed rollout therefore leaves the previous
+   default untouched.
 
    The launcher then replaces itself with `codex --remote` using that exact
    socket. It is not a proxy in front of the TUI, so Codex still owns the
    terminal, signals, and exit status directly. The same immutable endpoint is
-   injected through Codex's shell-environment policy, making callbacks the
-   default for detached workflow launches even under a restrictive inheritance
-   policy.
+   configured in the managed App Server's shell-environment policy, making
+   callbacks the default for detached workflow launches even under a
+   restrictive inheritance policy.
 
 2. **Verify the callback before creating the run**
 

@@ -122,11 +122,15 @@ def _thread_sign(row_id: str) -> str:
 
 
 _PLACE = """
-    (() => ({
-      scroll: Math.round(window.scrollY),
-      cursor:
-        document.querySelector('[data-cursor="true"]')?.dataset.rowId ?? null,
-    }))()
+    (() => {
+      const cursor = document.querySelector('[data-cursor="true"]');
+      const head = cursor?.querySelector(":scope > .row-head");
+      return {
+        cursor: cursor?.dataset.rowId ?? null,
+        top: head === null || head === undefined
+          ? null : Math.round(head.getBoundingClientRect().top),
+      };
+    })()
     """
 
 
@@ -294,7 +298,7 @@ def test_a_delayed_question_keeps_the_sign_with_its_diagnostic(
 def test_a_publish_does_not_move_the_page_under_the_reader(
     browser: Browser,
 ) -> None:
-    """Leave the reader exactly where they were, scroll and cursor alike.
+    """Leave the reader's selected row at the same viewport position.
 
     A publish used to hand the human a page scrolled somewhere else entirely,
     because it handed them a different page. It no longer does: the new
@@ -403,10 +407,9 @@ def test_waiting_paints_one_direct_rail_and_quiet_container_rails(
         for row_id in contained_ids
     ), waiting
     direct_colors = {by_id[row_id]["color"] for row_id in direct_ids}
-    contained_colors = {
-        by_id[row_id]["color"] for row_id in contained_ids
-    }
+    contained_colors = {by_id[row_id]["color"] for row_id in contained_ids}
+    quiet_ids = contained_ids - {"current-update"}
     assert direct_colors.isdisjoint(contained_colors), waiting
-    assert len(contained_colors) == 1, waiting
+    assert len({by_id[row_id]["color"] for row_id in quiet_ids}) == 1, waiting
     assert waiting["chips"] == 0, waiting
     assert waiting["labels"] == 0, waiting

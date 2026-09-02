@@ -319,7 +319,9 @@ def test_search_filters_without_writing_the_cursor_or_query(
     )
     assert FIRST_ITEM in filtered["items"]
     assert SECOND_ITEM not in filtered["items"]
-    assert filtered["cursor"] is None
+    # The selected item is filtered out, so the visible fallback is the
+    # latest briefing rather than an unmarked page.
+    assert filtered["cursor"] == "current-update"
     assert filtered["query"] == "Cedar CLI 4.11.2"
 
     browser.press("Escape")
@@ -354,11 +356,9 @@ def test_the_map_cannot_send_the_cursor_off_the_filtered_page(
     browser.run("wait", "200")
     browser.run("type", "#brief-search", "Cedar CLI 4.11.2")
     browser.run("wait", "300")
-    assert browser.evaluate(
-        "document.querySelector('[data-cursor=\"true\"]')"
-    ) is None
+    assert browser.cursor_row() == "current-update"
 
-    browser.run("click", '[aria-label="Open updates log"]')
+    browser.run("click", '[aria-label="Open briefing ledger"]')
     browser.run("wait", "200")
     geometry = browser.evaluate(
         """

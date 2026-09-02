@@ -110,19 +110,63 @@ consume tokens in your main conversation.
 
 The full list of `aichat` subcommands:
 
+Session-taking commands share one lookup. They accept a full or partial ID, a
+session name, a rollout filename fragment, or a session file path across both
+agents. See [Resolve](../resolve/) for the exact precedence.
+
+In a terminal, ambiguous actions show a numbered Rich table. Enter `q`, press
+Ctrl-C, or send end-of-input to cancel without changing anything. Non-terminal
+and machine-readable modes print the ambiguity and exit nonzero without
+prompting. `--agent` restricts the searched agent home. The bare
+`aichat <session>` shortcut routes through the same lookup as `menu`.
+
+[`port`](../port/) uses the same resolver and picker. It has no `--agent`, so
+it searches both configured homes. A direct file path is classified from its
+content.
+
+### Session-reference behavior by command
+
+The following commands use the shared Rich picker for ambiguous interactive
+queries:
+
+- `aichat <session>` and `aichat menu <session>`
+- `trim`, `smart-trim`, `export`, `info`, `copy`, `move`, and `query`
+- `clone`, `rollover`, `lineage`, and `resume`
+- `delete`, `find-original`, and `find-derived`
+- the agent-specific `export-claude` and `export-codex` commands
+- [`port`](../port/)
+
+`trim-in-place` uses the picker for human-readable output, but its `--json`
+mode never prompts and always emits one JSON result or error object. The
+`--json` modes for `info` and `lineage` also fail deterministically instead of
+prompting.
+
+[`move-account`](../move-account/) applies the same match tiers across all
+eligible source homes. Its picker includes the source home so equal names in
+different accounts remain distinguishable.
+
+Every picker sorts candidates newest first. Selecting a number continues with
+that session. Entering `q`, pressing Ctrl-C, or sending end-of-input cancels
+before the command changes anything. Piped and other non-terminal input lists
+the candidates and exits nonzero.
+
 <Tabs>
   <TabItem label="Session management">
 
     | Command | Description |
     |---------|-------------|
     | `aichat` | Action menu for latest session(s) |
-    | `aichat resume [id]` | Resume with strategy options |
-    | `aichat rollover [id]` | Rollover to fresh session |
-    | `aichat trim [id]` | Trim session content |
-    | `aichat clone [id]` | Clone a session file |
-    | `aichat menu [id]` | Interactive action menu |
-    | `aichat lineage [id]` | Show parent lineage chain |
-    | `aichat query [id]` | Query a session with AI |
+    | `aichat <session>` | Action-menu shortcut by name, ID, filename, or path |
+    | `aichat resume [session]` | Resume with strategy options |
+    | `aichat rollover [session]` | Rollover to fresh session |
+    | `aichat trim [session]` | Trim session content |
+    | `aichat trim-in-place <session>` | Trim a Claude session in place |
+    | `aichat smart-trim [session]` | AI-guided trim of session content |
+    | `aichat clone [session]` | Clone a session file |
+    | `aichat menu <session>` | Interactive action menu |
+    | `aichat lineage [session]` | Show parent lineage chain |
+    | `aichat query [session]` | Query a session with AI |
+    | `aichat port <session>` | Port a session to the other agent |
 
   </TabItem>
   <TabItem label="Search & index">
@@ -140,11 +184,14 @@ The full list of `aichat` subcommands:
 
     | Command | Description |
     |---------|-------------|
-    | `aichat info [id]` | Show session metadata |
-    | `aichat export [id]` | Export session to text |
-    | `aichat copy [id]` | Copy session file |
-    | `aichat move [id]` | Move session file |
-    | `aichat delete [id]` | Delete a session |
+    | `aichat info [session]` | Show session metadata |
+    | `aichat export [session]` | Export session to text |
+    | `aichat export-claude [session]` | Export a Claude session to text |
+    | `aichat export-codex [session]` | Export a Codex session to text |
+    | `aichat copy [session]` | Copy session file |
+    | `aichat move <session> <new-project>` | Move session to another project |
+    | `aichat delete <session>` | Delete a session |
+    | `aichat move-account <session>` | Move a session between accounts |
 
   </TabItem>
   <TabItem label="Find (legacy)">
@@ -154,8 +201,8 @@ The full list of `aichat` subcommands:
     | `aichat find` | Find sessions (all agents) |
     | `aichat find-claude` | Find Claude sessions |
     | `aichat find-codex` | Find Codex sessions |
-    | `aichat find-original` | Find original from derived |
-    | `aichat find-derived` | Find derived from original |
+    | `aichat find-original <session>` | Find original from derived |
+    | `aichat find-derived <session>` | Find derived from original |
 
     :::note
     The `find` commands are legacy. Prefer

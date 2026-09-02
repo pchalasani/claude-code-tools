@@ -88,7 +88,7 @@ def test_a_page_the_daemon_stopped_speaking_to_reloads_itself_once(
     assert healed is False, "the stranded page never reloaded itself"
     assert settled is True, "the page reloaded itself in a loop"
     assert readable["rows"] > 0
-    assert readable["cursor"] is None
+    assert readable["cursor"] == "current-update"
 
 
 def test_a_daemon_that_stops_answering_does_not_reload_anything(

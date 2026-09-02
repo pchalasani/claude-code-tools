@@ -5,7 +5,7 @@ title: "Session Actions"
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 When you select a session -- either from the
-[search TUI](./search/) or via `aichat menu` --
+[search TUI](../search/) or via `aichat menu` --
 an action menu appears with operations you can
 perform on that session.
 
@@ -56,7 +56,7 @@ appears with these options:
 | **Smart trim + resume** | Use an AI agent to decide what to trim, then resume |
 | **Rollover** | Hand off work to a fresh session with lineage |
 
-See the [Resume](./resume/) page for details on each
+See the [Resume](../resume/) page for details on each
 strategy.
 
 ## Accessing the action menu
@@ -67,18 +67,18 @@ strategy.
     (`aichat search`) and the action menu appears
     automatically.
   </TabItem>
-  <TabItem label="By session ID">
-    Pass a session ID directly to `aichat menu`:
+  <TabItem label="By session reference">
+    Pass a name, ID/fragment, filename fragment, or path to `aichat menu`:
 
     ```bash
-    aichat menu abc123-def456
+    aichat menu session-finder
     ```
 
-    Or use the shortcut (any unknown argument is
-    treated as a session ID):
+    Or use the shortcut (an unknown command token is treated as the session
+    reference):
 
     ```bash
-    aichat abc123-def456
+    aichat session-finder
     ```
   </TabItem>
   <TabItem label="Latest session">
@@ -119,3 +119,48 @@ exports go to:
 
 You can specify a custom destination path when
 prompted.
+
+## Move action
+
+`aichat move <session> <new-project>` re-homes a
+session on a different project directory. Both
+arguments are required, and the session may be named
+any way the [shared lookup](../resolve/) accepts:
+
+```bash
+aichat move session-finder ~/Git/other-repo
+aichat move 2945d228 ~/Git/other-repo
+```
+
+It rewrites the working directory recorded on every
+line of the transcript, then:
+
+- **Claude:** relocates the transcript into the new
+  project's directory under the Claude home. The
+  destination filename and the resume command it
+  prints both come from the session id recorded
+  *inside* the transcript, so a file you renamed
+  yourself still lands as `<session-id>.jsonl`.
+- **Codex:** rewrites the rollout in place. Codex
+  organizes sessions by date rather than by project,
+  so the file itself does not move.
+
+A name you set with `/rename` survives either way: a
+Claude name is recorded inside the transcript, and a
+Codex name lives in the home-level
+`session_index.jsonl`, keyed by a session id that
+`move` never changes. Afterwards `move` offers to
+switch to the new directory and resume the session.
+
+Both rewrites are atomic: the new content is written
+to a temporary file beside the destination and then
+swapped into place, so a move interrupted partway
+cannot leave you with a truncated transcript.
+
+:::caution
+In a terminal, an ambiguous query opens the shared candidate table before any
+write. Cancelling leaves every candidate untouched. Without interactive input,
+the move exits and lists the candidates. That matters here because a Claude
+move removes the old transcript after the new one is written. A Codex move
+rewrites its rollout in place.
+:::

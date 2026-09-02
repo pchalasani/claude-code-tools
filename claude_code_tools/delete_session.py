@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
 
-from claude_code_tools.session_utils import resolve_session_path
+from claude_code_tools.session_utils import get_session_uuid, resolve_session_path
 
 
 def get_session_info(session_file: Path) -> dict:
@@ -112,7 +112,7 @@ def confirm_deletion(session_file: Path, info: dict) -> bool:
     print("SESSION DELETION CONFIRMATION")
     print("=" * 70)
     print(f"\nFile: {session_file}")
-    print(f"Session ID: {session_file.stem}")
+    print(f"Session ID: {get_session_uuid(session_file.stem)}")
     print(f"\nTotal lines: {info['total_lines']}")
 
     # Date range
@@ -135,7 +135,32 @@ def confirm_deletion(session_file: Path, info: dict) -> bool:
     return response in ['yes', 'y']
 
 
-def main():
+def delete_resolved_session(session_file: Path, *, force: bool = False) -> None:
+    """Confirm and delete one already-resolved session transcript.
+
+    Args:
+        session_file: Exact transcript selected by the shared resolver.
+        force: Whether to skip the final destructive confirmation.
+    """
+    try:
+        info = get_session_info(session_file)
+    except Exception as error:
+        print(f"Error reading session file: {error}", file=sys.stderr)
+        sys.exit(1)
+
+    if not force and not confirm_deletion(session_file, info):
+        print("\nDeletion cancelled.")
+        return
+
+    try:
+        session_file.unlink()
+        print(f"\n✅ Session deleted: {get_session_uuid(session_file.stem)}")
+    except Exception as error:
+        print(f"\n❌ Error deleting session: {error}", file=sys.stderr)
+        sys.exit(1)
+
+
+def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
         description="Delete Claude Code or Codex session files with confirmation"
@@ -168,26 +193,7 @@ def main():
         # resolve_session_path calls sys.exit for multiple matches
         sys.exit(1)
 
-    # Get session info
-    try:
-        info = get_session_info(session_file)
-    except Exception as e:
-        print(f"Error reading session file: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    # Confirm deletion
-    if not args.force:
-        if not confirm_deletion(session_file, info):
-            print("\nDeletion cancelled.")
-            sys.exit(0)
-
-    # Delete the file
-    try:
-        session_file.unlink()
-        print(f"\n✅ Session deleted: {session_file.stem}")
-    except Exception as e:
-        print(f"\n❌ Error deleting session: {e}", file=sys.stderr)
-        sys.exit(1)
+    delete_resolved_session(session_file, force=args.force)
 
 
 if __name__ == "__main__":

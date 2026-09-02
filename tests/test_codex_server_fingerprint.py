@@ -34,12 +34,12 @@ from claude_code_tools.codex_server_models import (
         (Path("cache/remote_plugin_catalog"), False),
     ],
 )
-def test_missing_plugin_inputs_detect_absent_present_absent_aba(
+def test_semantically_missing_plugin_inputs_ignore_completed_aba(
     tmp_path: Path,
     relative: Path,
     is_file: bool,
 ) -> None:
-    """Missing inputs retain a parent generation across an ABA cycle."""
+    """A completed no-content ABA does not cause a false snapshot change."""
     paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
     paths.codex_home.mkdir(parents=True)
     target = paths.codex_home / relative
@@ -54,8 +54,7 @@ def test_missing_plugin_inputs_detect_absent_present_absent_aba(
 
     after = _plugin_configuration_snapshot(paths)
 
-    assert after.fingerprint == before.fingerprint
-    assert after.generation != before.generation
+    assert after == before
 
 
 @pytest.mark.parametrize(
@@ -83,6 +82,71 @@ def test_plugin_feature_flags_participate_in_fingerprint(
     assert _plugin_configuration_snapshot(paths).fingerprint != before.fingerprint
 
 
+def test_codex_marketplace_sync_metadata_does_not_roll_server(
+    tmp_path: Path,
+) -> None:
+    """Codex-owned sync observations are not process-generation inputs."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    paths.codex_home.mkdir(parents=True)
+    config = paths.codex_home / "config.toml"
+    config.write_text(
+        """
+[marketplaces.example]
+source_type = "git"
+source = "https://example.com/plugins.git"
+last_updated = "2026-08-14T12:00:00Z"
+last_revision = "old"
+""".lstrip(),
+        encoding="utf-8",
+    )
+    before = _plugin_configuration_snapshot(paths)
+    config.write_text(
+        """
+[marketplaces.example]
+source_type = "git"
+source = "https://example.com/plugins.git"
+last_updated = "2026-08-14T17:10:14Z"
+last_revision = "new"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    after = _plugin_configuration_snapshot(paths)
+
+    assert after.fingerprint == before.fingerprint
+    assert after.generation != before.generation
+
+
+def test_marketplace_source_change_rolls_server(tmp_path: Path) -> None:
+    """A user-selected marketplace source remains a generation input."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    paths.codex_home.mkdir(parents=True)
+    config = paths.codex_home / "config.toml"
+    config.write_text(
+        '[marketplaces.example]\nsource = "https://example.com/one.git"\n',
+        encoding="utf-8",
+    )
+    before = _plugin_configuration_snapshot(paths)
+    config.write_text(
+        '[marketplaces.example]\nsource = "https://example.com/two.git"\n',
+        encoding="utf-8",
+    )
+
+    assert _plugin_configuration_snapshot(paths).fingerprint != before.fingerprint
+
+
+def test_runtime_plugin_cache_change_does_not_roll_server(tmp_path: Path) -> None:
+    """The App Server's dynamically refreshed cache is not immutable state."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    artifact = paths.codex_home / "plugins/cache/example/plugin.json"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text('{"version": 1}', encoding="utf-8")
+    before = _plugin_configuration_snapshot(paths)
+    artifact.write_text('{"version": 2}', encoding="utf-8")
+
+    assert _plugin_configuration_snapshot(paths) == before
+
+
 def test_plugin_regular_file_content_is_hashed_when_metadata_matches(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -97,215 +161,45 @@ def test_plugin_regular_file_content_is_hashed_when_metadata_matches(
         "_stat_generation",
         lambda _info: "fixed generation",
     )
-    before = _plugin_configuration_snapshot(paths)
+    before = fingerprinting._plugin_artifact_snapshot(paths)
     artifact.write_text("BBBB", encoding="utf-8")
 
-    assert _plugin_configuration_snapshot(paths).fingerprint != before.fingerprint
+    assert fingerprinting._plugin_artifact_snapshot(paths)[0] != before[0]
 
 
-def test_same_content_remote_install_metadata_replacement_is_stable(
+def test_artifact_added_during_empty_root_certification_is_retryable(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Volatile metadata identity does not change a completed snapshot."""
+    """A real artifact cannot appear after the empty-root name scan."""
     paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
-    metadata = (
-        paths.codex_home
-        / "plugins/example/.codex-remote-plugin-install.json"
-    )
-    replacement = tmp_path / "replacement.json"
-    metadata.parent.mkdir(parents=True)
-    content = '{"version":1}\n'
-    metadata.write_text(content, encoding="utf-8")
-    replacement.write_text(content, encoding="utf-8")
-    before = _plugin_configuration_snapshot(paths)
-    replacement.replace(metadata)
+    plugins = paths.codex_home / "plugins"
+    plugins.mkdir(parents=True)
+    original_check = fingerprinting._require_same_directory_path
+    inserted = False
 
-    assert _plugin_configuration_snapshot(paths) == before
+    def insert_before_path_check(
+        path: Path,
+        expected: os.stat_result,
+        message: str,
+    ) -> None:
+        nonlocal inserted
+        if path == plugins and not inserted:
+            inserted = True
+            plugins.joinpath("plugin.json").write_text("{}", encoding="utf-8")
+        original_check(path, expected, message)
 
-
-def test_remote_install_metadata_content_change_updates_fingerprint(
-    tmp_path: Path,
-) -> None:
-    """Remote-install metadata content remains a fingerprint input."""
-    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
-    metadata = (
-        paths.codex_home
-        / "plugins/example/.codex-remote-plugin-install.json"
-    )
-    replacement = tmp_path / "replacement.json"
-    metadata.parent.mkdir(parents=True)
-    metadata.write_text('{"version":1}\n', encoding="utf-8")
-    replacement.write_text('{"version":2}\n', encoding="utf-8")
-    before = _plugin_configuration_snapshot(paths)
-    replacement.replace(metadata)
-
-    assert _plugin_configuration_snapshot(paths).fingerprint != before.fingerprint
-
-
-def test_same_content_ordinary_plugin_replacement_remains_detectable(
-    tmp_path: Path,
-) -> None:
-    """Ordinary plugin files retain replacement-sensitive snapshot identity."""
-    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
-    artifact = paths.codex_home / "plugins/example/plugin.txt"
-    replacement = tmp_path / "replacement.txt"
-    artifact.parent.mkdir(parents=True)
-    artifact.write_text("same content\n", encoding="utf-8")
-    replacement.write_text("same content\n", encoding="utf-8")
-    before = _plugin_configuration_snapshot(paths)
-    replacement.replace(artifact)
-
-    after = _plugin_configuration_snapshot(paths)
-
-    assert after.fingerprint != before.fingerprint
-    assert after.generation != before.generation
-
-
-def test_codex_temp_file_in_metadata_directory_is_ignored(
-    tmp_path: Path,
-) -> None:
-    """A Codex atomic-write temporary does not change a completed snapshot."""
-    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
-    plugin = paths.codex_home / "plugins/example"
-    plugin.mkdir(parents=True)
-    plugin.joinpath(".codex-remote-plugin-install.json").write_text(
-        '{"version":1}\n',
-        encoding="utf-8",
-    )
-    before = _plugin_configuration_snapshot(paths)
-    plugin.joinpath(".tmpF3miTg").write_text("transient\n", encoding="utf-8")
-
-    assert _plugin_configuration_snapshot(paths) == before
-
-
-def test_codex_temp_file_outside_metadata_directory_is_detectable(
-    tmp_path: Path,
-) -> None:
-    """A matching name remains an input outside an install metadata directory."""
-    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
-    plugin = paths.codex_home / "plugins/example"
-    plugin.mkdir(parents=True)
-    before = _plugin_configuration_snapshot(paths)
-    plugin.joinpath(".tmp26kciG").write_text("ordinary\n", encoding="utf-8")
-
-    after = _plugin_configuration_snapshot(paths)
-
-    assert after.fingerprint != before.fingerprint
-    assert after.generation != before.generation
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        ".tmpF3miT",
-        ".tmpF3miTg7",
-        ".tmpF3miT-",
-        ".TmpF3miTg",
-    ],
-)
-def test_codex_temp_near_miss_in_metadata_directory_is_detectable(
-    tmp_path: Path,
-    name: str,
-) -> None:
-    """Only the exact Codex temporary filename form is omitted."""
-    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
-    plugin = paths.codex_home / "plugins/example"
-    plugin.mkdir(parents=True)
-    plugin.joinpath(".codex-remote-plugin-install.json").write_text(
-        '{}\n',
-        encoding="utf-8",
-    )
-    before = _plugin_configuration_snapshot(paths)
-    plugin.joinpath(name).write_text("ordinary\n", encoding="utf-8")
-
-    after = _plugin_configuration_snapshot(paths)
-
-    assert after.fingerprint != before.fingerprint
-    assert after.generation != before.generation
-
-
-def _write_remote_catalog(
-    path: Path,
-    fetched_at: str,
-    plugin_name: str = "example",
-) -> None:
-    """Write a representative pretty-printed remote plugin catalog."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        "{\n"
-        '  "schema_version": 1,\n'
-        f'  "fetched_at": "{fetched_at}",\n'
-        '  "plugins": [\n'
-        f'    {{"name": "{plugin_name}"}}\n'
-        "  ]\n"
-        "}\n",
-        encoding="utf-8",
+    monkeypatch.setattr(
+        fingerprinting,
+        "_require_same_directory_path",
+        insert_before_path_check,
     )
 
-
-def test_remote_catalog_timestamp_only_atomic_rewrite_is_stable(
-    tmp_path: Path,
-) -> None:
-    """Catalog freshness and replacement identity do not change a snapshot."""
-    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
-    catalog = paths.codex_home / "cache/remote_plugin_catalog/catalog.json"
-    replacement = tmp_path / "replacement.json"
-    _write_remote_catalog(catalog, "2026-08-05T00:58:19.363913Z")
-    _write_remote_catalog(replacement, "2026-08-05T00:58:33Z")
-    before = _plugin_configuration_snapshot(paths)
-    replacement.replace(catalog)
-
-    assert _plugin_configuration_snapshot(paths) == before
-
-
-def test_remote_catalog_plugin_change_updates_fingerprint(tmp_path: Path) -> None:
-    """Real catalog plugin content remains a fingerprint input."""
-    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
-    catalog = paths.codex_home / "cache/remote_plugin_catalog/catalog.json"
-    replacement = tmp_path / "replacement.json"
-    _write_remote_catalog(catalog, "2026-08-05T00:58:19Z")
-    _write_remote_catalog(replacement, "2026-08-05T00:58:33Z", "changed")
-    before = _plugin_configuration_snapshot(paths)
-    replacement.replace(catalog)
-
-    assert _plugin_configuration_snapshot(paths).fingerprint != before.fingerprint
-
-
-def test_codex_temp_file_in_remote_catalog_is_ignored(tmp_path: Path) -> None:
-    """An exact Codex temporary name is omitted in the catalog directory."""
-    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
-    catalog_dir = paths.codex_home / "cache/remote_plugin_catalog"
-    _write_remote_catalog(catalog_dir / "catalog.json", "2026-08-05T00:58:19Z")
-    before = _plugin_configuration_snapshot(paths)
-    catalog_dir.joinpath(".tmpzjtMQ2").write_text("partial", encoding="utf-8")
-
-    assert _plugin_configuration_snapshot(paths) == before
-
-
-@pytest.mark.parametrize(
-    "relative",
-    [
-        Path(".tmpzjtMQ"),
-        Path("nested/.tmpzjtMQ2"),
-    ],
-)
-def test_catalog_temp_near_or_outside_scope_is_detectable(
-    tmp_path: Path,
-    relative: Path,
-) -> None:
-    """Near-miss and nested temporary names retain ordinary semantics."""
-    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
-    catalog_dir = paths.codex_home / "cache/remote_plugin_catalog"
-    _write_remote_catalog(catalog_dir / "catalog.json", "2026-08-05T00:58:19Z")
-    before = _plugin_configuration_snapshot(paths)
-    artifact = catalog_dir / relative
-    artifact.parent.mkdir(parents=True, exist_ok=True)
-    artifact.write_text("ordinary", encoding="utf-8")
-
-    after = _plugin_configuration_snapshot(paths)
-
-    assert after.fingerprint != before.fingerprint
-    assert after.generation != before.generation
+    with pytest.raises(
+        fingerprinting.PluginSnapshotChangedError,
+        match="cache changed",
+    ):
+        fingerprinting._plugin_artifact_snapshot(paths)
 
 
 def test_atomic_configuration_replacement_is_a_retryable_race(
@@ -367,7 +261,10 @@ def test_initial_plugin_input_race_is_retryable(
     monkeypatch.setattr(fingerprinting.os, "open", racing_open)
 
     with pytest.raises(fingerprinting.PluginSnapshotChangedError):
-        _plugin_configuration_snapshot(paths)
+        if input_name == "configuration":
+            _plugin_configuration_snapshot(paths)
+        else:
+            fingerprinting._plugin_artifact_snapshot(paths)
 
 
 @pytest.mark.parametrize(
@@ -425,7 +322,10 @@ def test_missing_plugin_input_appearance_is_retryable(
     )
 
     with pytest.raises(fingerprinting.PluginSnapshotChangedError):
-        _plugin_configuration_snapshot(paths)
+        if input_name == "configuration":
+            _plugin_configuration_snapshot(paths)
+        else:
+            fingerprinting._plugin_artifact_snapshot(paths)
 
 
 @pytest.mark.parametrize("helper", ["absolute", "relative"])
@@ -612,38 +512,37 @@ def test_atomic_plugin_root_replacement_is_a_retryable_race(
     displaced = paths.codex_home / "displaced"
     plugins.mkdir(parents=True)
     replacement.mkdir()
-    original_hash = fingerprinting._hash_directory
+    original_names = fingerprinting._plugin_directory_names
     replaced = False
 
-    def replace_after_hash(
+    def replace_after_names(
         directory_fd: int,
         relative: Path,
-        digest: fingerprinting.HashWriter,
-        generation: fingerprinting.HashWriter,
-        budget: list[int],
-        depth: int,
-    ) -> None:
+        budget: list[int] | None,
+    ) -> list[str]:
         nonlocal replaced
-        original_hash(
+        names = original_names(
             directory_fd,
             relative,
-            digest,
-            generation,
             budget,
-            depth,
         )
-        if not replaced:
+        if relative == Path("plugins") and not replaced:
             replaced = True
             plugins.rename(displaced)
             replacement.rename(plugins)
+        return names
 
-    monkeypatch.setattr(fingerprinting, "_hash_directory", replace_after_hash)
+    monkeypatch.setattr(
+        fingerprinting,
+        "_plugin_directory_names",
+        replace_after_names,
+    )
 
     with pytest.raises(
         fingerprinting.PluginSnapshotChangedError,
         match="cache root changed",
     ):
-        _plugin_configuration_snapshot(paths)
+        fingerprinting._plugin_artifact_snapshot(paths)
 
 
 def test_plugin_entry_removal_during_traversal_is_retryable(
@@ -687,7 +586,98 @@ def test_plugin_entry_removal_during_traversal_is_retryable(
         fingerprinting.PluginSnapshotChangedError,
         match="cache changed",
     ):
-        _plugin_configuration_snapshot(paths)
+        fingerprinting._plugin_artifact_snapshot(paths)
+
+
+def test_plugin_replacement_after_hash_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A final entry check catches replacement after content was hashed."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    artifact = paths.codex_home / "plugins/plugin.txt"
+    replacement = paths.codex_home / "replacement.txt"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("old", encoding="utf-8")
+    replacement.write_text("new", encoding="utf-8")
+    original_hash = fingerprinting._hash_regular_file
+
+    def replace_after_hash(
+        directory_fd: int,
+        name: str,
+        relative: Path,
+        expected: os.stat_result,
+        digest: fingerprinting.HashWriter,
+        generation: fingerprinting.HashWriter,
+        budget: list[int],
+    ) -> None:
+        original_hash(
+            directory_fd,
+            name,
+            relative,
+            expected,
+            digest,
+            generation,
+            budget,
+        )
+        replacement.replace(artifact)
+
+    monkeypatch.setattr(
+        fingerprinting,
+        "_hash_regular_file",
+        replace_after_hash,
+    )
+
+    with pytest.raises(
+        fingerprinting.PluginSnapshotChangedError,
+        match="directory changed",
+    ):
+        fingerprinting._plugin_artifact_snapshot(paths)
+
+
+def test_nested_artifact_change_after_child_hash_changes_next_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A later diagnostic scan observes a nested post-traversal change."""
+    paths = _paths({"CODEX_HOME": str(tmp_path / "home")})
+    artifact = paths.codex_home / "plugins/nested/plugin.txt"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("old", encoding="utf-8")
+    original_hash = fingerprinting._hash_directory
+    changed = False
+
+    def change_after_child_hash(
+        directory_fd: int,
+        relative: Path,
+        digest: fingerprinting.HashWriter,
+        generation: fingerprinting.HashWriter,
+        budget: list[int],
+        depth: int,
+    ) -> None:
+        nonlocal changed
+        original_hash(
+            directory_fd,
+            relative,
+            digest,
+            generation,
+            budget,
+            depth,
+        )
+        if relative == Path("plugins/nested") and not changed:
+            changed = True
+            artifact.write_text("new", encoding="utf-8")
+
+    monkeypatch.setattr(
+        fingerprinting,
+        "_hash_directory",
+        change_after_child_hash,
+    )
+
+    before = fingerprinting._plugin_artifact_snapshot(paths)
+    after = fingerprinting._plugin_artifact_snapshot(paths)
+
+    assert after != before
 
 
 def test_atomic_symlink_target_replacement_is_retryable(
@@ -737,7 +727,7 @@ def test_atomic_symlink_target_replacement_is_retryable(
         fingerprinting.PluginSnapshotChangedError,
         match="symlink target changed",
     ):
-        _plugin_configuration_snapshot(paths)
+        fingerprinting._plugin_artifact_snapshot(paths)
 
 
 def test_wide_plugin_tree_respects_file_descriptor_limit(tmp_path: Path) -> None:
@@ -750,16 +740,16 @@ def test_wide_plugin_tree_respects_file_descriptor_limit(tmp_path: Path) -> None
     program = textwrap.dedent(
         f"""
         import resource
-        from claude_code_tools.codex_server import (
-            _paths,
-            _plugin_configuration_snapshot,
+        from claude_code_tools.codex_server import _paths
+        from claude_code_tools.codex_server_fingerprint import (
+            _plugin_artifact_snapshot,
         )
 
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         resource.setrlimit(resource.RLIMIT_NOFILE, (min(24, hard), hard))
         paths = _paths({{"CODEX_HOME": {str(paths.codex_home)!r}}})
-        snapshot = _plugin_configuration_snapshot(paths)
-        assert len(snapshot.fingerprint) == 64
+        snapshot = _plugin_artifact_snapshot(paths)
+        assert len(snapshot[0]) == 64
         """
     )
 
@@ -786,7 +776,7 @@ def test_plugin_tree_aggregate_size_limit_is_enforced(
     monkeypatch.setattr(fingerprinting, "PLUGIN_TREE_MAX_BYTES", 3)
 
     with pytest.raises(CodexServerError, match="safe content size limit"):
-        _plugin_configuration_snapshot(paths)
+        fingerprinting._plugin_artifact_snapshot(paths)
 
 
 def test_normal_large_codex_plugin_binary_is_streamed(tmp_path: Path) -> None:
@@ -797,9 +787,9 @@ def test_normal_large_codex_plugin_binary_is_streamed(tmp_path: Path) -> None:
     with artifact.open("wb") as stream:
         stream.truncate(64 * 1024 * 1024 + 1)
 
-    snapshot = _plugin_configuration_snapshot(paths)
+    snapshot = fingerprinting._plugin_artifact_snapshot(paths)
 
-    assert len(snapshot.fingerprint) == 64
+    assert len(snapshot[0]) == 64
 
 
 def test_symlink_target_content_participates_in_fingerprint(
@@ -818,10 +808,10 @@ def test_symlink_target_content_participates_in_fingerprint(
         "_stat_generation",
         lambda _info: "fixed generation",
     )
-    before = _plugin_configuration_snapshot(paths)
+    before = fingerprinting._plugin_artifact_snapshot(paths)
     target.write_text("BBBB", encoding="utf-8")
 
-    assert _plugin_configuration_snapshot(paths).fingerprint != before.fingerprint
+    assert fingerprinting._plugin_artifact_snapshot(paths)[0] != before[0]
 
 
 def test_dangling_plugin_symlink_detects_target_parent_aba(
@@ -835,14 +825,14 @@ def test_dangling_plugin_symlink_detects_target_parent_aba(
     link.parent.mkdir(parents=True)
     link.symlink_to(target)
     target_parent.mkdir()
-    before = _plugin_configuration_snapshot(paths)
+    before = fingerprinting._plugin_artifact_snapshot(paths)
     target.write_text("temporary", encoding="utf-8")
     target.unlink()
 
-    after = _plugin_configuration_snapshot(paths)
+    after = fingerprinting._plugin_artifact_snapshot(paths)
 
-    assert after.fingerprint == before.fingerprint
-    assert after.generation != before.generation
+    assert after[0] == before[0]
+    assert after[1] != before[1]
 
 
 @pytest.mark.parametrize(

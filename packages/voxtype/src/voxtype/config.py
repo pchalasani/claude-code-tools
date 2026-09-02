@@ -111,6 +111,15 @@ class Config:
             shape (1.0 = default; higher = more flexible, calmer < 1.0).
         overlay_speed: Overall animation speed multiplier (1.0 =
             default; lower = slower/gentler motion).
+        keepalive_minutes: Re-decode a short silent clip after this
+            many minutes without a decode (parakeet-mlx only). Under
+            system-wide memory pressure macOS evicts an idle model to
+            compressed memory/swap, and the next take then pays a
+            multi-second page-in stall; the periodic throwaway decode
+            keeps the model's ~1.7 GB recently-used so eviction is
+            far less likely, and any page-in cost lands in an idle
+            moment instead of on a take. 0 disables (default);
+            max 1440 (a day).
         model_arch: Moonshine model architecture name (moonshine engine
             only).
         language: Language tag understood by Moonshine (e.g. "en").
@@ -156,6 +165,7 @@ class Config:
     overlay: bool = True
     overlay_flex: float = 1.0
     overlay_speed: float = 1.0
+    keepalive_minutes: float = 0.0
     model_arch: str = "medium-streaming"
     language: str = "en"
     hotkey: str = "<ctrl>+;"
@@ -256,6 +266,30 @@ class Config:
                 raise ValueError(
                     f"{name} must be between 0 and 5, got {value!r}"
                 )
+        if isinstance(self.keepalive_minutes, bool) or not isinstance(
+            self.keepalive_minutes, (int, float)
+        ):
+            raise ValueError(
+                f"keepalive_minutes must be a number of minutes, "
+                f"got {self.keepalive_minutes!r}"
+            )
+        if isinstance(self.keepalive_minutes, float) and not math.isfinite(
+            self.keepalive_minutes
+        ):
+            # TOML accepts nan/inf literals; NaN would make the idle
+            # comparison permanently false, silently disabling the
+            # feature while looking enabled.
+            raise ValueError(
+                f"keepalive_minutes must be finite, "
+                f"got {self.keepalive_minutes!r}"
+            )
+        if not 0 <= self.keepalive_minutes <= 1440:
+            # The upper bound also keeps huge TOML integers out of the
+            # engine, where float(minutes) * 60.0 would overflow.
+            raise ValueError(
+                "keepalive_minutes must be between 0 and 1440 "
+                "(a day); 0 disables"
+            )
         if self.mode == "wake" and not self.wake_word.strip():
             raise ValueError('mode "wake" requires a non-empty wake_word')
         if isinstance(self.idle_timeout, bool) or not isinstance(
@@ -396,6 +430,17 @@ overlay_speed = 1.0
 
 # Remove standalone filler words (uh, um, ...) from typed text.
 strip_fillers = true
+
+# Keep the model's memory warm (parakeet-mlx only): after this many
+# minutes without a decode, quietly decode a short silent clip so the
+# idle model stays recently-used and macOS is far less likely to
+# evict it to swap — otherwise the first take after a long pause can
+# stall for seconds paging it back in. Keeps ~1.7 GB in active use.
+# 0 disables; max 1440 (a day). Trade-off: the keepalive briefly
+# pauses capture (~0.2 s on a warm model); it avoids takes and waits
+# 30 s after any hotkey, but a press landing exactly as it starts can
+# clip the first moment of dictation.
+keepalive_minutes = 0.0
 
 # Moonshine model: tiny | base | tiny-streaming | base-streaming |
 # small-streaming | medium-streaming (most accurate; ~245M params)

@@ -1,0 +1,102 @@
+---
+title: "Move Account"
+---
+
+`aichat move-account` moves a session between two **accounts** of the same
+agent — where an account is a config directory such as `~/.claude` vs
+`~/.claude-rja`, or `~/.codex` vs `~/.codex-rja` (the directories normally
+selected via `CLAUDE_CONFIG_DIR` / `CODEX_HOME` or a shell alias). Useful
+when you started a session under your personal account that belongs in your
+work account, or vice versa.
+
+The session stays in the **same project**: nothing inside the transcript is
+rewritten, only its storage location changes. (To move a session to a
+different *project* instead, see `aichat move`.)
+
+:::note[Installation]
+Part of the `claude-code-tools` package.
+See [Quick Start](../../../getting-started/) for installation.
+:::
+
+## Usage
+
+```bash
+aichat move-account <session> --to <config-dir> [options]
+```
+
+`<session>` may be:
+
+- a **session UUID** — full or partial (a prefix or substring)
+- a **Claude session name** — the title set with `/rename`
+- a **Codex thread name**
+- an exact **session file path** inside an eligible source home
+
+Resolution uses the shared tiers: exact id, exact name, id prefix, id
+substring, filename substring, then name substring. The winning tier is
+chosen across all searched source accounts, so a weaker match in one account
+cannot compete with an exact name in another.
+
+In an interactive terminal, ambiguous matches appear in a numbered Rich table.
+The table includes the source home so equal names in different accounts remain
+distinguishable. Enter `q`, press Ctrl-C, or send end-of-input to cancel before
+anything moves. Without a terminal, the command lists the matches and exits
+nonzero; use `--from` or a more specific query to disambiguate.
+
+## Options
+
+| Option | Meaning |
+| --- | --- |
+| `--to <dir>` | Target account config dir (required), e.g. `~/.codex-rja` |
+| `--from <dir>` | Source account config dir. Default: search all local homes — the env-var home, the default home, and `~/.claude-*` / `~/.codex-*` siblings |
+| `--agent claude\|codex` | Agent kind. Default: auto-detected from the config dirs (`projects/` means Claude, `sessions/` means Codex) |
+| `--keep` | Copy instead of move, leaving the source account untouched |
+
+## What moves
+
+- **Claude:** the transcript keeps its
+  `projects/<encoded-path>/<uuid>.jsonl` location in the target home, and
+  its sidecar directory (subagents, tool-results, workflows) moves with it.
+- **Codex:** the rollout file keeps its date-based `sessions/YYYY/MM/DD/`
+  location, and the session's thread-name entries move with it in
+  `session_index.jsonl`.
+
+The copy is verified before the source is removed, and the command refuses
+to overwrite a session that already exists in the target account. On
+success it prints a paste-ready resume command that names the account
+explicitly, so it works regardless of any `CLAUDE_CONFIG_DIR` /
+`CODEX_HOME` lingering in your shell.
+
+## Examples
+
+Move a Codex session started in the personal account into the work
+account, keeping the original as a safety copy:
+
+```bash
+aichat move-account my-codex-thread --to ~/.codex-rja --keep
+```
+
+```text
+Copying codex session 019ca600-21fa-7d40-8560-d665abfca2fd (my-codex-thread)
+  from account: /Users/you/.codex
+  to account:   /Users/you/.codex-rja
+  transcript:   /Users/you/.codex-rja/sessions/2026/06/10/rollout-....jsonl
+  thread name:  moved in session_index.jsonl
+  source left in place (--keep)
+
+Resume with:
+  cd /Users/you/myproject && CODEX_HOME=/Users/you/.codex-rja codex resume 019ca600-...
+```
+
+Move a Claude session from the work account back to the default personal
+account:
+
+```bash
+aichat move-account cowrite-fable --from ~/.claude-rja --to ~/.claude
+```
+
+:::caution
+Run the move while the session is **not** actively running in its source
+account. The command detects a transcript that grows mid-copy and aborts
+(leaving the source untouched), but concurrent writes to Codex's
+`session_index.jsonl` by a live agent are not locked against.
+:::

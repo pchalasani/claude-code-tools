@@ -55,6 +55,10 @@ export default defineConfig({
                   slug: "tools/aichat/port",
                 },
                 {
+                  label: "Move Account",
+                  slug: "tools/aichat/move-account",
+                },
+                {
                   label: "Search",
                   slug: "tools/aichat/search",
                 },
@@ -94,6 +98,7 @@ export default defineConfig({
                 },
               ],
             },
+            { label: "amux", slug: "tools/amux" },
             { label: "lmsh", slug: "tools/lmsh" },
             { label: "fix-session", slug: "tools/fix-session" },
             { label: "Status Line", slug: "tools/statusline" },
@@ -101,6 +106,11 @@ export default defineConfig({
             { label: "env-safe", slug: "tools/env-safe" },
             { label: "sasy-guard", slug: "tools/sasy-guard" },
             { label: "agent-tunnel", slug: "tools/agent-tunnel" },
+            { label: "msg", slug: "tools/msg" },
+            {
+              label: "github-watch: wake on GitHub comment",
+              slug: "tools/github-wake",
+            },
             {
               label: "voxtype",
               collapsed: false,
@@ -155,6 +165,10 @@ export default defineConfig({
               label: "Langroid",
               slug: "plugins-detail/langroid",
             },
+            {
+              label: "Writing",
+              slug: "plugins-detail/writing",
+            },
           ],
         },
         {
@@ -182,7 +196,7 @@ export default defineConfig({
           label: "Guides",
           items: [
             {
-              label: "Claude → Codex",
+              label: "Codex Dynamic Workflows",
               slug: "guides/claude-to-codex",
             },
             {

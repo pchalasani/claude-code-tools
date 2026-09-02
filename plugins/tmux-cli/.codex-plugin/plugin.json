@@ -1,0 +1,19 @@
+{
+  "name": "tmux-cli",
+  "version": "1.14.0",
+  "description": "Control CLI agents and scripts in tmux panes.",
+  "author": {
+    "name": "Prasad Chalasani"
+  },
+  "repository": "https://github.com/pchalasani/claude-code-tools",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "tmux-cli",
+    "shortDescription": "Control CLI agents in tmux panes.",
+    "longDescription": "Use the tmux-cli command to launch, send to, inspect, and stop CLI agents in tmux.",
+    "developerName": "Prasad Chalasani",
+    "category": "Developer Tools",
+    "capabilities": ["Launch agents", "Send input", "Capture output"],
+    "defaultPrompt": "Use $tmux-cli to inspect the active tmux agents."
+  }
+}

@@ -1,10 +1,33 @@
 """Tests for tmux_cli_controller."""
-from unittest.mock import patch, MagicMock, call
-import time
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+from claude_code_tools import tmux_execution_helpers
 from claude_code_tools.tmux_cli_controller import TmuxCLIController
+
+
+@pytest.mark.parametrize("plugin", ("msg", "tmux-cli"))
+def test_codex_plugin_default_prompt_is_a_nonempty_string(plugin: str) -> None:
+    manifest_path = (
+        Path(__file__).parents[1]
+        / "plugins"
+        / plugin
+        / ".codex-plugin"
+        / "plugin.json"
+    )
+
+    default_prompt = json.loads(manifest_path.read_text())["interface"][
+        "defaultPrompt"
+    ]
+
+    assert isinstance(default_prompt, str)
+    assert default_prompt.strip()
 
 
 class TestFormatPaneIdentifier:
@@ -83,7 +106,10 @@ class TestCreatePane:
     def test_empty_output_returns_none(self, mock_window, mock_run):
         """When split-window returns empty output, return None."""
         mock_window.return_value = "@1"
-        mock_run.return_value = ("", 0)  # Empty output with code 0
+        mock_run.side_effect = [
+            ("", 0),  # list-panes
+            ("", 0),  # split-window
+        ]
 
         controller = TmuxCLIController()
         result = controller.create_pane()
@@ -95,7 +121,10 @@ class TestCreatePane:
     def test_invalid_pane_id_returns_none(self, mock_window, mock_run):
         """When split-window returns invalid pane ID, return None."""
         mock_window.return_value = "@1"
-        mock_run.return_value = ("invalid", 0)  # Invalid pane ID format
+        mock_run.side_effect = [
+            ("", 0),  # list-panes
+            ("invalid", 0),  # split-window
+        ]
 
         controller = TmuxCLIController()
         result = controller.create_pane()
@@ -107,28 +136,148 @@ class TestCreatePane:
     def test_valid_pane_id_returned(self, mock_window, mock_run):
         """When split-window returns valid pane ID, return it."""
         mock_window.return_value = "@1"
-        mock_run.return_value = ("%123", 0)
+        mock_run.side_effect = [
+            ("", 0),  # list-panes
+            ("%123", 0),  # split-window
+            ("%123", 0),  # display-message verification
+        ]
 
         controller = TmuxCLIController()
         result = controller.create_pane()
 
         assert result == "%123"
         assert controller.target_pane == "%123"
+        assert mock_run.call_args_list[0].args[0][0] == "list-panes"
+        assert mock_run.call_args_list[1].args[0][0] == "split-window"
+        assert mock_run.call_args_list[2].args[0] == [
+            "display-message", "-t", "%123", "-p", "#{pane_id}"
+        ]
 
     @patch.object(TmuxCLIController, '_run_tmux_command')
     @patch.object(TmuxCLIController, 'get_current_window_id')
     def test_error_code_returns_none(self, mock_window, mock_run):
         """When split-window fails, return None."""
         mock_window.return_value = "@1"
-        mock_run.return_value = ("%123", 1)  # Error code
+        mock_run.side_effect = [
+            ("", 0),  # list-panes
+            ("%123", 1),  # split-window
+        ]
 
         controller = TmuxCLIController()
         result = controller.create_pane()
 
         assert result is None
 
+
+class TestSendKeys:
+    """Native tmux failures must propagate to the CLI process."""
+
+    @patch.object(TmuxCLIController, "_run_tmux_command")
+    def test_send_keys_raises_when_native_tmux_fails(self, mock_run):
+        mock_run.return_value = ("tmux error", 1)
+
+        controller = TmuxCLIController()
+
+        with pytest.raises(RuntimeError, match="tmux send-keys failed"):
+            controller.send_keys("hello", pane_id="%1", delay_enter=False)
+
+    @patch("time.sleep")
+    @patch.object(TmuxCLIController, "_run_tmux_command")
+    def test_delayed_enter_raises_when_native_tmux_fails(
+        self, mock_run, _mock_sleep,
+    ):
+        mock_run.side_effect = [("", 0), ("tmux error", 1)]
+
+        controller = TmuxCLIController()
+
+        with pytest.raises(RuntimeError, match="tmux Enter failed"):
+            controller.send_keys(
+                "hello", pane_id="%1", delay_enter=0.01, verify_enter=False,
+            )
+
+    @patch("time.sleep")
+    @patch.object(TmuxCLIController, "capture_pane", return_value="unchanged")
+    @patch.object(TmuxCLIController, "_run_tmux_command", return_value=("", 0))
+    def test_delayed_enter_raises_after_verification_retries(
+        self, mock_run, _mock_capture, _mock_sleep,
+    ):
+        with pytest.raises(RuntimeError, match="tmux Enter was not accepted"):
+            TmuxCLIController().send_keys(
+                "hello", pane_id="%1", delay_enter=0.01, max_retries=2,
+            )
+        assert mock_run.call_count == 3
+
+
+class TestCLIExitFailures:
+    """The installed CLI process exits nonzero when native tmux fails."""
+
+    @pytest.mark.parametrize(
+        ("fake_mode", "delay_enter", "expected_error"),
+        (
+            ("all", "False", "tmux send-keys failed"),
+            ("enter", "0.001", "tmux Enter failed"),
+        ),
+    )
+    def test_send_native_failure_exits_nonzero(
+        self,
+        tmp_path: Path,
+        fake_mode: str,
+        delay_enter: str,
+        expected_error: str,
+    ) -> None:
+        fake_tmux = tmp_path / "tmux"
+        fake_tmux.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$FAKE_TMUX_MODE\" = all ]; then exit 17; fi\n"
+            "case \"$*\" in *Enter) exit 17;; esac\n"
+            "exit 0\n"
+        )
+        fake_tmux.chmod(0o755)
+        env = os.environ.copy()
+        env.update(
+            {
+                "FAKE_TMUX_MODE": fake_mode,
+                "PATH": f"{tmp_path}{os.pathsep}{env['PATH']}",
+                "TMUX": "/tmp/fake-tmux,1,0",
+                "TMUX_PANE": "%1",
+            }
+        )
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "claude_code_tools.tmux_cli_controller",
+                "send",
+                "hello",
+                "--pane=%1",
+                f"--delay-enter={delay_enter}",
+            ],
+            capture_output=True,
+            env=env,
+            text=True,
+            timeout=5,
+        )
+
+        assert result.returncode != 0
+        assert expected_error in result.stderr
+
+
 class TestExecute:
     """Tests for execute method."""
+
+    @pytest.fixture(autouse=True)
+    def fixed_markers(self, monkeypatch):
+        """Pin the per-execution markers so captured-output fixtures match.
+
+        execute() generates a unique marker pair for every call, so a test
+        fixture cannot hardcode them without pinning the generator.
+        """
+        monkeypatch.setattr(
+            tmux_execution_helpers,
+            "generate_execution_markers",
+            lambda: ("__TMUX_EXEC_START_12345__", "__TMUX_EXEC_END_12345__"),
+        )
 
     @patch.object(TmuxCLIController, 'capture_pane')
     @patch.object(TmuxCLIController, 'send_keys')
@@ -187,3 +336,44 @@ partial output..."""
 
         with pytest.raises(ValueError, match="No target pane specified"):
             controller.execute("pwd")
+
+
+class TestListPanes:
+    """Tests for list_panes output parsing."""
+
+    @patch.object(TmuxCLIController, '_run_tmux_command')
+    @patch.object(TmuxCLIController, 'get_current_window_id')
+    def test_malformed_line_is_skipped(self, mock_window, mock_run):
+        """A line without the expected fields is skipped, not indexed into."""
+        mock_window.return_value = "@1"
+        mock_run.return_value = ("invalid", 0)
+
+        panes = TmuxCLIController().list_panes()
+
+        assert panes == []
+
+    @patch.object(TmuxCLIController, '_run_tmux_command')
+    @patch.object(TmuxCLIController, 'get_current_window_id')
+    def test_well_formed_lines_are_parsed(self, mock_window, mock_run):
+        """Complete tmux output is parsed into pane dicts."""
+        mock_window.return_value = "@1"
+        mock_run.return_value = (
+            "%1|0|title-a|1|80x24|zsh\n%2|1|title-b|0|80x24|vim", 0
+        )
+
+        panes = TmuxCLIController().list_panes()
+
+        assert [p['id'] for p in panes] == ["%1", "%2"]
+        assert panes[0]['active'] is True
+        assert panes[1]['command'] == "vim"
+
+    @patch.object(TmuxCLIController, '_run_tmux_command')
+    @patch.object(TmuxCLIController, 'get_current_window_id')
+    def test_malformed_line_does_not_drop_valid_ones(self, mock_window, mock_run):
+        """One bad line does not discard the panes around it."""
+        mock_window.return_value = "@1"
+        mock_run.return_value = ("garbage\n%2|1|title-b|0|80x24|vim", 0)
+
+        panes = TmuxCLIController().list_panes()
+
+        assert [p['id'] for p in panes] == ["%2"]

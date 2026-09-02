@@ -31,27 +31,66 @@ aichat port <session>
 - a **session file path** (inside or outside the agent homes)
 
 Lookup is global across **all projects** in both the Claude and Codex
-homes. The query must resolve to exactly one session; if several
-match (in one agent or across both), the command errors with the
-candidate list — one line per candidate showing the agent, session
-id, name (when known), and modification time. The listing shows at
-most 25 candidates and ends with a `... and N more` tail when the
-match set is larger.
+homes. When several sessions match, the command shows an interactive
+chooser instead of guessing. See [Ambiguous matches](#ambiguous-matches)
+below.
 
-The source agent is auto-detected from the resolved session (or file
-path content), and the session is ported to the *other* agent. The
-detected direction is always printed first:
+Porting works **in both directions**, and you never say which one you want:
+the source agent is auto-detected and the session is ported to the *other*
+agent. A Codex rollout becomes a Claude Code session; a Claude session
+becomes a Codex rollout. Both produce a natively resumable session, and both
+record lineage back to the original, which is left untouched.
+
+For a session given as a file path, detection is **content-first** — the
+file's own records decide what it is, so a rollout sitting in the wrong home
+is still classified correctly. Its location is consulted only when the
+content is inconclusive.
+
+The command shows progress while it resolves the source, converts the
+transcript, and writes the destination session:
 
 ```text
-Detected source agent: codex — porting to Claude Code
-
-New Claude session id: e8f54e2c-2607-416b-be11-aaf68ce8e3e6
-Output file:           ~/.claude/projects/-Users-you-myproject/e8f54e2c-....jsonl
-Session cwd:           /Users/you/myproject
+╭─ Session port ───────────────╮
+│ Query  my-session-name       │
+╰──────────────────────────────╯
+1/3  Resolving session
+  ✓ Detected source agent: codex — porting to Claude Code
+    Source file  ~/.codex/sessions/.../rollout-....jsonl
+2/3  Porting Codex → Claude Code
+3/3  Ready
+╭─ Port complete ───────────────────────────────────────╮
+│ New Claude session id:  e8f54e2c-2607-416b-be11-... │
+│ Session cwd:            /Users/you/myproject         │
+│ Output file:            ~/.claude/projects/...       │
+╰───────────────────────────────────────────────────────╯
 
 To resume:
-  cd /Users/you/myproject && claude --resume e8f54e2c-2607-416b-be11-aaf68ce8e3e6
+  cd /Users/you/myproject && claude --resume e8f54e2c-...
+
+Copy the new session ID to your clipboard? (Y/n): y
+✓ Session ID copied to clipboard.
+Now you can run:
+  claude --resume <paste session ID>
 ```
+
+Porting the other way looks the same, with the detected agent and the resume
+command reversed:
+
+```text
+1/3  Resolving session
+  ✓ Detected source agent: claude — porting to Codex
+2/3  Porting Claude → Codex
+3/3  Ready
+
+To resume:
+  cd /Users/you/myproject && codex resume 019f6d85-df3c-...
+```
+
+The clipboard prompt defaults to **Yes**, but it never changes the clipboard
+until the user answers the prompt. It copies only the new session ID and
+supports the native clipboard tools on macOS, Linux, and Windows. The prompt is
+skipped when output or input is not connected to an interactive terminal, so
+scripts do not stop waiting for an answer.
 
 Options:
 
@@ -59,6 +98,21 @@ Options:
 |--------|-------------|
 | `--claude-home PATH` | Override `~/.claude` |
 | `--codex-home PATH` | Override `~/.codex` |
+
+## Ambiguous matches
+
+Codex may use an automatic title derived from the first prompt. A query can
+therefore match both a session explicitly named with `/rename` and another
+session whose automatic title happens to contain the same text.
+
+When multiple sessions match, `aichat port` does not guess. It shows an
+interactive chooser with each candidate's agent, match reason, name or title,
+project directory, session ID, and modification time. Select a number to port
+that source session. Enter `q`, press Ctrl-C, or send end-of-input to cancel
+before any conversion output is created.
+
+If no interactive input is available, the command exits without porting a
+session and prints the candidates so a later command can use a full session ID.
 
 ## Codex → Claude
 
@@ -79,18 +133,40 @@ How the conversion works:
 - The transcript is normalized to strict user/assistant alternation, and the
   file is written atomically (no partial sessions on failure).
 - The first line records lineage (`continue_metadata` with the source rollout
-  path), so [`aichat lineage`](./actions/) tracks the Codex parent.
+  path), so [`aichat lineage`](../actions/) tracks the Codex parent.
 
 Both the modern rollout format and the legacy 2025 format are supported.
 
 ## Claude → Codex
 
 A Claude Code session is converted into a native Codex rollout under
-`~/.codex/sessions/YYYY/MM/DD/`, resumable with `codex resume <new-id>`.
+`~/.codex/sessions/YYYY/MM/DD/`, resumable with `codex resume <new-id>` from
+the session's working directory. Codex files sessions by **date**, not by
+project, so the output path reflects when you ported rather than which
+project the work belongs to.
 
-The same flattening rules apply in reverse: Claude `tool_use`/`tool_result`
-blocks become labeled text, thinking blocks and sidechain (sub-agent) traffic
-are dropped, and slash-command wrappers are skipped.
+How the conversion works:
+
+- User and assistant messages carry over as real transcript turns.
+- Tool calls and their outputs are **flattened to labeled text**, mirroring
+  the other direction: Claude `tool_use` / `tool_result` blocks become
+  labeled text, with arguments and results truncated past a cap while normal
+  message text is preserved verbatim.
+- Claude-internal noise is dropped: thinking and redacted-thinking blocks,
+  sidechain (sub-agent) traffic, slash-command wrappers, and non
+  user/assistant line types.
+- The new session gets a **UUIDv7** id, the time-ordered form Codex itself
+  generates, so the ported session sorts among your real ones instead of
+  looking foreign.
+- The rollout is written to a temporary file and atomically renamed into
+  place only after the whole transcript is written, so a failure part-way
+  leaves no half-session behind.
+- The session is registered in Codex's `history.jsonl` so Codex's own
+  tooling can discover it. If that registration fails, the just-written
+  rollout is removed rather than left orphaned.
+- The synthesized `session_meta` line records lineage
+  (`continue_metadata` with the parent session id and file), so
+  [`aichat lineage`](../actions/) tracks the Claude parent.
 
 :::tip[Native alternative]
 Codex can also import Claude sessions itself: start `codex` and type
@@ -104,6 +180,12 @@ metadata for `aichat` tooling.
 - The ported transcript is a **faithful flattening**, not a byte-level
   replay: the target agent sees every turn's text and all tool activity as
   labeled text, which is what matters for continuing the work.
+- **Rewind works in the ported session.** A Codex rollout carries two
+  streams: the conversation the model reads, and a UI event log the TUI
+  replays to rebuild your scrollback. Porting writes both, so a ported
+  session lets you step back through the sequence of user messages exactly
+  as a native one does. Porting the other way preserves the same ability in
+  Claude Code, which walks the transcript's own message chain.
 - Very long sessions port fine (conversion is streaming), but resuming a huge
   transcript consumes context in the target agent -- consider
-  [trimming](./resume/) first.
+  [trimming](../resume/) first.

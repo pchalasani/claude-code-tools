@@ -165,6 +165,25 @@ def _snapshot(
     return codex_server._PluginSnapshot(fingerprint, generation)
 
 
+def test_metadata_only_plugin_rewrite_remains_compatible(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Same-byte cache rewrites do not invalidate a semantic fingerprint."""
+    expected = _snapshot("same content", "before rewrite")
+    monkeypatch.setattr(
+        codex_server,
+        "_plugin_configuration_snapshot",
+        lambda _paths, _options=(): _snapshot("same content", "after rewrite"),
+    )
+
+    codex_server._require_unchanged_plugin_snapshot(
+        codex_server._paths({"CODEX_HOME": str(tmp_path / "home")}),
+        expected,
+        "test certification",
+    )
+
+
 def _arrange_live_helper(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -341,11 +360,11 @@ def test_sustained_probe_failure_preserves_ownership_but_fails_certification(
     ]
 
 
-def test_plugin_change_during_reuse_probe_is_revalidated(
+def test_metadata_rewrite_during_reuse_probe_remains_compatible(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Reuse retries and certifies against the replacement snapshot."""
+    """A same-content metadata rewrite does not replace a live server."""
     environment, _sleeps, _commands = _arrange_live_helper(
         monkeypatch,
         tmp_path,
@@ -355,9 +374,6 @@ def test_plugin_change_during_reuse_probe_is_revalidated(
         [
             _snapshot(),
             _snapshot(),
-            _snapshot(generation="changed during probe"),
-            _snapshot(generation="changed during probe"),
-            _snapshot(generation="changed during probe"),
             _snapshot(generation="changed during probe"),
         ]
     )
@@ -383,9 +399,6 @@ def test_plugin_change_during_reuse_probe_is_revalidated(
     assert observed == [
         "stable generation",
         "stable generation",
-        "changed during probe",
-        "changed during probe",
-        "changed during probe",
         "changed during probe",
     ]
 
@@ -521,81 +534,6 @@ def test_final_reuse_revalidates_worker_liveness(
         ensure_server(environment)
 
 
-def test_unchanged_snapshot_recovers_from_transient_read_race(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A transient within-scan race retries only the snapshot read."""
-    expected = _snapshot()
-    outcomes: Iterator[codex_server._PluginSnapshot | Exception] = iter(
-        [
-            codex_server_retry.PluginSnapshotChangedError("refresh race"),
-            expected,
-        ]
-    )
-    sleeps: list[float] = []
-
-    def snapshot(
-        _paths: object,
-        _options: object = (),
-    ) -> codex_server._PluginSnapshot:
-        outcome = next(outcomes)
-        if isinstance(outcome, Exception):
-            raise outcome
-        return outcome
-
-    monkeypatch.setattr(codex_server, "_plugin_configuration_snapshot", snapshot)
-    monkeypatch.setattr(codex_server.time, "sleep", sleeps.append)
-
-    codex_server._require_unchanged_plugin_snapshot(
-        object(), expected, "app-server startup"
-    )
-
-    assert sleeps == [codex_server_retry.PLUGIN_SNAPSHOT_BACKOFF_SECONDS[0]]
-
-
-def test_unchanged_snapshot_bounds_persistent_read_churn(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Persistent within-scan churn stops without lifecycle-retry signaling."""
-    calls = 0
-    lifecycle_calls = 0
-    sleeps: list[float] = []
-
-    def snapshot(
-        _paths: object,
-        _options: object = (),
-    ) -> codex_server._PluginSnapshot:
-        nonlocal calls
-        calls += 1
-        raise codex_server_retry.PluginSnapshotChangedError("refresh race")
-
-    monkeypatch.setattr(codex_server, "_plugin_configuration_snapshot", snapshot)
-    monkeypatch.setattr(codex_server.time, "sleep", sleeps.append)
-
-    @codex_server_retry.retry_plugin_snapshot_changes
-    def lifecycle() -> None:
-        nonlocal lifecycle_calls
-        lifecycle_calls += 1
-        codex_server._require_unchanged_plugin_snapshot(
-            object(), _snapshot(), "app-server startup"
-        )
-
-    with pytest.raises(
-        CodexServerError,
-        match="plugin updates did not settle",
-    ) as raised:
-        lifecycle()
-
-    assert type(raised.value) is CodexServerError
-    assert isinstance(
-        raised.value.__cause__,
-        codex_server_retry.PluginSnapshotChangedError,
-    )
-    assert calls == codex_server_retry.PLUGIN_SNAPSHOT_ATTEMPTS
-    assert lifecycle_calls == 1
-    assert sleeps == list(codex_server_retry.PLUGIN_SNAPSHOT_BACKOFF_SECONDS)
-
-
 def test_unchanged_snapshot_preserves_stable_mismatch_behavior(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -647,13 +585,13 @@ def test_plugin_change_during_startup_is_not_certified(
     ) -> codex_server._PluginSnapshot:
         nonlocal snapshot_calls
         snapshot_calls += 1
-        generation = (
+        fingerprint = (
             "changed during startup"
             if snapshot_calls % 3 == 0
-            else "startup generation"
+            else "startup snapshot"
         )
-        value = _snapshot("startup snapshot", generation)
-        observed.append(value.generation)
+        value = _snapshot(fingerprint)
+        observed.append(value.fingerprint)
         return value
 
     def read_state(_paths: object) -> OwnedServer | None:
@@ -723,8 +661,8 @@ def test_plugin_change_during_startup_is_not_certified(
         item
         for _attempt in range(expected_attempts)
         for item in (
-            "startup generation",
-            "startup generation",
+            "startup snapshot",
+            "startup snapshot",
             "changed during startup",
         )
     ]

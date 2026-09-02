@@ -17,6 +17,17 @@ def _mock_capture(lines: list[str]):
 
 class TestPromptDetection:
 
+    @patch("claude_code_tools.msg.prompt_detect.subprocess.run")
+    def test_capture_targets_registered_tmux_socket(self, run):
+        run.return_value.returncode = 0
+        run.return_value.stdout = "› \n"
+
+        result = detect_prompt_state("%2", "codex", "/tmp/tmux-b")
+
+        assert result == PromptState.EMPTY
+        assert run.call_args.args[0][:3] == ["tmux", "-S", "/tmp/tmux-b"]
+
+
     @patch(
         "claude_code_tools.msg.prompt_detect"
         "._capture_last_lines",
@@ -69,6 +80,111 @@ class TestPromptDetection:
             "› fix the auth bug",
         ]
         result = detect_prompt_state("test:1.2", "codex")
+        assert result == PromptState.HAS_TEXT
+
+    @patch(
+        "claude_code_tools.msg.prompt_detect"
+        "._capture_last_lines",
+    )
+    def test_codex_dim_placeholder_is_an_empty_prompt(self, mock_capture):
+        mock_capture.return_value = [
+            "\x1b[1m›\x1b[0m \x1b[2mFind and fix a bug in @filename\x1b[0m",
+        ]
+
+        result = detect_prompt_state("test:1.2", "codex")
+
+        assert result == PromptState.EMPTY
+
+    @patch(
+        "claude_code_tools.msg.prompt_detect"
+        "._capture_last_lines",
+    )
+    def test_claude_dim_placeholder_is_an_empty_prompt(self, mock_capture):
+        mock_capture.return_value = [
+            "\x1b[39m❯\xa0\x1b[2mTry asking about this repository\x1b[0m",
+        ]
+
+        result = detect_prompt_state("test:1.1", "claude")
+
+        assert result == PromptState.EMPTY
+
+    @patch(
+        "claude_code_tools.msg.prompt_detect"
+        "._capture_last_lines",
+    )
+    def test_typed_text_before_dim_suggestion_is_not_empty(self, mock_capture):
+        mock_capture.return_value = [
+            "\x1b[1m›\x1b[0m fix auth\x1b[2m with a token refresh\x1b[0m",
+        ]
+
+        result = detect_prompt_state("test:1.2", "codex")
+
+        assert result == PromptState.HAS_TEXT
+
+    @patch(
+        "claude_code_tools.msg.prompt_detect"
+        "._capture_last_lines",
+    )
+    def test_dim_prompt_glyph_does_not_hide_typed_text(self, mock_capture):
+        mock_capture.return_value = [
+            "\x1b[2m› typed input\x1b[0m",
+        ]
+
+        result = detect_prompt_state("test:1.2", "codex")
+
+        assert result == PromptState.HAS_TEXT
+
+    @patch(
+        "claude_code_tools.msg.prompt_detect"
+        "._capture_last_lines",
+    )
+    def test_reset_after_dim_does_not_hide_typed_text(self, mock_capture):
+        for reset in ("22", "0"):
+            mock_capture.return_value = [
+                f"\x1b[1m›\x1b[0m \x1b[2;{reset}mtyped input\x1b[0m",
+            ]
+
+            result = detect_prompt_state("test:1.2", "codex")
+
+            assert result == PromptState.HAS_TEXT
+
+    @patch(
+        "claude_code_tools.msg.prompt_detect"
+        "._capture_last_lines",
+    )
+    def test_dim_after_reset_is_still_a_placeholder(self, mock_capture):
+        mock_capture.return_value = [
+            "\x1b[1m›\x1b[0m \x1b[22;2mplaceholder text\x1b[0m",
+        ]
+
+        result = detect_prompt_state("test:1.2", "codex")
+
+        assert result == PromptState.EMPTY
+
+    @patch(
+        "claude_code_tools.msg.prompt_detect"
+        "._capture_last_lines",
+    )
+    def test_indexed_color_two_is_not_dim(self, mock_capture):
+        mock_capture.return_value = [
+            "\x1b[1m›\x1b[0m \x1b[38;5;2mtyped input\x1b[0m",
+        ]
+
+        result = detect_prompt_state("test:1.2", "codex")
+
+        assert result == PromptState.HAS_TEXT
+
+    @patch(
+        "claude_code_tools.msg.prompt_detect"
+        "._capture_last_lines",
+    )
+    def test_rgb_color_mode_two_is_not_dim(self, mock_capture):
+        mock_capture.return_value = [
+            "\x1b[1m›\x1b[0m \x1b[38;2;2;40;80mtyped input\x1b[0m",
+        ]
+
+        result = detect_prompt_state("test:1.2", "codex")
+
         assert result == PromptState.HAS_TEXT
 
     @patch(

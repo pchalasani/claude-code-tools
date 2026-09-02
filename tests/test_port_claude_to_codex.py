@@ -333,6 +333,15 @@ def _read_lines(path: Path) -> list[dict[str, Any]]:
         return [json.loads(line) for line in f if line.strip()]
 
 
+def _response_items(out_path: Path) -> list[dict[str, Any]]:
+    """Read only model-facing response items from a rollout."""
+    return [
+        line
+        for line in _read_lines(out_path)
+        if line.get("type") == "response_item"
+    ]
+
+
 def _item_pairs(out_path: Path) -> list[tuple[str, str]]:
     """Extract (role, text) pairs from a rollout's response items."""
     return [
@@ -340,7 +349,7 @@ def _item_pairs(out_path: Path) -> list[tuple[str, str]]:
             item["payload"]["role"],
             item["payload"]["content"][0]["text"],
         )
-        for item in _read_lines(out_path)[1:]
+        for item in _response_items(out_path)
     ]
 
 
@@ -418,6 +427,7 @@ class TestConverter:
             "cwd",
             "originator",
             "cli_version",
+            "model_provider",
         }
         assert payload["id"] == new_id
         # a ported session is a fresh (non-forked) root thread
@@ -426,6 +436,7 @@ class TestConverter:
         assert payload["cwd"] == json.loads(
             session.read_text().splitlines()[-1]
         ).get("cwd")
+        assert payload["model_provider"] == "openai"
         assert payload["git"] == {"branch": "feat/x"}
         cm = first["continue_metadata"]
         assert cm["ported_from"] == "claude"
@@ -449,7 +460,7 @@ class TestConverter:
         same turn id, as in real rollouts.
         """
         _, _, out_path = ported
-        items = _read_lines(out_path)[1:]
+        items = _response_items(out_path)
         assert items, "no response items written"
         prev_role = None
         prev_turn_id = None
@@ -549,7 +560,7 @@ class TestConverter:
         self, ported: Ported
     ) -> None:
         _, _, out_path = ported
-        items = _read_lines(out_path)[1:]
+        items = _response_items(out_path)
         texts = [
             i["payload"]["content"][0]["text"] for i in items
         ]
@@ -573,7 +584,7 @@ class TestConverter:
         self, ported: Ported
     ) -> None:
         _, _, out_path = ported
-        items = _read_lines(out_path)[1:]
+        items = _response_items(out_path)
         texts = [
             i["payload"]["content"][0]["text"] for i in items
         ]
@@ -684,7 +695,7 @@ class TestConverter:
 
     def test_no_empty_messages(self, ported: Ported) -> None:
         _, _, out_path = ported
-        for item in _read_lines(out_path)[1:]:
+        for item in _response_items(out_path):
             assert item["payload"]["content"][0]["text"].strip()
 
     def test_history_jsonl_appended(
@@ -741,7 +752,7 @@ class TestConverter:
         _, out_path = port_claude_session_to_codex(
             path, codex_home=codex_home
         )
-        items = _read_lines(out_path)[1:]
+        items = _response_items(out_path)
         assert items[0]["payload"]["role"] == "user"
         assert (
             f"[Transcript ported from Claude Code session {CLAUDE_SID}]"

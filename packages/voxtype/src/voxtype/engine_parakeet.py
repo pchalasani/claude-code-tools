@@ -494,6 +494,15 @@ class ParakeetEngine:
         # never be replayed ahead of the hold-start it followed.
         self._cmd_lock = threading.Lock()
         self._commands: deque[str] = deque()
+        # When the last cross-thread command ARRIVED (stamped in
+        # _request, so it covers commands not yet drained by the
+        # worker). The MLX keepalive holds off for a grace period
+        # after any command: a just-activated user is about to speak,
+        # and a keepalive page-in blocking capture at that exact
+        # moment is the one delay the feature must never cause.
+        # -inf: no grace at startup. Benign cross-thread float write
+        # (GIL-atomic); only ever compared against the clock.
+        self._last_command = float("-inf")
         # Completed hold takes, decoded on a FIFO decoder thread so a
         # slow decode never blocks capture; None = shutdown sentinel.
         self._takes: queue.Queue = queue.Queue()
@@ -514,6 +523,7 @@ class ParakeetEngine:
         self.fatal_error: str | None = None
 
     def _request(self, command: str) -> None:
+        self._last_command = time.monotonic()
         with self._cmd_lock:
             self._commands.append(command)
 
@@ -823,6 +833,7 @@ class ParakeetEngine:
                 )
                 while not self._stop.is_set():
                     self._process_commands(on_utterance, np)
+                    self._keepalive_tick()
                     samples = self._read_samples(
                         stream, read_size, native_rate, np
                     )
@@ -924,6 +935,16 @@ class ParakeetEngine:
         finally:
             with self._stream_lock:
                 self._stream = None
+
+    def _keepalive_tick(self) -> None:
+        """Hook run once per capture-loop iteration; no-op by default.
+
+        The MLX engine overrides this to keep its model's memory
+        resident (see ``ParakeetMlxEngine._keepalive_tick``). It runs
+        on the capture thread — the only thread allowed to touch the
+        MLX model — which is why the hook lives in the capture loop
+        rather than on a timer thread.
+        """
 
     def _process_commands(
         self, on_utterance: Callable[[str], None], np  # noqa: ANN001

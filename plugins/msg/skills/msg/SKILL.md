@@ -1,4 +1,5 @@
 ---
+name: msg
 description: >-
   Inter-agent communication via the msg CLI.
   Use this when you need to send messages to other

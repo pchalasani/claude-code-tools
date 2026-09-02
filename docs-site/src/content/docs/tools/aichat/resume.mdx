@@ -49,7 +49,7 @@ strategies:
 | **Rollover** | Fresh session with lineage pointers | Clean slate, full history preserved |
 
 **Rollover** is the most frequently used strategy.
-See [Rollover Details](./rollover-details/) for a
+See [Rollover Details](../rollover-details/) for a
 deep dive on how it works.
 
 ## Three ways to access the resume options
@@ -88,7 +88,7 @@ deep dive on how it works.
     aichat search "my topic"
     ```
 
-    See the [Search](./search/) page for details.
+    See the [Search](../search/) page for details.
   </TabItem>
   <TabItem label="Direct CLI">
     Use the `resume` subcommand directly:
@@ -97,8 +97,8 @@ deep dive on how it works.
     # Resume the latest session for this project
     aichat resume
 
-    # Resume a specific session by ID
-    aichat resume abc123-def456
+    # Resume by name or ID fragment
+    aichat resume session-finder
     ```
   </TabItem>
 </Tabs>
@@ -138,7 +138,7 @@ So run `>trim` **before** you hit the wall. Once Claude Code
 shows `Context limit reached · /compact or /clear to continue`,
 the *live* context is what is full, so `>trim` typed there
 cannot rescue it — quit and resume (optionally
-`aichat trim-in-place <id>` from a shell first) to come back
+`aichat trim-in-place <session>` from a shell first) to come back
 lean.
 
 ### Options (in-session)
@@ -164,19 +164,45 @@ same session ID and writes a timestamped backup
 (`<id>.pre-trim-<ts>.jsonl.bak`) next to the file, which the
 truncation placeholders reference.
 
+### When a trim times out
+
+The hook gives the trim a time budget: 25 seconds, plus a second
+per megabyte of transcript, capped at 60. If that runs out, the
+trim is stopped and the message tells you the budget that
+expired, the transcript and its size, which `aichat` your PATH
+resolved to, a copy-pasteable command to reproduce it, and
+whatever the CLI printed before it stopped.
+
+A preview that times out changes nothing. An **apply** that times
+out is different: the subprocess is killed outright, so the
+rewrite may or may not have landed. That message says the outcome
+is unknown and points you at the timestamped
+`.pre-trim-<ts>.jsonl.bak` backup — check it before retrying.
+
+Set `AICHAT_TRIM_TIMEOUT` (seconds, hard-capped at 75) before
+starting Claude to widen the budget:
+
+```bash
+AICHAT_TRIM_TIMEOUT=70 claude
+```
+
+The cap exists so the trim can never outlive the hook itself —
+otherwise Claude Code would kill the hook first and you would get
+no explanation at all.
+
 ### Same engine on the command line
 
 `>trim` shells out to `aichat trim-in-place`, which you can run
 directly on any Claude session (or from scripts):
 
 ```bash
-aichat trim-in-place <id> --dry-run    # preview tokens saved
-aichat trim-in-place <id>              # trim, keep same ID
-aichat trim-in-place <id> -a -20       # keep last 20 asst msgs
-aichat trim-in-place <id> -a 10        # trim first 10 asst msgs
-aichat trim-in-place <id> -l 800       # char threshold 800
-aichat trim-in-place <id> -t bash,read # only Bash/Read results
-aichat trim-in-place <id> --json       # machine-readable result
+aichat trim-in-place <session> --dry-run    # preview tokens saved
+aichat trim-in-place <session>              # trim, keep same ID
+aichat trim-in-place <session> -a -20       # keep last 20 asst msgs
+aichat trim-in-place <session> -a 10        # trim first 10 asst msgs
+aichat trim-in-place <session> -l 800       # char threshold 800
+aichat trim-in-place <session> -t bash,read # only Bash/Read results
+aichat trim-in-place <session> --json       # machine-readable result
 ```
 
 Flags: `-l/--len` threshold (default 500), `-a/--trim-assistant`
@@ -190,6 +216,10 @@ subcommand — install or update it with
 [Plugins](../../../getting-started/plugins/)). Works on Claude
 sessions only (not Codex).
 
+`<session>` accepts a Claude name, ID/fragment, filename fragment, or path.
+Human-readable ambiguity opens the shared picker. `--json` never prompts and
+always emits exactly one result or error object.
+
 ## CLI usage
 
 ```bash
@@ -197,12 +227,30 @@ sessions only (not Codex).
 aichat resume
 
 # Resume a specific session (opens resume menu)
-aichat resume <session_id>
+aichat resume <session>
+
+# A session name, or a partial id, works too
+aichat resume session-finder
+aichat resume a15f9ced
 ```
 
 The resume menu presents the strategy options listed
 above. Pick one and the tool handles cloning,
 trimming, or rollover automatically.
+
+The session argument accepts a name (set with
+`/rename`), a full or partial id, a rollout filename
+fragment, or a file path, across both agents — see
+[Resolve](../resolve/). In a terminal, an ambiguous query opens the shared
+numbered picker; non-interactive use lists the candidates and exits.
+
+Cloning follows the transcript you actually named.
+Give `aichat clone` a file path and it copies **that
+file** into the configured Claude project's session
+directory under a fresh session id, even if the
+transcript lives outside the Claude home — it does
+not rebuild a path from the working directory the
+session happens to record.
 
 ## Rollover options
 
@@ -279,4 +327,4 @@ to its parent:
 
 This creates a linked chain that the agent can traverse
 to recover any prior context. For the full technical
-details, see [Rollover Details](./rollover-details/).
+details, see [Rollover Details](../rollover-details/).

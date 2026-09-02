@@ -145,7 +145,7 @@ def test_lowercase_keys_reach_their_own_targets(browser: Browser) -> None:
     browser.press("G")
     browser.press("g")
     browser.run("wait", "150")
-    assert browser.cursor_row() == "//current-state"
+    assert browser.cursor_row() == "current-update"
 
     browser.press("n")
     browser.run("wait", "200")
@@ -350,13 +350,10 @@ def test_the_arrow_keys_walk_the_page_with_the_pointer_resting_on_it(
     assert back == adjacent
 
 
-def test_the_chat_box_opens_on_c_and_still_on_the_old_a(
+def test_c_opens_context_chat_and_a_opens_the_global_message(
     browser: Browser,
 ) -> None:
-    """Open the box the page now calls Chat from its documented key.
-
-    ``a`` is kept as an undocumented alias because fingers remember it.
-    """
+    """Keep contextual chat and direct agent messaging distinct."""
     browser.click_row(FIRST_ITEM)
     browser.press("c")
     browser.run("wait", "300")
@@ -376,7 +373,11 @@ def test_the_chat_box_opens_on_c_and_still_on_the_old_a(
         "affordance": "Chat",
     }
     assert closed is False
-    assert on_a == on_c
+    assert on_a == {
+        "open": True,
+        "label": "Message the agent",
+        "affordance": "Chat",
+    }
 
 
 def test_keys_are_inert_while_a_question_is_being_typed(

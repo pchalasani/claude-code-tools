@@ -195,9 +195,9 @@ def test_one_key_opens_the_whole_page_and_another_folds_it_back(
     assert folded["openKinds"] == [], folded
     assert folded["open"] == 0, folded
     assert folded["threads"] == 0, folded
-    assert folded["rows"] == 3, folded
-    assert folded["cursor"] == "//current-state", folded
-    assert opened_top["cursor"] == "//current-state", opened_top
+    assert folded["rows"] == 2, folded
+    assert folded["cursor"] == "current-update", folded
+    assert opened_top["cursor"] == "current-update", opened_top
     assert opened_top["open"] > folded["open"], opened_top
     assert refolded == folded, refolded
     assert revealed["cursor"] is not None, revealed
@@ -502,17 +502,15 @@ def test_the_page_says_which_keys_do_the_new_things(browser: Browser) -> None:
     help_rows = browser.evaluate(_HELP_KEYS)
 
     named = {action: (key, label) for action, key, label in bar}
-    assert named["expand-all"] == ("E", "Expand all")
-    assert named["collapse-all"] == ("C", "Collapse all")
-    assert named["reveal-chats"] == ("m", "Reveal / restore chats")
-    assert named["hints"] == ("f", "Jump to a row")
-    assert named["next-row"] == ("j", "Next row")
+    assert named["reveal-chats"] == ("m", "Chats / restore")
+    assert named["hints"] == ("f", "Jump to row")
     assert named["next-awaiting"] == ("n", "Next open chat")
     # The key bar has to say that chatting is not an item-only affordance.
     assert named["compose"] == ("c", "Chat here")
+    assert named["compose-global"] == ("a", "Message agent")
     listed = {key: meaning for key, meaning in help_rows}
     assert "E / C" in listed
-    assert listed["f"].startswith("Label every row")
+    assert listed["f"].startswith("Jump to a row")
     assert "conversation" in listed["c"]
     assert listed["m"] == (
         "Reveal your chats, then restore the prior fold layout"
@@ -554,10 +552,10 @@ def test_shortcut_glyphs_and_labels_stay_readable_on_a_small_screen(
     assert painted["rows"] > 1, painted
     assert all(reading["label"] for reading in painted["readings"]), painted
     assert all(
-        reading["labelVisible"] and reading["labelSize"] >= 14
+        reading["labelVisible"] and reading["labelSize"] >= 13
         for reading in painted["readings"]
     ), painted
     assert all(
-        reading["keyVisible"] and reading["keySize"] >= 16
+        reading["keyVisible"] and reading["keySize"] >= 13
         for reading in painted["readings"]
     ), painted

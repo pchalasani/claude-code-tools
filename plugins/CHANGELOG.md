@@ -1,5 +1,52 @@
 # Plugin Changelog
 
+## 2026-08-23
+
+### safety-hooks 1.15.2
+
+- fix: env-file guard no longer blocks ordinary globs (issue #178)
+  - `find . -name '*.ts'`, `grep --include='*.py'`, `rg -g '*.rs'`, and
+    `find . -path '*/dist/*'` were denied because a bare `*` was allowed
+    to spell out the literal `.env`; a glob now names a dotenv only when
+    literal text or non-`*` wildcards help spell the `.env` core
+  - mixed spellings (`*env`, `*nv`, `*[e]nv`, `*e?v`) still block;
+    `*.local` is a documented accepted trade-off
+  - `find` negation (`! -path X`, `-not -name X`) is now honoured as an
+    exclusion, with fail-closed handling for double negation,
+    disjunctions (`-o`/`-or`/`,`), and `!` operands of
+    `-printf`/`-fprintf`
+  - reported in issue #178 by @tudorsss
+
+## 2026-08-20
+
+### safety-hooks 1.15.1
+
+- fix: block pathspecs that stage the repository root by another name
+  - `git add ./`, `git add :/`, `git add :(top)`, `git add ""`, and absolute
+    paths containing the working directory all stage what the blocked
+    `git add .` stages, and are now blocked with it
+  - paths below the root (`sub/`, `./sub`, `:/sub`, `:(top)sub`) and
+    exclusions (`:!file`) are unaffected
+  - reported by the Codex reviewer on PR #174
+
+## 2026-08-20
+
+### safety-hooks 1.15.0
+
+- feat: `CCTOOLS_ALLOW_GIT=1` allows `git commit` in every session
+  - the session-scoped `/tmp` allow flag no longer has to survive for commits
+    to work, which it did not: macOS reaps `/tmp` after a few days, so a
+    long-lived session started prompting again partway through its life
+  - `>allow-git off` writes a session-scoped deny flag that overrides the
+    environment variable, so one session can opt back into prompts
+  - `>allow-git status` reports which of the three is in effect
+- change: `git add` of explicitly named paths never asks for approval
+  - blanket staging (`git add -A`, `git add .`, `git add *`) stays blocked,
+    including behind `env -C`, `env -S`, and `GIT_DIR=` prefixes
+  - `git add --pathspec-from-file` still asks, since the hook cannot read the
+    path list it would stage
+  - `>allow-git staging` is gone; staging is no longer gated
+
 ## 2026-07-16
 
 ### dynamic-workflow 0.2.1

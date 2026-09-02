@@ -13,7 +13,11 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Set, Optional
 
-from claude_code_tools.session_utils import get_claude_home, resolve_session_path
+from claude_code_tools.session_utils import (
+    get_claude_home,
+    get_codex_home,
+    resolve_session_path,
+)
 
 
 def find_direct_children(
@@ -110,13 +114,18 @@ def print_tree(
         print_tree(lineage, child, child_indent)
 
 
-def get_search_dirs(custom_dir: Path = None, claude_home: Optional[str] = None) -> List[Path]:
+def get_search_dirs(
+    custom_dir: Optional[Path] = None,
+    claude_home: Optional[str] = None,
+    codex_home: Optional[str] = None,
+) -> List[Path]:
     """
     Get list of directories to search for sessions.
 
     Args:
         custom_dir: Optional custom directory to search.
         claude_home: Optional custom Claude home directory.
+        codex_home: Optional custom Codex home directory.
 
     Returns:
         List of directories to search.
@@ -125,11 +134,11 @@ def get_search_dirs(custom_dir: Path = None, claude_home: Optional[str] = None) 
         return [custom_dir]
 
     base_dir = get_claude_home(claude_home)
-    codex_home = Path.home() / ".codex"
+    codex_home_path = get_codex_home(codex_home)
 
     return [
         base_dir / "projects",  # Search all Claude projects
-        codex_home / "sessions",
+        codex_home_path / "sessions",
     ]
 
 
@@ -161,6 +170,11 @@ Examples:
         help="Path to Claude home directory (default: ~/.claude or $CLAUDE_CONFIG_DIR)",
     )
     parser.add_argument(
+        "--codex-home",
+        type=str,
+        help="Path to Codex home directory (default: ~/.codex or $CODEX_HOME)",
+    )
+    parser.add_argument(
         "--tree",
         "-t",
         action="store_true",
@@ -189,7 +203,11 @@ Examples:
 
     # Get search directories
     search_dir = Path(args.search_dir) if args.search_dir else None
-    search_dirs = get_search_dirs(search_dir, claude_home=args.claude_home)
+    search_dirs = get_search_dirs(
+        search_dir,
+        claude_home=args.claude_home,
+        codex_home=args.codex_home,
+    )
 
     # Find all descendants
     lineage = find_all_descendants(session_path, search_dirs)

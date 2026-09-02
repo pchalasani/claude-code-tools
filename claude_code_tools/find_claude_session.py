@@ -1263,25 +1263,47 @@ def copy_session_file(session_file_path: str, dest_override: str | None = None, 
         print(f"\nError copying file: {e}")
 
 
-def clone_session(session_id: str, project_path: str, shell_mode: bool = False, claude_home: Optional[str] = None):
-    """Clone a Claude session to a new file with new UUID and resume it."""
+def clone_session(
+    session_id: str,
+    project_path: str,
+    shell_mode: bool = False,
+    claude_home: Optional[str] = None,
+    source_path: Optional[Path] = None,
+) -> None:
+    """Clone a Claude session to a new file with new UUID and resume it.
+
+    Args:
+        session_id: UUID of the session being cloned.
+        project_path: Working directory used when resuming the clone.
+        shell_mode: Whether to emit shell commands instead of resuming.
+        claude_home: Optional configured Claude home.
+        source_path: Exact resolved transcript to clone. When omitted, retain
+            the legacy path reconstruction behavior.
+    """
     import shutil
     import uuid
 
-    # Get the original session file path
-    source_path = Path(get_session_file_path(session_id, project_path, claude_home))
+    if source_path is None:
+        source_path = Path(
+            get_session_file_path(session_id, project_path, claude_home)
+        )
 
     if not source_path.exists():
         print(f"\nError: Session file not found: {source_path}")
         return
 
-    # Generate new UUID for cloned session
-    new_session_id = str(uuid.uuid4())
-
-    # Create destination path with new UUID in same directory
-    dest_path = source_path.parent / f"{new_session_id}.jsonl"
-
     try:
+        destination_dir = Path(
+            get_session_file_path(session_id, project_path, claude_home)
+        ).parent
+        destination_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate new UUID for cloned session
+        new_session_id = str(uuid.uuid4())
+
+        # Claude discovers sessions only inside the configured project home.
+        dest_path = destination_dir / f"{new_session_id}.jsonl"
+
         # Copy the file
         shutil.copy2(source_path, dest_path)
 
@@ -1299,8 +1321,8 @@ def clone_session(session_id: str, project_path: str, shell_mode: bool = False, 
         resume_session(new_session_id, project_path, shell_mode=shell_mode, claude_home=claude_home)
 
     except Exception as e:
-        print(f"\nError cloning session: {e}")
-        return
+        print(f"\nError cloning session: {e}", file=sys.stderr)
+        raise SystemExit(1) from None
 
 
 def resume_session(session_id: str, project_path: str, shell_mode: bool = False, claude_home: Optional[str] = None):

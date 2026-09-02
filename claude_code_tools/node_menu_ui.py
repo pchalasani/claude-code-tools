@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,11 +19,90 @@ from typing import Any, Callable, Dict, Iterable, List
 
 SessionDict = Dict[str, Any]
 
+#: Runtime npm packages ``menu.js`` imports directly. A checkout that is
+#: missing any of them cannot render a menu, so we check before spawning Node
+#: rather than letting Node print a raw ``ERR_MODULE_NOT_FOUND`` stack trace.
+NODE_UI_REQUIRED_PACKAGES = (
+    "chalk",
+    "figures",
+    "ink",
+    "ink-select-input",
+    "meow",
+    "react",
+)
+
+
+def _node_ui_dir() -> Path:
+    """Return the directory holding the bundled Node UI."""
+    here = Path(__file__).resolve()
+    return here.parent.parent / "node_ui"
+
 
 def _node_script_path() -> Path:
     """Return path to the bundled Node UI script."""
-    here = Path(__file__).resolve()
-    return here.parent.parent / "node_ui" / "menu.js"
+    return _node_ui_dir() / "menu.js"
+
+
+def _missing_node_ui_packages(node_ui_dir: Path | None = None) -> List[str]:
+    """Return the required Node UI packages that are not installed.
+
+    Args:
+        node_ui_dir: Directory to inspect. Defaults to the bundled ``node_ui``.
+
+    Returns:
+        Names of missing packages, empty when every requirement is present.
+    """
+    root = node_ui_dir if node_ui_dir is not None else _node_ui_dir()
+    node_modules = root / "node_modules"
+    if not node_modules.is_dir():
+        return list(NODE_UI_REQUIRED_PACKAGES)
+    return [
+        name
+        for name in NODE_UI_REQUIRED_PACKAGES
+        if not (node_modules / name).is_dir()
+    ]
+
+
+def _quote_path(path: Path) -> str:
+    """Quote a path for the shell the user is most likely pasting into.
+
+    ``shlex.quote`` emits POSIX single quotes, which ``cmd.exe`` treats as
+    literal characters, so a Windows path containing spaces would be split.
+
+    Args:
+        path: Path to embed in a suggested command line.
+
+    Returns:
+        The path, quoted only when it needs to be.
+    """
+    text = str(path)
+    if os.name == "nt":
+        # cmd.exe splits on & | ^ < > as well as spaces, so always quote.
+        return f'"{text}"'
+    return shlex.quote(text)
+
+
+def _no_node_message() -> str:
+    """Build the message shown when the Node runtime is unavailable."""
+    return (
+        "aichat could not start its interactive menu: 'node' was not found "
+        "on PATH.\nInstall Node.js (>=18) and try again."
+    )
+
+
+def _node_ui_setup_message(missing: List[str], node_ui_dir: Path) -> str:
+    """Build an actionable message for a Node UI with missing dependencies."""
+    return (
+        "aichat could not start its interactive menu: the Node UI "
+        f"dependencies are missing ({', '.join(missing)}).\n"
+        f"Expected them in: {node_ui_dir / 'node_modules'}\n"
+        "\n"
+        "This happens when aichat runs from a source checkout (an editable\n"
+        "install) whose Node dependencies were never installed. Install them\n"
+        "with either of:\n"
+        f"  npm ci --prefix {_quote_path(node_ui_dir)} --omit=dev\n"
+        "  make install   # from that checkout (needs GNU make)\n"
+    )
 
 
 def _write_payload(
@@ -63,15 +144,33 @@ def _write_payload(
 def _run_node(data_path: Path, out_path: Path, stderr_mode: bool = False) -> int:
     """Invoke the Node UI process.
 
-    Returns the process return code.
+    Returns the process return code. A missing Node runtime or missing Node UI
+    dependencies are reported as an actionable message and return code 1.
     """
+    # Check the runtime before its packages: on a machine without Node, telling
+    # the user to run npm is useless advice.
+    if shutil.which("node") is None:
+        print(_no_node_message(), file=sys.stderr)
+        return 1
+
+    node_ui_dir = _node_ui_dir()
+    missing = _missing_node_ui_packages(node_ui_dir)
+    if missing:
+        print(_node_ui_setup_message(missing, node_ui_dir), file=sys.stderr)
+        return 1
+
     script = _node_script_path()
     cmd = ["node", str(script), "--data", str(data_path), "--out", str(out_path)]
     env = os.environ.copy()
     if stderr_mode:
         env["NODE_UI_STDERR"] = "1"
 
-    proc = subprocess.run(cmd, env=env)
+    try:
+        proc = subprocess.run(cmd, env=env)
+    except FileNotFoundError:
+        # Node disappeared between the check above and the spawn.
+        print(_no_node_message(), file=sys.stderr)
+        return 1
     return proc.returncode
 
 

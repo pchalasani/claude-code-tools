@@ -43,16 +43,15 @@ claude plugin install safety-hooks@cctools-plugins
   </Card>
 
   <Card title="Git Add Protection">
-    Smart staging control that hard-blocks dangerous
-    patterns like `git add .` and `git add -A`,
-    while allowing new files and prompting for
-    modified files.
+    Hard-blocks bulk staging patterns like
+    `git add .` and `git add -A`, while staging
+    of specific paths goes through untouched.
   </Card>
 
   <Card title="Environment Security">
     Blocks all `.env` file operations (read, write,
     edit) and suggests the
-    [env-safe](../tools/env-safe/) command for
+    [env-safe](../../tools/env-safe/) command for
     safe inspection.
   </Card>
 
@@ -91,7 +90,7 @@ Each hook returns one of three results:
 |-----------|-----------------|
 | `bash_hook.py` | Main orchestrator for all bash command checks |
 | `git_commit_block_hook.py` | User permission prompt for `git commit` |
-| `git_add_block_hook.py` | Smart staging: blocks dangerous patterns, prompts for modified files |
+| `git_add_block_hook.py` | Blocks bulk staging patterns (`git add -A`, `git add .`, wildcards) |
 | `env_file_protection_hook.py` | Blocks all `.env` file operations (read/write/edit) |
 | `file_size_conditional_hook.py` | Prevents reading files over 500 lines |
 | `grep_block_hook.py` | Enforces ripgrep (`rg`) over `grep` |
@@ -101,50 +100,60 @@ Each hook returns one of three results:
 
 ### Git Add Protection
 
-The `git add` hook applies layered protection:
+The `git add` hook blocks bulk staging outright:
 
-- **Hard blocks** (always denied):
+- `git add .`
+- `git add ../`
+- `git add *`
+- `git add -A` / `git add --all`
+- pathspecs that name the same thing by
+  another route: `./`, `:/`, `:(top)`, an
+  empty pathspec, or an absolute path that
+  contains the working directory
 
-  - `git add .`
-  - `git add ../`
-  - `git add *`
-  - `git add -A` / `git add --all`
+These stay blocked behind command prefixes too,
+so `env -C <dir> git add -A` and
+`GIT_DIR=... git add .` are blocked as well.
 
-- **New files** -- allowed without a prompt,
-  since they pose minimal risk.
+Staging specific paths -- new files, modified
+files, a named directory -- is never gated and
+never prompts. The one exception is
+`--pathspec-from-file`, which stages an
+unreadable list of paths and so still asks.
 
-- **Modified files** -- require user approval
-  via the permission prompt.
+### Allowing Commits
 
-- **Directories** -- the hook performs a dry-run
-  to detect which files would be staged. If any
-  modified files are included, approval is
-  required.
+`git commit` asks for approval by default. Set
+`CCTOOLS_ALLOW_GIT=1` in your environment to allow
+commits everywhere without prompting -- useful for
+unattended workflows, where a prompt stalls the run:
 
-### Temporarily Allowing Staging & Commits
+```json title="~/.claude/settings.json"
+{
+  "env": {
+    "CCTOOLS_ALLOW_GIT": "1"
+  }
+}
+```
 
-When you're in a workflow where you trust the agent
-to stage modified files and commit, you can
-temporarily disable the approval prompts using a
-`>allow-git` trigger. Type it directly at the prompt:
+The `>allow-git` trigger is the per-session
+override. Type it directly at the prompt:
 
 | Trigger | Effect |
 |---------|--------|
-| `>allow-git` | Allow both staging and commits |
-| `>allow-git staging` | Allow only staging modified files |
-| `>allow-git commit` | Allow only commits |
-| `>allow-git off` | Restore approval prompts |
-| `>allow-git status` | Show current state |
+| `>allow-git` | Allow commits in this session |
+| `>allow-git off` | Restore approval prompts in this session |
+| `>allow-git status` | Show current state and why |
 
-This is **session-scoped** — it only affects the
-current Claude Code session. Other concurrent sessions
-are unaffected, and the allowance is automatically
-gone when the session ends.
+`>allow-git off` wins over `CCTOOLS_ALLOW_GIT`, so a
+single session can opt back into prompts. Both
+triggers are **session-scoped**: other concurrent
+sessions are unaffected.
 
 :::caution
 Dangerous operations like `git add -A`, `git add .`,
 and `git checkout --force` remain **always blocked**
-regardless of this setting.
+regardless of these settings.
 :::
 
 ### Environment File Protection
@@ -156,8 +165,49 @@ All operations on `.env` files are blocked:
 - Editing (e.g., Edit tool)
 
 The hook directs users to the
-[env-safe](../tools/env-safe/) CLI for safe
+[env-safe](../../tools/env-safe/) CLI for safe
 inspection of environment variables.
+
+#### Globs in find / grep / ripgrep
+
+The guard also inspects filename globs passed to
+`find`, `grep`, and `rg`, and blocks a command only
+when its glob *targets* a dotenv name. A glob counts
+as targeting a dotenv when its literal characters or
+its non-`*` wildcards (`?`, bracket classes) help
+spell the `.env` name:
+
+- Blocked: `find . -name '.env'`,
+  `find . -path '*/.env'`,
+  `grep -r --include='*.env*'`, `rg -g '*env'`,
+  `find . -name '.?nv'`, `rg -g '*e?v'`
+- Allowed: `find . -name '*.ts'`,
+  `find . -path '*/dist/*'`,
+  `grep -rn TODO --include='*.py' .`,
+  `rg TODO -g '*.rs'`
+
+A bare `*` on its own is never treated as spelling
+`.env`, even though it could match one at runtime --
+otherwise every ordinary include-glob would be
+denied. This is consistent with the guard allowing
+`grep -r SECRET .` (no glob at all), which reads the
+same files. The known trade-off: a glob like
+`--include='*.local'` can match `.env.local` but is
+allowed, because it reaches a dotenv only by `*`
+expanding over the entire `.env` core.
+
+Negated predicates and globs are exclusions, not
+selections, so they never trigger the guard:
+`find . ! -path '*/.env'`,
+`find . -not -name '.env'`, and
+`rg -g '!.env*'` are all allowed. Double negation
+(`find . ! ! -name '.env'`) selects again and is
+still blocked, and negation is ignored when the
+`find` expression contains a disjunction
+(`-o`/`-or`/`,`), since an `-o` branch can re-select
+the excluded file. Parenthesised `\( ... \)`
+expressions are not analysed as a unit; the guard
+inspects predicates token by token.
 
 :::tip
 If you need to modify a `.env` file, do so

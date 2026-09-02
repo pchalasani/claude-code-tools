@@ -14,7 +14,9 @@ Tests cover all duplicated functions across:
 
 import json
 import os
+import sqlite3
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
 
@@ -31,6 +33,20 @@ from claude_code_tools.session_utils import (
     is_valid_session,
     is_malformed_session,
 )
+from claude_code_tools.resolve_session import resolve as resolve_full_session
+from claude_code_tools.session_resolution import (
+    ResolvedSessionQuery,
+    SessionQueryError,
+    resolve_session_query,
+)
+from tests.resolve_session_helpers import (
+    FakeHome,
+    _write_claude_session,
+    claude_home,
+    codex_home,
+)
+
+__all__ = ["claude_home", "codex_home"]
 
 
 class TestHomeDirectoryResolution:
@@ -511,6 +527,449 @@ class TestCommandIntegration:
         # but actual Claude sessions store it as metadata.git.branch, which is extracted
         # separately by extract_git_branch_claude(). For this test, we just verify the
         # session is found - git_branch extraction is tested separately in TestMetadataExtraction.
+
+
+def _resolve_query_in_fake_homes(
+    query: str,
+    claude_home: FakeHome,
+    codex_home: FakeHome,
+    *,
+    agent: str | None = None,
+) -> ResolvedSessionQuery:
+    """Resolve against only the two supplied fake homes."""
+    return resolve_session_query(
+        query,
+        agent=agent,
+        claude_home=str(claude_home.path),
+        codex_home=str(codex_home.path),
+    )
+
+
+@pytest.mark.parametrize("agent_name", ["claude", "codex"])
+@pytest.mark.parametrize("query_kind", ["full", "prefix", "middle"])
+def test_shared_resolution_id_forms(
+    claude_home: FakeHome,
+    codex_home: FakeHome,
+    agent_name: str,
+    query_kind: str,
+) -> None:
+    """Full ids, prefixes, and middle fragments resolve for both agents."""
+    home = claude_home if agent_name == "claude" else codex_home
+    session_id = home.ids[2]
+    queries = {
+        "full": session_id,
+        "prefix": session_id[:12],
+        "middle": session_id[9:21],
+    }
+    result = _resolve_query_in_fake_homes(
+        queries[query_kind],
+        claude_home,
+        codex_home,
+        agent=agent_name,
+    )
+    assert result.agent == agent_name
+    assert result.session_file == home.files[2].resolve()
+    assert result.directory == home.directories[2]
+
+
+@pytest.mark.parametrize(
+    ("agent_name", "name"),
+    [
+        ("claude", "Unique Deployment Review"),
+        ("codex", "Unique Codex Migration"),
+    ],
+)
+def test_shared_resolution_exact_session_names(
+    claude_home: FakeHome,
+    codex_home: FakeHome,
+    agent_name: str,
+    name: str,
+) -> None:
+    """Claude custom titles and Codex thread names are accepted."""
+    home = claude_home if agent_name == "claude" else codex_home
+    result = _resolve_query_in_fake_homes(
+        name, claude_home, codex_home, agent=agent_name
+    )
+    assert result.session_file == home.files[2].resolve()
+
+
+def test_shared_resolution_rollout_filename_fragment(
+    claude_home: FakeHome, codex_home: FakeHome
+) -> None:
+    """A structural rollout filename fragment resolves one Codex file."""
+    query = f"2026-07-14T10-00-00-{codex_home.ids[2][:8]}"
+    result = _resolve_query_in_fake_homes(
+        query, claude_home, codex_home
+    )
+    assert result.agent == "codex"
+    assert result.session_file == codex_home.files[2].resolve()
+
+
+def test_shared_resolution_direct_path_prefers_content(
+    tmp_path: Path, claude_home: FakeHome, codex_home: FakeHome
+) -> None:
+    """Codex content copied under Claude's home remains Codex."""
+    project = claude_home.path / "projects" / "misplaced"
+    project.mkdir(parents=True)
+    misplaced = project / codex_home.files[2].name
+    misplaced.write_bytes(codex_home.files[2].read_bytes())
+
+    result = _resolve_query_in_fake_homes(
+        str(misplaced), claude_home, codex_home
+    )
+    assert result.agent == "codex"
+    assert result.session_file == misplaced.resolve()
+    assert result.directory == codex_home.directories[2]
+
+
+def test_shared_resolution_ambiguity_lists_candidates(
+    claude_home: FakeHome, codex_home: FakeHome
+) -> None:
+    """Ambiguity errors identify every matching candidate."""
+    with pytest.raises(SessionQueryError) as exc_info:
+        _resolve_query_in_fake_homes(
+            "Shared Plan",
+            claude_home,
+            codex_home,
+            agent="claude",
+        )
+    message = str(exc_info.value)
+    assert "Ambiguous session 'Shared Plan' matches 2 sessions" in message
+    assert claude_home.ids[0] in message
+    assert claude_home.ids[1] in message
+
+
+def test_shared_resolution_agent_constraint(
+    claude_home: FakeHome, codex_home: FakeHome
+) -> None:
+    """An agent constraint excludes an exact match from the other home."""
+    connection = sqlite3.connect(codex_home.path / "state_5.sqlite")
+    try:
+        connection.execute(
+            "UPDATE threads SET title = ? WHERE id = ?",
+            ("Unique Deployment Review", codex_home.ids[2]),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(SessionQueryError, match="Ambiguous"):
+        _resolve_query_in_fake_homes(
+            "Unique Deployment Review", claude_home, codex_home
+        )
+    result = _resolve_query_in_fake_homes(
+        "Unique Deployment Review",
+        claude_home,
+        codex_home,
+        agent="codex",
+    )
+    assert result.agent == "codex"
+    assert result.session_file == codex_home.files[2].resolve()
+
+
+@pytest.mark.parametrize("query_length", [12, 36])
+def test_shared_resolution_fast_path_matches_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+    claude_home: FakeHome,
+    codex_home: FakeHome,
+    query_length: int,
+) -> None:
+    """An 8+ character prefix or full ID avoids full enumeration."""
+    from claude_code_tools import session_resolution
+
+    query = claude_home.ids[2][:query_length]
+    full_result = resolve_full_session(
+        query,
+        "claude",
+        claude_home.path,
+        fallback_on_database_error=True,
+    )
+    assert full_result.kind == "single"
+
+    validated: set[Path] = set()
+    original_metadata = session_resolution._metadata_for_path
+
+    def track_metadata(
+        candidate_agent: str, candidate_path: Path
+    ) -> tuple[str | None, str | None]:
+        validated.add(candidate_path)
+        return original_metadata(candidate_agent, candidate_path)
+
+    def fail_full_resolver(*args: object) -> None:
+        raise AssertionError("8+ character prefix reached full resolver")
+
+    monkeypatch.setattr(
+        session_resolution, "_metadata_for_path", track_metadata
+    )
+    monkeypatch.setattr(
+        session_resolution, "_resolve_query_for_agent", fail_full_resolver
+    )
+    fast_result = _resolve_query_in_fake_homes(
+        query, claude_home, codex_home, agent="claude"
+    )
+
+    assert fast_result.session_file == Path(
+        full_result.records[0].session_file
+    )
+    assert fast_result.directory == full_result.records[0].directory
+    assert 0 < len(validated) <= 25
+
+
+def test_shared_resolution_fast_path_can_be_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    claude_home: FakeHome,
+    codex_home: FakeHome,
+) -> None:
+    """Falling through from an id-like query preserves the selection."""
+    from claude_code_tools import session_resolution
+
+    query = codex_home.ids[2]
+    expected = _resolve_query_in_fake_homes(
+        query, claude_home, codex_home, agent="codex"
+    )
+
+    def disable_fast_path(*args: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        session_resolution, "_validated_fast_candidates", disable_fast_path
+    )
+    actual = _resolve_query_in_fake_homes(
+        query, claude_home, codex_home, agent="codex"
+    )
+    assert actual == expected
+
+
+def test_shared_resolution_name_bypasses_fast_path(
+    monkeypatch: pytest.MonkeyPatch,
+    claude_home: FakeHome,
+    codex_home: FakeHome,
+) -> None:
+    """Free-text names bypass filename-glob validation entirely."""
+    from claude_code_tools import session_resolution
+
+    def fail_fast_path(*args: object) -> None:
+        raise AssertionError("name query entered the fast path")
+
+    monkeypatch.setattr(
+        session_resolution, "_validated_fast_candidates", fail_fast_path
+    )
+    result = _resolve_query_in_fake_homes(
+        "Unique Deployment Review",
+        claude_home,
+        codex_home,
+        agent="claude",
+    )
+    assert result.session_file == claude_home.files[2].resolve()
+
+
+@pytest.mark.parametrize("query", ["dead", "deadb", "deadbe", "deadbee"])
+def test_short_hex_query_defers_to_exact_name(
+    claude_home: FakeHome,
+    codex_home: FakeHome,
+    query: str,
+) -> None:
+    """Exact hex-like names of lengths four through seven outrank IDs."""
+    named = _write_claude_session(
+        claude_home.path,
+        "eeee4444-4444-4444-8444-444444444444",
+        claude_home.directories[0],
+        query,
+        1_720_000_000.0,
+    )
+    _write_claude_session(
+        claude_home.path,
+        f"ffff{query}-beef-4444-8444-444444444444",
+        claude_home.directories[1],
+        "Different session",
+        1_720_000_001.0,
+    )
+
+    result = _resolve_query_in_fake_homes(
+        query, claude_home, codex_home, agent="claude"
+    )
+
+    assert result.session_file == named.resolve()
+
+
+def test_fast_path_filesystem_error_falls_through(
+    monkeypatch: pytest.MonkeyPatch,
+    claude_home: FakeHome,
+    codex_home: FakeHome,
+) -> None:
+    """A failed bounded enumeration does not abort authoritative lookup."""
+    from claude_code_tools import session_resolution
+
+    def fail_enumeration(
+        *args: object, **kwargs: object
+    ) -> Iterator[tuple[str, Path]]:
+        raise OSError("unreadable directory")
+        yield
+
+    monkeypatch.setattr(
+        session_resolution, "_iter_named_session_files", fail_enumeration
+    )
+    result = _resolve_query_in_fake_homes(
+        claude_home.ids[2][:12],
+        claude_home,
+        codex_home,
+        agent="claude",
+    )
+    assert result.session_file == claude_home.files[2].resolve()
+
+
+def test_fast_path_rejects_invalid_codex_filename_match(
+    tmp_path: Path,
+) -> None:
+    """Garbage in a matching rollout filename is not a fast-path session."""
+    claude = tmp_path / "claude"
+    codex = tmp_path / "codex"
+    rollout = codex / "sessions" / "2026" / "07" / "24"
+    rollout.mkdir(parents=True)
+    invalid = rollout / (
+        "rollout-2026-07-24T10-00-00-abc12345-"
+        "1111-4111-8111-111111111111.jsonl"
+    )
+    invalid.write_text("garbage\n", encoding="utf-8")
+
+    with pytest.raises(SessionQueryError, match="Session not found"):
+        resolve_session_query(
+            "abc12345",
+            agent="codex",
+            claude_home=str(claude),
+            codex_home=str(codex),
+        )
+
+
+def test_short_id_uses_bounded_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+    claude_home: FakeHome,
+    codex_home: FakeHome,
+) -> None:
+    """A unique 4-7 character ID avoids full resolver enumeration."""
+    from claude_code_tools import session_resolution
+
+    def fail_full_resolver(*args: object) -> None:
+        raise AssertionError("unique short ID reached full resolver")
+
+    monkeypatch.setattr(
+        session_resolution, "_resolve_query_for_agent", fail_full_resolver
+    )
+    result = _resolve_query_in_fake_homes(
+        codex_home.ids[2][:6],
+        claude_home,
+        codex_home,
+        agent="codex",
+    )
+
+    assert result.session_file == codex_home.files[2].resolve()
+
+
+def test_fast_path_cap_applies_after_agent_filter(
+    monkeypatch: pytest.MonkeyPatch,
+    claude_home: FakeHome,
+    codex_home: FakeHome,
+) -> None:
+    """Irrelevant matches neither consume the cap nor get read."""
+    from claude_code_tools import session_resolution
+
+    query = codex_home.ids[2][:12]
+    project = claude_home.path / "projects" / "many-irrelevant-matches"
+    project.mkdir()
+    irrelevant = {
+        project / f"{index:02d}-{query}-garbage.jsonl"
+        for index in range(26)
+    }
+    for path in irrelevant:
+        path.write_text("garbage\n", encoding="utf-8")
+    reads: set[Path] = set()
+    original_valid = session_resolution.is_valid_session
+    original_metadata = session_resolution.extract_session_metadata_codex
+
+    def track_valid(path: Path) -> bool:
+        reads.add(path)
+        return original_valid(path)
+
+    def track_metadata(path: Path) -> dict[object, object] | None:
+        reads.add(path)
+        return original_metadata(path)
+
+    def fail_full_resolver(*args: object) -> None:
+        raise AssertionError("agent-filtered candidate reached full resolver")
+
+    monkeypatch.setattr(session_resolution, "is_valid_session", track_valid)
+    monkeypatch.setattr(
+        session_resolution,
+        "extract_session_metadata_codex",
+        track_metadata,
+    )
+    monkeypatch.setattr(
+        session_resolution, "_resolve_query_for_agent", fail_full_resolver
+    )
+
+    result = _resolve_query_in_fake_homes(
+        query, claude_home, codex_home, agent="codex"
+    )
+
+    assert result.session_file == codex_home.files[2].resolve()
+    assert reads == {codex_home.files[2].resolve()}
+    assert reads.isdisjoint(irrelevant)
+
+
+def test_fast_path_stops_before_reading_candidate_26(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """More than 25 relevant filename matches are not validated."""
+    from claude_code_tools import session_resolution
+
+    query = "deadbeef"
+    claude = tmp_path / "claude"
+    codex = tmp_path / "codex"
+    project = claude / "projects" / "cap-boundary"
+    project.mkdir(parents=True)
+    candidates = [
+        project / f"{index:02d}-{query}-candidate.jsonl"
+        for index in range(26)
+    ]
+    for path in candidates:
+        path.write_text("garbage\n", encoding="utf-8")
+    reads: set[Path] = set()
+
+    def track_malformed(path: Path) -> bool:
+        reads.add(path)
+        return True
+
+    monkeypatch.setattr(
+        session_resolution, "is_malformed_session", track_malformed
+    )
+
+    result = session_resolution._validated_fast_candidates(
+        query,
+        "claude",
+        str(claude),
+        str(codex),
+    )
+
+    assert result is None
+    assert reads == set()
+
+
+def test_direct_symlink_path_is_preserved(
+    tmp_path: Path,
+    claude_home: FakeHome,
+    codex_home: FakeHome,
+) -> None:
+    """Direct-path resolution retains the supplied symlink for mutation."""
+    link = tmp_path / "session-link.jsonl"
+    link.symlink_to(claude_home.files[2])
+
+    result = _resolve_query_in_fake_homes(
+        str(link), claude_home, codex_home
+    )
+
+    assert result.session_file == link.absolute()
+    assert result.session_file.is_symlink()
 
 
 if __name__ == "__main__":

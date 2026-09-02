@@ -37,25 +37,21 @@ decisions to Claude Code.
   - `git add -A`, `git add -a`, `git add --all` - stages everything including
     untracked files across the entire repo
   - `git add .` - stages entire current directory blindly
+  - equivalents of `git add .`: `git add ./`, the repository-root magic
+    `git add :/` and `git add :(top)`, an empty pathspec, and any absolute
+    path containing the working directory
   - `git add ../` (parent directory patterns) - stages outside current scope
   - `git add *` (wildcard patterns) - shell expansion can match unexpected files
   - `git commit -a` without `-m` flag - would open an editor (not interactive)
 
 - **Ask (user approval required)**:
 
-  - Staging **modified** files (files already tracked that have changes)
-  - Staging a directory that contains modified files
+  - `--pathspec-from-file` - stages a list of paths the hook cannot read
 
-- **Allow without prompting**:
-
-  - Staging **new/untracked** files (no approval needed)
-  - `--dry-run` or `-n` flag (used internally)
-  - Directories containing only new files
-
-- **How it works**: Uses `git add --dry-run` to detect what would be staged,
-  then checks `git status --porcelain` to distinguish new vs modified files.
-- **Purpose**: Prevent accidental staging while allowing smooth workflow for
-  new files
+- **Allow without prompting**: every other `git add`, whether the paths are
+  new, modified, or a named directory. Explicit selection is the point: if the
+  paths are spelled out, the command is not blanket staging.
+- **Purpose**: Prevent blanket staging, without gating ordinary work
 
 #### 1c. git_checkout_safety_hook.py
 
@@ -86,6 +82,11 @@ decisions to Claude Code.
 - **Purpose**: Ensure user is aware of and approves commits
 - **Note**: Uses `hookSpecificOutput` with `permissionDecision: "ask"` to
   trigger UI prompt
+- **Allowing commits**: set `CCTOOLS_ALLOW_GIT=1` in the environment (e.g. the
+  `env` block of `~/.claude/settings.json`) to allow commits in every session,
+  which is what unattended workflows need. Per session, `>allow-git` allows
+  commits and `>allow-git off` restores the prompt; `off` wins over the
+  environment variable.
 
 #### 1e. env_file_protection_hook.py
 
@@ -132,7 +133,7 @@ decisions to Claude Code.
 |------|---------------|-------------|
 | bash_hook.py | block/ask/allow | Unified hook combining all bash safety checks |
 | rm_block_hook.py | block | Blocks rm, suggests TRASH |
-| git_add_block_hook.py | block/ask/allow | Blocks dangerous patterns; asks for modified files; allows new files |
+| git_add_block_hook.py | block/ask/allow | Blocks blanket staging; allows explicitly named paths |
 | git_checkout_safety_hook.py | block | Protects uncommitted changes |
 | git_commit_block_hook.py | ask | Prompts user for commit approval |
 | env_file_protection_hook.py | block | Protects .env files from Bash commands |

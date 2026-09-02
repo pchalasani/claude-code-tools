@@ -1,9 +1,9 @@
 """Real-browser proof that an answer the human was waiting for is seen.
 
-The page reloads itself the moment the agent publishes, and rows hold
-themselves open only while they are *awaiting*. That made the one conversation
-the human was waiting on the one conversation that folded shut the instant its
-answer arrived. These drive the whole moment through a real self-reload.
+The page patches itself the moment the agent publishes, and rows hold
+themselves open only while they are *awaiting*. That once made the one
+conversation the human was waiting on fold shut the instant its answer
+arrived. These tests drive the whole moment through a live publish.
 """
 
 from __future__ import annotations
@@ -13,8 +13,6 @@ from typing import Any, Iterator
 import pytest
 
 from browser_support import AWAITING_THREAD, Browser, browser_session
-from visual_brief.schema import CURRENT_STATE_ROOT
-
 ANCHOR, THREAD_ID = AWAITING_THREAD.split("#")
 UPDATE_ID, LANE_ID, ITEM_ID = ANCHOR.split("/")
 
@@ -84,10 +82,10 @@ def _answer(browser: Browser, text: str, at: str) -> None:
 def test_an_answer_that_landed_while_away_opens_itself_and_is_marked(
     browser: Browser,
 ) -> None:
-    """Show the answer, and say it is new, after a real self-reload."""
+    """Show the answer, and say it is new, after a live publish."""
     browser.press("g")
     browser.run("wait", "250")
-    assert browser.cursor_row() == CURRENT_STATE_ROOT
+    assert browser.cursor_row() == "current-update"
     before = browser.evaluate(_ROW_STATE)
 
     _answer(browser, "Malformed and unsupported now differ.", "2026-07-25T21:00:00Z")

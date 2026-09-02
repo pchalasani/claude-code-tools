@@ -116,6 +116,7 @@ struct Session {
     first_user_msg_content: String,  // First real user message (skips meta messages)
     derivation_type: String,  // "trimmed", "continued", or ""
     is_sidechain: bool,       // Sub-agent session
+    is_exec_run: bool,        // Codex session launched headlessly (`codex exec`)
     claude_home: String,      // Source Claude home directory
     custom_title: String,     // User-assigned session name (from /rename)
 }
@@ -182,6 +183,9 @@ impl Session {
         }
         if self.is_sidechain {
             display.push_str(" (s)");
+        }
+        if self.is_exec_run {
+            display.push_str(" (h)");
         }
         display
     }
@@ -345,6 +349,7 @@ struct App {
     // Filter state - inclusion-based (true = include this type)
     include_original: bool,   // true by default - include original sessions
     include_sub: bool,        // false by default - exclude sub-agents
+    include_exec: bool,       // false by default - exclude headless codex exec runs
     include_trimmed: bool,    // true by default - include trimmed sessions
     include_continued: bool,  // true by default - include continued sessions
     filter_agent: Option<String>, // None = all, Some("claude"), Some("codex")
@@ -451,6 +456,7 @@ enum FilterMenuItem {
     ClearAll,
     IncludeOriginal,
     IncludeSub,
+    IncludeExec,       // Headless `codex exec` runs (agent-spawned workers)
     IncludeTrimmed,
     IncludeContinued,  // Internally "continued", displayed as "rollover" to user
     IncludeLive,       // Only show currently running sessions
@@ -468,6 +474,7 @@ impl FilterMenuItem {
             FilterMenuItem::ClearAll,
             FilterMenuItem::IncludeOriginal,
             FilterMenuItem::IncludeSub,
+            FilterMenuItem::IncludeExec,
             FilterMenuItem::IncludeTrimmed,
             FilterMenuItem::IncludeContinued,
             FilterMenuItem::IncludeLive,
@@ -485,6 +492,7 @@ impl FilterMenuItem {
             FilterMenuItem::ClearAll => "(x) Reset to defaults",
             FilterMenuItem::IncludeOriginal => "(o) Include original sessions",
             FilterMenuItem::IncludeSub => "(s) Include sub-agent sessions",
+            FilterMenuItem::IncludeExec => "(h) Include headless exec runs",
             FilterMenuItem::IncludeTrimmed => "(t) Include trimmed sessions",
             FilterMenuItem::IncludeContinued => "(r) Include rollover sessions",
             FilterMenuItem::IncludeLive => "(!) Live sessions only",
@@ -502,6 +510,7 @@ impl FilterMenuItem {
             FilterMenuItem::ClearAll => 'x',
             FilterMenuItem::IncludeOriginal => 'o',
             FilterMenuItem::IncludeSub => 's',
+            FilterMenuItem::IncludeExec => 'h',
             FilterMenuItem::IncludeTrimmed => 't',
             FilterMenuItem::IncludeContinued => 'r',
             FilterMenuItem::IncludeLive => '!',
@@ -658,6 +667,7 @@ impl App {
             // Filter state
             include_original: true,   // Include original by default
             include_sub: false,       // Exclude sub-agents by default
+            include_exec: false,      // Exclude headless codex exec runs by default
             include_trimmed: true,    // Include trimmed by default
             include_continued: true,  // Include continued by default
             filter_agent: None,
@@ -768,6 +778,7 @@ impl App {
             // Additive flag (--sub-agent) adds sub-agents to defaults
             include_original: !cli.no_original,
             include_sub: cli.include_sub,
+            include_exec: cli.include_exec,
             include_trimmed: !cli.no_trimmed,
             include_continued: !cli.no_rollover,
             filter_agent: cli.agent_filter.clone(),
@@ -907,6 +918,13 @@ impl App {
                     if !self.include_sub {
                         return false;
                     }
+                } else if s.is_exec_run {
+                    // Headless `codex exec` run: agent-spawned worker.
+                    // Include only if include_exec is true (derivation type
+                    // filter does NOT apply, same as sub-agents).
+                    if !self.include_exec {
+                        return false;
+                    }
                 } else {
                     // Non-sub-agent: apply derivation type filter
                     let derivation_included = match s.derivation_type.as_str() {
@@ -972,6 +990,7 @@ impl App {
                 &self.query,
                 self.filter_claude_home.as_deref(),
                 self.filter_codex_home.as_deref(),
+                !self.include_exec,
             );
             if !snippets.is_empty() {
                 // Store snippets for rendering
@@ -1080,6 +1099,7 @@ impl App {
             || self.filter_branch.is_some()
             || !self.include_original
             || self.include_sub
+            || self.include_exec
             || !self.include_trimmed
             || !self.include_continued
     }
@@ -1193,7 +1213,7 @@ impl App {
     fn has_annotations(&self) -> bool {
         self.filtered.iter().any(|&idx| {
             let s = &self.sessions[idx];
-            !s.derivation_type.is_empty() || s.is_sidechain
+            !s.derivation_type.is_empty() || s.is_sidechain || s.is_exec_run
         })
     }
 
@@ -1330,6 +1350,7 @@ fn render(frame: &mut Frame, app: &mut App) {
     let show_legend = app.has_annotations();
     let has_filters = !app.include_original
         || app.include_sub
+        || app.include_exec
         || !app.include_trimmed
         || !app.include_continued
         || app.filter_agent.is_some()
@@ -1623,9 +1644,12 @@ fn render_action_modal(frame: &mut Frame, app: &App, t: &Theme, area: Rect) {
 fn render_filter_modal(frame: &mut Frame, app: &App, t: &Theme, area: Rect) {
     use ratatui::widgets::{Block, Borders, Clear};
 
-    // Center the modal
+    let items = FilterMenuItem::all();
+
+    // Center the modal. Height follows the item count so adding a filter can
+    // never silently clip the bottom entries off the modal.
     let modal_width = 42u16;
-    let modal_height = 13u16; // 9 items + 2 border + 2 padding
+    let modal_height = (items.len() as u16 + 2).min(area.height);
     let x = (area.width.saturating_sub(modal_width)) / 2;
     let y = (area.height.saturating_sub(modal_height)) / 2;
     let modal_area = Rect::new(x, y, modal_width, modal_height);
@@ -1635,15 +1659,21 @@ fn render_filter_modal(frame: &mut Frame, app: &App, t: &Theme, area: Rect) {
 
     // Modal border
     let block = Block::default()
-        .title(" Filters (|) ")
+        .title(" Filters (C-f) ")
         .borders(Borders::ALL)
         .style(Style::default().bg(t.search_bg));
     frame.render_widget(block, modal_area);
 
-    // Inner content area
-    let inner = Rect::new(x + 2, y + 1, modal_width - 4, modal_height - 2);
+    // Inner content area. The height is derived from the item count and
+    // clamped to the terminal, so on a very short terminal it can be smaller
+    // than the border allowance -- saturate rather than underflow.
+    let inner = Rect::new(
+        x + 2,
+        y + 1,
+        modal_width.saturating_sub(4),
+        modal_height.saturating_sub(2),
+    );
 
-    let items = FilterMenuItem::all();
     let mut lines: Vec<Line> = Vec::new();
 
     for (i, item) in items.iter().enumerate() {
@@ -1654,6 +1684,7 @@ fn render_filter_modal(frame: &mut Frame, app: &App, t: &Theme, area: Rect) {
             FilterMenuItem::ClearAll => "".to_string(),
             FilterMenuItem::IncludeOriginal => if app.include_original { " [ON]" } else { " [off]" }.to_string(),
             FilterMenuItem::IncludeSub => if app.include_sub { " [ON]" } else { " [off]" }.to_string(),
+            FilterMenuItem::IncludeExec => if app.include_exec { " [ON]" } else { " [off]" }.to_string(),
             FilterMenuItem::IncludeTrimmed => if app.include_trimmed { " [ON]" } else { " [off]" }.to_string(),
             FilterMenuItem::IncludeContinued => if app.include_continued { " [ON]" } else { " [off]" }.to_string(),
             FilterMenuItem::IncludeLive => if app.include_live_only { " [ON]" } else { " [off]" }.to_string(),
@@ -2216,6 +2247,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, t: &Theme, area: Rect, show_l
     // Check if we have any active filters (need third row for legend or filters)
     let has_filters = !app.include_original
         || app.include_sub
+        || app.include_exec
         || !app.include_trimmed
         || !app.include_continued
         || app.filter_agent.is_some()
@@ -2265,7 +2297,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, t: &Theme, area: Rect, show_l
     } else if app.command_mode {
         // Command mode indicator
         nav_spans.push(Span::styled(" CMD ", Style::default().bg(t.accent).fg(Color::Black)));
-        nav_spans.push(Span::styled(" :x clear :o orig :s sub :t trim :c cont :a agent :m lines :> after :< before ", label));
+        nav_spans.push(Span::styled(" :x clear :o orig :s sub :h exec :t trim :c cont :a agent :m lines :> after :< before ", label));
     } else {
         // Normal mode - single line with all shortcuts
         let has_selection = !app.filtered.is_empty();
@@ -2323,7 +2355,9 @@ fn render_status_bar(frame: &mut Frame, app: &App, t: &Theme, area: Rect, show_l
                 Span::styled("(t)", Style::default().fg(t.dim_fg)),
                 Span::styled(" trimmed  ", dim),
                 Span::styled("(s)", Style::default().fg(t.dim_fg)),
-                Span::styled(" sub-agent", dim),
+                Span::styled(" sub-agent  ", dim),
+                Span::styled("(h)", Style::default().fg(t.dim_fg)),
+                Span::styled(" headless exec", dim),
             ]);
         }
 
@@ -2333,6 +2367,9 @@ fn render_status_bar(frame: &mut Frame, app: &App, t: &Theme, area: Rect, show_l
         }
         if app.include_sub {
             row3_spans.push(Span::styled(" [+sub]", filter_active));
+        }
+        if app.include_exec {
+            row3_spans.push(Span::styled(" [+exec]", filter_active));
         }
         if !app.include_trimmed {
             row3_spans.push(Span::styled(" [-trim]", filter_active));
@@ -3228,6 +3265,9 @@ fn scan_running_sessions() -> HashMap<String, ProcessState> {
     // Collect CWD -> process counts (separated by agent type)
     let mut cwd_processes: HashMap<String, CwdProcesses> = HashMap::new();
 
+    // Agent processes found in `ps`, resolved to working directories below.
+    let mut agent_procs: Vec<(String, bool, bool, ProcessState)> = Vec::new();
+
     // Run: ps -eo pid,stat,comm to get PID, status, and command
     let ps_output = match Command::new("ps")
         .args(["-eo", "pid,stat,comm"])
@@ -3271,28 +3311,36 @@ fn scan_running_sessions() -> HashMap<String, ProcessState> {
             ProcessState::Waiting
         };
 
-        // Get the CWD for this process
-        let cwd = get_process_cwd(pid);
-        if let Some(cwd_path) = cwd {
-            cwd_processes
-                .entry(cwd_path)
-                .and_modify(|existing| {
-                    if is_claude {
-                        existing.claude_count += 1;
-                    }
-                    if is_codex {
-                        existing.codex_count += 1;
-                    }
-                    if state == ProcessState::Running {
-                        existing.best_state = ProcessState::Running;
-                    }
-                })
-                .or_insert(CwdProcesses {
-                    claude_count: if is_claude { 1 } else { 0 },
-                    codex_count: if is_codex { 1 } else { 0 },
-                    best_state: state,
-                });
-        }
+        agent_procs.push((pid.to_string(), is_claude, is_codex, state));
+    }
+
+    // Resolve every working directory in one call rather than one per process.
+    let pids: Vec<String> = agent_procs.iter().map(|(pid, _, _, _)| pid.clone()).collect();
+    let cwds = get_process_cwds(&pids);
+
+    for (pid, is_claude, is_codex, state) in agent_procs {
+        let cwd_path = match cwds.get(&pid) {
+            Some(cwd) => cwd.clone(),
+            None => continue,
+        };
+        cwd_processes
+            .entry(cwd_path)
+            .and_modify(|existing| {
+                if is_claude {
+                    existing.claude_count += 1;
+                }
+                if is_codex {
+                    existing.codex_count += 1;
+                }
+                if state == ProcessState::Running {
+                    existing.best_state = ProcessState::Running;
+                }
+            })
+            .or_insert(CwdProcesses {
+                claude_count: if is_claude { 1 } else { 0 },
+                codex_count: if is_codex { 1 } else { 0 },
+                best_state: state,
+            });
     }
 
     let home = match dirs::home_dir() {
@@ -3472,38 +3520,67 @@ fn encode_project_path(path: &str) -> String {
 }
 
 /// Get the current working directory of a process by PID
-fn get_process_cwd(pid: &str) -> Option<String> {
-    // Try lsof first (works on macOS and Linux)
-    let lsof_output = Command::new("lsof")
-        .args(["-p", pid, "-Fn"])
-        .output()
-        .ok()?;
-
-    let lsof_str = String::from_utf8_lossy(&lsof_output.stdout);
-
-    // lsof -Fn output format: lines starting with 'n' contain the path
-    // On macOS: 'fcwd' line followed by 'n' line (f = file descriptor type)
-    // On Linux: 'tcwd' line followed by 'n' line (t = type)
-    let mut found_cwd = false;
-    for line in lsof_str.lines() {
-        if line == "fcwd" || line == "tcwd" {
-            found_cwd = true;
-        } else if found_cwd && line.starts_with('n') {
-            return Some(line[1..].to_string());
-        } else if line.starts_with('f') || line.starts_with('t') {
-            found_cwd = false;
-        }
+/// Look up the working directory of many processes in one shot.
+///
+/// This runs on a timer while the TUI is interactive, so it must be cheap.
+/// One `lsof` per pid costs ~150ms each -- with a few dozen agent processes
+/// that blocked the event loop for seconds at a time. `lsof` accepts a
+/// comma-separated pid list, and `-d cwd` restricts it to the one descriptor
+/// we need, which turns the whole scan into a single ~150ms call.
+///
+/// Returns a map of pid -> working directory; pids whose cwd could not be
+/// read are simply absent.
+fn get_process_cwds(pids: &[String]) -> HashMap<String, String> {
+    let mut result = HashMap::new();
+    if pids.is_empty() {
+        return result;
     }
 
-    // Fallback for Linux: try reading /proc/<pid>/cwd
+    // Linux exposes this directly, with no subprocess at all.
     #[cfg(target_os = "linux")]
     {
-        if let Ok(cwd) = std::fs::read_link(format!("/proc/{}/cwd", pid)) {
-            return Some(cwd.to_string_lossy().to_string());
+        for pid in pids {
+            if let Ok(cwd) = std::fs::read_link(format!("/proc/{}/cwd", pid)) {
+                result.insert(pid.clone(), cwd.to_string_lossy().to_string());
+            }
         }
     }
 
-    None
+    // Whatever /proc could not answer still goes to lsof, which may hold
+    // privileges that a direct read_link does not. On macOS nothing is
+    // resolved above, so this is every pid.
+    let remaining: Vec<&str> = pids
+        .iter()
+        .filter(|pid| !result.contains_key(*pid))
+        .map(|pid| pid.as_str())
+        .collect();
+    if remaining.is_empty() {
+        return result;
+    }
+
+    let lsof_output = match Command::new("lsof")
+        .args(["-a", "-d", "cwd", "-p", &remaining.join(","), "-Fpn"])
+        .output()
+    {
+        Ok(output) => output,
+        Err(_) => return result,
+    };
+
+    // -Fpn output is a flat stream: `p<pid>` starts a process block, and the
+    // `n<path>` line that follows carries its cwd.
+    let lsof_str = String::from_utf8_lossy(&lsof_output.stdout);
+    let mut current_pid: Option<String> = None;
+    for line in lsof_str.lines() {
+        if let Some(rest) = line.strip_prefix('p') {
+            current_pid = Some(rest.to_string());
+        } else if let Some(rest) = line.strip_prefix('n') {
+            if let Some(pid) = current_pid.take() {
+                result.insert(pid, rest.to_string());
+            }
+        }
+    }
+
+    result
 }
 
 // ============================================================================
@@ -3536,6 +3613,8 @@ fn load_sessions(index_path: &str, limit: usize) -> Result<Vec<Session>> {
     let first_user_msg_content_field = schema.get_field("first_user_msg_content").ok();
     let derivation_type_field = schema.get_field("derivation_type").context("missing derivation_type")?;
     let is_sidechain_field = schema.get_field("is_sidechain").context("missing is_sidechain")?;
+    // is_exec_run may not exist in older indexes, so make it optional
+    let is_exec_run_field = schema.get_field("is_exec_run").ok();
     // claude_home may not exist in older indexes, so make it optional
     let claude_home_field = schema.get_field("claude_home").ok();
     // custom_title may not exist in older indexes, so make it optional
@@ -3574,6 +3653,9 @@ fn load_sessions(index_path: &str, limit: usize) -> Result<Vec<Session>> {
             .unwrap_or(0);
 
         let is_sidechain_str = get_text(is_sidechain_field);
+        let is_exec_run = is_exec_run_field
+            .map(|f| get_text(f) == "true")
+            .unwrap_or(false);
 
         // Get claude_home if field exists, otherwise empty string
         let claude_home = claude_home_field
@@ -3608,6 +3690,7 @@ fn load_sessions(index_path: &str, limit: usize) -> Result<Vec<Session>> {
             first_user_msg_content,
             derivation_type: get_text(derivation_type_field),
             is_sidechain: is_sidechain_str == "true",
+            is_exec_run,
             claude_home,
             custom_title,
         });
@@ -3629,6 +3712,7 @@ fn search_tantivy(
     query_str: &str,
     filter_claude_home: Option<&str>,
     filter_codex_home: Option<&str>,
+    exclude_exec_runs: bool,
 ) -> (HashMap<String, String>, Vec<String>) {
     // Return empty if query is empty
     if query_str.trim().is_empty() {
@@ -3706,6 +3790,26 @@ fn search_tantivy(
         } else {
             // No claude_home field in schema, just use content query
             content_query
+        };
+
+        // Headless exec runs are a large share of the corpus. When they are
+        // hidden, exclude them in the query instead of dropping them after the
+        // top-N cut, so the retrieval budget below is spent on rows the user
+        // can actually see. Older indexes have no such field; skip it there.
+        let final_query: Box<dyn tantivy::query::Query> = match (
+            exclude_exec_runs,
+            schema.get_field("is_exec_run"),
+        ) {
+            (true, Ok(exec_field)) => {
+                let term = Term::from_field_text(exec_field, "false");
+                let exec_clause: Box<dyn tantivy::query::Query> =
+                    Box::new(TermQuery::new(term, IndexRecordOption::Basic));
+                Box::new(BooleanQuery::new(vec![
+                    (Occur::Must, final_query),
+                    (Occur::Must, exec_clause),
+                ]))
+            }
+            _ => final_query,
         };
 
         // Search with high limit
@@ -4255,6 +4359,7 @@ fn output_json(app: &App, limit: Option<usize>) -> Result<()> {
             "file_path": s.export_path,
             "derivation_type": s.derivation_type,
             "is_sidechain": s.is_sidechain,
+            "is_exec_run": s.is_exec_run,
             "custom_title": s.custom_title,
             "snippet": app.search_snippets.get(&s.session_id).map(|s| strip_html_tags(s)),
         });
@@ -4279,6 +4384,8 @@ struct CliOptions {
     no_rollover: bool,
     // Additive flag: --sub-agent adds sub-agents to defaults
     include_sub: bool,
+    // Additive flag: --exec-runs adds headless codex exec runs to defaults
+    include_exec: bool,
     // Live sessions filter: --live shows only currently running sessions
     include_live: bool,
     min_lines: Option<i64>,
@@ -4380,6 +4487,8 @@ fn parse_cli_args() -> CliOptions {
     let no_rollover = has_flag("--no-rollover");
     // Additive flag: --sub-agent adds sub-agents to defaults
     let include_sub = has_flag("--sub-agent");
+    // Additive flag: --exec-runs adds headless codex exec runs to defaults
+    let include_exec = has_flag("--exec-runs");
     // Live sessions filter: --live shows only currently running sessions
     let include_live = has_flag("--live");
 
@@ -4416,6 +4525,7 @@ fn parse_cli_args() -> CliOptions {
         no_trimmed,
         no_rollover,
         include_sub,
+        include_exec,
         include_live,
         min_lines,
         after_date,
@@ -4520,6 +4630,12 @@ fn main() -> Result<()> {
                 }
             }
         }
+
+        // Wait for input rather than spinning. Without this the loop redrew
+        // the whole screen as fast as the CPU allowed, burning a core the
+        // entire time the TUI was open. The timeout still lets the debounce
+        // and live-session timers above fire promptly.
+        event::poll(Duration::from_millis(50))?;
 
         // Drain all pending events (non-blocking)
         while event::poll(Duration::from_millis(0))? {
@@ -4804,6 +4920,7 @@ fn main() -> Result<()> {
                                     // Reset to defaults
                                     app.include_original = true;
                                     app.include_sub = false;
+                                    app.include_exec = false;
                                     app.include_trimmed = true;
                                     app.include_continued = true;
                                     app.filter_agent = None;
@@ -4816,6 +4933,10 @@ fn main() -> Result<()> {
                                 }
                                 FilterMenuItem::IncludeSub => {
                                     app.include_sub = !app.include_sub;
+                                    app.filter();
+                                }
+                                FilterMenuItem::IncludeExec => {
+                                    app.include_exec = !app.include_exec;
                                     app.filter();
                                 }
                                 FilterMenuItem::IncludeTrimmed => {
@@ -5064,6 +5185,7 @@ fn main() -> Result<()> {
                                 // Reset to defaults
                                 app.include_original = true;
                                 app.include_sub = false;
+                                app.include_exec = false;
                                 app.include_trimmed = true;
                                 app.include_continued = true;
                                 app.filter_agent = None;
@@ -5080,6 +5202,10 @@ fn main() -> Result<()> {
                             }
                             KeyCode::Char('s') => {
                                 app.include_sub = !app.include_sub;
+                                app.filter();
+                            }
+                            KeyCode::Char('h') => {
+                                app.include_exec = !app.include_exec;
                                 app.filter();
                             }
                             KeyCode::Char('t') => {
@@ -5217,6 +5343,7 @@ fn main() -> Result<()> {
                 "filter_dir": app.filter_dir,
                 "include_original": app.include_original,
                 "include_sub": app.include_sub,
+                "include_exec": app.include_exec,
                 "include_trimmed": app.include_trimmed,
                 "include_continued": app.include_continued,
                 "filter_agent": app.filter_agent,

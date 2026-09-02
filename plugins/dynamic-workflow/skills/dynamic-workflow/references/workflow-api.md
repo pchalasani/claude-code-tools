@@ -184,7 +184,8 @@ logs <run-id>
 wait <run-id> [--json]
 notify <run-id> [--force] [--json]
 pause <run-id>
-resume <run-id> [--foreground] [--json] [--allow-workspace-write]
+resume <run-id> [--recover] [--foreground] [--json]
+                [--allow-workspace-write]
                 [--allow-danger-full-access]
 cancel <run-id>
 ```

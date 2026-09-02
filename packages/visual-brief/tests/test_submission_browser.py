@@ -102,10 +102,10 @@ def test_double_click_sends_one_question_while_request_is_in_flight(
     ) == [1, True, True]
 
 
-def test_escape_during_a_send_still_shows_the_question_landing(
+def test_escape_during_a_send_folds_without_losing_the_question(
     browser: Browser,
 ) -> None:
-    """Show the sent note even when Escape folded its row mid-request."""
+    """Keep the sent note while Escape deliberately folds its row."""
     browser.server.post_gate = threading.Event()
     try:
         browser.compose_at(ITEM)
@@ -120,7 +120,12 @@ def test_escape_during_a_send_still_shows_the_question_landing(
         browser.server.post_gate.set()
     browser.run("wait", "600")
 
-    assert browser.evaluate(
+    folded = browser.evaluate(
+        f'document.querySelector(\'[data-row-id="{ITEM}"]\').dataset.open'
+    )
+    browser.press(" ")
+    browser.run("wait", "200")
+    revealed = browser.evaluate(
         f"""
         (() => {{
           const row = document.querySelector('[data-row-id="{ITEM}"]');
@@ -133,7 +138,9 @@ def test_escape_during_a_send_still_shows_the_question_landing(
           ];
         }})()
         """
-    ) == ["true", True]
+    )
+    assert folded == "false"
+    assert revealed == ["true", True]
 
 
 def test_plain_enter_stays_in_the_box_and_the_chord_sends(

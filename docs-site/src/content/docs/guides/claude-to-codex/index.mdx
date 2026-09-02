@@ -1,7 +1,7 @@
 ---
-title: "Claude → Codex"
+title: "Codex Dynamic Workflows"
 description: >-
-  Switch from Claude to Codex without giving up dynamic agent workflows.
+  Run durable, JavaScript-orchestrated multi-agent workflows inside Codex.
 ---
 
 import {
@@ -11,28 +11,23 @@ import {
   Steps,
 } from "@astrojs/starlight/components";
 
-Moving from Claude Code to Codex should not mean giving up the workflows you
-already rely on. This is the migration hub for translating those workflows to
-Codex-native tools, beginning with dynamic workflows.
-
-## Dynamic workflows
+This is the Codex analog of Claude Code's
+[dynamic workflows](https://code.claude.com/docs/en/workflows), which Codex
+does not have natively. The `dynamic-workflow` plugin in this repository
+supplies that capability through an installable skill and a durable JavaScript
+runtime.
 
 A dynamic workflow is a small JavaScript program that coordinates agents at
 runtime. JavaScript owns predictable control flow—fan-out, fan-in, loops,
 branches, and aggregation—while agents own reasoning and tool use.
 
-Claude Code provides this pattern through its
-[dynamic workflows](https://code.claude.com/docs/en/workflows). The
-`dynamic-workflow` plugin in this repository provides equivalent orchestration
-for Codex through an installable skill and a durable JavaScript runtime.
-
 <CardGrid>
-  <Card title="What carries over">
-    You can still create and run dynamic workflows that coordinate multiple
-    agents and adapt as the work progresses.
+  <Card title="What you get">
+    Codex can create and run dynamic workflows that coordinate multiple agents
+    and adapt as the work progresses.
   </Card>
-  <Card title="What changes">
-    Claude Code's interactive `/workflows` command does not carry over to Codex.
+  <Card title="What differs from Claude Code">
+    Even with the plugin, Codex has no interactive `/workflows` command.
   </Card>
 </CardGrid>
 
@@ -143,6 +138,12 @@ no model calls. Callbacks require Codex CLI 0.136.0 or newer; it is the first
 compatible CLI release for this callback protocol. The helper rejects older
 versions before starting the server or TUI. Callback preflight also validates
 the connected App Server before creating a workflow.
+
+For trusted projects, `codex-dynamic --yolo` provides the lowest-friction TUI.
+Restricted sessions instead need explicit supervisor approval, worker write
+authorization, network configuration, writable artifact paths, and accessible
+tool caches. Follow the complete
+[`codex-dynamic` permissions guide][codex-dynamic-permissions].
 
 The Python package is only a convenience for this callback setup. Without it,
 use Codex's manual two-terminal form:
@@ -255,13 +256,11 @@ skill handles those commands for ordinary use, while the
 [Dynamic Workflow plugin reference](/claude-code-tools/plugins-detail/dynamic-workflow/)
 documents the JavaScript API, direct CLI, cache model, and safety boundaries.
 
-This migration hub will grow to cover project instructions, skills and command
-surfaces, and session-continuity strategies as more Codex equivalents are added
-to the repository.
-
 [codex-marketplace]:
   https://developers.openai.com/codex/build-plugins#add-a-marketplace-from-the-cli
 [codex-app-server]: https://developers.openai.com/codex/app-server
 [codex-dynamic]: /claude-code-tools/tools/codex-dynamic/
+[codex-dynamic-permissions]:
+  /claude-code-tools/tools/codex-dynamic/#choose-a-permissions-mode
 [codex-workflows]:
   /claude-code-tools/tools/codex-dynamic/#monitor-workflows-with-codex-workflows

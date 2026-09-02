@@ -1,0 +1,127 @@
+---
+title: "amux — Agents Tmux Dashboard"
+---
+
+`amux` finds the coding agents running across your tmux panes and lets you
+jump to one. Its job is to answer the question that gets hard once you have
+more than a handful of sessions: **which agent is waiting on me?**
+
+:::note[Installation]
+Part of the `claude-code-tools` package.
+See [Quick Start](../../getting-started/) for installation.
+Requires [`fzf`](https://github.com/junegunn/fzf) for the picker
+(`brew install fzf`); `amux list` works without it.
+:::
+
+## What It Does
+
+```bash
+amux              # interactive picker: pick an agent, jump to its pane
+amux list         # table of every live agent
+amux list --json  # machine-readable
+amux scan         # refresh the cache
+```
+
+In the picker, rows are sorted by urgency, the right-hand pane shows a live
+preview of whatever is highlighted, `enter` jumps to that pane, and `ctrl-r`
+refreshes.
+
+## Agent states
+
+Every pane running an agent gets one of four states, sorted most urgent first:
+
+| state | colour | meaning |
+|---|---|---|
+| `input` | red | the agent stopped and is **asking you something** |
+| `busy` | green | mid-turn, actively working |
+| `bg` | cyan | background monitors or subagents running |
+| `idle` | dim | at its prompt, nothing pending |
+
+`input` is the reason the tool exists. An agent blocked on a permission
+prompt or an `AskUserQuestion` is invisible among a hundred panes, and it
+will sit there indefinitely until you notice.
+
+## What each row shows
+
+```
+sasy:1.8   input  codex   certify-main    observability@feat/certify-codex   gpt-5.6-sol · …
+└─ pane    state  harness session name    repo@branch                        context
+```
+
+- **pane** — the tmux target; jump to it manually with `tmux switch-client`
+- **name** — the agent's session name, from its own `--resume`/`--name`
+  argument, the tmux pane title, or an on-screen banner
+- **repo@branch** — read directly from `.git/HEAD`, so git worktrees resolve
+  to the branch they are actually on
+- **context** — the model and status line lifted from the harness footer
+
+## How detection works
+
+Two questions, answered from two different places.
+
+**Which harness is this?** From the process, not the screen.
+`pane_current_command` is useless here: Claude Code reports a bare version
+string like `2.1.220` because it runs a versioned binary, and Codex reports
+`node`. `amux` inspects the executable of each process beneath the pane's
+shell — including under wrappers like `direnv exec` — and matches on
+`argv[0]`, or on the script path when `argv[0]` is an interpreter.
+
+**What is it doing?** From the screen, since only the rendered UI knows.
+Claude's prompts are a structured choice list, so they are recognised
+directly; position disambiguates a *pending* prompt from one you already
+answered, because an answered prompt has the harness footer rendered below
+it.
+
+Codex has no structured prompt UI, so "waiting for you" is a heuristic: the
+last content line ends in a question mark, and nothing indicates it is
+working. Expect occasional misses and false alarms there.
+
+## Speed
+
+On a server with 160 panes: **1.1s cold, 0.075s warm.**
+
+The picker opens on cached rows and refreshes in the background, so it feels
+instant regardless of how many panes you have. `--max-age` controls how long
+a cached scan stays usable (default 30s); `amux scan` refreshes it explicitly,
+which is useful from cron or a tmux hook.
+
+## tmux keybinding
+
+Bind the picker to a popup overlay so it is one keystroke from anywhere:
+
+```bash
+# ~/.tmux.conf
+bind-key A display-popup -E -w 85% -h 75% amux
+```
+
+Then `prefix + A` opens the dashboard over whatever you are looking at,
+`enter` jumps to the chosen agent, and `esc` closes without moving anything.
+
+Pair it with a "jump back" binding, since jumping to an agent switches your
+current client to that session:
+
+```bash
+bind-key a switch-client -l   # return to the session you came from
+```
+
+## Scripting
+
+`amux list --json` emits one object per agent with every field — pane,
+session, kind, state, name, cwd, repo, branch, model, info, pid — so you can
+drive alerts or dashboards from it:
+
+```bash
+# how many agents are blocked on me right now?
+amux list --json | jq '[.[] | select(.state == "input")] | length'
+
+# name every waiting agent and its pane
+amux list --json | jq -r '.[] | select(.state=="input") | "\(.name)\t\(.pane)"'
+```
+
+## Limitations
+
+- **Local tmux only.** It reads the tmux server on this machine.
+- **Codex input detection is heuristic** — Codex exposes no prompt state, so
+  the question-mark rule will sometimes miss or over-report.
+- **States are sampled, not streamed.** The list reflects the moment you
+  opened it (`ctrl-r` re-scans); the preview pane is always live.

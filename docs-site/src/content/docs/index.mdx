@@ -61,8 +61,15 @@ hero:
   .retro-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    grid-auto-flow: dense;
     gap: 1rem;
     margin: 2rem 0;
+  }
+  /* Double-width feature card; only span once two columns actually fit. */
+  @media (min-width: 520px) {
+    .retro-grid a.wide {
+      grid-column: span 2;
+    }
   }
   .retro-grid a {
     display: block;
@@ -94,10 +101,6 @@ hero:
     <img src="/claude-code-tools/assets/card-visual-brief.svg"
          alt="Visual Brief" />
   </a>
-  <a href="/claude-code-tools/guides/claude-to-codex/">
-    <img src="/claude-code-tools/assets/card-claude-to-codex.svg"
-         alt="Claude to Codex" />
-  </a>
   <a href="/claude-code-tools/tools/aichat/">
     <img src="/claude-code-tools/assets/card-aichat.svg"
          alt="aichat" />
@@ -110,9 +113,17 @@ hero:
     <img src="/claude-code-tools/assets/card-tmux.svg"
          alt="tmux-cli" />
   </a>
+  <a href="/claude-code-tools/tools/amux/">
+    <img src="/claude-code-tools/assets/card-amux.svg"
+         alt="amux" />
+  </a>
   <a href="/claude-code-tools/tools/agent-tunnel/">
     <img src="/claude-code-tools/assets/card-agent-tunnel.svg"
          alt="agent-tunnel" />
+  </a>
+  <a href="/claude-code-tools/tools/msg/">
+    <img src="/claude-code-tools/assets/card-msg.svg"
+         alt="msg: inter-agent comms" />
   </a>
   <a href="/claude-code-tools/tools/lmsh/">
     <img src="/claude-code-tools/assets/card-lmsh.svg"
@@ -126,17 +137,21 @@ hero:
     <img src="/claude-code-tools/assets/card-env-safe.svg"
          alt="env-safe" />
   </a>
-  <a href="/claude-code-tools/tools/sasy-guard/">
-    <img src="/claude-code-tools/assets/card-sasy-guard.svg"
-         alt="sasy-guard" />
-  </a>
   <a href="/claude-code-tools/plugins-detail/safety-hooks/">
     <img src="/claude-code-tools/assets/card-safety.svg"
          alt="safety hooks" />
   </a>
+  <a href="/claude-code-tools/tools/sasy-guard/">
+    <img src="/claude-code-tools/assets/card-sasy-guard.svg"
+         alt="sasy-guard" />
+  </a>
   <a href="/claude-code-tools/tools/statusline/">
     <img src="/claude-code-tools/assets/card-statusline.svg"
          alt="status line" />
+  </a>
+  <a href="/claude-code-tools/tools/fix-session/">
+    <img src="/claude-code-tools/assets/card-session-repair.svg"
+         alt="fix-session" />
   </a>
   <a href="/claude-code-tools/integrations/google-docs/">
     <img src="/claude-code-tools/assets/card-gdocs.svg"
@@ -154,17 +169,25 @@ hero:
     <img src="/claude-code-tools/assets/card-voice.svg"
          alt="voice" />
   </a>
-  <a href="/claude-code-tools/tools/fix-session/">
-    <img src="/claude-code-tools/assets/card-session-repair.svg"
-         alt="fix-session" />
+  <a href="/claude-code-tools/tools/aichat/port/">
+    <img src="/claude-code-tools/assets/card-session-port.svg"
+         alt="Claude <-> Codex session porting" />
   </a>
-  <a href="/claude-code-tools/getting-started/plugins/">
-    <img src="/claude-code-tools/assets/card-plugins.svg"
-         alt="plugins" />
+  <a href="/claude-code-tools/tools/github-wake/">
+    <img src="/claude-code-tools/assets/card-github-watch.svg"
+         alt="github-watch: wake on a GitHub comment" />
+  </a>
+  <a href="/claude-code-tools/guides/claude-to-codex/" class="wide">
+    <img src="/claude-code-tools/assets/card-codex-dynamic-workflows.svg"
+         alt="Codex Dynamic Workflows" />
   </a>
   <a href="/claude-code-tools/getting-started/">
     <img src="/claude-code-tools/assets/card-quickstart.svg"
          alt="quick start" />
+  </a>
+  <a href="/claude-code-tools/getting-started/plugins/">
+    <img src="/claude-code-tools/assets/card-plugins.svg"
+         alt="plugins" />
   </a>
   <a href="/claude-code-tools/development/">
     <img src="/claude-code-tools/assets/card-dev.svg"

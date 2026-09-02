@@ -84,7 +84,7 @@ def test_the_page_scopes_attention_to_the_latest_dated_update(
     assert len(latest_threads) == 2
     assert shown == {
         "count": "2",
-        "copy": "2 need attention in latest update",
+        "copy": "2 need attention in latest briefing",
     }
 
 

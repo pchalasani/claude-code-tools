@@ -1,0 +1,19 @@
+{
+  "name": "msg",
+  "version": "1.14.0",
+  "description": "Inter-agent messaging for Claude Code and Codex CLI sessions.",
+  "author": {
+    "name": "Prasad Chalasani"
+  },
+  "repository": "https://github.com/pchalasani/claude-code-tools",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Msg",
+    "shortDescription": "Message other Claude and Codex agents.",
+    "longDescription": "Use the msg command for named inter-agent messages, inboxes, and threads.",
+    "developerName": "Prasad Chalasani",
+    "category": "Developer Tools",
+    "capabilities": ["Register agents", "Send messages", "Read inboxes"],
+    "defaultPrompt": "Use $msg to check my agent inbox."
+  }
+}

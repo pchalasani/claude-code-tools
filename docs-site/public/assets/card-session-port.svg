@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <defs>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#101336"/>
+      <stop offset="100%" style="stop-color:#07081c"/>
+    </linearGradient>
+  </defs>
+  <rect width="200" height="100" rx="8" fill="url(#bg)"/>
+  <text x="100" y="37" font-family="monospace" font-size="19" font-weight="bold" fill="#8ba7ff" text-anchor="middle" filter="url(#glow)">Claude &lt;-&gt; Codex</text>
+  <text x="100" y="60" font-family="monospace" font-size="14" fill="#b3c4ff" text-anchor="middle">Port sessions to</text>
+  <text x="100" y="75" font-family="monospace" font-size="14" fill="#b3c4ff" text-anchor="middle">other agents</text>
+</svg>

@@ -58,15 +58,18 @@ def _detect_tmux_pane() -> str | None:
     return os.environ.get("TMUX_PANE")
 
 
-def _detect_tmux_session() -> str | None:
+def _detect_tmux_session(pane: str | None = None) -> str | None:
     """Auto-detect current tmux session name."""
-    pane = os.environ.get("TMUX_PANE")
+    pane = pane or os.environ.get("TMUX_PANE")
     try:
-        cmd = ["tmux", "display-message", "-p",
-               "#{session_name}"]
+        cmd = ["tmux"]
+        tmux_socket = _detect_tmux_socket(pane)
+        if tmux_socket:
+            cmd += ["-S", tmux_socket]
+        cmd += ["display-message"]
         if pane:
-            cmd = ["tmux", "display-message",
-                   "-t", pane, "-p", "#{session_name}"]
+            cmd += ["-t", pane]
+        cmd += ["-p", "#{session_name}"]
         result = subprocess.run(
             cmd,
             capture_output=True, text=True, timeout=5,
@@ -78,7 +81,7 @@ def _detect_tmux_session() -> str | None:
     return None
 
 
-def _detect_tmux_socket() -> str | None:
+def _detect_tmux_socket(pane: str | None = None) -> str | None:
     """Auto-detect tmux socket path."""
     tmux_env = os.environ.get("TMUX", "")
     if tmux_env:
@@ -86,19 +89,35 @@ def _detect_tmux_socket() -> str | None:
         parts = tmux_env.split(",")
         if parts:
             return parts[0]
+    try:
+        command = ["tmux", "display-message"]
+        if pane:
+            command += ["-t", pane]
+        result = subprocess.run(
+                [*command, "-p", "#{socket_path}"],
+                capture_output=True, text=True, timeout=5,
+            )
+        if result.returncode == 0:
+            return result.stdout.strip() or None
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
     return None
 
 
-def _detect_display_addr() -> str | None:
+def _detect_display_addr(pane: str | None = None) -> str | None:
     """Auto-detect full pane address (session:window.pane)."""
-    pane = os.environ.get("TMUX_PANE")
+    pane = pane or os.environ.get("TMUX_PANE")
     try:
         fmt = ("#{session_name}:#{window_index}."
                "#{pane_index}")
-        cmd = ["tmux", "display-message", "-p", fmt]
+        cmd = ["tmux"]
+        tmux_socket = _detect_tmux_socket(pane)
+        if tmux_socket:
+            cmd += ["-S", tmux_socket]
+        cmd += ["display-message"]
         if pane:
-            cmd = ["tmux", "display-message",
-                   "-t", pane, "-p", fmt]
+            cmd += ["-t", pane]
+        cmd += ["-p", fmt]
         result = subprocess.run(
             cmd,
             capture_output=True, text=True, timeout=5,
@@ -171,11 +190,12 @@ def _get_self_agent(store: MsgStore) -> dict | None:
     tmux_session = _detect_tmux_session()
     if not tmux_session:
         return None
-    agents = store.list_agents(tmux_session=tmux_session)
-    for a in agents:
-        if a.pane_id == pane_id:
-            return a
-    return None
+    tmux_socket = _detect_tmux_socket(pane_id)
+    matches = [
+        agent for agent in store.list_agents(tmux_session, tmux_socket)
+        if agent.pane_id == pane_id and agent.tmux_socket == tmux_socket
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _relative_time(iso_str: str) -> str:
@@ -202,6 +222,7 @@ def _ensure_watcher_running(store: MsgStore) -> None:
     """Auto-start the watcher if not already running."""
     if store.is_watcher_alive():
         return
+    watch_args = ["--db", store.db_path, "watch"]
     # Spawn watcher as a detached background process
     import shutil
     msg_bin = shutil.which("msg")
@@ -210,7 +231,7 @@ def _ensure_watcher_running(store: MsgStore) -> None:
         uv_bin = shutil.which("uv")
         if uv_bin:
             subprocess.Popen(
-                [uv_bin, "run", "msg", "watch"],
+                [uv_bin, "run", "msg", *watch_args],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
@@ -219,7 +240,7 @@ def _ensure_watcher_running(store: MsgStore) -> None:
             return
     if msg_bin:
         subprocess.Popen(
-            [msg_bin, "watch"],
+            [msg_bin, *watch_args],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
@@ -271,7 +292,7 @@ def cli(
             )
             sys.exit(1)
 
-    store = _get_store(db=db, local=local)
+    store = _get_store(db_path=db, local=local)
     ctx.obj["store"] = store
     if ctx.invoked_subcommand != "watch":
         _ensure_watcher_running(store)
@@ -307,7 +328,7 @@ def register(
         )
         sys.exit(1)
 
-    tmux_session = _detect_tmux_session()
+    tmux_session = _detect_tmux_session(pane_id)
     if not tmux_session:
         click.echo(
             "Error: cannot detect tmux session.",
@@ -319,19 +340,24 @@ def register(
         AgentKind(agent) if agent
         else _detect_agent_kind()
     )
-    tmux_socket = _detect_tmux_socket()
-    display_addr = _detect_display_addr()
+    tmux_socket = _detect_tmux_socket(pane_id)
+    if not tmux_socket:
+        raise click.ClickException(f"cannot resolve tmux socket for pane {pane_id}")
+    display_addr = _detect_display_addr(pane_id)
 
-    result = store.register_agent(
-        name=name,
-        pane_id=pane_id,
-        tmux_session=tmux_session,
-        agent_kind=agent_kind,
-        tmux_socket=tmux_socket,
-        display_addr=display_addr,
-        pid=os.getpid(),
-        cwd=os.getcwd(),
-    )
+    try:
+        result = store.register_agent(
+            name=name,
+            pane_id=pane_id,
+            tmux_session=tmux_session,
+            agent_kind=agent_kind,
+            tmux_socket=tmux_socket,
+            display_addr=display_addr,
+            pid=os.getpid(),
+            cwd=os.getcwd(),
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
     click.echo(
         f"Registered as '{name}' "
         f"(session={result.session_id[:8]}..., "
@@ -340,13 +366,68 @@ def register(
     )
 
 
+@cli.command()
+@click.argument("name", required=False)
+@click.option("--session-id", help="Retire one exact registration.")
+@click.pass_context
+def unregister(ctx: click.Context, name: str | None, session_id: str | None) -> None:
+    """Retire a named agent, or this pane, without deleting message history."""
+    store: MsgStore = ctx.obj["store"]
+    if name and session_id:
+        raise click.UsageError("use NAME or --session-id, not both")
+    if session_id:
+        agent = store.get_agent_by_id(session_id)
+    elif name:
+        session = _detect_tmux_session()
+        agent = store.get_agent_by_name(name, session, _detect_tmux_socket()) if session else None
+        if not agent:
+            click.echo(f"Agent '{name}' is already unregistered.")
+            return
+    else:
+        agent = _get_self_agent(store)
+    if not agent:
+        click.echo("Error: registration not found.", err=True)
+        sys.exit(1)
+    try:
+        retired = store.retire_agent(agent.session_id)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if not retired:
+        click.echo(f"Error: agent '{agent.name}' is already retired.", err=True)
+        sys.exit(1)
+    click.echo(f"Unregistered '{agent.name}' (history preserved)")
+
+
+@cli.command()
+@click.option("--session-id", required=True, help="Exact active registration to move.")
+@click.option("--pane", required=True, help="Destination tmux pane ID.")
+@click.pass_context
+def retarget(ctx: click.Context, session_id: str, pane: str) -> None:
+    """Move one exact active registration to another pane."""
+    store: MsgStore = ctx.obj["store"]
+    tmux_session = _detect_tmux_session(pane)
+    if not tmux_session:
+        raise click.ClickException(f"cannot resolve tmux session for pane {pane}")
+    try:
+        agent = store.retarget_agent(
+            session_id=session_id,
+            pane_id=pane,
+            tmux_session=tmux_session,
+            tmux_socket=_detect_tmux_socket(pane),
+            display_addr=_detect_display_addr(pane),
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Retargeted '{agent.name}' to {agent.display_addr or agent.pane_id}")
+
+
 @cli.command("list")
 @click.pass_context
 def list_agents(ctx: click.Context) -> None:
     """List registered agents."""
     store: MsgStore = ctx.obj["store"]
     tmux_session = _detect_tmux_session()
-    agents = store.list_agents(tmux_session=tmux_session)
+    agents = store.list_agents(tmux_session, _detect_tmux_socket())
 
     if not agents:
         click.echo("No agents registered.")
@@ -511,11 +592,14 @@ def send(
         created_by=me.session_id,
     )
 
-    msg = store.send_message(
-        thread_id=thread.id,
-        from_agent=me.session_id,
-        body=body,
-    )
+    try:
+        store.send_message(
+            thread_id=thread.id,
+            from_agent=me.session_id,
+            body=body,
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
 
     if not store.is_watcher_alive():
         click.echo(
@@ -597,7 +681,8 @@ def inbox(
 
     # Mark as read
     count = store.mark_read(
-        me.session_id, thread_id=resolved_id,
+        me.session_id,
+        delivery_ids=[message["delivery_id"] for message in messages],
     )
     click.echo(f"\n({count} message(s) marked as read)")
 
@@ -624,7 +709,7 @@ def status(ctx: click.Context) -> None:
 
     # Agents
     tmux_session = _detect_tmux_session()
-    agents = store.list_agents(tmux_session=tmux_session)
+    agents = store.list_agents(tmux_session, _detect_tmux_socket())
     click.echo(f"\nAgents: {len(agents)} registered")
     for a in agents:
         seen = _relative_time(a.last_seen)

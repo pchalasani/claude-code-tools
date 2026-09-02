@@ -39,6 +39,20 @@ brew install pchalasani/tap/aichat-search
 cargo install aichat-search
 ```
 
+:::caution[It upgrades separately]
+Because it is a separate binary, upgrading
+`claude-code-tools` does **not** update the search engine.
+Changes to the TUI -- new filters, keybindings, speed
+work -- only arrive when you upgrade `aichat-search`
+itself (`brew upgrade`, `cargo install aichat-search`, or
+`make aichat-search-install` from a checkout).
+
+If more than one copy is installed, the first on your
+`PATH` wins: a Homebrew copy shadows one in
+`~/.cargo/bin`, so a locally built binary appears to have
+no effect. Check with `which -a aichat-search`.
+:::
+
 ## Demo
 
 ![aichat-search demo](/claude-code-tools/assets/aichat-search-asciinema.gif)
@@ -97,7 +111,8 @@ cargo install aichat-search
 | `--no-original` | Exclude original sessions |
 | `--no-trimmed` | Exclude trimmed sessions |
 | `--no-rollover` | Exclude rollover sessions |
-| `--sub-agent` | Include sub-agent sessions |
+| `--sub-agent` | Include sub-agent sessions (hidden by default) |
+| `--exec-runs` | Include headless `codex exec` runs (hidden by default) |
 | `--live` | Show only currently running sessions |
 | `--by-time` | Sort by last-modified (default: relevance) |
 | `--json` | JSONL output for agents |
@@ -105,6 +120,41 @@ cargo install aichat-search
 Date formats: `YYYYMMDD`, `YYYY-MM-DD`, `MM/DD/YY`,
 `MM/DD/YYYY`. Optional time suffix: `T16:45:23`,
 `T16:45`, `T16`.
+
+## What is hidden by default
+
+Most sessions on a machine that runs coding agents were
+never a conversation you had -- they are workers other
+agents spawned. Search hides two such kinds by default:
+
+- **Sub-agent sessions.** Claude names these
+  `agent-*.jsonl`; Codex records the spawn in the
+  session's own metadata.
+- **Headless `codex exec` runs.** Every `codex exec`
+  invocation, whichever way it was started. Most are
+  workers spawned by orchestrating agents, scripts and
+  review loops -- but a `codex exec` you run yourself is
+  hidden too, so reach for `--exec-runs` when a session
+  you started that way is missing. Interactive `codex`
+  sessions are unaffected.
+
+On a machine driving agents hard these can outnumber real
+sessions by ten to one, so leaving them in makes search
+close to useless.
+
+Nothing is deleted, and nothing is left out of the index
+-- it is only filtered out of the results, so you can ask
+for it at any time:
+
+```bash
+aichat search "query" --sub-agent    # add sub-agents
+aichat search "query" --exec-runs    # add headless runs
+```
+
+In the TUI, open the filter menu with `Ctrl-F` and toggle
+`(s)` for sub-agents or `(h)` for headless runs; `:s` and
+`:h` do the same from command mode. When shown, these
+sessions are marked `(s)` and `(h)` in the session list.
 
 ## What gets indexed
 
@@ -116,6 +166,14 @@ The search engine indexes JSONL session files from:
 Custom locations can be set with `--claude-home` and
 `--codex-home` flags, or the `CLAUDE_CONFIG_DIR` and
 `CODEX_HOME` environment variables.
+
+Sub-agent and headless sessions are indexed like any
+other; they are hidden from results, not skipped.
+
+The index rebuilds itself when the indexing logic changes
+-- after an upgrade that stores new information about
+each session, the first run takes about a minute for a
+large history, then returns to incremental updates.
 
 ## Examples
 
