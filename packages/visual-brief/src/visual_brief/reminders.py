@@ -373,7 +373,7 @@ def _is_assignment(word: str) -> bool:
 
 
 def _meaningful_command(command: str) -> bool:
-    """Recognize successful build, test, format, review, and commit commands."""
+    """Recognize a standalone successful build, test, format, review, or commit."""
     try:
         lexer = shlex.shlex(
             _separate_unquoted_newlines(command.lower()),
@@ -385,7 +385,7 @@ def _meaningful_command(command: str) -> bool:
         words = list(lexer)
     except ValueError:
         return False
-    if not words:
+    if not words or _has_compound_shell_list(words):
         return False
     command_start = True
     for index, word in enumerate(words):
@@ -421,7 +421,8 @@ def _meaningful_command(command: str) -> bool:
                 executable == "npm" and arguments[:1] == ["ls"]
             ) or (
                 executable == "cargo"
-                and arguments[:2] == ["metadata", "--no-deps"]
+                and arguments[:1] == ["metadata"]
+                and "--no-deps" in arguments[1:]
             ) or (
                 executable == "uv"
                 and arguments[:2] in (["pip", "show"], ["pip", "list"])
@@ -431,6 +432,16 @@ def _meaningful_command(command: str) -> bool:
         if executable == "git":
             if _git_commit_follows_global_options(words[index + 1 :]):
                 return True
+    return False
+
+
+def _has_compound_shell_list(words: list[str]) -> bool:
+    """Reject shell lists whose aggregate status cannot prove a segment ran."""
+    for index, word in enumerate(words):
+        if word in {";", "&&", "||", "|", "|&"}:
+            return True
+        if word == "&" and not _is_standard_fd_redirection(words, index):
+            return True
     return False
 
 

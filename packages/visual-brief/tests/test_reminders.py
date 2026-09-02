@@ -112,18 +112,6 @@ def test_non_meaningful_events_do_not_advance_activity_gate(
         ("Bash", {"command": "rg commit"}, {"exit_code": 0}, False),
         (
             "Bash",
-            {"command": "cd src && pytest -q"},
-            {"exit_code": 0},
-            True,
-        ),
-        (
-            "Bash",
-            {"command": "cd src\npytest -q"},
-            {"exit_code": 0},
-            True,
-        ),
-        (
-            "Bash",
             {"command": "FOO=1 pytest -q"},
             {"exit_code": 0},
             True,
@@ -177,6 +165,7 @@ def test_classifier_counts_only_completed_meaningful_work(
         "cargo info serde",
         "cargo --color always search serde",
         "cargo metadata --no-deps",
+        "cargo metadata --format-version 1 --no-deps",
         "uv pip list",
         "uv pip show pytest",
         "yarn info react",
@@ -213,6 +202,27 @@ def test_classifier_keeps_package_progress_commands_meaningful(
     )
 
     assert actual is True
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd src && pytest -q",
+        "pytest -q || printf fallback",
+        "pytest -q | tee pytest.log",
+        "pytest -q; printf complete",
+        "cd src\npytest -q",
+    ],
+)
+def test_classifier_fails_closed_for_compound_shell_commands(command: str) -> None:
+    """Aggregate shell status cannot prove a meaningful segment ran successfully."""
+    actual = reminder_module().is_meaningful_completion(
+        "Bash",
+        {"command": command},
+        {"exit_code": 0},
+    )
+
+    assert actual is False
 
 
 @pytest.mark.parametrize(
@@ -303,17 +313,17 @@ def test_incomplete_tool_results_do_not_count_as_meaningful_work(
 
 
 @pytest.mark.parametrize("operator", ["&", "|&"])
-def test_classifier_recognizes_progress_after_background_boundary(
+def test_classifier_fails_closed_after_background_boundary(
     operator: str,
 ) -> None:
-    """A later command after either background boundary starts a new segment."""
+    """Aggregate status cannot establish a later background-list segment ran."""
     actual = reminder_module().is_meaningful_completion(
         "Bash",
         {"command": f"printf setup {operator} pytest -q"},
         {"exit_code": 0},
     )
 
-    assert actual is True
+    assert actual is False
 
 
 @pytest.mark.parametrize("prefix", ["printf setup", "true &&", "true;", "cat x |"])
