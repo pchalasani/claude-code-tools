@@ -140,7 +140,7 @@ def is_meaningful_completion(
     normalized = tool_name.strip().lower().replace("_", "")
     if normalized in _READ_TOOLS:
         return False
-    if not _succeeded(tool_result):
+    if not _reported_success(tool_result):
         return False
     if normalized in _WRITE_TOOLS:
         return True
@@ -177,14 +177,6 @@ def _has_publish_receipt(output: str) -> bool:
     return any(line.startswith("publish: appended ") for line in output.splitlines())
 
 
-def _succeeded(result: dict[str, object]) -> bool:
-    """Return whether a normalized result represents success."""
-    if result.get("success") is False:
-        return False
-    exit_code = result.get("exit_code", result.get("exitCode"))
-    return not isinstance(exit_code, int) or exit_code == 0
-
-
 def _reported_success(result: dict[str, object]) -> bool:
     """Require an explicit, well-formed successful shell result."""
     if "interrupted" in result and result["interrupted"] is not False:
@@ -214,7 +206,11 @@ def _reported_success(result: dict[str, object]) -> bool:
 def _contains_publish_segment(command: str) -> bool:
     """Find an executable ``visual-brief publish`` shell segment."""
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+        lexer = shlex.shlex(
+            _separate_unquoted_newlines(command),
+            posix=True,
+            punctuation_chars=";&|",
+        )
         lexer.whitespace_split = True
         lexer.commenters = ""
         words = list(lexer)
@@ -223,15 +219,40 @@ def _contains_publish_segment(command: str) -> bool:
 
     segment: list[str] = []
     for word in [*words, ";"]:
-        if word in {";", "&&", "|"}:
+        if word == "||":
+            segment = []
+        elif word in {";", "&&", "|"}:
             if _is_publish_segment(segment):
                 return True
-            segment = []
-        elif word == "||":
             segment = []
         else:
             segment.append(word)
     return False
+
+
+def _separate_unquoted_newlines(command: str) -> str:
+    """Turn executable newlines into standalone semicolon separators."""
+    normalized: list[str] = []
+    quote: str | None = None
+    escaped = False
+    for character in command:
+        if escaped:
+            normalized.append(character)
+            escaped = False
+        elif character == "\\" and quote != "'":
+            normalized.append(character)
+            escaped = True
+        elif character in {"'", '"'}:
+            if quote == character:
+                quote = None
+            elif quote is None:
+                quote = character
+            normalized.append(character)
+        elif character == "\n" and quote is None:
+            normalized.append(" ; ")
+        else:
+            normalized.append(character)
+    return "".join(normalized)
 
 
 def _is_publish_segment(words: list[str]) -> bool:

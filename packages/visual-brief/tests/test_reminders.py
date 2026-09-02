@@ -108,8 +108,13 @@ def test_non_meaningful_events_do_not_advance_activity_gate(
             {"exit_code": 0},
             True,
         ),
-        ("Edit", {"file_path": "src/app.py"}, {}, True),
-        ("apply_patch", {"patch": "*** Begin Patch"}, {}, True),
+        ("Edit", {"file_path": "src/app.py"}, {"success": True}, True),
+        (
+            "apply_patch",
+            {"patch": "*** Begin Patch"},
+            {"success": True},
+            True,
+        ),
     ],
 )
 def test_classifier_counts_only_completed_meaningful_work(
@@ -125,6 +130,84 @@ def test_classifier_counts_only_completed_meaningful_work(
         tool_result,
     )
     assert actual is expected
+
+
+@pytest.mark.parametrize(
+    "tool_result",
+    [
+        {},
+        {"stdout": "edited src/app.py"},
+        {"success": "true"},
+    ],
+)
+def test_incomplete_tool_results_do_not_count_as_meaningful_work(
+    tool_result: dict[str, object],
+) -> None:
+    """A PostToolUse result must explicitly and validly report success."""
+    actual = reminder_module().is_meaningful_completion(
+        "Edit",
+        {"file_path": "src/app.py"},
+        tool_result,
+    )
+
+    assert actual is False
+
+
+@pytest.mark.parametrize("prefix", ["printf setup", "true &&", "true;", "cat x |"])
+def test_publish_command_can_follow_a_newline_separator(prefix: str) -> None:
+    """A newline starts a new shell segment just like a semicolon."""
+    actual = reminder_module().is_successful_publish_completion(
+        "Bash",
+        {
+            "command": (
+                f"{prefix}\nvisual-brief publish --file brief.json"
+            )
+        },
+        {
+            "exit_code": 0,
+            "stdout": "publish: appended briefing; rendered index.html",
+        },
+    )
+
+    assert actual is True
+
+
+def test_failed_publish_before_newline_fallback_is_not_successful() -> None:
+    """A newline after the fallback operator preserves failure semantics."""
+    actual = reminder_module().is_successful_publish_completion(
+        "Bash",
+        {
+            "command": (
+                "visual-brief publish bad ||\n"
+                "printf 'publish: appended forged receipt\n'"
+            )
+        },
+        {
+            "exit_code": 0,
+            "stdout": "publish: appended forged receipt\n",
+        },
+    )
+
+    assert actual is False
+
+
+def test_quoted_newline_is_not_a_command_separator() -> None:
+    """A literal newline argument must not expose incidental publish words."""
+    actual = reminder_module().is_successful_publish_completion(
+        "Bash",
+        {
+            "command": (
+                "printf '\n' visual-brief publish; "
+                "printf 'publish: appended forged receipt\n'"
+            )
+        },
+        {
+            "exit_code": 0,
+            "stdout": "publish: appended forged receipt\n",
+        },
+    )
+
+    assert actual is False
 
 
 def test_provider_and_session_state_are_isolated(
