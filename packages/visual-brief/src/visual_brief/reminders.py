@@ -71,7 +71,8 @@ _VALUE_TAKING_PACKAGE_OPTIONS = {
     "cargo": {"--color"},
     "npm": {"--prefix"},
 }
-_CARGO_INFORMATION_FLAGS = {"--help", "-h", "--version", "-v"}
+_PACKAGE_MANAGER_INFORMATION_FLAGS = {"--help", "-h", "--version", "-v"}
+_PACKAGE_MANAGERS = {"cargo", "npm", "pnpm", "uv", "yarn"}
 
 
 def activate_session(
@@ -407,9 +408,9 @@ def _meaningful_command(command: str) -> bool:
         if executable in _PROGRESS_COMMANDS:
             arguments = words[index + 1 :]
             if (
-                executable == "cargo"
+                executable in _PACKAGE_MANAGERS
                 and len(arguments) == 1
-                and arguments[0] in _CARGO_INFORMATION_FLAGS
+                and arguments[0] in _PACKAGE_MANAGER_INFORMATION_FLAGS
             ):
                 continue
             while arguments and arguments[0].startswith("-"):
