@@ -150,7 +150,11 @@ def test_classifier_counts_only_completed_meaningful_work(
     "command",
     [
         "npm view pytest",
+        "npm search react",
+        "npm info react",
+        "npm --silent search react",
         "cargo search serde",
+        "cargo info serde",
         "uv pip show pytest",
         "yarn info react",
     ],
@@ -164,6 +168,28 @@ def test_classifier_rejects_read_only_package_commands(command: str) -> None:
     )
 
     assert actual is False
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "npm install react",
+        "npm test",
+        "cargo build",
+        "cargo test",
+    ],
+)
+def test_classifier_keeps_package_progress_commands_meaningful(
+    command: str,
+) -> None:
+    """Build, test, and install package commands remain meaningful work."""
+    actual = reminder_module().is_meaningful_completion(
+        "Bash",
+        {"command": command},
+        {"exit_code": 0},
+    )
+
+    assert actual is True
 
 
 def test_reminder_module_import_does_not_require_fcntl(
@@ -347,6 +373,20 @@ def test_unsupported_state_schema_fails_closed(tmp_path: Path) -> None:
 
     assert event(tmp_path, now=10_000.0) is None
     assert state_path.read_text(encoding="utf-8") == unsupported
+
+
+@pytest.mark.parametrize("field", ["activation_time", "last_gate_time"])
+def test_boolean_state_timestamps_fail_closed(tmp_path: Path, field: str) -> None:
+    """Boolean timestamps must not pass numeric persisted-state validation."""
+    activate(tmp_path)
+    state_path = next((tmp_path / ".reminders").glob("*.json"))
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state[field] = True
+    invalid = json.dumps(state)
+    state_path.write_text(invalid, encoding="utf-8")
+
+    assert event(tmp_path, now=10_000.0) is None
+    assert state_path.read_text(encoding="utf-8") == invalid
 
 
 def test_concurrent_updates_are_not_lost(

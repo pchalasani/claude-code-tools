@@ -64,12 +64,8 @@ _PROGRESS_COMMANDS = {
     "vitest",
     "yarn",
 }
-_READ_ONLY_PACKAGE_COMMANDS = {
-    "cargo": [("search",)],
-    "npm": [("view",)],
-    "uv": [("pip", "show")],
-    "yarn": [("info",)],
-}
+_READ_ONLY_PACKAGE_MANAGERS = {"cargo", "npm", "yarn"}
+_READ_ONLY_PACKAGE_VERBS = {"info", "search", "view"}
 
 
 def activate_session(
@@ -316,10 +312,13 @@ def _meaningful_command(command: str) -> bool:
         executable = Path(word).name
         if executable in _PROGRESS_COMMANDS:
             arguments = words[index + 1 :]
-            if any(
-                tuple(arguments[: len(read_only)]) == read_only
-                for read_only in _READ_ONLY_PACKAGE_COMMANDS.get(executable, [])
-            ):
+            while arguments and arguments[0].startswith("-"):
+                arguments = arguments[1:]
+            if (
+                executable in _READ_ONLY_PACKAGE_MANAGERS
+                and arguments
+                and arguments[0] in _READ_ONLY_PACKAGE_VERBS
+            ) or (executable == "uv" and arguments[:2] == ["pip", "show"]):
                 continue
             return True
         if executable == "git" and index + 1 < len(words):
@@ -390,9 +389,17 @@ def _read_state(path: Path, provider: str) -> dict[str, Any] | None:
         return None
     if value.get("provider") != provider:
         return None
-    if not isinstance(value.get("activation_time"), (int, float)):
+    activation_time = value.get("activation_time")
+    if not isinstance(activation_time, (int, float)) or isinstance(
+        activation_time,
+        bool,
+    ):
         return None
-    if not isinstance(value.get("last_gate_time"), (int, float)):
+    last_gate_time = value.get("last_gate_time")
+    if not isinstance(last_gate_time, (int, float)) or isinstance(
+        last_gate_time,
+        bool,
+    ):
         return None
     count = value.get("meaningful_work_count")
     if not isinstance(count, int) or isinstance(count, bool) or count < 0:
