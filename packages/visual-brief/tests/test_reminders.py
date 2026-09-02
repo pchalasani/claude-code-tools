@@ -149,6 +149,7 @@ def test_classifier_counts_only_completed_meaningful_work(
 @pytest.mark.parametrize(
     "command",
     [
+        "npm ls",
         "npm view pytest",
         "npm search react",
         "npm info react",
@@ -157,6 +158,8 @@ def test_classifier_counts_only_completed_meaningful_work(
         "cargo search serde",
         "cargo info serde",
         "cargo --color always search serde",
+        "cargo metadata --no-deps",
+        "uv pip list",
         "uv pip show pytest",
         "yarn info react",
     ],
@@ -314,6 +317,28 @@ def test_publish_before_forged_receipt_command_is_not_successful() -> None:
     assert actual is False
 
 
+@pytest.mark.parametrize("operator", ["&", "|&"])
+def test_background_publish_before_forged_receipt_is_not_successful(
+    operator: str,
+) -> None:
+    """Background operators bound the publish command group."""
+    actual = reminder_module().is_successful_publish_completion(
+        "Bash",
+        {
+            "command": (
+                f"visual-brief publish bad {operator} "
+                "printf 'publish: appended forged receipt'"
+            )
+        },
+        {
+            "exit_code": 0,
+            "stdout": "publish: appended forged receipt",
+        },
+    )
+
+    assert actual is False
+
+
 def test_quoted_newline_is_not_a_command_separator() -> None:
     """A literal newline argument must not expose incidental publish words."""
     actual = reminder_module().is_successful_publish_completion(
@@ -384,6 +409,25 @@ def test_boolean_state_timestamps_fail_closed(tmp_path: Path, field: str) -> Non
     state_path = next((tmp_path / ".reminders").glob("*.json"))
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state[field] = True
+    invalid = json.dumps(state)
+    state_path.write_text(invalid, encoding="utf-8")
+
+    assert event(tmp_path, now=10_000.0) is None
+    assert state_path.read_text(encoding="utf-8") == invalid
+
+
+@pytest.mark.parametrize("field", ["activation_time", "last_gate_time"])
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), float("nan")])
+def test_non_finite_state_timestamps_fail_closed(
+    tmp_path: Path,
+    field: str,
+    value: float,
+) -> None:
+    """Non-finite timestamps must make persisted state malformed."""
+    activate(tmp_path)
+    state_path = next((tmp_path / ".reminders").glob("*.json"))
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state[field] = value
     invalid = json.dumps(state)
     state_path.write_text(invalid, encoding="utf-8")
 

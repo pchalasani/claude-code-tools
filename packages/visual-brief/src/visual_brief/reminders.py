@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import shlex
 import tempfile
@@ -231,7 +232,7 @@ def _contains_publish_segment(command: str) -> bool:
             group_has_command = group_has_command or bool(segment)
             group_has_publish = group_has_publish or _is_publish_segment(segment)
             segment = []
-        elif word in {";", "&&", "||"}:
+        elif word in {";", "&&", "||", "&", "|&"}:
             group_has_command = group_has_command or bool(segment)
             group_has_publish = group_has_publish or _is_publish_segment(segment)
             if group_has_command:
@@ -328,7 +329,15 @@ def _meaningful_command(command: str) -> bool:
                 executable in _READ_ONLY_PACKAGE_MANAGERS
                 and arguments
                 and arguments[0] in _READ_ONLY_PACKAGE_VERBS
-            ) or (executable == "uv" and arguments[:2] == ["pip", "show"]):
+            ) or (
+                executable == "npm" and arguments[:1] == ["ls"]
+            ) or (
+                executable == "cargo"
+                and arguments[:2] == ["metadata", "--no-deps"]
+            ) or (
+                executable == "uv"
+                and arguments[:2] in (["pip", "show"], ["pip", "list"])
+            ):
                 continue
             return True
         if executable == "git" and index + 1 < len(words):
@@ -403,13 +412,13 @@ def _read_state(path: Path, provider: str) -> dict[str, Any] | None:
     if not isinstance(activation_time, (int, float)) or isinstance(
         activation_time,
         bool,
-    ):
+    ) or not math.isfinite(activation_time):
         return None
     last_gate_time = value.get("last_gate_time")
     if not isinstance(last_gate_time, (int, float)) or isinstance(
         last_gate_time,
         bool,
-    ):
+    ) or not math.isfinite(last_gate_time):
         return None
     count = value.get("meaningful_work_count")
     if not isinstance(count, int) or isinstance(count, bool) or count < 0:
