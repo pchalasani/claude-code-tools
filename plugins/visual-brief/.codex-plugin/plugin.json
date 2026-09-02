@@ -5,6 +5,7 @@
   "author": {
     "name": "Prasad Chalasani"
   },
+  "skills": "./skills/",
   "interface": {
     "displayName": "Visual Brief",
     "shortDescription": "Quiet milestone reminders for Visual Brief",

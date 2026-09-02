@@ -28,13 +28,10 @@ Install the provider-neutral CLI first:
 uv tool install visual-brief
 ```
 
-The CLI creates and serves the briefing. The optional Visual Brief plugin adds
-quiet milestone reminders to the agent session after a successful publish; it
-does not create a separate dashboard or store your work remotely.
-
-The `visual-brief` package also ships the `visual-brief` agent skill. After
-installation, ask your agent to make or publish a Visual Brief; the skill
-provides the workflow instructions. The optional plugin only adds reminders.
+The CLI provides the `visual-brief` command that creates, serves, and updates
+briefings. The optional Visual Brief plugin exposes the agent skill and adds
+quiet milestone reminders after a successful publish. It does not create a
+separate dashboard or store your work remotely.
 
 ## Start a Briefing
 
@@ -73,9 +70,9 @@ optional reminder plugin for the provider you use:
     claude plugin install visual-brief@cctools-plugins
     ```
 
-    Restart Claude Code after installation. The plugin stays inactive until a
-    successful `visual-brief publish`, then gives quiet reminders to publish
-    again at meaningful milestones.
+    Restart Claude Code after installation. The plugin exposes the Visual Brief
+    skill and stays inactive until a successful `visual-brief publish`, then
+    gives quiet reminders to publish again at meaningful milestones.
   </TabItem>
   <TabItem label="Codex">
     ```bash
@@ -83,8 +80,9 @@ optional reminder plugin for the provider you use:
     codex plugin add visual-brief@cctools-codex-plugins
     ```
 
-    Restart Codex after installation. Review and trust the hook definition
-    before enabling it. Its reminder behavior matches the Claude Code plugin.
+    Restart Codex after installation. The plugin exposes the Visual Brief skill.
+    Review and trust the hook definition before enabling it. Its reminder
+    behavior matches the Claude Code plugin.
   </TabItem>
 </Tabs>
 
@@ -106,7 +104,35 @@ codex plugin marketplace upgrade cctools-codex-plugins
 3. You open the local browser page to scan the latest update, then expand prior
    updates when you need context.
 
-The browser page can accept follow-up questions. The agent folds those messages
-into the briefing and answers them there, keeping the context beside the update
-that prompted it. This remains a local, session-oriented briefing flow rather
-than a replacement for issue tracking or project management.
+The browser page can accept follow-up questions. Before sharing its URL, arm a
+watcher for that run so the agent can receive page questions.
+
+<Tabs>
+  <TabItem label="Claude Code">
+    Start Claude Code's persistent monitor:
+
+    ```text
+    Monitor(
+      command: "visual-brief watch --agent claude --run <RUN>",
+      description: "questions from the visual-brief page",
+      persistent: true,
+    )
+    ```
+  </TabItem>
+  <TabItem label="Codex">
+    For a session launched through `codex-dynamic`, start:
+
+    ```bash
+    visual-brief watch --agent codex --run <RUN>
+    ```
+
+    The watcher needs the Codex bridge environment. Obtain approval to run this
+    trusted watcher outside the default sandbox. Re-arm it after a session
+    boundary, and stop an existing watcher before starting another one.
+  </TabItem>
+</Tabs>
+
+The agent folds those messages into the briefing and answers them there, keeping
+the context beside the update that prompted it. This remains a local,
+session-oriented briefing flow rather than a replacement for issue tracking or
+project management.
