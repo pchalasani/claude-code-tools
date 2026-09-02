@@ -101,6 +101,12 @@ def test_non_meaningful_events_do_not_advance_activity_gate(
         ("Grep", {"pattern": "needle"}, {}, False),
         ("Bash", {"command": "git status --short"}, {"exit_code": 0}, False),
         ("Bash", {"command": "pytest -q"}, {"exit_code": 0}, True),
+        (
+            "Bash",
+            {"command": "python -m pytest -q"},
+            {"exit_code": 0},
+            True,
+        ),
         ("Bash", {"command": "pytest -q"}, {"exit_code": 1}, False),
         ("Bash", {"command": "echo pytest"}, {"exit_code": 0}, False),
         ("Bash", {"command": "rg commit"}, {"exit_code": 0}, False),

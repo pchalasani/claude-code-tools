@@ -210,7 +210,7 @@ def _reported_success(result: dict[str, object]) -> bool:
 
 
 def _contains_publish_segment(command: str) -> bool:
-    """Find ``visual-brief publish`` in the final executable command group."""
+    """Find a receipt-eligible publish in the final executable command group."""
     try:
         lexer = shlex.shlex(
             _separate_unquoted_newlines(command),
@@ -224,25 +224,42 @@ def _contains_publish_segment(command: str) -> bool:
         return False
 
     segment: list[str] = []
-    group_has_command = False
-    group_has_publish = False
+    pipeline: list[list[str]] = []
     final_group_has_publish = False
     for word in [*words, ";"]:
         if word == "|":
-            group_has_command = group_has_command or bool(segment)
-            group_has_publish = group_has_publish or _is_publish_segment(segment)
+            pipeline.append(segment)
             segment = []
         elif word in {";", "&&", "||", "&", "|&"}:
-            group_has_command = group_has_command or bool(segment)
-            group_has_publish = group_has_publish or _is_publish_segment(segment)
-            if group_has_command:
-                final_group_has_publish = group_has_publish
+            pipeline.append(segment)
+            if any(pipeline):
+                final_group_has_publish = _pipeline_has_receipt_eligible_publish(
+                    pipeline
+                )
             segment = []
-            group_has_command = False
-            group_has_publish = False
+            pipeline = []
         else:
             segment.append(word)
     return final_group_has_publish
+
+
+def _pipeline_has_receipt_eligible_publish(pipeline: list[list[str]]) -> bool:
+    """Require downstream pipeline stages to preserve a publish receipt."""
+    for index, stage in enumerate(pipeline):
+        if _is_publish_segment(stage) and all(
+            _is_receipt_preserving_stage(downstream)
+            for downstream in pipeline[index + 1 :]
+        ):
+            return True
+    return False
+
+
+def _is_receipt_preserving_stage(words: list[str]) -> bool:
+    """Return whether a pipeline stage copies standard input to standard output."""
+    index = 0
+    while index < len(words) and _is_assignment(words[index]):
+        index += 1
+    return index < len(words) and Path(words[index]).name == "tee"
 
 
 def _separate_unquoted_newlines(command: str) -> str:
@@ -315,6 +332,11 @@ def _meaningful_command(command: str) -> bool:
             continue
         command_start = False
         executable = Path(word).name
+        if (
+            executable in {"python", "python3"}
+            and words[index + 1 : index + 3] == ["-m", "pytest"]
+        ):
+            return True
         if executable in _PROGRESS_COMMANDS:
             arguments = words[index + 1 :]
             while arguments and arguments[0].startswith("-"):
