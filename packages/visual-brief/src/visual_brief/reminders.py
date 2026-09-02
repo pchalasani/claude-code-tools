@@ -66,6 +66,10 @@ _PROGRESS_COMMANDS = {
 }
 _READ_ONLY_PACKAGE_MANAGERS = {"cargo", "npm", "yarn"}
 _READ_ONLY_PACKAGE_VERBS = {"info", "search", "view"}
+_VALUE_TAKING_PACKAGE_OPTIONS = {
+    "cargo": {"--color"},
+    "npm": {"--prefix"},
+}
 
 
 def activate_session(
@@ -313,7 +317,13 @@ def _meaningful_command(command: str) -> bool:
         if executable in _PROGRESS_COMMANDS:
             arguments = words[index + 1 :]
             while arguments and arguments[0].startswith("-"):
+                option = arguments[0]
                 arguments = arguments[1:]
+                if (
+                    option in _VALUE_TAKING_PACKAGE_OPTIONS.get(executable, set())
+                    and arguments
+                ):
+                    arguments = arguments[1:]
             if (
                 executable in _READ_ONLY_PACKAGE_MANAGERS
                 and arguments
