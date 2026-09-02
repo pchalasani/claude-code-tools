@@ -90,9 +90,12 @@ All modes accept the provider's PostToolUse JSON on standard input, require a
 non-empty payload `session_id`, and preserve canonical `tool_response` with
 `tool_result` as fallback. A successful Bash or shell command containing an
 actually executed `visual-brief publish` segment activates or resets the
-session, including when the segment is in a pipeline. That completion emits
-`{}` and does not count as meaningful work. Other valid completions pass one
-meaningful-or-trivial event to the shared engine.
+session only when provider output contains the concrete successful CLI receipt
+`publish: appended `. This requirement applies to structured Claude `stdout`
+and Codex string output, including when the segment is in a pipeline. Aggregate
+shell success alone is insufficient. That completion emits `{}` and does not
+count as meaningful work. Other valid completions pass one meaningful-or-
+trivial event to the shared engine.
 
 Success may be reported by an explicit boolean or zero exit code. Claude's
 completed Bash response is also successful when `stdout` is a string,
@@ -110,9 +113,11 @@ exit status.
 
 The Codex adapter converts a nonempty, non-error string into an explicit
 successful normalized result so meaningful output such as the pytest result
-can advance the shared reminder gate. Empty and error strings fail closed.
-Publish activation from a Codex string additionally requires the concrete
-`publish: appended ` receipt prefix. Command text quoted in output, unrelated
+can advance the shared reminder gate. Empty strings and strings containing
+common error or failure markers anywhere in their output fail closed. The
+known successful `pytest --version` output remains successful. Publish
+activation from a Codex string additionally requires the concrete
+`publish: appended ` receipt. Command text quoted in output, unrelated
 nonempty output, and other incidental mentions never activate a session.
 Claude string responses remain invalid; its strict object behavior is
 unchanged.

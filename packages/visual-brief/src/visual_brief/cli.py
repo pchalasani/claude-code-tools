@@ -297,8 +297,8 @@ def _normalize_reminder_result(
         raise ValueError("invalid tool result")
     output = tool_result.strip()
     lowered = output.lower()
-    error_prefixes = ("error", "failed", "command failed", "process exited")
-    if not output or lowered.startswith(error_prefixes):
+    error_markers = ("error:", "failed", "failure", "process exited")
+    if not output or any(marker in lowered for marker in error_markers):
         return {"success": False, "_codex_string_output": tool_result}
     return {"success": True, "_codex_string_output": tool_result}
 

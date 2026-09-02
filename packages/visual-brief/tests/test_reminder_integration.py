@@ -224,6 +224,39 @@ def test_codex_string_test_output_triggers_shared_reminder_gate(
     }
 
 
+@pytest.mark.parametrize(
+    "tool_response",
+    [
+        "test session starts\nFAILED tests/test_app.py::test_publish\n",
+        "Build output\nError: compilation failed\n",
+    ],
+)
+def test_codex_error_marker_anywhere_does_not_advance_gate(
+    tmp_path: Path,
+    tool_response: str,
+) -> None:
+    """A normal header must not hide a later Codex failure marker."""
+    reminder_module().activate_session(
+        tmp_path,
+        "codex",
+        "codex-session",
+        now=time.time() - 2.0,
+    )
+    completed = run_adapter(
+        "codex",
+        {
+            "session_id": "codex-session",
+            "tool_name": "exec_command",
+            "tool_input": {"cmd": "pytest -q"},
+            "tool_response": tool_response,
+        },
+        tmp_path,
+    )
+
+    assert completed.returncode == 0
+    assert json.loads(completed.stdout) == {}
+
+
 def test_codex_publish_receipt_string_activates_session(
     tmp_path: Path,
 ) -> None:
@@ -268,6 +301,54 @@ def test_codex_string_without_publish_receipt_does_not_activate(
             "session_id": "codex-session",
             "tool_name": "exec_command",
             "tool_input": {"cmd": "visual-brief publish -"},
+            "tool_response": tool_response,
+        },
+        tmp_path,
+    )
+
+    assert completed.returncode == 0
+    assert json.loads(completed.stdout) == {}
+    assert reminder_states(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    ("provider", "command", "tool_response"),
+    [
+        (
+            "claude",
+            "visual-brief publish bad; true",
+            {"success": True, "stdout": "", "stderr": ""},
+        ),
+        (
+            "claude",
+            "visual-brief publish bad | true",
+            {"exit_code": 0, "stdout": "", "stderr": ""},
+        ),
+        (
+            "codex",
+            "visual-brief publish bad; true",
+            "command completed successfully\n",
+        ),
+        (
+            "codex",
+            "visual-brief publish bad | true",
+            "command completed successfully\n",
+        ),
+    ],
+)
+def test_masked_publish_failure_without_receipt_does_not_activate(
+    tmp_path: Path,
+    provider: str,
+    command: str,
+    tool_response: dict[str, object] | str,
+) -> None:
+    """Aggregate shell success cannot substitute for the publish receipt."""
+    completed = run_adapter(
+        provider,
+        {
+            "session_id": "masked-session",
+            "tool_name": "Bash" if provider == "claude" else "exec_command",
+            "tool_input": {"command": command},
             "tool_response": tool_response,
         },
         tmp_path,
@@ -349,7 +430,10 @@ def test_auto_provider_uses_plugin_root_contract(
         "session_id": "payload-session",
         "tool_name": "Bash",
         "tool_input": {"command": "visual-brief publish --file brief.json"},
-        "tool_response": {"exit_code": 0},
+        "tool_response": {
+            "exit_code": 0,
+            "stdout": "publish: appended briefing; rendered index.html",
+        },
     }
     completed = run_adapter(
         "auto",
@@ -370,12 +454,18 @@ def test_auto_provider_uses_plugin_root_contract(
         (
             "visual-brief publish --file brief.json",
             "tool_response",
-            {"exit_code": 0},
+            {
+                "exit_code": 0,
+                "stdout": "publish: appended briefing; rendered index.html",
+            },
         ),
         (
             "printf '%s' data | visual-brief publish --stdin -",
             "tool_result",
-            {"success": True},
+            {
+                "success": True,
+                "stdout": "publish: appended briefing; rendered index.html",
+            },
         ),
         (
             "visual-brief publish --file brief.json",
@@ -505,7 +595,10 @@ def test_publish_activation_failure_is_quiet_and_non_blocking(
             "session_id": "payload-session",
             "tool_name": "Bash",
             "tool_input": {"command": "visual-brief publish --file brief.json"},
-            "tool_response": {"exit_code": 0},
+            "tool_response": {
+                "exit_code": 0,
+                "stdout": "publish: appended briefing; rendered index.html",
+            },
         },
         tmp_path,
     )

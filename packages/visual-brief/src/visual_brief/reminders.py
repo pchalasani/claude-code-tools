@@ -163,8 +163,11 @@ def is_successful_publish_completion(
         return False
     codex_output = tool_result.get("_codex_string_output")
     if isinstance(codex_output, str):
-        if not codex_output.startswith("publish: appended "):
-            return False
+        output = codex_output
+    else:
+        output = tool_result.get("stdout")
+    if not isinstance(output, str) or "publish: appended " not in output:
+        return False
     command = tool_input.get("command", tool_input.get("cmd", ""))
     return isinstance(command, str) and _contains_publish_segment(command)
 
