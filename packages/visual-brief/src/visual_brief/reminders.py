@@ -146,14 +146,25 @@ def is_meaningful_completion(
     normalized = tool_name.strip().lower().replace("_", "")
     if normalized in _READ_TOOLS:
         return False
+    if normalized in _WRITE_TOOLS:
+        return _reported_success(tool_result) or _is_canonical_write_response(
+            tool_result
+        )
     if not _reported_success(tool_result):
         return False
-    if normalized in _WRITE_TOOLS:
-        return True
     if normalized not in {"bash", "shell", "exec", "execcommand"}:
         return False
     command = tool_input.get("command", tool_input.get("cmd", ""))
     return isinstance(command, str) and _meaningful_command(command)
+
+
+def _is_canonical_write_response(result: dict[str, object]) -> bool:
+    """Recognize Claude's successful file-write response without a status code."""
+    return (
+        isinstance(result.get("filePath"), str)
+        and bool(result["filePath"])
+        and result.get("type") in {"create", "update"}
+    )
 
 
 def is_successful_publish_completion(
@@ -323,7 +334,7 @@ def _meaningful_command(command: str) -> bool:
         return False
     command_start = True
     for index, word in enumerate(words):
-        if word in {";", "&&", "||", "|"}:
+        if word in {";", "&&", "||", "|", "&", "|&"}:
             command_start = True
             continue
         if not command_start:

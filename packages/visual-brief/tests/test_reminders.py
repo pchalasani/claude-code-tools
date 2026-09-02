@@ -128,6 +128,18 @@ def test_non_meaningful_events_do_not_advance_activity_gate(
             {"exit_code": 0},
             True,
         ),
+        (
+            "Write",
+            {"file_path": "src/app.py"},
+            {"filePath": "src/app.py", "type": "create"},
+            True,
+        ),
+        (
+            "Edit",
+            {"file_path": "src/app.py"},
+            {"filePath": "src/app.py", "type": "update"},
+            True,
+        ),
         ("Edit", {"file_path": "src/app.py"}, {"success": True}, True),
         (
             "apply_patch",
@@ -252,6 +264,8 @@ def test_reminder_module_import_does_not_require_fcntl(
         {},
         {"stdout": "edited src/app.py"},
         {"success": "true"},
+        {"filePath": "src/app.py"},
+        {"filePath": "src/app.py", "type": "unknown"},
     ],
 )
 def test_incomplete_tool_results_do_not_count_as_meaningful_work(
@@ -265,6 +279,20 @@ def test_incomplete_tool_results_do_not_count_as_meaningful_work(
     )
 
     assert actual is False
+
+
+@pytest.mark.parametrize("operator", ["&", "|&"])
+def test_classifier_recognizes_progress_after_background_boundary(
+    operator: str,
+) -> None:
+    """A later command after either background boundary starts a new segment."""
+    actual = reminder_module().is_meaningful_completion(
+        "Bash",
+        {"command": f"printf setup {operator} pytest -q"},
+        {"exit_code": 0},
+    )
+
+    assert actual is True
 
 
 @pytest.mark.parametrize("prefix", ["printf setup", "true &&", "true;", "cat x |"])
