@@ -1,0 +1,17 @@
+{
+  "description": "Quiet Visual Brief milestone reminders",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit|apply_patch|exec_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/reminder-hook",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

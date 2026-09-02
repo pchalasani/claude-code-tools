@@ -1,0 +1,193 @@
+"""Contract tests for session-scoped Visual Brief milestone reminders."""
+
+from __future__ import annotations
+
+import importlib
+import json
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from types import ModuleType
+
+import pytest
+
+REMINDER = (
+    "Visual Brief is active for this session. Remember to publish an update "
+    "when you reach the next meaningful milestone."
+)
+
+
+def reminder_module() -> ModuleType:
+    """Import the shared engine whose public contract these tests define."""
+    return importlib.import_module("visual_brief.reminders")
+
+
+def activate(
+    home: Path,
+    provider: str = "claude",
+    session_id: str = "session-one",
+    now: float = 100.0,
+) -> None:
+    """Activate one provider session through the shared engine."""
+    reminder_module().activate_session(home, provider, session_id, now=now)
+
+
+def event(
+    home: Path,
+    *,
+    provider: str = "claude",
+    session_id: str = "session-one",
+    meaningful: bool = True,
+    now: float = 100.0,
+) -> str | None:
+    """Record one completed tool event through the shared engine."""
+    result = reminder_module().record_tool_completion(
+        home,
+        provider,
+        session_id,
+        meaningful=meaningful,
+        now=now,
+    )
+    assert result is None or isinstance(result, str)
+    return result
+
+
+def test_session_is_inactive_before_publish(tmp_path: Path) -> None:
+    """Tool completions alone must never invent activation."""
+    for index in range(5):
+        assert event(tmp_path, now=1_000.0 + index) is None
+    assert not (tmp_path / ".reminders").exists()
+
+
+def test_time_and_activity_gates_and_repeat_suppression(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both gates must open, and a reminder must reset both gates."""
+    monkeypatch.setenv("VISUAL_BRIEF_REMINDER_SECONDS", "20")
+    monkeypatch.setenv("VISUAL_BRIEF_REMINDER_COMPLETIONS", "3")
+    activate(tmp_path)
+
+    assert event(tmp_path, now=110.0) is None
+    assert event(tmp_path, now=111.0) is None
+    assert event(tmp_path, now=112.0) is None
+    assert event(tmp_path, now=120.0) == REMINDER
+    assert event(tmp_path, now=200.0) is None
+    assert event(tmp_path, now=201.0) is None
+    assert event(tmp_path, now=202.0) == REMINDER
+
+
+def test_non_meaningful_events_do_not_advance_activity_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reads and searches must remain invisible to the activity counter."""
+    monkeypatch.setenv("VISUAL_BRIEF_REMINDER_SECONDS", "0")
+    monkeypatch.setenv("VISUAL_BRIEF_REMINDER_COMPLETIONS", "1")
+    activate(tmp_path)
+
+    assert event(tmp_path, meaningful=False, now=200.0) is None
+    state_path = next((tmp_path / ".reminders").glob("*.json"))
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["meaningful_work_count"] == 0
+    assert event(tmp_path, meaningful=True, now=201.0) == REMINDER
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "tool_input", "tool_result", "expected"),
+    [
+        ("Read", {"file_path": "README.md"}, {}, False),
+        ("Grep", {"pattern": "needle"}, {}, False),
+        ("Bash", {"command": "git status --short"}, {"exit_code": 0}, False),
+        ("Bash", {"command": "pytest -q"}, {"exit_code": 0}, True),
+        ("Bash", {"command": "pytest -q"}, {"exit_code": 1}, False),
+        ("Bash", {"command": "echo pytest"}, {"exit_code": 0}, False),
+        ("Bash", {"command": "rg commit"}, {"exit_code": 0}, False),
+        (
+            "Bash",
+            {"command": "cd src && pytest -q"},
+            {"exit_code": 0},
+            True,
+        ),
+        ("Edit", {"file_path": "src/app.py"}, {}, True),
+        ("apply_patch", {"patch": "*** Begin Patch"}, {}, True),
+    ],
+)
+def test_classifier_counts_only_completed_meaningful_work(
+    tool_name: str,
+    tool_input: dict[str, object],
+    tool_result: dict[str, object],
+    expected: bool,
+) -> None:
+    """The shared classifier must reject reads and failed progress commands."""
+    actual = reminder_module().is_meaningful_completion(
+        tool_name,
+        tool_input,
+        tool_result,
+    )
+    assert actual is expected
+
+
+def test_provider_and_session_state_are_isolated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Activity in one opaque state record must not leak to another."""
+    monkeypatch.setenv("VISUAL_BRIEF_REMINDER_SECONDS", "0")
+    monkeypatch.setenv("VISUAL_BRIEF_REMINDER_COMPLETIONS", "1")
+    activate(tmp_path, "claude", "same-id")
+    activate(tmp_path, "codex", "same-id")
+    activate(tmp_path, "claude", "other-id")
+
+    assert event(tmp_path, provider="claude", session_id="same-id") == REMINDER
+    assert event(tmp_path, provider="codex", session_id="same-id") == REMINDER
+    assert event(tmp_path, provider="claude", session_id="other-id") == REMINDER
+    state_names = {
+        path.name for path in (tmp_path / ".reminders").glob("*.json")
+    }
+    assert len(state_names) == 3
+    assert all("same-id" not in name and "other-id" not in name for name in state_names)
+
+
+def test_malformed_state_fails_closed(tmp_path: Path) -> None:
+    """An invalid durable record must not be replaced with activation."""
+    activate(tmp_path)
+    state_path = next((tmp_path / ".reminders").glob("*.json"))
+    state_path.write_text("{broken", encoding="utf-8")
+
+    assert event(tmp_path, now=10_000.0) is None
+    assert state_path.read_text(encoding="utf-8") == "{broken"
+
+
+def test_unsupported_state_schema_fails_closed(tmp_path: Path) -> None:
+    """A future state schema must not be treated as active by old code."""
+    activate(tmp_path)
+    state_path = next((tmp_path / ".reminders").glob("*.json"))
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["schema_version"] = 999
+    unsupported = json.dumps(state)
+    state_path.write_text(unsupported, encoding="utf-8")
+
+    assert event(tmp_path, now=10_000.0) is None
+    assert state_path.read_text(encoding="utf-8") == unsupported
+
+
+def test_concurrent_updates_are_not_lost(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per-session locking must retain every concurrent completion."""
+    monkeypatch.setenv("VISUAL_BRIEF_REMINDER_SECONDS", "999999")
+    monkeypatch.setenv("VISUAL_BRIEF_REMINDER_COMPLETIONS", "999999")
+    activate(tmp_path)
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(
+            executor.map(
+                lambda index: event(tmp_path, now=200.0 + index),
+                range(40),
+            )
+        )
+
+    assert results == [None] * 40
+    state_path = next((tmp_path / ".reminders").glob("*.json"))
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["meaningful_work_count"] == 40

@@ -1,0 +1,8 @@
+#!/bin/sh
+
+if ! command -v visual-brief >/dev/null 2>&1; then
+    printf '{}\n'
+    exit 0
+fi
+
+exec visual-brief reminder-hook --provider auto
