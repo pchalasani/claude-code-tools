@@ -12,6 +12,7 @@ import errno
 import http.client
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import NoReturn
@@ -43,6 +44,11 @@ from visual_brief.writes import (
     resolve_run,
 )
 from visual_brief.writes.runfiles import write_transaction
+
+_CODEX_ERROR_OUTPUT = re.compile(
+    r"\b(?:error|failed|failure)\b|process exited",
+    re.IGNORECASE,
+)
 
 DEFAULT_RUNS_ROOT = Path("~/.claude/visual-brief/runs/")
 
@@ -296,9 +302,7 @@ def _normalize_reminder_result(
     if provider != "codex" or not isinstance(tool_result, str):
         raise ValueError("invalid tool result")
     output = tool_result.strip()
-    lowered = output.lower()
-    error_markers = ("error:", "failed", "failure", "process exited")
-    if not output or any(marker in lowered for marker in error_markers):
+    if not output or _CODEX_ERROR_OUTPUT.search(output):
         return {"success": False, "_codex_string_output": tool_result}
     return {"success": True, "_codex_string_output": tool_result}
 

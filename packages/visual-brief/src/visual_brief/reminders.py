@@ -166,10 +166,15 @@ def is_successful_publish_completion(
         output = codex_output
     else:
         output = tool_result.get("stdout")
-    if not isinstance(output, str) or "publish: appended " not in output:
+    if not isinstance(output, str) or not _has_publish_receipt(output):
         return False
     command = tool_input.get("command", tool_input.get("cmd", ""))
     return isinstance(command, str) and _contains_publish_segment(command)
+
+
+def _has_publish_receipt(output: str) -> bool:
+    """Require the literal CLI receipt at the start of an output line."""
+    return any(line.startswith("publish: appended ") for line in output.splitlines())
 
 
 def _succeeded(result: dict[str, object]) -> bool:

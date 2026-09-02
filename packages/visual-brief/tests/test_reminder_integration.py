@@ -229,6 +229,7 @@ def test_codex_string_test_output_triggers_shared_reminder_gate(
     [
         "test session starts\nFAILED tests/test_app.py::test_publish\n",
         "Build output\nError: compilation failed\n",
+        "test session starts\nERROR collecting tests/test_app.py\n",
     ],
 )
 def test_codex_error_marker_anywhere_does_not_advance_gate(
@@ -357,6 +358,49 @@ def test_masked_publish_failure_without_receipt_does_not_activate(
     assert completed.returncode == 0
     assert json.loads(completed.stdout) == {}
     assert reminder_states(tmp_path) == []
+
+
+def test_incidental_inline_publish_receipt_does_not_activate(
+    tmp_path: Path,
+) -> None:
+    """Only a CLI receipt at the start of an output line is authoritative."""
+    completed = run_adapter(
+        "codex",
+        {
+            "session_id": "masked-session",
+            "tool_name": "exec_command",
+            "tool_input": {"cmd": "visual-brief publish bad; true"},
+            "tool_response": "echoed: publish: appended fake receipt\n",
+        },
+        tmp_path,
+    )
+
+    assert completed.returncode == 0
+    assert json.loads(completed.stdout) == {}
+    assert reminder_states(tmp_path) == []
+
+
+def test_successful_publish_pipeline_with_receipt_activates(
+    tmp_path: Path,
+) -> None:
+    """A pipeline remains eligible when it emits the literal CLI receipt."""
+    completed = run_adapter(
+        "codex",
+        {
+            "session_id": "pipeline-session",
+            "tool_name": "exec_command",
+            "tool_input": {"cmd": "visual-brief publish - | tee publish.log"},
+            "tool_response": (
+                "pipeline setup\n"
+                "publish: appended update; rendered index.html\n"
+            ),
+        },
+        tmp_path,
+    )
+
+    assert completed.returncode == 0
+    assert json.loads(completed.stdout) == {}
+    assert len(reminder_states(tmp_path)) == 1
 
 
 def test_claude_string_tool_response_remains_invalid(tmp_path: Path) -> None:
