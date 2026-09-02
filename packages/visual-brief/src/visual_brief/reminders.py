@@ -287,7 +287,7 @@ def _meaningful_command(command: str) -> bool:
     """Recognize successful build, test, format, review, and commit commands."""
     try:
         lexer = shlex.shlex(
-            command.lower(),
+            _separate_unquoted_newlines(command.lower()),
             posix=True,
             punctuation_chars=";&|",
         )
@@ -304,6 +304,8 @@ def _meaningful_command(command: str) -> bool:
             command_start = True
             continue
         if not command_start:
+            continue
+        if _is_assignment(word):
             continue
         command_start = False
         executable = Path(word).name

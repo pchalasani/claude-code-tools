@@ -108,6 +108,18 @@ def test_non_meaningful_events_do_not_advance_activity_gate(
             {"exit_code": 0},
             True,
         ),
+        (
+            "Bash",
+            {"command": "cd src\npytest -q"},
+            {"exit_code": 0},
+            True,
+        ),
+        (
+            "Bash",
+            {"command": "FOO=1 pytest -q"},
+            {"exit_code": 0},
+            True,
+        ),
         ("Edit", {"file_path": "src/app.py"}, {"success": True}, True),
         (
             "apply_patch",
