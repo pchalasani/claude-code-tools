@@ -380,6 +380,29 @@ def test_incidental_inline_publish_receipt_does_not_activate(
     assert reminder_states(tmp_path) == []
 
 
+def test_forged_receipt_after_publish_does_not_activate(tmp_path: Path) -> None:
+    """A later executable command makes an earlier publish ineligible."""
+    completed = run_adapter(
+        "codex",
+        {
+            "session_id": "masked-session",
+            "tool_name": "exec_command",
+            "tool_input": {
+                "cmd": (
+                    'visual-brief publish bad; '
+                    'printf "publish: appended forged receipt"'
+                )
+            },
+            "tool_response": "publish: appended forged receipt",
+        },
+        tmp_path,
+    )
+
+    assert completed.returncode == 0
+    assert json.loads(completed.stdout) == {}
+    assert reminder_states(tmp_path) == []
+
+
 def test_successful_publish_pipeline_with_receipt_activates(
     tmp_path: Path,
 ) -> None:

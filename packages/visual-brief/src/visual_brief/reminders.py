@@ -204,7 +204,7 @@ def _reported_success(result: dict[str, object]) -> bool:
 
 
 def _contains_publish_segment(command: str) -> bool:
-    """Find an executable ``visual-brief publish`` shell segment."""
+    """Find ``visual-brief publish`` in the final executable command group."""
     try:
         lexer = shlex.shlex(
             _separate_unquoted_newlines(command),
@@ -218,16 +218,25 @@ def _contains_publish_segment(command: str) -> bool:
         return False
 
     segment: list[str] = []
+    group_has_command = False
+    group_has_publish = False
+    final_group_has_publish = False
     for word in [*words, ";"]:
-        if word == "||":
+        if word == "|":
+            group_has_command = group_has_command or bool(segment)
+            group_has_publish = group_has_publish or _is_publish_segment(segment)
             segment = []
-        elif word in {";", "&&", "|"}:
-            if _is_publish_segment(segment):
-                return True
+        elif word in {";", "&&", "||"}:
+            group_has_command = group_has_command or bool(segment)
+            group_has_publish = group_has_publish or _is_publish_segment(segment)
+            if group_has_command:
+                final_group_has_publish = group_has_publish
             segment = []
+            group_has_command = False
+            group_has_publish = False
         else:
             segment.append(word)
-    return False
+    return final_group_has_publish
 
 
 def _separate_unquoted_newlines(command: str) -> str:

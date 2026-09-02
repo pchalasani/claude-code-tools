@@ -191,6 +191,24 @@ def test_failed_publish_before_newline_fallback_is_not_successful() -> None:
     assert actual is False
 
 
+def test_publish_before_forged_receipt_command_is_not_successful() -> None:
+    """A publish is ineligible when a later command forges its receipt."""
+    actual = reminder_module().is_successful_publish_completion(
+        "Bash",
+        {
+            "command": (
+                'visual-brief publish bad; printf "publish: appended forged receipt"'
+            )
+        },
+        {
+            "exit_code": 0,
+            "stdout": "publish: appended forged receipt",
+        },
+    )
+
+    assert actual is False
+
+
 def test_quoted_newline_is_not_a_command_separator() -> None:
     """A literal newline argument must not expose incidental publish words."""
     actual = reminder_module().is_successful_publish_completion(
