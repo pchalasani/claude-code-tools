@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import builtins
 import importlib
+import importlib.util
 import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -142,6 +144,53 @@ def test_classifier_counts_only_completed_meaningful_work(
         tool_result,
     )
     assert actual is expected
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "npm view pytest",
+        "cargo search serde",
+        "uv pip show pytest",
+        "yarn info react",
+    ],
+)
+def test_classifier_rejects_read_only_package_commands(command: str) -> None:
+    """Package searches and metadata lookups are not meaningful work."""
+    actual = reminder_module().is_meaningful_completion(
+        "Bash",
+        {"command": command},
+        {"exit_code": 0},
+    )
+
+    assert actual is False
+
+
+def test_reminder_module_import_does_not_require_fcntl(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reminder support stays usable without the optional fcntl lock."""
+    module_path = Path(reminder_module().__file__)
+    spec = importlib.util.spec_from_file_location(
+        "visual_brief._reminders_without_fcntl",
+        module_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    real_import = builtins.__import__
+
+    def import_without_fcntl(name: str, *args: object, **kwargs: object) -> object:
+        if name == "fcntl":
+            raise ModuleNotFoundError("No module named 'fcntl'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_fcntl)
+    spec.loader.exec_module(module)
+    module.activate_session(tmp_path, "codex", "windows-session", now=100.0)
+
+    assert len(list((tmp_path / ".reminders").glob("*.json"))) == 1
 
 
 @pytest.mark.parametrize(

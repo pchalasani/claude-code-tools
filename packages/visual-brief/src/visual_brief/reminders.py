@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
@@ -64,6 +63,12 @@ _PROGRESS_COMMANDS = {
     "uv",
     "vitest",
     "yarn",
+}
+_READ_ONLY_PACKAGE_COMMANDS = {
+    "cargo": [("search",)],
+    "npm": [("view",)],
+    "uv": [("pip", "show")],
+    "yarn": [("info",)],
 }
 
 
@@ -310,6 +315,12 @@ def _meaningful_command(command: str) -> bool:
         command_start = False
         executable = Path(word).name
         if executable in _PROGRESS_COMMANDS:
+            arguments = words[index + 1 :]
+            if any(
+                tuple(arguments[: len(read_only)]) == read_only
+                for read_only in _READ_ONLY_PACKAGE_COMMANDS.get(executable, [])
+            ):
+                continue
             return True
         if executable == "git" and index + 1 < len(words):
             if words[index + 1] == "commit":
@@ -343,7 +354,12 @@ def _locked_paths(
     state_path = _state_path(home, provider, session_id)
     lock_path = state_path.with_suffix(".lock")
     with lock_path.open("a", encoding="utf-8") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            import fcntl
+        except ImportError:
+            fcntl = None
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         yield state_path, lock_path
 
 
