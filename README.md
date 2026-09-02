@@ -130,6 +130,11 @@ docs. Click a card below to jump to a feature, or
 <img src="assets/card-claude-to-codex.svg" alt="Claude to Codex" width="200"/>
 </a>
 </td>
+<td align="center">
+<a href="https://pchalasani.github.io/claude-code-tools/plugins-detail/visual-brief/">
+<img src="assets/card-visual-brief.svg" alt="Visual Brief" width="200"/>
+</a>
+</td>
 </tr>
 </table>
 

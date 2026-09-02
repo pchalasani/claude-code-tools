@@ -1,0 +1,108 @@
+---
+title: "Visual Brief"
+description: >-
+  Concise local browser briefings for long-running Claude Code and Codex work.
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
+Visual Brief helps you return to substantial Claude Code or Codex work and
+quickly understand its current state. It turns verbose agent updates into a
+concise structured briefing in your browser: the latest update is prominent,
+and earlier updates remain available in a quieter ledger.
+
+It is for meaningful implementation, investigation, review, and design work.
+Routine progress messages, quick answers, and small fixes belong in the normal
+agent conversation.
+
+## Status
+
+Visual Brief 0.1.0 is the initial public release. Its workflows and interfaces
+may change as the product is used in real long-running sessions.
+
+## What You Install
+
+Install the provider-neutral CLI first:
+
+```bash
+uv tool install visual-brief
+```
+
+The CLI creates and serves the briefing. The optional Visual Brief plugin adds
+quiet milestone reminders to the agent session after a successful publish; it
+does not create a separate dashboard or store your work remotely.
+
+## Start a Briefing
+
+Create a run for the work, then serve it:
+
+```bash
+visual-brief new --label "Review parser changes"
+visual-brief serve --port 8765
+```
+
+The CLI prints local URLs for the run. An agent publishes concise structured
+updates to that run. Open the URL in a desktop browser to read the latest
+briefing and browse the earlier-update ledger.
+
+## Local Browser Behavior
+
+Visual Brief runs a loopback-only local server and stores its runs on your
+machine. The briefing page is a local browser page, not a hosted
+project-management dashboard or a persistent project-state system. It gives an
+agent a clearer way to present updates that would otherwise scroll past in the
+terminal.
+
+The page is keyboard-first. Its visible shortcut bar documents navigation,
+folding, and conversation controls, so the experience stays fast and
+terminal-like without hiding the controls behind a mouse-only interface.
+
+## Use It with Claude Code or Codex
+
+The same `visual-brief` CLI works with either agent provider. Install the
+optional reminder plugin for the provider you use:
+
+<Tabs>
+  <TabItem label="Claude Code">
+    ```bash
+    claude plugin marketplace add pchalasani/claude-code-tools
+    claude plugin install visual-brief@cctools-plugins
+    ```
+
+    Restart Claude Code after installation. The plugin stays inactive until a
+    successful `visual-brief publish`, then gives quiet reminders to publish
+    again at meaningful milestones.
+  </TabItem>
+  <TabItem label="Codex">
+    ```bash
+    codex plugin marketplace add pchalasani/claude-code-tools
+    codex plugin add visual-brief@cctools-codex-plugins
+    ```
+
+    Restart Codex after installation. Review and trust the hook definition
+    before enabling it. Its reminder behavior matches the Claude Code plugin.
+  </TabItem>
+</Tabs>
+
+If the marketplace was already added before Visual Brief was published, refresh
+it before installing:
+
+```bash
+# Claude Code
+claude plugin marketplace update cctools-plugins
+
+# Codex
+codex plugin marketplace upgrade cctools-codex-plugins
+```
+
+## How the Update Flow Works
+
+1. The agent does a substantial block of work.
+2. It publishes a structured update with `visual-brief publish`.
+3. You open the local browser page to scan the latest update, then expand prior
+   updates when you need context.
+
+The browser page can accept follow-up questions. The agent folds those messages
+into the briefing and answers them there, keeping the context beside the update
+that prompted it. This remains a local, session-oriented briefing flow rather
+than a replacement for issue tracking or project management.
