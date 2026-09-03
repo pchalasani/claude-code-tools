@@ -294,6 +294,135 @@ def extract_subshell_commands(command: str) -> list[str]:
     return subshell_commands
 
 
+def _heredoc_bounds(
+        command: str, start: int) -> tuple[int, int, int, bool] | None:
+    """
+    Locate one heredoc introduced by the '<<' at the given index.
+
+    Args:
+        command: The full command string.
+        start: Index of the '<' that starts the '<<' operator.
+
+    Returns:
+        Tuple (body_start, delimiter_start, body_end, quoted) where
+        body_start/delimiter_start bound the heredoc body, body_end is just
+        past the closing delimiter line, and quoted says whether the
+        delimiter was quoted (so the shell performs no expansion in the
+        body). Returns None when this is not a complete, simple heredoc.
+    """
+    index = start + 2
+    strip_tabs = index < len(command) and command[index] == '-'
+    if strip_tabs:
+        index += 1
+    while index < len(command) and command[index] in ' \t':
+        index += 1
+    delimiter_parts = []
+    quoted = False
+    while index < len(command) and command[index] not in ' \t\r\n;&|<>()':
+        character = command[index]
+        if character in "'\"":
+            quoted = True
+            end = command.find(character, index + 1)
+            if end == -1:
+                return None
+            delimiter_parts.append(command[index + 1:end])
+            index = end + 1
+        elif character == '\\':
+            if index + 1 >= len(command):
+                return None
+            quoted = True
+            delimiter_parts.append(command[index + 1])
+            index += 2
+        else:
+            delimiter_parts.append(character)
+            index += 1
+    delimiter = ''.join(delimiter_parts)
+    if not delimiter:
+        return None
+    body_start = command.find('\n', index)
+    if body_start == -1:
+        return None
+    body_start += 1
+    line_start = body_start
+    while line_start <= len(command):
+        line_end = command.find('\n', line_start)
+        if line_end == -1:
+            line_end = len(command)
+        line = command[line_start:line_end].removesuffix('\r')
+        if strip_tabs:
+            line = line.lstrip('\t')
+        if line == delimiter:
+            body_end = min(line_end + 1, len(command))
+            return body_start, line_start, body_end, quoted
+        if line_end == len(command):
+            return None
+        line_start = line_end + 1
+    return None
+
+
+def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
+    """
+    Blank heredoc bodies and return the bodies the shell still expands.
+
+    A heredoc body is data, not code: the shell never runs its lines as
+    commands. When the delimiter is quoted (<<'EOF', <<"EOF", <<\\EOF) the
+    shell performs no expansion at all, so nothing in the body executes.
+    With an unquoted delimiter (<<EOF) only the body's expansions -- $(...)
+    and backticks -- execute.
+
+    Args:
+        command: A bash command string, possibly containing heredocs.
+
+    Returns:
+        Tuple (command_without_bodies, expanded_bodies). The first element
+        is the command with every heredoc body (and its closing delimiter
+        line) replaced by whitespace, preserving offsets and line breaks.
+        The second is the list of bodies whose expansions do execute.
+
+    Example:
+        >>> strip_heredoc_bodies("cat <<'EOF'\\n`rm x`\\nEOF")[1]
+        []
+        >>> strip_heredoc_bodies("cat <<EOF\\n`rm x`\\nEOF")[1]
+        ['`rm x`\\n']
+    """
+    expanded_bodies = []
+    pieces = []
+    copied_to = 0
+    index = 0
+    quote = None
+    while index < len(command):
+        character = command[index]
+        if character == '\\' and quote != "'":
+            index += 2
+            continue
+        if character in "'\"":
+            if quote == character:
+                quote = None
+            elif quote is None:
+                quote = character
+            index += 1
+            continue
+        if (quote is None and command.startswith('<<', index)
+                and not command.startswith('<<<', index)):
+            heredoc = _heredoc_bounds(command, index)
+            if heredoc is not None:
+                body_start, delimiter_start, body_end, quoted = heredoc
+                pieces.append(command[copied_to:body_start])
+                pieces.append(''.join(
+                    '\n' if char == '\n' else ' '
+                    for char in command[body_start:body_end]
+                ))
+                if not quoted:
+                    expanded_bodies.append(
+                        command[body_start:delimiter_start])
+                copied_to = body_end
+                index = body_end
+                continue
+        index += 1
+    pieces.append(command[copied_to:])
+    return ''.join(pieces), expanded_bodies
+
+
 def extract_all_commands(command: str) -> list[str]:
     """
     Recursively extract all commands from a bash command string.
@@ -304,6 +433,10 @@ def extract_all_commands(command: str) -> list[str]:
 
     This is the recommended function for security hooks that need to
     inspect all commands, including those hidden in subshells.
+
+    Heredoc bodies are treated as the data they are: a quoted delimiter
+    (<<'EOF') means nothing in the body executes, and an unquoted one
+    (<<EOF) means only the body's $() and backtick expansions execute.
 
     Args:
         command: A bash command string, possibly compound with subshells.
@@ -316,18 +449,30 @@ def extract_all_commands(command: str) -> list[str]:
         ['echo $(rm foo)', 'ls', 'rm foo']
         >>> extract_all_commands("cat `echo secret` | grep pass")
         ['cat `echo secret`', 'grep pass', 'echo secret']
+        >>> extract_all_commands("cat > f <<'EOF'\\n`rm x` is blocked\\nEOF")
+        ["cat > f <<'EOF'"]
     """
     if not command:
         return []
 
+    # Heredoc bodies are data, so their lines are not commands. Blank them
+    # out first; expanded_bodies holds the bodies (unquoted delimiters only)
+    # whose substitutions the shell does run.
+    stripped, expanded_bodies = strip_heredoc_bodies(command)
+
     all_commands = []
 
     # First, extract top-level subcommands (split on operators)
-    subcommands = extract_subcommands(command)
+    subcommands = extract_subcommands(stripped)
     all_commands.extend(subcommands)
 
     # Then, extract commands from subshells within the original command
-    subshell_cmds = extract_subshell_commands(command)
+    subshell_cmds = extract_subshell_commands(stripped)
+
+    # Only the substitutions inside an unquoted heredoc body execute; the
+    # surrounding text is literal, so it is not split into subcommands.
+    for body in expanded_bodies:
+        subshell_cmds.extend(extract_subshell_commands(body))
 
     # Recursively process subshell commands (they may contain nested subshells
     # or chained operators)

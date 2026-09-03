@@ -129,6 +129,27 @@ class TestCheckRmCommand(unittest.TestCase):
         blocked, _ = check_rm_command("cat `rm bar`")
         self.assertTrue(blocked, "rm in backticks should be blocked")
 
+    def test_quoted_heredoc_documenting_rm_is_allowed(self):
+        """Writing a doc that mentions rm in a code span is not deletion.
+
+        Regression test for issue #187: a single-quoted heredoc delimiter
+        disables every expansion, so the backticks in the body are literal.
+        """
+        command = "cat > notes.md <<'MD'\nThe `rm` guard blocks deletions.\nMD"
+        blocked, _ = check_rm_command(command)
+        self.assertFalse(blocked, "literal rm in a quoted heredoc is data")
+
+    def test_unquoted_heredoc_substitution_still_blocked(self):
+        """An unquoted delimiter really does run the substitution."""
+        command = "cat > notes.md <<MD\nThe `rm -rf x` guard.\nMD"
+        blocked, _ = check_rm_command(command)
+        self.assertTrue(blocked, "rm in an unquoted heredoc should be blocked")
+
+    def test_rm_chained_after_heredoc_still_blocked(self):
+        """Blanking the body must not hide the command that opens it."""
+        blocked, _ = check_rm_command("cat <<'MD' && rm foo\nliteral\nMD")
+        self.assertTrue(blocked, "rm after a heredoc redirect should be blocked")
+
     def test_complex_bypass_attempts(self):
         """Complex commands attempting to hide rm are blocked."""
         # Multiple levels of indirection

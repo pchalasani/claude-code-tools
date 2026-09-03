@@ -20,6 +20,7 @@ from command_utils import (
     extract_subshell_commands,
     extract_all_commands,
     expand_command_aliases,
+    strip_heredoc_bodies,
 )
 
 
@@ -199,6 +200,84 @@ class TestExtractAllCommands(unittest.TestCase):
         """Detect rm hidden in subshell - security regression test."""
         result = extract_all_commands("echo $(rm secret)")
         self.assertIn("rm secret", result)
+
+    def test_quoted_heredoc_backticks_are_literal(self):
+        """A quoted delimiter means the shell expands nothing in the body."""
+        command = "cat > notes.md <<'MD'\nThe `rm -rf x` guard.\nMD"
+        result = extract_all_commands(command)
+        self.assertNotIn("rm -rf x", result)
+        self.assertIn("cat > notes.md <<'MD'", result)
+
+    def test_double_quoted_heredoc_backticks_are_literal(self):
+        """A double-quoted delimiter is just as literal as a single-quoted one."""
+        command = 'cat > notes.md <<"MD"\nThe `rm -rf x` guard.\nMD'
+        self.assertNotIn("rm -rf x", extract_all_commands(command))
+
+    def test_backslash_quoted_heredoc_backticks_are_literal(self):
+        """A backslash-escaped delimiter also disables expansion."""
+        command = "cat > notes.md <<\\MD\nThe `rm -rf x` guard.\nMD"
+        self.assertNotIn("rm -rf x", extract_all_commands(command))
+
+    def test_unquoted_heredoc_substitutions_are_extracted(self):
+        """An unquoted delimiter still expands $() and backticks - regression."""
+        backticks = "cat > notes.md <<MD\nThe `rm -rf x` guard.\nMD"
+        self.assertIn("rm -rf x", extract_all_commands(backticks))
+
+        dollar = "cat > notes.md <<MD\nThe $(rm -rf y) guard.\nMD"
+        self.assertIn("rm -rf y", extract_all_commands(dollar))
+
+    def test_unquoted_heredoc_body_text_is_not_a_command(self):
+        """Body lines are data even when the delimiter is unquoted."""
+        command = "cat > notes.md <<MD\nrm -rf /tmp/x\nMD"
+        self.assertNotIn("rm -rf /tmp/x", extract_all_commands(command))
+
+    def test_command_chained_after_heredoc_is_extracted(self):
+        """Only the body is blanked, never the line introducing it."""
+        command = "cat <<'MD' && rm foo\nliteral text\nMD"
+        self.assertIn("rm foo", extract_all_commands(command))
+
+    def test_heredoc_tab_stripped_delimiter(self):
+        """<<- indents the closing delimiter with tabs."""
+        command = "cat > notes.md <<-'MD'\n\tThe `rm -rf x` guard.\n\tMD"
+        self.assertNotIn("rm -rf x", extract_all_commands(command))
+
+    def test_unterminated_heredoc_keeps_current_behavior(self):
+        """Without a closing delimiter nothing is treated as a heredoc body."""
+        command = "cat > notes.md <<'MD'\nThe `rm -rf x` guard."
+        self.assertIn("rm -rf x", extract_all_commands(command))
+
+    def test_herestring_is_not_a_heredoc(self):
+        """<<< is a here-string, whose expansions do execute."""
+        command = "cat <<< `rm -rf x`"
+        self.assertIn("rm -rf x", extract_all_commands(command))
+
+
+class TestStripHeredocBodies(unittest.TestCase):
+    """Tests for strip_heredoc_bodies() heredoc detection."""
+
+    def test_no_heredoc_is_unchanged(self):
+        """Commands without heredocs pass through untouched."""
+        self.assertEqual(strip_heredoc_bodies("ls -la"), ("ls -la", []))
+
+    def test_quoted_body_is_blanked_and_not_returned(self):
+        """A quoted body is removed from the command and never expanded."""
+        command = "cat <<'MD'\nrm -rf x\nMD"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, [])
+        self.assertNotIn("rm", stripped)
+        self.assertEqual(len(stripped), len(command))
+
+    def test_unquoted_body_is_returned(self):
+        """An unquoted body is blanked but returned for expansion scanning."""
+        command = "cat <<MD\nrm -rf x\nMD"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, ["rm -rf x\n"])
+        self.assertNotIn("rm", stripped)
+
+    def test_heredoc_operator_inside_quotes_is_ignored(self):
+        """A '<<' inside a quoted word does not start a heredoc."""
+        command = "echo 'a << b'\nrm foo"
+        self.assertEqual(strip_heredoc_bodies(command), (command, []))
 
 
 class TestExpandCommandAliases(unittest.TestCase):
