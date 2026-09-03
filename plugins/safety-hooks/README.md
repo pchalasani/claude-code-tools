@@ -139,3 +139,18 @@ decisions to Claude Code.
 | env_file_protection_hook.py | block | Protects .env files from Bash commands |
 | read_env_protection_hook.py | block | Protects .env files from Read tool |
 | file_length_limit_hook.py | block (speed bump) | Limits source file size |
+
+## Tool name matching
+
+Every hook gates on the incoming `tool_name` before running any check, and
+clients do not agree on how to spell it — Claude Code sends `Bash`, others
+send `bash`. That comparison is therefore case-insensitive at both layers:
+
+- the `hooks.json` matchers accept any case (`^[Bb][Aa][Ss][Hh]$`)
+- each script folds case before comparing (`tool_name.lower() != "bash"`)
+
+Both layers matter. The matcher decides whether the hook runs at all; the
+in-script check is the second line of defence. Comparing exact case there
+would send a mismatched spelling straight to the approve branch, so the
+hook would return "allowed" for a command it exists to block — silently,
+with no log line and no non-zero exit.

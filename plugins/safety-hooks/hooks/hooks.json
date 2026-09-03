@@ -3,7 +3,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "^[Bb][Aa][Ss][Hh]$",
         "hooks": [
           {
             "type": "command",
@@ -13,7 +13,7 @@
         ]
       },
       {
-        "matcher": "Edit",
+        "matcher": "^[Ee][Dd][Ii][Tt]$",
         "hooks": [
           {
             "type": "command",
@@ -23,7 +23,7 @@
         ]
       },
       {
-        "matcher": "Write",
+        "matcher": "^[Ww][Rr][Ii][Tt][Ee]$",
         "hooks": [
           {
             "type": "command",
@@ -33,7 +33,7 @@
         ]
       },
       {
-        "matcher": "Read",
+        "matcher": "^[Rr][Ee][Aa][Dd]$",
         "hooks": [
           {
             "type": "command",

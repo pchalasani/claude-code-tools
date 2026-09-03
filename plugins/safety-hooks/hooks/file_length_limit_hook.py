@@ -74,13 +74,18 @@ def get_resulting_line_count(
 
     For Write: count lines in new content
     For Edit: count lines in file after replacement
+
+    ``tool_name`` is matched case-insensitively, since clients differ on
+    how they spell it ("Write" vs "write").
     """
-    if tool_name == "Write":
+    tool_name = tool_name.lower()
+
+    if tool_name == "write":
         # For Write, the new content is in the 'content' field
         content = tool_input.get("content", "")
         return count_lines_in_content(content)
 
-    elif tool_name == "Edit":
+    elif tool_name == "edit":
         # For Edit, we need to calculate the result of the replacement
         old_string = tool_input.get("old_string", "")
         new_string = tool_input.get("new_string", "")
@@ -124,10 +129,12 @@ def check_file_length_limit(data: dict) -> tuple[bool, str | None]:
     Returns:
         (should_block, reason)
     """
-    tool_name = data.get("tool_name")
+    # Fold case first: an exact-case mismatch would skip the limit check
+    # entirely on clients that spell the tool name differently.
+    tool_name = (data.get("tool_name") or "").lower()
 
     # Only check Edit and Write tools
-    if tool_name not in ("Edit", "Write"):
+    if tool_name not in ("edit", "write"):
         return False, None
 
     tool_input = data.get("tool_input", {})
