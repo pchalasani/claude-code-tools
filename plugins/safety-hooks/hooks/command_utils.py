@@ -361,8 +361,11 @@ def _heredoc_bounds(
 
 
 # A '#' only opens a comment at the start of a word, so it must follow
-# whitespace or an operator (or start the command).
-_COMMENT_PRECEDERS = ' \t\n;&|(<>'
+# whitespace or an operator (or start the command). ')' is included because
+# '(echo x)# comment' is a comment; the cost is that the rarer '$(date)#tag',
+# where '#' is mid-word, is misread as one -- which only ever makes this
+# function blank less, i.e. hand MORE text to the guards.
+_COMMENT_PRECEDERS = ' \t\n;&|(<>)'
 
 
 def _end_of_arithmetic(command: str, start: int) -> int | None:

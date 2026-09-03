@@ -284,6 +284,11 @@ class TestStripHeredocBodies(unittest.TestCase):
         command = "# <<END\nrm -rf /tmp/x\nEND"
         self.assertEqual(strip_heredoc_bodies(command), (command, []))
 
+    def test_comment_after_subshell_close_is_ignored(self):
+        """'(echo x)# <<END' is a comment, so the next lines are commands."""
+        command = "(echo x)# <<END\nrm -rf /tmp/x\nEND"
+        self.assertEqual(strip_heredoc_bodies(command), (command, []))
+
     def test_hash_inside_word_is_not_a_comment(self):
         """A '#' that is not word-initial does not start a comment."""
         command = "echo a#b <<'MD'\nrm -rf x\nMD"
