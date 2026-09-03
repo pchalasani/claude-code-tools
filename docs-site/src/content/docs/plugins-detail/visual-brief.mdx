@@ -146,8 +146,8 @@ visual-brief serve --port 8765
 ```
 
 `new` creates the run and prints its local URLs; it does not start the server.
-The separate `serve` command starts the shared loopback daemon. Publish a
-structured update with
+Run the separate `serve` command in another terminal and leave it running; it
+starts the shared loopback daemon. Then publish a structured update with
 `visual-brief publish --run <RUN> --file report.json`, using the run ID printed
 by `new`.
 
