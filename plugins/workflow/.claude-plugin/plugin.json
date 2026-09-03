@@ -1,7 +1,7 @@
 {
   "name": "workflow",
   "version": "1.14.0",
-  "description": "Workflow skills and agents: code-walk-thru, log-work, make-issue-spec, socratic-quiz skills; ui-tester agent for browser-based UI validation",
+  "description": "Workflow skills, agents, and hooks: code-walk-thru, log-work, make-issue-spec, socratic-quiz skills; ui-tester agent; a Codex review-loop nudge hook for open pull requests",
   "author": {
     "name": "Prasad Chalasani"
   }

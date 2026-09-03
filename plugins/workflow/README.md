@@ -87,6 +87,47 @@ DevTools MCP Server.
 - Check for console errors and network issues
 - Validate responsive behavior and accessibility
 
+## Hooks
+
+### Codex review-loop nudge (`hooks/pr_review_nudge.py`)
+
+A nudge, never a gate: it reminds the agent to run the GitHub Codex
+review loop on its own pull requests — monitor the review, address or
+defer each finding, and **request a fresh review after every push** —
+without ever blocking work.
+
+- **After `gh pr create` or a `git push` to a branch with an open PR**
+  (PostToolUse on Bash): injects a one-line reminder.
+- **When the agent tries to end its turn** (Stop): asks GitHub for open
+  PRs by you whose head branch is checked out in a local worktree of
+  this repo. For each one whose current head has no completed Codex
+  review, or which has unresolved review threads, it interrupts the stop
+  **once** with the details; the next stop in the same state passes
+  silently. The agent then decides — fix, defer to an issue, or dismiss
+  with a reply. It checks GitHub rather than pattern-matching commands,
+  so a PR created via `gh api`, by a subagent, or by hand is covered.
+
+Speed and safety: a handful of `gh` calls with short timeouts, results
+cached for a minute, and anything that fails — not a git repo, no GitHub
+remote, `gh` missing or offline — makes it silent rather than slow.
+State lives in `~/.local/state/codex-review-nudge/` (override with
+`CODEX_REVIEW_NUDGE_STATE`).
+
+**Codex CLI** speaks the same hook payloads. Register the script by
+absolute path in `~/.codex/hooks.json` (Codex hash-trusts the entry
+script, so keep it a single file, and re-trust via `/hooks` after edits):
+
+```json
+{"hooks": {
+  "PostToolUse": [{"matcher": "^(Bash|shell)$", "hooks": [{"type": "command",
+    "command": "python3 /ABS/PATH/plugins/workflow/hooks/pr_review_nudge.py",
+    "timeout": 15}]}],
+  "Stop": [{"hooks": [{"type": "command",
+    "command": "python3 /ABS/PATH/plugins/workflow/hooks/pr_review_nudge.py",
+    "timeout": 20}]}]
+}}
+```
+
 ## Installation
 
 No additional dependencies required for skills. The ui-tester agent requires the
