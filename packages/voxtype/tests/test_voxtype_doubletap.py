@@ -365,6 +365,47 @@ def test_start_hotkeys_rejects_unknown_double_tap_key(monkeypatch) -> None:  # n
         )
 
 
+class _FakeGlobalHotKeys:
+    def __init__(self, mapping) -> None:  # noqa: ANN001
+        self.mapping = mapping
+        self.daemon = False
+        self.stopped = False
+
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+def test_chord_fallback_keeps_double_tap_armed(monkeypatch) -> None:  # noqa: ANN001
+    """A chord that cannot be resolved on this layout sends the chords to
+    the observing fallback — that must not take the layout-independent
+    double tap down with it (GitHub Codex finding on PR #195)."""
+    _install_fakes(monkeypatch)
+    sys.modules["pynput.keyboard"].GlobalHotKeys = _FakeGlobalHotKeys
+    import voxtype.hotkey as hotkey_mod
+
+    monkeypatch.setattr(hotkey_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(hotkey_mod, "_resolve_vk", lambda q, term: None)
+    fired = threading.Event()
+    listener = hotkey_mod.start_hotkeys(
+        [("<ctrl>+;", lambda: None)],
+        double_tap=("right_alt", 400, fired.set),
+    )
+    assert listener.double_tap_active is True
+    vk, devbit = hotkey_mod.DOUBLE_TAP_KEYS["right_alt"]
+    q = _FakeQuartz
+    alt = q.kCGEventFlagMaskAlternate
+    for e in (
+        _ev(vk, alt | devbit), _ev(vk, 0), _ev(vk, alt | devbit), _ev(vk, 0)
+    ):
+        listener._tap._intercept(q.kCGEventFlagsChanged, e)
+    assert fired.wait(2.0), "double tap lost to the chord fallback"
+    listener.stop()
+    assert listener._chords.stopped
+
+
 # -- app wiring ---------------------------------------------------------------
 
 

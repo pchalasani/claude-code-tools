@@ -624,7 +624,7 @@ def start_hotkeys(  # noqa: ANN201
                 "hotkeys (chords may leak keystrokes)",
                 file=sys.stderr,
             )
-    if dt is not None:
+    if dt is not None and sys.platform != "darwin":
         print(
             "[voxtype] double-tap hotkey needs the macOS event tap; "
             "ignored here",
@@ -646,11 +646,48 @@ def start_hotkeys(  # noqa: ANN201
         ): _gated(cb, when)
         for mods, term, cb, when in parsed
     }
+    tap = None
+    if dt is not None and sys.platform == "darwin":
+        # One unresolvable CHORD sent the chords to the observing
+        # fallback; that must not take the layout-independent double
+        # tap down with it. A tap with no chords cannot raise (nothing
+        # to resolve), so keep one just for the double tap — built
+        # BEFORE the chord listener starts, so a failure here leaks no
+        # running listener without a handle.
+        tap = _SuppressingHotKeys([], double_tap=dt)
     hotkeys = keyboard.GlobalHotKeys(canonical)
     hotkeys.double_tap_active = False  # observing listener: no tap
     hotkeys.daemon = True
-    hotkeys.start()
+    try:
+        hotkeys.start()
+    except Exception:
+        if tap is not None:
+            tap.stop()
+        raise
+    if tap is not None:
+        return _ChordsPlusTap(hotkeys, tap)
     return hotkeys
+
+
+class _ChordsPlusTap:
+    """Observing chord listener plus a tap that serves only the double tap.
+
+    Used when a chord could not be resolved on this layout (see
+    ``start_hotkeys``). ``stop()`` stops both; ``double_tap_active`` is
+    True because the tap half really did arm it.
+    """
+
+    double_tap_active = True
+
+    def __init__(self, chords, tap) -> None:  # noqa: ANN001
+        self._chords = chords
+        self._tap = tap
+
+    def stop(self) -> None:
+        try:
+            self._tap.stop()
+        finally:
+            self._chords.stop()
 
 
 def start_hotkey(hotkey: str, callback: Callable[[], None]):  # noqa: ANN201
