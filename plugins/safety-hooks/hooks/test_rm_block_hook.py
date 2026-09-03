@@ -160,6 +160,11 @@ class TestCheckRmCommand(unittest.TestCase):
         blocked, _ = check_rm_command("(echo x)# <<END\n; rm -rf /tmp/x\nEND")
         self.assertTrue(blocked, "rm after '(...)# <<' should be blocked")
 
+    def test_parameter_expansion_cannot_fake_a_heredoc(self):
+        """'<<' in ${x:-<<EOF} must not blank out a following rm."""
+        blocked, _ = check_rm_command("echo ${x:-<<EOF}\n; rm -rf /tmp/x\nEOF}")
+        self.assertTrue(blocked, "rm after '${x:-<<EOF}' should be blocked")
+
     def test_arithmetic_shift_cannot_fake_a_heredoc(self):
         """A left shift in $(( )) must not blank out a following rm."""
         blocked, _ = check_rm_command("echo $((1 << 2))\n; rm -rf /tmp/x\n2")

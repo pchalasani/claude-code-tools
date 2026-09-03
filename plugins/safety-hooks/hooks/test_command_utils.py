@@ -301,6 +301,16 @@ class TestStripHeredocBodies(unittest.TestCase):
         command = "echo $((1 << 2))\nrm -rf /tmp/x\n2"
         self.assertEqual(strip_heredoc_bodies(command), (command, []))
 
+    def test_parameter_expansion_is_not_a_heredoc(self):
+        """'<<' inside ${...} is expansion text, so it opens no heredoc."""
+        command = "echo ${x:-<<EOF}\nrm -rf /tmp/x\nEOF}"
+        self.assertEqual(strip_heredoc_bodies(command), (command, []))
+
+    def test_nested_parameter_expansion_is_skipped_whole(self):
+        """Nested braces inside a parameter expansion are handled."""
+        command = "echo ${x:-${y:-<<EOF}}\nrm -rf /tmp/x\nEOF}}"
+        self.assertEqual(strip_heredoc_bodies(command), (command, []))
+
     def test_nested_arithmetic_is_skipped_whole(self):
         """Nested parentheses inside arithmetic are handled."""
         command = "echo $(( (1 << 2) + 3 ))\nrm -rf /tmp/x\n3 ))"

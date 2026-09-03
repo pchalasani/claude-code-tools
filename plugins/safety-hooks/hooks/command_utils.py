@@ -368,22 +368,28 @@ def _heredoc_bounds(
 _COMMENT_PRECEDERS = ' \t\n;&|(<>)'
 
 
-def _end_of_arithmetic(command: str, start: int) -> int | None:
+def _end_of_balanced(command: str, start: int, opener: str) -> int | None:
     """
-    Return the index just past the '))' closing an arithmetic expansion.
+    Return the index just past the bracket balancing the one at start.
+
+    Used to step over a span whose contents are not commands: an arithmetic
+    expansion $((...)) or a parameter expansion ${...}. A '<<' inside either
+    is text, not a heredoc operator.
 
     Args:
         command: The full command string.
-        start: Index of the first '(' of the opening '((' .
+        start: Index of the opening bracket.
+        opener: The opening bracket character, '(' or '{'.
 
     Returns:
         Index just past the matching close, or None when unbalanced.
     """
+    closer = ')' if opener == '(' else '}'
     depth = 0
     for index in range(start, len(command)):
-        if command[index] == '(':
+        if command[index] == opener:
             depth += 1
-        elif command[index] == ')':
+        elif command[index] == closer:
             depth -= 1
             if depth == 0:
                 return index + 1
@@ -442,9 +448,15 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
             continue
         if quote is None and command.startswith('((', index):
             # '<<' inside $((1 << 2)) is a left shift, not a heredoc.
-            arithmetic_end = _end_of_arithmetic(command, index)
+            arithmetic_end = _end_of_balanced(command, index, '(')
             if arithmetic_end is not None:
                 index = arithmetic_end
+                continue
+        if quote is None and command.startswith('${', index):
+            # '<<' inside ${x:-<<EOF} is expansion text, not a heredoc.
+            expansion_end = _end_of_balanced(command, index + 1, '{')
+            if expansion_end is not None:
+                index = expansion_end
                 continue
         if (quote is None and command.startswith('<<', index)
                 and not command.startswith('<<<', index)):
