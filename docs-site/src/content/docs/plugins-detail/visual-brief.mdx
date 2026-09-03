@@ -38,33 +38,76 @@ agent conversation.
 Visual Brief 0.1.0 is the initial public release. Its workflows and interfaces
 may change as the product is used in real long-running sessions.
 
-## What You Install
+## Install It
 
-Install the provider-neutral CLI first:
+Install the provider-neutral CLI once:
 
 ```bash
 uv tool install visual-brief
 ```
 
-The CLI provides the `visual-brief` command that creates, serves, and updates
-briefings. The optional Visual Brief plugin exposes the agent skill and adds
-quiet milestone reminders after a successful publish. It does not create a
-separate dashboard or store your work remotely.
+For the normal agent-driven workflow, also install the Visual Brief plugin for
+the coding agent you use:
 
-## Start a Briefing
+<Tabs>
+  <TabItem label="Claude Code">
+    ```bash
+    claude plugin marketplace add pchalasani/claude-code-tools
+    claude plugin install visual-brief@cctools-plugins
+    ```
 
-Create a run for the work, then serve it:
+    Restart Claude Code after installation.
+  </TabItem>
+  <TabItem label="Codex">
+    ```bash
+    codex plugin marketplace add pchalasani/claude-code-tools
+    codex plugin add visual-brief@cctools-codex-plugins
+    ```
+
+    Restart Codex after installation. Review and trust the hook definition
+    before enabling it.
+  </TabItem>
+</Tabs>
+
+If the marketplace was added before Visual Brief was published, refresh it
+before installing:
 
 ```bash
-visual-brief new --label "Review parser changes"
-visual-brief serve --port 8765
+# Claude Code
+claude plugin marketplace update cctools-plugins
+
+# Codex
+codex plugin marketplace upgrade cctools-codex-plugins
 ```
 
-The CLI prints local URLs for the run. An agent publishes concise structured
-updates to that run. Open the URL in a desktop browser to read the latest
-briefing and browse the earlier-update ledger.
+The CLI creates, serves, and updates briefings. The plugin gives the agent the
+Visual Brief skill and adds quiet milestone reminders after the first
+successful publish. It does not store your work remotely.
 
-## Local Browser Behavior
+## Use It Normally
+
+Ask for Visual Brief as part of an ordinary Claude Code or Codex conversation:
+
+> Use Visual Brief for this task. Periodically publish a new briefing after
+> each meaningful milestone.
+
+The agent invokes the Visual Brief skill, creates a run, starts or reuses the
+loopback server, publishes the briefing, and gives you its browser URL. You do
+not need to run the CLI, start a server, or assemble the structured payload.
+You can also ask for a single briefing at any point with “Give me a visual
+brief.”
+
+If you want to reply from the browser in Codex, launch the session with
+[`codex-dynamic`](/claude-code-tools/tools/codex-dynamic/) instead of plain
+`codex` before making that request. Plain Codex can publish the briefing, but
+it cannot receive browser questions as live notifications. Claude Code does
+not require a different launcher.
+
+Under the hood, `visual-brief serve` is a normal long-running CLI process;
+`visual-brief publish` does not start it. The skill makes the agent manage that
+process so this implementation detail stays out of the normal user workflow.
+
+## Read and Reply in the Browser
 
 Visual Brief runs a loopback-only local server and stores its runs on your
 machine. The briefing page is a local browser page, not a hosted
@@ -85,60 +128,58 @@ the row's **Chat** control. Type your question and send it with
 <kbd>Command</kbd> + <kbd>Enter</kbd> on macOS or <kbd>Ctrl</kbd> +
 <kbd>Enter</kbd> elsewhere.
 
-The page keeps your question beside the selected content, shows when the agent
-is working, and places the answer in the same inline thread. This works on the
-latest briefing and on earlier briefings in the ledger. Press `a`, or use the
-**Message agent** control above the latest briefing, when your message is
-about the session as a whole rather than one section.
+When the agent's watcher is connected, the page keeps your question beside the
+selected content, shows when the agent is working, and places the answer in the
+same inline thread. This works on the latest briefing and on earlier briefings
+in the ledger. Press `a`, or use the **Message agent** control above the latest
+briefing, when your message is about the session as a whole rather than one
+section.
 
-## Use It with Claude Code or Codex
+## Manual CLI Workflow
 
-The same `visual-brief` CLI works with either agent provider. Install the
-optional reminder plugin for the provider you use:
-
-<Tabs>
-  <TabItem label="Claude Code">
-    ```bash
-    claude plugin marketplace add pchalasani/claude-code-tools
-    claude plugin install visual-brief@cctools-plugins
-    ```
-
-    Restart Claude Code after installation. The plugin exposes the Visual Brief
-    skill and stays inactive until a successful `visual-brief publish`, then
-    gives quiet reminders to publish again at meaningful milestones.
-  </TabItem>
-  <TabItem label="Codex">
-    ```bash
-    codex plugin marketplace add pchalasani/claude-code-tools
-    codex plugin add visual-brief@cctools-codex-plugins
-    ```
-
-    Restart Codex after installation. The plugin exposes the Visual Brief skill.
-    Review and trust the hook definition before enabling it. Its reminder
-    behavior matches the Claude Code plugin.
-  </TabItem>
-</Tabs>
-
-If the marketplace was already added before Visual Brief was published, refresh
-it before installing:
+Most users can skip this section. To operate Visual Brief without the agent
+skill, create a run and start its server yourself:
 
 ```bash
-# Claude Code
-claude plugin marketplace update cctools-plugins
-
-# Codex
-codex plugin marketplace upgrade cctools-codex-plugins
+visual-brief new --label "Review parser changes"
+visual-brief serve --port 8765
 ```
 
-## How the Update Flow Works
+`new` creates the run and prints its local URLs; it does not start the server.
+Run the separate `serve` command in another terminal and leave it running; it
+starts the shared loopback daemon. A minimal `report.json` is:
 
-1. The agent does a substantial block of work.
-2. It publishes a structured update with `visual-brief publish`.
-3. You open the local browser page to scan the latest update, then expand prior
-   updates when you need context.
+```json
+{
+  "id": "parser-check",
+  "timestamp": "2026-08-04T12:00:00Z",
+  "headline": "The parser check is complete",
+  "summary": "The focused checks pass.",
+  "lanes": [
+    {
+      "id": "results",
+      "name": "Results",
+      "items": [
+        {
+          "id": "focused-checks",
+          "glance": "The focused parser checks pass.",
+          "explanation": "The implementation matches the expected behavior.",
+          "trust": "verified-by-me"
+        }
+      ]
+    }
+  ]
+}
+```
 
-The browser page can accept follow-up questions. Before sharing its URL, arm a
-watcher for that run so the agent can receive page questions.
+Publish it with `visual-brief publish --run <RUN> --file report.json`, using the
+run ID printed by `new`.
+
+## How Page Questions Reach the Agent
+
+The skill also arms a watcher before sharing the URL, so questions from the
+page return to the same running agent session. The provider-specific mechanism
+is shown below for troubleshooting and manual setups.
 
 <Tabs>
   <TabItem label="Claude Code">
