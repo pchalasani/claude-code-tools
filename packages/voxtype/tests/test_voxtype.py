@@ -834,7 +834,7 @@ def test_overlay_path_starts_hotkeys_from_inside_run_loop(monkeypatch) -> None:
     monkeypatch.setattr(overlay_mod, "overlay_available", lambda: True)
 
     def fake_run_overlay(  # noqa: ANN001, ANN202
-        sample, tick, stopped, on_ready=None, flex=1.0, speed=1.0
+        sample, tick, stopped, on_ready=None, flex=1.0, speed=1.0, opacity=1.0
     ):
         order.append("overlay_loop")
         on_ready()  # the one-shot timer firing inside the live loop
@@ -1744,7 +1744,7 @@ def test_invalid_optional_hotkey_keeps_toggle(monkeypatch) -> None:
     monkeypatch.setattr(app_mod, "Typist", RecordingTypist)
     started: dict = {}
 
-    def fake_start_hotkeys(bindings):  # noqa: ANN001, ANN202
+    def fake_start_hotkeys(bindings, double_tap=None):  # noqa: ANN001, ANN202
         started["bindings"] = bindings
         return SimpleNamespace(stop=lambda: None)
 
@@ -1897,7 +1897,7 @@ def test_startup_emits_permission_warnings_before_hotkeys(
         lambda: ["no input monitoring", "no accessibility"],
     )
 
-    def fake_start_hotkeys(bindings):  # noqa: ANN001, ANN202
+    def fake_start_hotkeys(bindings, double_tap=None):  # noqa: ANN001, ANN202
         events.append("start_hotkeys")
         return SimpleNamespace(stop=lambda: None)
 

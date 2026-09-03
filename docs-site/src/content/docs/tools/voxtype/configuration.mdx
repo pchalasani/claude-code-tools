@@ -206,6 +206,12 @@ language = "en"
 
 # Hotkeys (pynput or bracket-less syntax; `voxtype hotkey` records one)
 hotkey = "<ctrl>+;"          # toggle recording
+# A second toggle for the laptop keyboard (macOS): tap a modifier key
+# twice on its own. One of left_alt right_alt left_cmd right_cmd
+# left_ctrl right_ctrl left_shift right_shift ("alt" = Option). The key
+# keeps working as a normal modifier. "" disables.
+double_tap_key = ""
+double_tap_ms = 400          # max gap between the two taps, press to press
 cancel_hotkey = "<esc>"      # cancel recording (only intercepted WHILE recording)
 paste_hotkey = ""            # re-type last transcript, e.g. "<cmd>+<ctrl>+v"
 
@@ -239,6 +245,7 @@ copy_to_clipboard = false
 overlay = true
 overlay_flex = 1.0   # how much the face flexes its shape (higher = more)
 overlay_speed = 1.0  # animation speed (lower = slower/gentler)
+overlay_opacity = 1.0  # 0.1–1.0; lower it if the ghost hides text under it
 
 # Keep the model's memory warm (parakeet-mlx only). After this many
 # minutes without a decode, voxtype quietly decodes a short silent
@@ -295,6 +302,23 @@ Flags mirror the config keys: `--mode`, `--engine`,
 `--language`, `--hotkey`, `--wake-word`,
 `--stop-phrase`, `--no-sounds`, `--no-overlay`,
 `--config PATH`.
+
+### Double-tap toggle
+
+`double_tap_key` adds a second way to start and stop recording, next
+to the `hotkey` chord: tap one modifier key twice, by itself. It exists
+for the laptop keyboard, where a chord like Ctrl+; is awkward without
+an external keyboard; `right_alt` (the right Option key) is a good
+choice because nothing else uses it alone.
+
+- Both triggers stay active at once; use whichever is under your hand.
+- The taps must be *clean*: press, release, press, release, with no
+  other key in between and within `double_tap_ms` of each other
+  (press to press). Holding the key to type an Option-shortcut or an
+  accented character never triggers it.
+- The modifier is never swallowed — voxtype only observes it — so
+  Option, Command, and friends keep working everywhere.
+- macOS only (it rides on the same event tap as the chord).
 
 ## Hotkey notation
 

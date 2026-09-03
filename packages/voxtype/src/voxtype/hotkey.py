@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 from typing import Callable
 
 _MODIFIERS = {
@@ -50,6 +51,75 @@ _NAMED_VKS = {
     "f11": 103, "f12": 111, "f13": 105, "f14": 107, "f15": 113,
     "f16": 106, "f17": 64, "f18": 79, "f19": 80, "f20": 90,
 }
+
+# Modifier keys usable as a double-tap toggle: name -> (kVK_* virtual
+# keycode, device-specific CGEventFlags bit). Modifier presses arrive as
+# kCGEventFlagsChanged, whose generic flag (kCGEventFlagMaskAlternate…)
+# cannot tell LEFT from RIGHT; the NX_DEVICE*KEYMASK bits can, and are
+# what make "right_alt" mean only the right Option key. Keep in sync
+# with config.VALID_DOUBLE_TAP_KEYS (a test enforces it).
+DOUBLE_TAP_KEYS: dict[str, tuple[int, int]] = {
+    "left_alt": (58, 0x00000020),
+    "right_alt": (61, 0x00000040),
+    "left_cmd": (55, 0x00000008),
+    "right_cmd": (54, 0x00000010),
+    "left_ctrl": (59, 0x00000001),
+    "right_ctrl": (62, 0x00002000),
+    "left_shift": (56, 0x00000002),
+    "right_shift": (60, 0x00000004),
+}
+
+
+class DoubleTapDetector:
+    """Recognize two clean taps of one key within a time window.
+
+    Pure logic, fed one key event at a time with an explicit clock so
+    it is testable without an event tap. A "clean" double tap is
+    press, release, press, release of the target key with NO other
+    key event in between; it fires on the second RELEASE (never on the
+    press) so that holding the key to type a chord — Option+letter —
+    can never trigger it, even right after a first tap. The window is
+    measured press-to-press; a late second press simply becomes a new
+    first tap.
+    """
+
+    _IDLE, _FIRST_DOWN, _FIRST_UP, _SECOND_DOWN = range(4)
+
+    def __init__(self, vk: int, window: float) -> None:
+        self._vk = vk
+        self._window = window
+        self._state = self._IDLE
+        self._first_down = 0.0
+
+    def reset(self) -> None:
+        self._state = self._IDLE
+
+    def feed(self, vk: int, down: bool, now: float) -> bool:
+        """Consume one key event; True exactly when a double tap completes."""
+        if vk != self._vk:
+            # Any other key, pressed OR released, breaks the sequence:
+            # the user is typing or chording, not tapping.
+            self._state = self._IDLE
+            return False
+        if down:
+            if (
+                self._state == self._FIRST_UP
+                and now - self._first_down <= self._window
+            ):
+                self._state = self._SECOND_DOWN
+            else:
+                self._state = self._FIRST_DOWN
+                self._first_down = now
+            return False
+        # release
+        if self._state == self._FIRST_DOWN:
+            self._state = self._FIRST_UP
+        elif self._state == self._SECOND_DOWN:
+            self._state = self._IDLE
+            return True
+        else:
+            self._state = self._IDLE
+        return False
 
 
 def parse_hotkey(hotkey: str) -> tuple[frozenset[str], str]:
@@ -112,11 +182,28 @@ class _SuppressingHotKeys:
     def __init__(
         self,
         bindings: list[tuple],  # (mods, terminal, callback, when|None)
+        double_tap: tuple | None = None,  # (vk, devbit, window, cb, when)
     ) -> None:
         import Quartz
         from pynput import keyboard
 
         self._quartz = Quartz
+        # Optional double-tap modifier trigger. Unlike chords it is
+        # observed, never swallowed (see _intercept). ``double_tap_active``
+        # is the public "did it arm?" flag the app reports on; the
+        # observing fallback listener sets it False.
+        self._dt: DoubleTapDetector | None = None
+        # True when the listener accepted a double-tap binding. Like
+        # the chords, it does not prove the OS granted the tap —
+        # missing Input Monitoring is reported by check_permissions.
+        self.double_tap_active = double_tap is not None
+        if double_tap is not None:
+            vk, devbit, window, cb, when = double_tap
+            self._dt = DoubleTapDetector(vk, window)
+            self._dt_vk = vk
+            self._dt_devbit = devbit
+            self._dt_cb = cb
+            self._dt_when = when
         masks = {
             "ctrl": Quartz.kCGEventFlagMaskControl,
             "alt": Quartz.kCGEventFlagMaskAlternate,
@@ -130,6 +217,17 @@ class _SuppressingHotKeys:
         self._mod_mask = 0
         for m in masks.values():
             self._mod_mask |= m
+        if self._dt is not None:
+            # Anything held during the taps besides the tapped key
+            # itself means a chord is in progress, not a lone double
+            # tap: every other family's generic flag, plus the
+            # opposite-side device bit of the same family (left Option
+            # held while right Option is tapped).
+            family_generic = self._family_mask(Quartz, self._dt_devbit)
+            family_devbits = self._family_devbits(self._dt_devbit)
+            self._dt_foreign_mask = (self._mod_mask & ~family_generic) | (
+                family_devbits & ~self._dt_devbit
+            )
         # vk -> list of (mask, callback, when); ``when`` (nullable)
         # gates matching dynamically: a False-returning ``when`` lets
         # the event pass through untouched, so e.g. Escape can cancel
@@ -160,11 +258,70 @@ class _SuppressingHotKeys:
         self._listener.daemon = True
         self._listener.start()
 
+    @staticmethod
+    def _family_mask(quartz, devbit: int) -> int:  # noqa: ANN001
+        """Generic CGEventFlags bit for the family a device bit belongs to."""
+        if devbit & 0x60:  # NX_DEVICE[LR]ALTKEYMASK
+            return quartz.kCGEventFlagMaskAlternate
+        if devbit & 0x18:  # NX_DEVICE[LR]CMDKEYMASK
+            return quartz.kCGEventFlagMaskCommand
+        if devbit & 0x2001:  # NX_DEVICE[LR]CTLKEYMASK
+            return quartz.kCGEventFlagMaskControl
+        return quartz.kCGEventFlagMaskShift
+
+    @staticmethod
+    def _family_devbits(devbit: int) -> int:
+        """Both sides' NX_DEVICE*KEYMASK bits for a device bit's family."""
+        for family in (0x60, 0x18, 0x2001, 0x06):  # alt, cmd, ctl, shift
+            if devbit & family:
+                return family
+        return devbit
+
+    def _fire(self, callback: Callable[[], None]) -> None:
+        """Run a matched callback on its own thread (tracked for stop)."""
+        thread = threading.Thread(target=callback, daemon=True)
+        self._threads = [t for t in self._threads if t.is_alive()]
+        self._threads.append(thread)
+        thread.start()
+
     def _intercept(self, event_type: int, event):  # noqa: ANN001, ANN202
         q = self._quartz
+        if event_type == q.kCGEventFlagsChanged:
+            # Modifier press/release. Only the double-tap trigger cares,
+            # and it only OBSERVES: swallowing a modifier would break
+            # Option/Cmd for every chord and accented character, so the
+            # event is always returned untouched.
+            if self._dt is not None:
+                vk = q.CGEventGetIntegerValueField(
+                    event, q.kCGKeyboardEventKeycode
+                )
+                flags = q.CGEventGetFlags(event)
+                if flags & self._dt_foreign_mask:
+                    # Another modifier is held (e.g. Shift+Option-Option):
+                    # a chord, not a lone tap. A modifier held from
+                    # BEFORE the first tap produces no event of its own,
+                    # so this check — not the reset-on-other-key path —
+                    # is what enforces "tapped alone".
+                    self._dt.reset()
+                    return event
+                down = bool(flags & self._dt_devbit)
+                if self._dt.feed(vk, down, time.monotonic()):
+                    ok = True
+                    if self._dt_when is not None:
+                        try:
+                            ok = bool(self._dt_when())
+                        except Exception:
+                            ok = False
+                    if ok and not self._stopping:
+                        self._fire(self._dt_cb)
+            return event
         if event_type not in (q.kCGEventKeyDown, q.kCGEventKeyUp):
             return event
         vk = q.CGEventGetIntegerValueField(event, q.kCGKeyboardEventKeycode)
+        if self._dt is not None:
+            # A real key between (or during) the taps means the user is
+            # typing/chording, not double-tapping: break the sequence.
+            self._dt.reset()
         entries = self._by_vk.get(vk)
         if entries is None:
             return event
@@ -191,14 +348,7 @@ class _SuppressingHotKeys:
                 )
                 if not repeat and not self._stopping:
                     self._down.add(vk)
-                    thread = threading.Thread(
-                        target=callback, daemon=True
-                    )
-                    self._threads = [
-                        t for t in self._threads if t.is_alive()
-                    ]
-                    self._threads.append(thread)
-                    thread.start()
+                    self._fire(callback)
                 return None  # swallow the chord (and auto-repeats)
             return event
         if vk in self._down:
@@ -423,7 +573,9 @@ def _check_accessibility() -> list[str]:
     return warnings
 
 
-def start_hotkeys(bindings: list[tuple]):  # noqa: ANN201
+def start_hotkeys(  # noqa: ANN201
+    bindings: list[tuple], double_tap: tuple | None = None
+):
     """Start one global listener for several chords; returns ``stop()``-able.
 
     Each binding is ``(hotkey, callback)`` or ``(hotkey, callback,
@@ -431,13 +583,20 @@ def start_hotkeys(bindings: list[tuple]):  # noqa: ANN201
     returns False the chord passes through to the focused app
     untouched (used for context-dependent keys like Escape-to-cancel).
 
+    ``double_tap`` optionally adds ``(key_name, window_ms, callback)``
+    or ``(key_name, window_ms, callback, when)``: ``key_name`` is one
+    of ``DOUBLE_TAP_KEYS`` and two clean taps of that modifier within
+    ``window_ms`` run ``callback``. macOS only (it needs the event
+    tap); elsewhere it is reported and ignored.
+
     On macOS every matched chord is fully suppressed. Elsewhere -- or
     when suppression isn't possible for a key -- falls back to
     pynput's observing ``GlobalHotKeys`` (apps may also receive the
     keys; ``when`` is then checked inside the callback).
 
     Raises:
-        ValueError: If any hotkey string is malformed.
+        ValueError: If any hotkey string is malformed, or the
+            double-tap key name is unknown.
     """
     parsed = []
     for binding in bindings:
@@ -445,15 +604,32 @@ def start_hotkeys(bindings: list[tuple]):  # noqa: ANN201
         when = binding[2] if len(binding) > 2 else None
         mods, term = parse_hotkey(hk)  # validate on every platform
         parsed.append((mods, term, cb, when))
+    dt = None
+    if double_tap is not None:
+        key_name, window_ms, dt_cb = double_tap[0], double_tap[1], double_tap[2]
+        dt_when = double_tap[3] if len(double_tap) > 3 else None
+        if key_name not in DOUBLE_TAP_KEYS:
+            raise ValueError(
+                f"unknown double_tap key {key_name!r}; must be one of "
+                f"{sorted(DOUBLE_TAP_KEYS)}"
+            )
+        vk, devbit = DOUBLE_TAP_KEYS[key_name]
+        dt = (vk, devbit, float(window_ms) / 1000.0, dt_cb, dt_when)
     if sys.platform == "darwin":
         try:
-            return _SuppressingHotKeys(parsed)
+            return _SuppressingHotKeys(parsed, double_tap=dt)
         except ValueError as e:
             print(
                 f"[voxtype] {e}; falling back to non-suppressing "
                 "hotkeys (chords may leak keystrokes)",
                 file=sys.stderr,
             )
+    if dt is not None:
+        print(
+            "[voxtype] double-tap hotkey needs the macOS event tap; "
+            "ignored here",
+            file=sys.stderr,
+        )
     from pynput import keyboard
 
     # Rebuild canonical pynput syntax (GlobalHotKeys doesn't know our
@@ -471,6 +647,7 @@ def start_hotkeys(bindings: list[tuple]):  # noqa: ANN201
         for mods, term, cb, when in parsed
     }
     hotkeys = keyboard.GlobalHotKeys(canonical)
+    hotkeys.double_tap_active = False  # observing listener: no tap
     hotkeys.daemon = True
     hotkeys.start()
     return hotkeys
