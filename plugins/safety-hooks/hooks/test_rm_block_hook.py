@@ -205,6 +205,11 @@ class TestCheckRmCommand(unittest.TestCase):
         blocked, _ = check_rm_command(command)
         self.assertFalse(blocked, "literal rm in the second body is data")
 
+    def test_legacy_arithmetic_shift_cannot_fake_a_heredoc(self):
+        """A shift in the deprecated $[ ] form must not blank a following rm."""
+        blocked, _ = check_rm_command("echo $[1 << 2]\nrm -rf /tmp/x\n2]")
+        self.assertTrue(blocked, "rm after 'echo $[1 << 2]' should be blocked")
+
     def test_array_subscript_shift_cannot_fake_a_heredoc(self):
         """A shift inside an array subscript must not blank a following rm."""
         blocked, _ = check_rm_command("a[1<<2]=foo\nrm -rf /tmp/x\n2]=foo")

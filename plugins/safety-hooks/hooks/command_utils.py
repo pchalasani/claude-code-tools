@@ -753,6 +753,12 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
             if expansion_end is not None:
                 index = expansion_end
                 continue
+        if quote is None and command.startswith('$[', index):
+            # $[1 << 2] is the deprecated arithmetic form, still a shift.
+            legacy_end = _end_of_balanced(command, index + 1, '[')
+            if legacy_end is not None:
+                index = legacy_end
+                continue
         if quote is None and character == '(':
             # A grouping or subshell paren. It is not a parsing unit of its
             # own, but it has to be balanced so that its ')' is not taken

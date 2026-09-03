@@ -410,6 +410,11 @@ class TestStripHeredocBodies(unittest.TestCase):
         command = 'cat <<$"A\\\\B"\ndata\nA\\B\nrm -rf /tmp/x\nA\\\\B'
         self.assertEqual(strip_heredoc_bodies(command), (command, []))
 
+    def test_legacy_arithmetic_shift_is_not_a_heredoc(self):
+        """$[1 << 2] is the deprecated arithmetic form, so '<<' is a shift."""
+        command = "echo $[1 << 2]\nrm -rf /tmp/x\n2]"
+        self.assertEqual(strip_heredoc_bodies(command), (command, []))
+
     def test_array_subscript_shift_is_not_a_heredoc(self):
         """'<<' in "a[1<<2]=foo" is a shift: the subscript is arithmetic."""
         command = "a[1<<2]=foo\nrm -rf /tmp/x\n2]=foo"
