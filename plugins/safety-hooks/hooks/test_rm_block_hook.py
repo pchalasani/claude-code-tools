@@ -205,6 +205,11 @@ class TestCheckRmCommand(unittest.TestCase):
         blocked, _ = check_rm_command(command)
         self.assertFalse(blocked, "literal rm in the second body is data")
 
+    def test_array_subscript_shift_cannot_fake_a_heredoc(self):
+        """A shift inside an array subscript must not blank a following rm."""
+        blocked, _ = check_rm_command("a[1<<2]=foo\nrm -rf /tmp/x\n2]=foo")
+        self.assertTrue(blocked, "rm after 'a[1<<2]=foo' should be blocked")
+
     def test_process_substitution_cannot_hide_rm(self):
         """The rm runs inside <( ), before the heredoc body starts."""
         command = "cat <<EOF <(echo x\nrm -rf /tmp/x\n)\nliteral\nEOF"

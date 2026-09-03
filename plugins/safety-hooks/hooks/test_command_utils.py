@@ -410,6 +410,18 @@ class TestStripHeredocBodies(unittest.TestCase):
         command = 'cat <<$"A\\\\B"\ndata\nA\\B\nrm -rf /tmp/x\nA\\\\B'
         self.assertEqual(strip_heredoc_bodies(command), (command, []))
 
+    def test_array_subscript_shift_is_not_a_heredoc(self):
+        """'<<' in "a[1<<2]=foo" is a shift: the subscript is arithmetic."""
+        command = "a[1<<2]=foo\nrm -rf /tmp/x\n2]=foo"
+        self.assertEqual(strip_heredoc_bodies(command), (command, []))
+
+    def test_bracket_that_is_not_a_subscript_still_allows_a_heredoc(self):
+        """A '[' after whitespace is a glob or test, not a subscript."""
+        command = "ls [ab]* ; cat <<EOF\nrm -rf /tmp/x\nEOF"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, ["rm -rf /tmp/x\n"])
+        self.assertNotIn("rm -rf /tmp/x", stripped)
+
     def test_process_substitution_delays_the_body(self):
         """A newline inside <( ) does not end the line that opened it."""
         command = "cat <<EOF <(echo x\nrm -rf /tmp/x\n)\nliteral\nEOF"

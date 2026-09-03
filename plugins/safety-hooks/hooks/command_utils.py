@@ -575,18 +575,19 @@ def _end_of_balanced(command: str, start: int, opener: str) -> int | None:
     Return the index just past the bracket balancing the one at start.
 
     Used to step over a span whose contents are not commands: an arithmetic
-    expansion $((...)) or a parameter expansion ${...}. A '<<' inside either
-    is text, not a heredoc operator.
+    expansion $((...)), a parameter expansion ${...} or an array subscript
+    a[...]. A '<<' inside any of them is text or a shift, not a heredoc
+    operator.
 
     Args:
         command: The full command string.
         start: Index of the opening bracket.
-        opener: The opening bracket character, '(' or '{'.
+        opener: The opening bracket character, '(', '{' or '['.
 
     Returns:
         Index just past the matching close, or None when unbalanced.
     """
-    closer = ')' if opener == '(' else '}'
+    closer = {'(': ')', '{': '}', '[': ']'}[opener]
     depth = 0
     index = start
     quote = None
@@ -760,6 +761,16 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
             open_parens.append('(')
             index += 1
             continue
+        if (quote is None and character == '[' and index > 0
+                and (command[index - 1].isalnum()
+                     or command[index - 1] == '_')):
+            # An array subscript is an arithmetic context, so the '<<' in
+            # "a[1<<2]=foo" is a shift. A '[' that does not follow a name
+            # is the test command or a glob, and is left alone.
+            subscript_end = _end_of_balanced(command, index, '[')
+            if subscript_end is not None:
+                index = subscript_end
+                continue
         if (quote is None and command.startswith('<<', index)
                 and not command.startswith('<<<', index)):
             delimiter = _heredoc_delimiter(command, index)
