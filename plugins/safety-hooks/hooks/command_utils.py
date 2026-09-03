@@ -360,6 +360,33 @@ def _heredoc_bounds(
     return None
 
 
+# A '#' only opens a comment at the start of a word, so it must follow
+# whitespace or an operator (or start the command).
+_COMMENT_PRECEDERS = ' \t\n;&|(<>'
+
+
+def _end_of_arithmetic(command: str, start: int) -> int | None:
+    """
+    Return the index just past the '))' closing an arithmetic expansion.
+
+    Args:
+        command: The full command string.
+        start: Index of the first '(' of the opening '((' .
+
+    Returns:
+        Index just past the matching close, or None when unbalanced.
+    """
+    depth = 0
+    for index in range(start, len(command)):
+        if command[index] == '(':
+            depth += 1
+        elif command[index] == ')':
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return None
+
+
 def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
     """
     Blank heredoc bodies and return the bodies the shell still expands.
@@ -402,6 +429,20 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
                 quote = character
             index += 1
             continue
+        if quote is None and character == '#' and (
+                index == 0 or command[index - 1] in _COMMENT_PRECEDERS):
+            # A comment runs to end of line, so any '<<' in it is text.
+            newline = command.find('\n', index)
+            if newline == -1:
+                break
+            index = newline + 1
+            continue
+        if quote is None and command.startswith('((', index):
+            # '<<' inside $((1 << 2)) is a left shift, not a heredoc.
+            arithmetic_end = _end_of_arithmetic(command, index)
+            if arithmetic_end is not None:
+                index = arithmetic_end
+                continue
         if (quote is None and command.startswith('<<', index)
                 and not command.startswith('<<<', index)):
             heredoc = _heredoc_bounds(command, index)

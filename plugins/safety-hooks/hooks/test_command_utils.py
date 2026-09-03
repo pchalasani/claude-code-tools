@@ -279,6 +279,28 @@ class TestStripHeredocBodies(unittest.TestCase):
         command = "echo 'a << b'\nrm foo"
         self.assertEqual(strip_heredoc_bodies(command), (command, []))
 
+    def test_heredoc_operator_inside_comment_is_ignored(self):
+        """A '<<' in a comment must not swallow the lines that follow."""
+        command = "# <<END\nrm -rf /tmp/x\nEND"
+        self.assertEqual(strip_heredoc_bodies(command), (command, []))
+
+    def test_hash_inside_word_is_not_a_comment(self):
+        """A '#' that is not word-initial does not start a comment."""
+        command = "echo a#b <<'MD'\nrm -rf x\nMD"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, [])
+        self.assertNotIn("rm", stripped)
+
+    def test_left_shift_in_arithmetic_is_not_a_heredoc(self):
+        """'<<' inside $(( )) is a shift operator, not a heredoc."""
+        command = "echo $((1 << 2))\nrm -rf /tmp/x\n2"
+        self.assertEqual(strip_heredoc_bodies(command), (command, []))
+
+    def test_nested_arithmetic_is_skipped_whole(self):
+        """Nested parentheses inside arithmetic are handled."""
+        command = "echo $(( (1 << 2) + 3 ))\nrm -rf /tmp/x\n3 ))"
+        self.assertEqual(strip_heredoc_bodies(command), (command, []))
+
 
 class TestExpandCommandAliases(unittest.TestCase):
     """Tests for expand_command_aliases() with updated operator support."""

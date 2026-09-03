@@ -150,6 +150,16 @@ class TestCheckRmCommand(unittest.TestCase):
         blocked, _ = check_rm_command("cat <<'MD' && rm foo\nliteral\nMD")
         self.assertTrue(blocked, "rm after a heredoc redirect should be blocked")
 
+    def test_comment_cannot_fake_a_heredoc(self):
+        """A '<<' in a comment must not blank out a following rm."""
+        blocked, _ = check_rm_command("# <<END\n; rm -rf /tmp/x\nEND")
+        self.assertTrue(blocked, "rm after a commented '<<' should be blocked")
+
+    def test_arithmetic_shift_cannot_fake_a_heredoc(self):
+        """A left shift in $(( )) must not blank out a following rm."""
+        blocked, _ = check_rm_command("echo $((1 << 2))\n; rm -rf /tmp/x\n2")
+        self.assertTrue(blocked, "rm after an arithmetic shift should be blocked")
+
     def test_complex_bypass_attempts(self):
         """Complex commands attempting to hide rm are blocked."""
         # Multiple levels of indirection
