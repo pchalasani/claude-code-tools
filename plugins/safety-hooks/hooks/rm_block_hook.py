@@ -89,9 +89,10 @@ if __name__ == "__main__":
 
     data = json.load(sys.stdin)
 
-    # Only intercept Bash tool calls
-    tool_name = data.get("tool_name")
-    if tool_name != "Bash":
+    # Only intercept Bash tool calls. Fold case first: an exact-case
+    # mismatch would approve the command without checking it.
+    tool_name = (data.get("tool_name") or "").lower()
+    if tool_name != "bash":
         print(json.dumps({"decision": "approve"}))
         sys.exit(0)
 

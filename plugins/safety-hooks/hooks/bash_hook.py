@@ -46,9 +46,12 @@ def main():
 
     session_id = data.get("session_id", "")
 
-    # Check if this is a Bash tool call
-    tool_name = data.get("tool_name")
-    if tool_name != "Bash":
+    # Check if this is a Bash tool call. Clients spell tool names
+    # differently ("Bash" vs "bash"), so fold case before comparing --
+    # an exact-case mismatch would fall through to "approve" and
+    # silently disable every check below.
+    tool_name = (data.get("tool_name") or "").lower()
+    if tool_name != "bash":
         print(json.dumps({"decision": "approve"}))
         sys.exit(0)
 

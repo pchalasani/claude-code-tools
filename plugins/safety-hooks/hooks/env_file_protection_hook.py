@@ -1014,9 +1014,10 @@ if __name__ == "__main__":
 
     data = json.load(sys.stdin)
 
-    # Check if this is a Bash tool call
-    tool_name = data.get("tool_name")
-    if tool_name != "Bash":
+    # Check if this is a Bash tool call. Fold case first: an exact-case
+    # mismatch would allow the command without checking it.
+    tool_name = (data.get("tool_name") or "").lower()
+    if tool_name != "bash":
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
