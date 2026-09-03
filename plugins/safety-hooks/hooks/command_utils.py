@@ -453,6 +453,12 @@ def _heredoc_delimiter(command: str, start: int):
         elif character == '\\':
             if index + 1 >= len(command):
                 return None
+            if command[index + 1] == '\n':
+                # A continuation inside the word: the shell removes both
+                # characters before reading the delimiter, so "E\" + "OF"
+                # is the delimiter EOF, and is not quoted by it.
+                index += 2
+                continue
             quoted = True
             delimiter_parts.append(command[index + 1])
             index += 2
@@ -754,14 +760,15 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
             index += 1
             continue
         if quote is None and character == '\n' and pending:
-            if pending[0][3] != depth:
-                # This newline is inside a deeper command substitution, so
-                # it does not end the line that opened these heredocs.
+            # Only the heredocs opened at this depth end here; ones opened
+            # further out belong to a command line this newline is nested
+            # inside, and wait for their own.
+            ready = [item for item in pending if item[3] == depth]
+            if not ready:
                 index += 1
                 continue
-            # The command line ended: its heredoc bodies start here.
-            bodies = _heredoc_bodies(command, index + 1, pending)
-            pending = []
+            bodies = _heredoc_bodies(command, index + 1, ready)
+            pending = [item for item in pending if item[3] != depth]
             if bodies is None:
                 index += 1
                 continue

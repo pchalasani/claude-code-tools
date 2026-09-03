@@ -410,6 +410,21 @@ class TestStripHeredocBodies(unittest.TestCase):
         command = 'cat <<$"A\\\\B"\ndata\nA\\B\nrm -rf /tmp/x\nA\\\\B'
         self.assertEqual(strip_heredoc_bodies(command), (command, []))
 
+    def test_delimiter_word_split_by_a_continuation(self):
+        """The shell removes the backslash-newline, so "E\\"+"OF" is EOF."""
+        command = "cat <<E\\\nOF\necho <<X\nEOF\nrm -rf /tmp/x\nX"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, ["echo <<X\n"])
+        self.assertIn("rm -rf /tmp/x", stripped)
+        self.assertNotIn("echo <<X", stripped)
+
+    def test_each_substitution_ends_its_own_heredocs(self):
+        """An outer heredoc does not swallow a newline inside $( )."""
+        command = "cat <<OUT $(cat <<IN\n)\nIN\nrm -rf /tmp/x\n)\nouter\nOUT"
+        stripped, _ = strip_heredoc_bodies(command)
+        self.assertIn("rm -rf /tmp/x", stripped)
+        self.assertNotIn("outer", stripped)
+
     def test_undecodable_delimiter_stops_the_scan(self):
         """Declining one heredoc must not turn its body into a new header.
 

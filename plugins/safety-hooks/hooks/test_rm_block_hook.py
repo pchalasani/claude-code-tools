@@ -205,6 +205,18 @@ class TestCheckRmCommand(unittest.TestCase):
         blocked, _ = check_rm_command(command)
         self.assertFalse(blocked, "literal rm in the second body is data")
 
+    def test_continued_delimiter_word_cannot_hide_rm(self):
+        """"E\\"+"OF" is the delimiter EOF, so the rm after that body runs."""
+        command = "cat <<E\\\nOF\necho <<X\nEOF\nrm -rf /tmp/x\nX"
+        blocked, _ = check_rm_command(command)
+        self.assertTrue(blocked, "rm after a continued delimiter word blocks")
+
+    def test_nested_heredoc_in_a_substitution_cannot_hide_rm(self):
+        """The inner heredoc ends inside $( ), leaving the rm a command."""
+        command = "cat <<OUT $(cat <<IN\n)\nIN\nrm -rf /tmp/x\n)\nouter\nOUT"
+        blocked, _ = check_rm_command(command)
+        self.assertTrue(blocked, "rm inside the substitution should be blocked")
+
     def test_undecodable_delimiter_cannot_hide_rm(self):
         """Bash ends that body at EOF, so the rm after it is a command."""
         command = "cat <<$'E\\x4fF'\necho <<X\nEOF\nrm -rf /tmp/x\nX"
