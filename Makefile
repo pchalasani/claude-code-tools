@@ -1,4 +1,4 @@
-.PHONY: install install-gdocs node-ui-deps release patch minor major dev-install help clean publish all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply update-homebrew docs-dev docs-build docs-preview voxtype-version voxtype-test voxtype-install voxtype-build voxtype-release voxtype-publish voxtype-all voxtype-all-patch voxtype-all-minor voxtype-all-major visual-brief-version visual-brief-frontend visual-brief-frontend-check visual-brief-test visual-brief-install visual-brief-build visual-brief-release visual-brief-publish visual-brief-all visual-brief-all-patch visual-brief-all-minor visual-brief-all-major
+.PHONY: release-preflight install install-gdocs node-ui-deps release patch minor major dev-install help clean publish all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply update-homebrew docs-dev docs-build docs-preview voxtype-version voxtype-test voxtype-install voxtype-build voxtype-release voxtype-publish voxtype-all voxtype-all-patch voxtype-all-minor voxtype-all-major visual-brief-version visual-brief-frontend visual-brief-frontend-check visual-brief-test visual-brief-install visual-brief-build visual-brief-release visual-brief-publish visual-brief-all visual-brief-all-patch visual-brief-all-minor visual-brief-all-major
 
 GIT_PRIMARY_WORKTREE := $(realpath $(shell git rev-parse \
 	--path-format=absolute --git-common-dir)/..)
@@ -84,6 +84,30 @@ install-gdocs: node-ui-deps
 dev-install: node-ui-deps
 	uv pip install -e ".[dev]"
 
+# Refuse to cut a release from anything but an up-to-date, clean main.
+# voxtype 0.1.7 was published to PyPI from a local main that had not
+# pulled a merged fix: the bump commit landed on a stale tree, the push
+# was rejected, the tag never reached GitHub — and the build and upload
+# went ahead regardless. This guard makes that impossible.
+release-preflight:
+	@set -e; \
+	branch=$$(git rev-parse --abbrev-ref HEAD); \
+	if [ "$$branch" != "main" ]; then \
+		echo "ERROR: releases are cut from main (on '$$branch')" >&2; exit 1; \
+	fi; \
+	if [ -n "$$(git status --porcelain -uno)" ]; then \
+		echo "ERROR: working tree has uncommitted changes" >&2; exit 1; \
+	fi; \
+	: "(untracked files are deliberately ignored: this repo keeps many)"; \
+	git fetch -q origin main; \
+	if [ "$$(git rev-parse HEAD)" != "$$(git rev-parse origin/main)" ]; then \
+		echo "ERROR: local main is not origin/main (behind and/or ahead)." >&2; \
+		echo "       git pull --ff-only first; releasing from a stale tree" >&2; \
+		echo "       is how voxtype 0.1.7 shipped without its fix." >&2; \
+		exit 1; \
+	fi; \
+	echo "preflight OK: main is clean and matches origin/main"
+
 release: patch
 
 patch:
@@ -125,7 +149,7 @@ publish:
 		fi; \
 		UV_PUBLISH_TOKEN="$$PYPI_TOKEN" uv publish'
 
-all-patch:
+all-patch: release-preflight
 	@echo "Ensuring dev dependencies (commitizen)..."
 	@uv sync --extra dev --quiet
 	@echo "Bumping patch version..."
@@ -134,14 +158,18 @@ all-patch:
 	git push && git push --tags
 	@echo "Creating GitHub release..."
 	@VERSION=$$(grep "^version" pyproject.toml | head -1 | cut -d'"' -f2); \
-	gh release create v$$VERSION --title "v$$VERSION" || echo "Release v$$VERSION already exists"
+	if gh release view v$$VERSION >/dev/null 2>&1; then \
+		echo "Release v$$VERSION already exists"; \
+	else \
+		gh release create v$$VERSION --title "v$$VERSION"; \
+	fi
 	@echo "Cleaning old builds..."
 	rm -rf dist/*
 	@echo "Building package..."
 	uv build
 	@echo "Build complete! Ready for: make publish"
 
-all-minor:
+all-minor: release-preflight
 	@echo "Ensuring dev dependencies (commitizen)..."
 	@uv sync --extra dev --quiet
 	@echo "Bumping minor version..."
@@ -150,14 +178,18 @@ all-minor:
 	git push && git push --tags
 	@echo "Creating GitHub release..."
 	@VERSION=$$(grep "^version" pyproject.toml | head -1 | cut -d'"' -f2); \
-	gh release create v$$VERSION --title "v$$VERSION" || echo "Release v$$VERSION already exists"
+	if gh release view v$$VERSION >/dev/null 2>&1; then \
+		echo "Release v$$VERSION already exists"; \
+	else \
+		gh release create v$$VERSION --title "v$$VERSION"; \
+	fi
 	@echo "Cleaning old builds..."
 	rm -rf dist/*
 	@echo "Building package..."
 	uv build
 	@echo "Build complete! Ready for: make publish"
 
-all-major:
+all-major: release-preflight
 	@echo "Ensuring dev dependencies (commitizen)..."
 	@uv sync --extra dev --quiet
 	@echo "Bumping major version..."
@@ -166,7 +198,11 @@ all-major:
 	git push && git push --tags
 	@echo "Creating GitHub release..."
 	@VERSION=$$(grep "^version" pyproject.toml | head -1 | cut -d'"' -f2); \
-	gh release create v$$VERSION --title "v$$VERSION" || echo "Release v$$VERSION already exists"
+	if gh release view v$$VERSION >/dev/null 2>&1; then \
+		echo "Release v$$VERSION already exists"; \
+	else \
+		gh release create v$$VERSION --title "v$$VERSION"; \
+	fi
 	@echo "Cleaning old builds..."
 	rm -rf dist/*
 	@echo "Building package..."
@@ -350,8 +386,9 @@ voxtype-build:
 
 # Bump (BUMP=patch|minor|major, default patch), commit, tag voxtype-vX.Y.Z,
 # push, create GitHub release, build. Then: make voxtype-publish
-voxtype-release: voxtype-test
-	@BUMP_TYPE=$${BUMP:-patch}; \
+voxtype-release: release-preflight voxtype-test
+	@set -e; \
+	BUMP_TYPE=$${BUMP:-patch}; \
 	OLD=$$(grep '^version' $(VOXTYPE_PYPROJECT) | head -1 | cut -d'"' -f2); \
 	NEW=$$(python3 -c "$$VOXTYPE_BUMP_PY" $$BUMP_TYPE); \
 	echo "Bumping voxtype $$OLD -> $$NEW ($$BUMP_TYPE)..."; \
@@ -360,11 +397,15 @@ voxtype-release: voxtype-test
 	git commit -m "bump: voxtype $$OLD → $$NEW"; \
 	git tag "voxtype-v$$NEW"; \
 	echo "Pushing to GitHub..."; \
-	git push && git push --tags; \
+	git push; \
+	git push --tags; \
 	echo "Creating GitHub release..."; \
-	gh release create "voxtype-v$$NEW" --title "voxtype v$$NEW" \
-		--notes "voxtype $$NEW — install with: uv tool install voxtype" \
-		|| echo "Release voxtype-v$$NEW already exists"
+	if gh release view "voxtype-v$$NEW" >/dev/null 2>&1; then \
+		echo "Release voxtype-v$$NEW already exists"; \
+	else \
+		gh release create "voxtype-v$$NEW" --title "voxtype v$$NEW" \
+			--notes "voxtype $$NEW — install with: uv tool install voxtype"; \
+	fi
 	$(MAKE) voxtype-build
 
 voxtype-publish:
