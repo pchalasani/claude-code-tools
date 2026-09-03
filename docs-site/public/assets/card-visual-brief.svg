@@ -16,7 +16,7 @@
   <text x="100" y="37" font-family="monospace" font-size="22" font-weight="bold"
         fill="#5eead4" text-anchor="middle" filter="url(#glow)">visual brief</text>
   <text x="100" y="62" font-family="monospace" font-size="13" fill="#99f6e4"
-        text-anchor="middle">Structured local</text>
+        text-anchor="middle">Structured</text>
   <text x="100" y="77" font-family="monospace" font-size="13" fill="#99f6e4"
         text-anchor="middle">agent updates</text>
 </svg>
