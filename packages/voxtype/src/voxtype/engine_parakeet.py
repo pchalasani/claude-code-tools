@@ -58,9 +58,29 @@ SAMPLE_RATE = 16000
 MIN_SILENCE = 0.5
 # Hold-mode recordings are capped at this length to bound memory.
 MAX_HOLD_SECONDS = 600
+# A hold take whose RAW (pre-AGC) peak never reaches this is a dead
+# microphone, not a quiet user: a stream that was muted at the CoreAudio
+# level (Zoom does this) or went stale after a device-topology change
+# (opening the lid) delivers a dither floor around 1.6e-07, while a live
+# dynamic mic's mere room noise measures ~2.8e-03 (Shure MV7+) to 8e-03
+# (Studio Display). 1e-04 sits ~600x above the dead floor and ~30x
+# below live room noise. Judged on raw samples because the AGC would
+# amplify a dead floor by up to 60x and make it look alive.
+SILENT_TAKE_PEAK = 1e-04
 # A VAD segment continuously "in speech" for this long is stuck
 # (amplified noise pinning the detector): force-close and recover.
 MAX_SEGMENT_SECONDS = 30.0
+
+
+class _ReopenMicrophone(Exception):
+    """Raised inside a capture session to end it and open a fresh stream.
+
+    Used when a take came back silent: if the stream went stale after a
+    device change, the reopen fixes it; if the mic is muted by another
+    app, the user has been told and the reopen is harmless. Handled by
+    ``_loop`` as a deliberate restart — no backoff, and it never counts
+    toward the consecutive-failure limit.
+    """
 
 
 class AutoGain:
@@ -516,6 +536,9 @@ class ParakeetEngine:
         self._hold_buf: list = []
         self._hold_len = 0
         self._hold_capped = False
+        # Loudest RAW (pre-AGC) sample seen during the current take;
+        # compared against SILENT_TAKE_PEAK on hold-stop.
+        self._hold_raw_peak = 0.0
         # Per-session VAD staging buffer / open-segment clock; given
         # real values at the top of each capture session.
         self._vad_pending: Any = None
@@ -573,6 +596,7 @@ class ParakeetEngine:
         self._holding = False
         self._hold_buf, self._hold_len = [], 0
         self._hold_capped = False
+        self._hold_raw_peak = 0.0
 
     def start(
         self,
@@ -739,6 +763,15 @@ class ParakeetEngine:
                 try:
                     self._capture_session(on_utterance, on_activity)
                     failures = 0
+                except _ReopenMicrophone:
+                    # Deliberate: reopen immediately. The session DID
+                    # capture audio (a whole take of it), so like any
+                    # productive session it resets the consecutive-
+                    # failure count — a muted mic producing silent
+                    # take after silent take must never walk the
+                    # counter up to the fatal limit.
+                    failures = 0
+                    continue
                 except Exception as e:
                     if self._stop.is_set():
                         break
@@ -853,6 +886,7 @@ class ParakeetEngine:
                             )
                         continue
                     empty_reads = 0
+                    raw = samples  # pre-AGC view, for the silent-take check
                     samples = self._agc.process(samples)
                     self.level = float(
                         min(1.0, float(np.abs(samples).max()))
@@ -873,13 +907,21 @@ class ParakeetEngine:
                         # remaining budget is kept, so even a huge
                         # single read cannot blow past the cap.
                         budget = (
-                            MAX_HOLD_SECONDS * SAMPLE_RATE
+                            int(MAX_HOLD_SECONDS * SAMPLE_RATE)
                             - self._hold_len
                         )
                         if budget > 0:
                             chunk = samples[:budget]
                             self._hold_buf.append(chunk)
                             self._hold_len += len(chunk)
+                            # Raw level BEFORE the AGC, and only over
+                            # the slice actually kept: audio past the
+                            # cap is not in the take and must not
+                            # vouch for it (see SILENT_TAKE_PEAK).
+                            self._hold_raw_peak = max(
+                                self._hold_raw_peak,
+                                float(np.abs(raw[:budget]).max()),
+                            )
                         if (
                             budget <= len(samples)
                             and not self._hold_capped
@@ -993,10 +1035,23 @@ class ParakeetEngine:
                 self._holding = True
                 self._hold_buf, self._hold_len = [], 0
                 self._hold_capped = False
+                self._hold_raw_peak = 0.0
             elif command == "hold_stop":
                 if self._holding and self._hold_len:
                     take = np.concatenate(self._hold_buf)
                     self._hold_buf, self._hold_len = [], 0
+                    self._holding = False
+                    if self._hold_raw_peak < SILENT_TAKE_PEAK:
+                        # Dead microphone: say so (the bland "decoded
+                        # to empty text" hid two real incidents), skip
+                        # the pointless decode, and reopen the stream.
+                        self._report(
+                            f"take was silent ({len(take) / SAMPLE_RATE:.1f}s"
+                            f", peak {self._hold_raw_peak:.1e}): microphone"
+                            " muted, held by another app, or its stream"
+                            " went stale — reopening the microphone"
+                        )
+                        raise _ReopenMicrophone()
                     self._enqueue_take(take, on_utterance)
                 self._holding = False
 
