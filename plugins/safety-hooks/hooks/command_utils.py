@@ -257,7 +257,9 @@ def _extract_balanced_paren_content(command: str, start_idx: int) -> str | None:
     Extract content from balanced parentheses starting at given index.
 
     Given a string and the index of an opening '(', finds the matching
-    closing ')' accounting for nested parentheses.
+    closing ')' accounting for nested parentheses. A ')' inside quotes is
+    text, not the closing one: stopping at it would cut the substitution
+    short and hide the commands after it, as in "$(printf ')'; rm foo)".
 
     Args:
         command: The full command string.
@@ -274,18 +276,10 @@ def _extract_balanced_paren_content(command: str, start_idx: int) -> str | None:
     if start_idx >= len(command) or command[start_idx] != '(':
         return None
 
-    depth = 0
-    for i in range(start_idx, len(command)):
-        if command[i] == '(':
-            depth += 1
-        elif command[i] == ')':
-            depth -= 1
-            if depth == 0:
-                # Found the matching closing paren
-                return command[start_idx + 1:i]
-
-    # No matching closing paren found
-    return None
+    end = _end_of_balanced(command, start_idx, '(')
+    if end is None:
+        return None
+    return command[start_idx + 1:end - 1]
 
 
 def extract_subshell_commands(command: str) -> list[str]:

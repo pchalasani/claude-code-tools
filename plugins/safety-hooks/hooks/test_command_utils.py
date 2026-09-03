@@ -216,6 +216,16 @@ class TestExtractAllCommands(unittest.TestCase):
         result = extract_all_commands("echo $(rm secret)")
         self.assertIn("rm secret", result)
 
+    def test_quoted_paren_does_not_cut_a_subshell_short(self):
+        """A ')' inside quotes is text, so the rm after it is still found."""
+        result = extract_all_commands("echo $(printf ')'; rm foo)")
+        self.assertIn("rm foo", result)
+
+    def test_quoted_paren_in_a_heredoc_body_substitution(self):
+        """Same, for the substitution inside an unquoted heredoc body."""
+        result = extract_all_commands("cat <<EOF\n$(printf ')'; rm foo)\nEOF")
+        self.assertIn("rm foo", result)
+
     def test_quoted_heredoc_backticks_are_literal(self):
         """A quoted delimiter means the shell expands nothing in the body."""
         command = "cat > notes.md <<'MD'\nThe `rm -rf x` guard.\nMD"
