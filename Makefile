@@ -89,6 +89,18 @@ dev-install: node-ui-deps
 # pulled a merged fix: the bump commit landed on a stale tree, the push
 # was rejected, the tag never reached GitHub — and the build and upload
 # went ahead regardless. This guard makes that impossible.
+# Source trees that end up inside published artifacts (hatch `include` /
+# `packages`, and the Rust crates). Untracked files here are refused.
+RELEASE_INPUTS := claude_code_tools node_ui docs \
+	packages/voxtype/src packages/visual-brief/src \
+	rust-search-ui/src lmsh/src
+# The umbrella wheel ignores VCS state ([tool.hatch.build] ignore-vcs =
+# true) and ships whatever matches its include GLOBS — claude_code_tools/
+# **/*.py and docs/*.md; the node_ui entries name specific tracked files,
+# which the dirty-tree check already covers. Mirror the globs here.
+UMBRELLA_INCLUDE_ROOTS := claude_code_tools docs
+UMBRELLA_INCLUDE_GLOBS := ^(claude_code_tools/.*\.py|docs/[^/]*\.md)$$
+
 release-preflight:
 	@set -e; \
 	branch=$$(git rev-parse --abbrev-ref HEAD); \
@@ -99,9 +111,24 @@ release-preflight:
 	if [ -n "$$dirty" ]; then \
 		echo "ERROR: working tree has uncommitted changes" >&2; exit 1; \
 	fi; \
-	: "(untracked files are deliberately ignored: this repo keeps many;" \
-	  "and each git call above/below is a plain assignment so set -e" \
-	  "aborts if git itself fails — an empty result is never a pass)"; \
+	: "(untracked files elsewhere are deliberately ignored — this repo" \
+	  "keeps many — but NOT under the packaged source trees below, which" \
+	  "hatch/cargo can ship; every git call here is a plain assignment so" \
+	  "set -e aborts if git itself fails — an empty result is never a pass)"; \
+	stray=$$(git ls-files --others --exclude-standard -- $(RELEASE_INPUTS)); \
+	: "(the umbrella build sets ignore-vcs=true with include globs, so" \
+	  "gitignored files matching those globs would still ship: check" \
+	  "ignored files under the umbrella's include roots, filtered by the" \
+	  "same globs — keep UMBRELLA_INCLUDE_* in step with the" \
+	  "[tool.hatch.build] include list in pyproject.toml)"; \
+	ignored=$$(git ls-files --others --ignored --exclude-standard \
+		-- $(UMBRELLA_INCLUDE_ROOTS)); \
+	ignored=$$(printf '%s\n' "$$ignored" | grep -E '$(UMBRELLA_INCLUDE_GLOBS)' || :); \
+	stray=$$(printf '%s\n%s\n' "$$stray" "$$ignored" | sed '/^$$/d'); \
+	if [ -n "$$stray" ]; then \
+		echo "ERROR: untracked files under packaged sources would ship:" >&2; \
+		echo "$$stray" | sed 's/^/       /' >&2; exit 1; \
+	fi; \
 	git fetch -q origin main; \
 	head=$$(git rev-parse HEAD); \
 	remote=$$(git rev-parse origin/main); \
