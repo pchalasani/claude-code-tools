@@ -14,6 +14,9 @@ classifiers = [
 ]
 dependencies = []
 
+[dependency-groups]
+dev = ["pytest>=9.0.1"]
+
 [project.urls]
 Homepage = "https://github.com/pchalasani/claude-code-tools"
 

@@ -40,6 +40,9 @@ dependencies = [
     "numpy>=1.26.0",
 ]
 
+[dependency-groups]
+dev = ["pytest>=9.0.1"]
+
 [project.urls]
 Homepage = "https://github.com/pchalasani/claude-code-tools"
 Documentation = "https://pchalasani.github.io/claude-code-tools/tools/voxtype/"

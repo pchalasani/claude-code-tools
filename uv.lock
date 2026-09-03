@@ -2676,6 +2676,16 @@ name = "visual-brief"
 version = "0.1.0"
 source = { editable = "packages/visual-brief" }
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.0.1" }]
+
 [[package]]
 name = "voxtype"
 version = "0.1.8"
@@ -2696,6 +2706,11 @@ moonshine = [
     { name = "moonshine-voice" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "moonshine-voice", marker = "extra == 'moonshine'", specifier = ">=0.0.69" },
@@ -2708,6 +2723,9 @@ requires-dist = [
     { name = "sherpa-onnx-core", specifier = ">=1.12.0,<1.13" },
     { name = "sounddevice", specifier = ">=0.5.0" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.0.1" }]
 
 [[package]]
 name = "wcwidth"
