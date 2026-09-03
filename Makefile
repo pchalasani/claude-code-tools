@@ -95,12 +95,17 @@ release-preflight:
 	if [ "$$branch" != "main" ]; then \
 		echo "ERROR: releases are cut from main (on '$$branch')" >&2; exit 1; \
 	fi; \
-	if [ -n "$$(git status --porcelain -uno)" ]; then \
+	dirty=$$(git status --porcelain -uno); \
+	if [ -n "$$dirty" ]; then \
 		echo "ERROR: working tree has uncommitted changes" >&2; exit 1; \
 	fi; \
-	: "(untracked files are deliberately ignored: this repo keeps many)"; \
+	: "(untracked files are deliberately ignored: this repo keeps many;" \
+	  "and each git call above/below is a plain assignment so set -e" \
+	  "aborts if git itself fails — an empty result is never a pass)"; \
 	git fetch -q origin main; \
-	if [ "$$(git rev-parse HEAD)" != "$$(git rev-parse origin/main)" ]; then \
+	head=$$(git rev-parse HEAD); \
+	remote=$$(git rev-parse origin/main); \
+	if [ "$$head" != "$$remote" ]; then \
 		echo "ERROR: local main is not origin/main (behind and/or ahead)." >&2; \
 		echo "       git pull --ff-only first; releasing from a stale tree" >&2; \
 		echo "       is how voxtype 0.1.7 shipped without its fix." >&2; \
@@ -209,7 +214,7 @@ all-major: release-preflight
 	uv build
 	@echo "Build complete! Ready for: make publish"
 
-release-github:
+release-github: release-preflight
 	@echo "Creating GitHub release..."
 	@VERSION=$$(grep "^version" pyproject.toml | head -1 | cut -d'"' -f2); \
 	gh release create v$$VERSION --title "v$$VERSION"
@@ -232,7 +237,7 @@ lmsh-install: lmsh
 		echo "⚠️  Add ~/.cargo/bin to your PATH if not already there"; \
 	fi
 
-lmsh-publish:
+lmsh-publish: release-preflight
 	@if ! command -v cargo-bump >/dev/null 2>&1; then \
 		echo "Installing cargo-bump..."; \
 		cargo install cargo-bump; \
@@ -270,23 +275,25 @@ define aichat-search-bump
 	fi
 	@echo "Bumping aichat-search $(1) version..."
 	@cd rust-search-ui && cargo bump $(1)
-	@VERSION=$$(grep "^version" rust-search-ui/Cargo.toml | head -1 | cut -d'"' -f2); \
+	@set -e; \
+	VERSION=$$(grep "^version" rust-search-ui/Cargo.toml | head -1 | cut -d'"' -f2); \
 	echo "Creating tag rust-v$$VERSION..."; \
 	git add rust-search-ui/Cargo.toml rust-search-ui/Cargo.lock; \
 	git commit -m "bump: aichat-search v$$VERSION"; \
 	git tag "rust-v$$VERSION"; \
-	git push && git push --tags
+	git push; \
+	git push --tags
 	@echo "Tag pushed! GitHub Actions will build and release binaries."
 	@echo "Check progress at: https://github.com/pchalasani/claude-code-tools/actions"
 endef
 
-aichat-search-patch:
+aichat-search-patch: release-preflight
 	$(call aichat-search-bump,patch)
 
-aichat-search-minor:
+aichat-search-minor: release-preflight
 	$(call aichat-search-bump,minor)
 
-aichat-search-major:
+aichat-search-major: release-preflight
 	$(call aichat-search-bump,major)
 
 # Backwards compatible alias
@@ -528,8 +535,9 @@ visual-brief-build: visual-brief-frontend-check
 	uv build --package visual-brief
 	@echo "Build complete! Ready for: make visual-brief-publish"
 
-visual-brief-release: visual-brief-test
-	@BUMP_TYPE=$${BUMP:-patch}; \
+visual-brief-release: release-preflight visual-brief-test
+	@set -e; \
+	BUMP_TYPE=$${BUMP:-patch}; \
 	OLD=$$(grep '^version' $(VISUAL_BRIEF_PYPROJECT) | head -1 | cut -d'"' -f2); \
 	NEW=$$(python3 -c "$$VISUAL_BRIEF_BUMP_PY" $$BUMP_TYPE); \
 	echo "Bumping visual-brief $$OLD -> $$NEW ($$BUMP_TYPE)..."; \
@@ -537,10 +545,14 @@ visual-brief-release: visual-brief-test
 	git add $(VISUAL_BRIEF_PYPROJECT) $(VISUAL_BRIEF_INIT) uv.lock; \
 	git commit -m "bump: visual-brief $$OLD → $$NEW"; \
 	git tag "visual-brief-v$$NEW"; \
-	git push && git push --tags; \
-	gh release create "visual-brief-v$$NEW" --title "visual-brief v$$NEW" \
-		--notes "visual-brief $$NEW — install: uv tool install visual-brief" \
-		|| echo "Release visual-brief-v$$NEW already exists"
+	git push; \
+	git push --tags; \
+	if gh release view "visual-brief-v$$NEW" >/dev/null 2>&1; then \
+		echo "Release visual-brief-v$$NEW already exists"; \
+	else \
+		gh release create "visual-brief-v$$NEW" --title "visual-brief v$$NEW" \
+			--notes "visual-brief $$NEW — install: uv tool install visual-brief"; \
+	fi
 	$(MAKE) visual-brief-build
 
 visual-brief-publish: visual-brief-frontend-check
