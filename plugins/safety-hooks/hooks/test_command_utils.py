@@ -390,6 +390,33 @@ class TestStripHeredocBodies(unittest.TestCase):
         self.assertEqual(bodies, [])
         self.assertNotIn("rm -rf x", stripped)
 
+    def test_escape_in_a_double_quoted_delimiter_is_not_a_heredoc(self):
+        """Quote removal would drop a backslash, so decline to blank."""
+        command = 'cat <<"A\\\\B"\ndata\nA\\B\nrm -rf /tmp/x\nA\\\\B'
+        self.assertEqual(strip_heredoc_bodies(command), (command, []))
+
+    def test_delimiter_split_over_a_continued_line(self):
+        """An unquoted body loses backslash-newline, so 'EO\\'+'F' ends it."""
+        command = "cat <<EOF\ndata\nEO\\\nF\nrm -rf /tmp/x\nEOF"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, ["data\n"])
+        self.assertIn("rm -rf /tmp/x", stripped)
+
+    def test_quoted_body_keeps_a_continued_delimiter_literal(self):
+        """With a quoted delimiter nothing is unescaped, so it does not end."""
+        command = "cat <<'EOF'\ndata\nEO\\\nF\nrm -rf /tmp/x\nEOF"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, [])
+        self.assertNotIn("rm -rf /tmp/x", stripped)
+
+    def test_nested_group_paren_does_not_close_the_substitution(self):
+        """The ')' of '(echo x)' closes the group, not the '$(' around it."""
+        command = "cat <<EOF $( (echo x)\nrm -rf /tmp/x\n)\nliteral\nEOF"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, ["literal\n"])
+        self.assertIn("rm -rf /tmp/x", stripped)
+        self.assertNotIn("literal", stripped)
+
     def test_substitution_in_a_delimiter_is_literal(self):
         """No expansion runs on a delimiter word, so '$(echo EOF)' ends it."""
         command = "cat <<$(echo EOF)\npayload\n$(echo EOF)\nrm -rf /tmp/x\n$"

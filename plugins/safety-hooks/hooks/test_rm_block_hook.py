@@ -205,6 +205,24 @@ class TestCheckRmCommand(unittest.TestCase):
         blocked, _ = check_rm_command(command)
         self.assertFalse(blocked, "literal rm in the second body is data")
 
+    def test_double_quoted_escape_delimiter_cannot_hide_rm(self):
+        """Bash ends that body at 'A\\B', so the next line is a command."""
+        command = 'cat <<"A\\\\B"\ndata\nA\\B\nrm -rf /tmp/x\nA\\\\B'
+        blocked, _ = check_rm_command(command)
+        self.assertTrue(blocked, "rm after a '\"A\\\\B\"' body should be blocked")
+
+    def test_continued_delimiter_line_cannot_hide_rm(self):
+        """An unquoted body ends at a delimiter split across two lines."""
+        command = "cat <<EOF\ndata\nEO\\\nF\nrm -rf /tmp/x\nEOF"
+        blocked, _ = check_rm_command(command)
+        self.assertTrue(blocked, "rm after a continued delimiter is a command")
+
+    def test_nested_group_paren_cannot_hide_rm(self):
+        """The substitution is still open, so the rm inside it is a command."""
+        command = "cat <<EOF $( (echo x)\nrm -rf /tmp/x\n)\nliteral\nEOF"
+        blocked, _ = check_rm_command(command)
+        self.assertTrue(blocked, "rm inside a still-open $( ) should be blocked")
+
     def test_substitution_delimiter_cannot_fake_a_heredoc(self):
         """'<<$(echo EOF)' ends at that literal line, so the rm is a command."""
         command = "cat <<$(echo EOF)\npayload\n$(echo EOF)\nrm -rf /tmp/x\n$"

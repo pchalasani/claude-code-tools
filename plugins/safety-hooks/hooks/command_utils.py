@@ -441,7 +441,13 @@ def _heredoc_delimiter(
             end = _end_of_single_quote(command, index, escapes=False)
             if end is None:
                 return None
-            delimiter_parts.append(command[index + 1:end])
+            content = command[index + 1:end]
+            if character == '"' and '\\' in content:
+                # Quote removal would drop backslashes here. Rather than
+                # replicate that, report no heredoc: nothing is blanked and
+                # the guards see the body, which is the safe direction.
+                return None
+            delimiter_parts.append(content)
             index = end + 1
         elif character == '\\':
             if index + 1 >= len(command):
@@ -458,9 +464,23 @@ def _heredoc_delimiter(
     return delimiter, quoted, strip_tabs, index
 
 
+def _ends_with_continuation(line: str) -> bool:
+    """
+    Report whether a physical line ends in a backslash-newline pair.
+
+    Args:
+        line: One physical line, without its newline.
+
+    Returns:
+        True when the line ends with an odd number of backslashes, so the
+        last one escapes the newline instead of itself.
+    """
+    return (len(line) - len(line.rstrip('\\'))) % 2 == 1
+
+
 def _end_of_heredoc_body(
-        command: str, start: int, delimiter: str,
-        strip_tabs: bool) -> tuple[int, int] | None:
+        command: str, start: int, delimiter: str, strip_tabs: bool,
+        join_continuations: bool) -> tuple[int, int] | None:
     """
     Find the closing delimiter line of one heredoc body.
 
@@ -469,18 +489,35 @@ def _end_of_heredoc_body(
         start: Index where the body begins (just past a newline).
         delimiter: The delimiter word that ends the body.
         strip_tabs: Whether the '<<-' form allows leading tabs on it.
+        join_continuations: Whether backslash-newline pairs are removed
+            while reading the body, as they are for an unquoted delimiter.
+            A delimiter can then be split over two lines ("EO\\" + "F").
 
     Returns:
-        Tuple (delimiter_start, body_end): the index where the delimiter
-        line begins and the index just past it. None when the body is
-        never closed.
+        Tuple (delimiter_line_start, body_end): the index where the line
+        holding the delimiter begins -- which is where the body ends, and
+        with '<<-' may be a leading tab rather than the delimiter itself
+        -- and the index just past that line. None when the body is never
+        closed.
     """
     line_start = start
     while line_start <= len(command):
-        line_end = command.find('\n', line_start)
-        if line_end == -1:
-            line_end = len(command)
-        line = command[line_start:line_end].removesuffix('\r')
+        # Read one logical line, which may span several physical ones.
+        parts = []
+        scan = line_start
+        while True:
+            line_end = command.find('\n', scan)
+            if line_end == -1:
+                line_end = len(command)
+            part = command[scan:line_end].removesuffix('\r')
+            if (join_continuations and line_end < len(command)
+                    and _ends_with_continuation(part)):
+                parts.append(part[:-1])
+                scan = line_end + 1
+                continue
+            parts.append(part)
+            break
+        line = ''.join(parts)
         if strip_tabs:
             line = line.lstrip('\t')
         if line == delimiter:
@@ -517,12 +554,14 @@ def _heredoc_bodies(
     cursor = start
     expanded_bodies = []
     for delimiter, quoted, strip_tabs, _ in pending:
-        bounds = _end_of_heredoc_body(command, cursor, delimiter, strip_tabs)
+        bounds = _end_of_heredoc_body(
+            command, cursor, delimiter, strip_tabs,
+            join_continuations=not quoted)
         if bounds is None:
             return None
-        delimiter_start, body_end = bounds
+        delimiter_line_start, body_end = bounds
         if not quoted:
-            expanded_bodies.append(command[cursor:delimiter_start])
+            expanded_bodies.append(command[cursor:delimiter_line_start])
         cursor = body_end
     return cursor, expanded_bodies
 
@@ -589,6 +628,13 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
     With an unquoted delimiter (<<EOF) only the body's expansions -- $(...)
     and backticks -- execute.
 
+    Bodies begin after the command line that opens them, which is not the
+    same as the next newline: a backslash-newline continues that line, and
+    a newline inside quotes or inside an unfinished command substitution
+    does not end it. Every heredoc opened on one line is consumed, in
+    order, and a command substitution is its own parsing unit with its own
+    bodies.
+
     Args:
         command: A bash command string, possibly containing heredocs.
 
@@ -611,7 +657,10 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
     quote = None
     # A command substitution is parsed as its own unit, so it has its own
     # command lines and its own heredoc bodies. Track how deep we are in
-    # one, and remember the depth each heredoc was opened at.
+    # one, and remember the depth each heredoc was opened at. Grouping
+    # parentheses are tracked too, so that the ')' of a nested group is not
+    # mistaken for the one closing the substitution.
+    open_parens: list[str] = []
     depth = 0
     in_backtick = False
     # Heredocs opened on the command line now being scanned. Their bodies
@@ -639,6 +688,7 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
             continue
         if (quote is None and command.startswith('$(', index)
                 and not command.startswith('$((', index)):
+            open_parens.append('$(')
             depth += 1
             index += 2
             continue
@@ -648,11 +698,12 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
             in_backtick = not in_backtick
             index += 1
             continue
-        if quote is None and character == ')' and depth > 0 and not in_backtick:
-            depth -= 1
-            # A heredoc whose substitution closed before any newline never
-            # gets a body: bash reads it from inside that substitution.
-            pending = [item for item in pending if item[3] <= depth]
+        if quote is None and character == ')' and open_parens:
+            if open_parens.pop() == '$(':
+                depth -= 1
+                # A heredoc whose substitution closed before any newline
+                # never gets a body: bash reads it from inside there.
+                pending = [item for item in pending if item[3] <= depth]
             index += 1
             continue
         if quote is None and character == '\n' and pending:
@@ -699,6 +750,14 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
             if expansion_end is not None:
                 index = expansion_end
                 continue
+        if quote is None and character == '(':
+            # A grouping or subshell paren. It is not a parsing unit of its
+            # own, but it has to be balanced so that its ')' is not taken
+            # for the one closing a substitution. Checked after the
+            # arithmetic and expansion skips above, which own their parens.
+            open_parens.append('(')
+            index += 1
+            continue
         if (quote is None and command.startswith('<<', index)
                 and not command.startswith('<<<', index)):
             delimiter = _heredoc_delimiter(command, index)
