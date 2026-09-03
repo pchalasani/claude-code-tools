@@ -31,7 +31,7 @@ package, but do **not** push or publish:
 | `make major` | Bump major version (X.0.0) and install |
 | `make release` | Alias for `make patch` |
 
-## Publishing (Python)
+## Publishing claude-code-tools (Python)
 
 These commands do everything needed to prepare a
 PyPI release: bump version, push to GitHub, create
@@ -54,6 +54,38 @@ make publish
 
 Linked worktrees automatically use the primary checkout's `.env`. Set
 `PYPI_ENV_FILE=/path/to/file` to load the token from another dotenv file.
+
+## Standalone Python Packages
+
+Voxtype and Visual Brief have independent versions, git tags, builds, and PyPI
+distributions. See [Publishing](../publishing/) for the complete release flow.
+
+### Voxtype
+
+- `make voxtype-version`: print the current version.
+- `make voxtype-test`: run the package tests.
+- `make voxtype-install`: install the package in editable mode.
+- `make voxtype-build`: build the wheel and source distribution.
+- `make voxtype-release BUMP=patch`: test, bump, commit, tag, push, create the
+  GitHub release, and build. Use `minor` or `major` when needed.
+- `make voxtype-publish`: publish `dist/voxtype-*` to PyPI.
+- `make voxtype-all BUMP=patch`: release and publish in one invocation.
+- `make voxtype-all-patch`: prepare a patch release. The `-minor` and `-major`
+  forms select those version parts.
+
+### Visual Brief
+
+- `make visual-brief-version`: print the current version.
+- `make visual-brief-frontend`: rebuild the committed browser bundles.
+- `make visual-brief-test`: verify the bundle and run the package tests.
+- `make visual-brief-install`: install the package in editable mode.
+- `make visual-brief-build`: verify and build the wheel and source distribution.
+- `make visual-brief-release BUMP=patch`: test, bump, commit, tag, push, create
+  the GitHub release, and build. Use `minor` or `major` when needed.
+- `make visual-brief-publish`: publish `dist/visual_brief-*` to PyPI.
+- `make visual-brief-all BUMP=patch`: release and publish in one invocation.
+- `make visual-brief-all-patch`: prepare a patch release. The `-minor` and
+  `-major` forms select those version parts.
 
 ## Rust Binaries
 

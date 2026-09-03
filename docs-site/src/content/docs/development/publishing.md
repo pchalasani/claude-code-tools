@@ -5,7 +5,17 @@ description: >
   binaries to crates.io.
 ---
 
-## Python Package (PyPI)
+## Python Packages (PyPI)
+
+The repository publishes three independent Python distributions. The root
+package is `claude-code-tools`; `voxtype` and `visual-brief` have their own
+versions, tags, build artifacts, and PyPI releases.
+
+All publish commands load `PYPI_TOKEN` from the primary Git checkout's `.env`
+without printing it. Linked worktrees share that file. To load another dotenv
+file, pass `PYPI_ENV_FILE=/path/to/file` to the publish command.
+
+### claude-code-tools
 
 Use the `all-*` Make commands to prepare a release, then publish:
 
@@ -14,7 +24,7 @@ make all-patch   # or all-minor, all-major
 make publish
 ```
 
-### What the Commands Do
+#### What the Commands Do
 
 Each `all-*` command automatically:
 
@@ -31,16 +41,64 @@ inconsistent lock file stops the build.
 The built package includes its Node dependencies, so users do not need to run
 `npm install`. They need Node.js 18 or newer.
 
-After the build completes, run `make publish` to upload to PyPI. The command
-loads `PYPI_TOKEN` from the primary Git checkout's `.env`, passes it to uv
-without printing it, and requires both wheel and source distributions in
-`dist/`. Linked worktrees therefore share the primary checkout's secret file;
-you do not need to copy `.env` into each worktree.
+After the build completes, run `make publish` to upload to PyPI. It requires
+both wheel and source distributions in `dist/`.
 
-To use another dotenv file, set `PYPI_ENV_FILE`:
+### Voxtype
+
+Prepare a patch release, then publish its wheel and source distribution:
+
+```bash
+make voxtype-all-patch   # or voxtype-all-minor, voxtype-all-major
+make voxtype-publish
+```
+
+The first command runs the Voxtype tests, bumps its independent version,
+updates `uv.lock`, commits the bump, creates and pushes a `voxtype-vX.Y.Z` tag,
+creates the GitHub release, and builds the package. The second command uploads
+only `dist/voxtype-*` to PyPI.
+
+To choose the bump and publish in one invocation, run:
+
+```bash
+make voxtype-all BUMP=patch   # or minor, major
+```
+
+Use `make voxtype-version` to print the current package version.
+
+### Visual Brief
+
+Prepare a patch release, then publish its wheel and source distribution:
+
+```bash
+make visual-brief-all-patch   # or -minor, -major
+make visual-brief-publish
+```
+
+The first command runs the Visual Brief tests, bumps its independent version,
+updates `uv.lock`, commits the bump, creates and pushes a
+`visual-brief-vX.Y.Z` tag, creates the GitHub release, verifies the committed
+browser bundle, and builds the package. The second command uploads only
+`dist/visual_brief-*` to PyPI.
+
+To choose the bump and publish in one invocation, run:
+
+```bash
+make visual-brief-all BUMP=patch   # or minor, major
+```
+
+Use `make visual-brief-version` to print the current package version. Rebuild
+and commit changed browser assets with `make visual-brief-frontend` before
+starting a release.
+
+### Alternate PyPI Credentials
+
+Pass another dotenv file to any publish target when needed:
 
 ```bash
 make publish PYPI_ENV_FILE=~/.config/claude-code-tools/pypi.env
+make voxtype-publish PYPI_ENV_FILE=~/.config/claude-code-tools/pypi.env
+make visual-brief-publish PYPI_ENV_FILE=~/.config/claude-code-tools/pypi.env
 ```
 
 ## Rust Binaries (crates.io)

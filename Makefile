@@ -1,4 +1,4 @@
-.PHONY: install install-gdocs node-ui-deps release patch minor major dev-install help clean publish all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply update-homebrew docs-dev docs-build docs-preview voxtype-version voxtype-test voxtype-install voxtype-build voxtype-release voxtype-publish voxtype-all voxtype-all-patch voxtype-all-minor voxtype-all-major visual-brief-frontend visual-brief-frontend-check visual-brief-test visual-brief-install visual-brief-build visual-brief-release visual-brief-publish
+.PHONY: install install-gdocs node-ui-deps release patch minor major dev-install help clean publish all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply update-homebrew docs-dev docs-build docs-preview voxtype-version voxtype-test voxtype-install voxtype-build voxtype-release voxtype-publish voxtype-all voxtype-all-patch voxtype-all-minor voxtype-all-major visual-brief-version visual-brief-frontend visual-brief-frontend-check visual-brief-test visual-brief-install visual-brief-build visual-brief-release visual-brief-publish visual-brief-all visual-brief-all-patch visual-brief-all-minor visual-brief-all-major
 
 GIT_PRIMARY_WORKTREE := $(realpath $(shell git rev-parse \
 	--path-format=absolute --git-common-dir)/..)
@@ -46,6 +46,8 @@ help:
 	@echo "  make visual-brief-build   - Build visual-brief wheel and sdist"
 	@echo "  make visual-brief-release [BUMP=patch|minor|major] - Release visual-brief"
 	@echo "  make visual-brief-publish - Publish visual-brief artifacts to PyPI"
+	@echo "  make visual-brief-all-patch / -minor / -major - Bump, release, and build (then: make visual-brief-publish)"
+	@echo "  make visual-brief-all [BUMP=...] - Release and publish visual-brief in one shot"
 
 node-ui-deps:
 	@if command -v npm >/dev/null 2>&1; then \
@@ -382,7 +384,9 @@ voxtype-publish:
 		UV_PUBLISH_TOKEN="$$PYPI_TOKEN" uv publish dist/voxtype-*'
 
 # One-shot: bump + tag + push + GitHub release + build + publish to PyPI
-voxtype-all: voxtype-release voxtype-publish
+voxtype-all:
+	@$(MAKE) voxtype-release
+	@$(MAKE) voxtype-publish
 	@echo "voxtype released and published!"
 
 # Named bump aliases mirroring the umbrella's all-patch/minor/major:
@@ -439,6 +443,9 @@ VISUAL_BRIEF_FRONTEND := $(VISUAL_BRIEF_DIR)/frontend
 VISUAL_BRIEF_CODEX := plugins/dynamic-workflow
 VISUAL_BRIEF_STAMP := $(VISUAL_BRIEF_DIR)/tools/frontend_stamp.py
 
+visual-brief-version:
+	@grep '^version' $(VISUAL_BRIEF_PYPROJECT) | head -1 | cut -d'"' -f2
+
 # Rebuild the committed browser and Codex helper bundles. Installing needs no Node.
 visual-brief-frontend:
 	@command -v npm >/dev/null 2>&1 || { \
@@ -466,7 +473,8 @@ visual-brief-frontend-check:
 	@python3 $(VISUAL_BRIEF_STAMP) check
 
 visual-brief-test: visual-brief-frontend-check
-	uv run --package visual-brief pytest $(VISUAL_BRIEF_DIR)/tests -q
+	uv run --package visual-brief pytest \
+		$(VISUAL_BRIEF_DIR)/tests -q
 
 visual-brief-install:
 	uv tool install --force -e $(VISUAL_BRIEF_DIR)
@@ -510,3 +518,19 @@ visual-brief-publish: visual-brief-frontend-check
 			exit 1; \
 		fi; \
 		UV_PUBLISH_TOKEN="$$PYPI_TOKEN" uv publish dist/visual_brief-*'
+
+# One-shot: bump + tag + push + GitHub release + build + publish to PyPI
+visual-brief-all:
+	@$(MAKE) visual-brief-release
+	@$(MAKE) visual-brief-publish
+	@echo "visual-brief released and published!"
+
+# Named bump aliases matching the standalone Voxtype package workflow.
+visual-brief-all-patch:
+	@$(MAKE) visual-brief-release BUMP=patch
+
+visual-brief-all-minor:
+	@$(MAKE) visual-brief-release BUMP=minor
+
+visual-brief-all-major:
+	@$(MAKE) visual-brief-release BUMP=major
