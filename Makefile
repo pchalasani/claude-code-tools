@@ -1,4 +1,4 @@
-.PHONY: install install-gdocs node-ui-deps release patch minor major dev-install help clean publish all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply update-homebrew docs-dev docs-build docs-preview voxtype-version voxtype-test voxtype-install voxtype-build voxtype-release voxtype-publish voxtype-all voxtype-all-patch voxtype-all-minor voxtype-all-major visual-brief-version visual-brief-frontend visual-brief-frontend-check visual-brief-test visual-brief-install visual-brief-build visual-brief-release visual-brief-publish visual-brief-all visual-brief-all-patch visual-brief-all-minor visual-brief-all-major
+.PHONY: release-preflight install install-gdocs node-ui-deps release patch minor major dev-install help clean publish all-patch all-minor all-major release-github lmsh lmsh-install lmsh-publish aichat-search aichat-search-install aichat-search-release aichat-search-patch aichat-search-minor aichat-search-major aichat-search-publish fix-session-metadata fix-session-metadata-apply delete-helper-sessions delete-helper-sessions-apply update-homebrew docs-dev docs-build docs-preview voxtype-version voxtype-test voxtype-install voxtype-build voxtype-release voxtype-publish voxtype-all voxtype-all-patch voxtype-all-minor voxtype-all-major visual-brief-version visual-brief-frontend visual-brief-frontend-check visual-brief-test visual-brief-install visual-brief-build visual-brief-release visual-brief-publish visual-brief-all visual-brief-all-patch visual-brief-all-minor visual-brief-all-major
 
 GIT_PRIMARY_WORKTREE := $(realpath $(shell git rev-parse \
 	--path-format=absolute --git-common-dir)/..)
@@ -84,6 +84,62 @@ install-gdocs: node-ui-deps
 dev-install: node-ui-deps
 	uv pip install -e ".[dev]"
 
+# Refuse to cut a release from anything but an up-to-date, clean main.
+# voxtype 0.1.7 was published to PyPI from a local main that had not
+# pulled a merged fix: the bump commit landed on a stale tree, the push
+# was rejected, the tag never reached GitHub — and the build and upload
+# went ahead regardless. This guard makes that impossible.
+# Source trees that end up inside published artifacts (hatch `include` /
+# `packages`, and the Rust crates). Untracked files here are refused.
+RELEASE_INPUTS := claude_code_tools node_ui docs \
+	packages/voxtype/src packages/visual-brief/src \
+	rust-search-ui/src lmsh/src
+# The umbrella wheel ignores VCS state ([tool.hatch.build] ignore-vcs =
+# true) and ships whatever matches its include GLOBS — claude_code_tools/
+# **/*.py and docs/*.md; the node_ui entries name specific tracked files,
+# which the dirty-tree check already covers. Mirror the globs here.
+UMBRELLA_INCLUDE_ROOTS := claude_code_tools docs
+UMBRELLA_INCLUDE_GLOBS := ^(claude_code_tools/.*\.py|docs/[^/]*\.md)$$
+
+release-preflight:
+	@set -e; \
+	branch=$$(git rev-parse --abbrev-ref HEAD); \
+	if [ "$$branch" != "main" ]; then \
+		echo "ERROR: releases are cut from main (on '$$branch')" >&2; exit 1; \
+	fi; \
+	dirty=$$(git status --porcelain -uno); \
+	if [ -n "$$dirty" ]; then \
+		echo "ERROR: working tree has uncommitted changes" >&2; exit 1; \
+	fi; \
+	: "(untracked files elsewhere are deliberately ignored — this repo" \
+	  "keeps many — but NOT under the packaged source trees below, which" \
+	  "hatch/cargo can ship; every git call here is a plain assignment so" \
+	  "set -e aborts if git itself fails — an empty result is never a pass)"; \
+	stray=$$(git ls-files --others --exclude-standard -- $(RELEASE_INPUTS)); \
+	: "(the umbrella build sets ignore-vcs=true with include globs, so" \
+	  "gitignored files matching those globs would still ship: check" \
+	  "ignored files under the umbrella's include roots, filtered by the" \
+	  "same globs — keep UMBRELLA_INCLUDE_* in step with the" \
+	  "[tool.hatch.build] include list in pyproject.toml)"; \
+	ignored=$$(git ls-files --others --ignored --exclude-standard \
+		-- $(UMBRELLA_INCLUDE_ROOTS)); \
+	ignored=$$(printf '%s\n' "$$ignored" | grep -E '$(UMBRELLA_INCLUDE_GLOBS)' || :); \
+	stray=$$(printf '%s\n%s\n' "$$stray" "$$ignored" | sed '/^$$/d'); \
+	if [ -n "$$stray" ]; then \
+		echo "ERROR: untracked files under packaged sources would ship:" >&2; \
+		echo "$$stray" | sed 's/^/       /' >&2; exit 1; \
+	fi; \
+	git fetch -q origin main; \
+	head=$$(git rev-parse HEAD); \
+	remote=$$(git rev-parse origin/main); \
+	if [ "$$head" != "$$remote" ]; then \
+		echo "ERROR: local main is not origin/main (behind and/or ahead)." >&2; \
+		echo "       git pull --ff-only first; releasing from a stale tree" >&2; \
+		echo "       is how voxtype 0.1.7 shipped without its fix." >&2; \
+		exit 1; \
+	fi; \
+	echo "preflight OK: main is clean and matches origin/main"
+
 release: patch
 
 patch:
@@ -125,7 +181,7 @@ publish:
 		fi; \
 		UV_PUBLISH_TOKEN="$$PYPI_TOKEN" uv publish'
 
-all-patch:
+all-patch: release-preflight
 	@echo "Ensuring dev dependencies (commitizen)..."
 	@uv sync --extra dev --quiet
 	@echo "Bumping patch version..."
@@ -134,14 +190,18 @@ all-patch:
 	git push && git push --tags
 	@echo "Creating GitHub release..."
 	@VERSION=$$(grep "^version" pyproject.toml | head -1 | cut -d'"' -f2); \
-	gh release create v$$VERSION --title "v$$VERSION" || echo "Release v$$VERSION already exists"
+	if gh release view v$$VERSION >/dev/null 2>&1; then \
+		echo "Release v$$VERSION already exists"; \
+	else \
+		gh release create v$$VERSION --title "v$$VERSION"; \
+	fi
 	@echo "Cleaning old builds..."
 	rm -rf dist/*
 	@echo "Building package..."
 	uv build
 	@echo "Build complete! Ready for: make publish"
 
-all-minor:
+all-minor: release-preflight
 	@echo "Ensuring dev dependencies (commitizen)..."
 	@uv sync --extra dev --quiet
 	@echo "Bumping minor version..."
@@ -150,14 +210,18 @@ all-minor:
 	git push && git push --tags
 	@echo "Creating GitHub release..."
 	@VERSION=$$(grep "^version" pyproject.toml | head -1 | cut -d'"' -f2); \
-	gh release create v$$VERSION --title "v$$VERSION" || echo "Release v$$VERSION already exists"
+	if gh release view v$$VERSION >/dev/null 2>&1; then \
+		echo "Release v$$VERSION already exists"; \
+	else \
+		gh release create v$$VERSION --title "v$$VERSION"; \
+	fi
 	@echo "Cleaning old builds..."
 	rm -rf dist/*
 	@echo "Building package..."
 	uv build
 	@echo "Build complete! Ready for: make publish"
 
-all-major:
+all-major: release-preflight
 	@echo "Ensuring dev dependencies (commitizen)..."
 	@uv sync --extra dev --quiet
 	@echo "Bumping major version..."
@@ -166,14 +230,18 @@ all-major:
 	git push && git push --tags
 	@echo "Creating GitHub release..."
 	@VERSION=$$(grep "^version" pyproject.toml | head -1 | cut -d'"' -f2); \
-	gh release create v$$VERSION --title "v$$VERSION" || echo "Release v$$VERSION already exists"
+	if gh release view v$$VERSION >/dev/null 2>&1; then \
+		echo "Release v$$VERSION already exists"; \
+	else \
+		gh release create v$$VERSION --title "v$$VERSION"; \
+	fi
 	@echo "Cleaning old builds..."
 	rm -rf dist/*
 	@echo "Building package..."
 	uv build
 	@echo "Build complete! Ready for: make publish"
 
-release-github:
+release-github: release-preflight
 	@echo "Creating GitHub release..."
 	@VERSION=$$(grep "^version" pyproject.toml | head -1 | cut -d'"' -f2); \
 	gh release create v$$VERSION --title "v$$VERSION"
@@ -196,7 +264,7 @@ lmsh-install: lmsh
 		echo "⚠️  Add ~/.cargo/bin to your PATH if not already there"; \
 	fi
 
-lmsh-publish:
+lmsh-publish: release-preflight
 	@if ! command -v cargo-bump >/dev/null 2>&1; then \
 		echo "Installing cargo-bump..."; \
 		cargo install cargo-bump; \
@@ -234,23 +302,25 @@ define aichat-search-bump
 	fi
 	@echo "Bumping aichat-search $(1) version..."
 	@cd rust-search-ui && cargo bump $(1)
-	@VERSION=$$(grep "^version" rust-search-ui/Cargo.toml | head -1 | cut -d'"' -f2); \
+	@set -e; \
+	VERSION=$$(grep "^version" rust-search-ui/Cargo.toml | head -1 | cut -d'"' -f2); \
 	echo "Creating tag rust-v$$VERSION..."; \
 	git add rust-search-ui/Cargo.toml rust-search-ui/Cargo.lock; \
 	git commit -m "bump: aichat-search v$$VERSION"; \
 	git tag "rust-v$$VERSION"; \
-	git push && git push --tags
+	git push; \
+	git push --tags
 	@echo "Tag pushed! GitHub Actions will build and release binaries."
 	@echo "Check progress at: https://github.com/pchalasani/claude-code-tools/actions"
 endef
 
-aichat-search-patch:
+aichat-search-patch: release-preflight
 	$(call aichat-search-bump,patch)
 
-aichat-search-minor:
+aichat-search-minor: release-preflight
 	$(call aichat-search-bump,minor)
 
-aichat-search-major:
+aichat-search-major: release-preflight
 	$(call aichat-search-bump,major)
 
 # Backwards compatible alias
@@ -350,8 +420,9 @@ voxtype-build:
 
 # Bump (BUMP=patch|minor|major, default patch), commit, tag voxtype-vX.Y.Z,
 # push, create GitHub release, build. Then: make voxtype-publish
-voxtype-release: voxtype-test
-	@BUMP_TYPE=$${BUMP:-patch}; \
+voxtype-release: release-preflight voxtype-test
+	@set -e; \
+	BUMP_TYPE=$${BUMP:-patch}; \
 	OLD=$$(grep '^version' $(VOXTYPE_PYPROJECT) | head -1 | cut -d'"' -f2); \
 	NEW=$$(python3 -c "$$VOXTYPE_BUMP_PY" $$BUMP_TYPE); \
 	echo "Bumping voxtype $$OLD -> $$NEW ($$BUMP_TYPE)..."; \
@@ -360,11 +431,15 @@ voxtype-release: voxtype-test
 	git commit -m "bump: voxtype $$OLD → $$NEW"; \
 	git tag "voxtype-v$$NEW"; \
 	echo "Pushing to GitHub..."; \
-	git push && git push --tags; \
+	git push; \
+	git push --tags; \
 	echo "Creating GitHub release..."; \
-	gh release create "voxtype-v$$NEW" --title "voxtype v$$NEW" \
-		--notes "voxtype $$NEW — install with: uv tool install voxtype" \
-		|| echo "Release voxtype-v$$NEW already exists"
+	if gh release view "voxtype-v$$NEW" >/dev/null 2>&1; then \
+		echo "Release voxtype-v$$NEW already exists"; \
+	else \
+		gh release create "voxtype-v$$NEW" --title "voxtype v$$NEW" \
+			--notes "voxtype $$NEW — install with: uv tool install voxtype"; \
+	fi
 	$(MAKE) voxtype-build
 
 voxtype-publish:
@@ -487,8 +562,9 @@ visual-brief-build: visual-brief-frontend-check
 	uv build --package visual-brief
 	@echo "Build complete! Ready for: make visual-brief-publish"
 
-visual-brief-release: visual-brief-test
-	@BUMP_TYPE=$${BUMP:-patch}; \
+visual-brief-release: release-preflight visual-brief-test
+	@set -e; \
+	BUMP_TYPE=$${BUMP:-patch}; \
 	OLD=$$(grep '^version' $(VISUAL_BRIEF_PYPROJECT) | head -1 | cut -d'"' -f2); \
 	NEW=$$(python3 -c "$$VISUAL_BRIEF_BUMP_PY" $$BUMP_TYPE); \
 	echo "Bumping visual-brief $$OLD -> $$NEW ($$BUMP_TYPE)..."; \
@@ -496,10 +572,14 @@ visual-brief-release: visual-brief-test
 	git add $(VISUAL_BRIEF_PYPROJECT) $(VISUAL_BRIEF_INIT) uv.lock; \
 	git commit -m "bump: visual-brief $$OLD → $$NEW"; \
 	git tag "visual-brief-v$$NEW"; \
-	git push && git push --tags; \
-	gh release create "visual-brief-v$$NEW" --title "visual-brief v$$NEW" \
-		--notes "visual-brief $$NEW — install: uv tool install visual-brief" \
-		|| echo "Release visual-brief-v$$NEW already exists"
+	git push; \
+	git push --tags; \
+	if gh release view "visual-brief-v$$NEW" >/dev/null 2>&1; then \
+		echo "Release visual-brief-v$$NEW already exists"; \
+	else \
+		gh release create "visual-brief-v$$NEW" --title "visual-brief v$$NEW" \
+			--notes "visual-brief $$NEW — install: uv tool install visual-brief"; \
+	fi
 	$(MAKE) visual-brief-build
 
 visual-brief-publish: visual-brief-frontend-check
