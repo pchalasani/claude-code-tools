@@ -405,6 +405,33 @@ class TestStripHeredocBodies(unittest.TestCase):
         command = 'cat <<"A\\\\B"\ndata\nA\\B\nrm -rf /tmp/x\nA\\\\B'
         self.assertEqual(strip_heredoc_bodies(command), (command, []))
 
+    def test_escape_in_a_localized_delimiter_is_not_a_heredoc(self):
+        """$"..." unescapes just like "..." does, so decline there too."""
+        command = 'cat <<$"A\\\\B"\ndata\nA\\B\nrm -rf /tmp/x\nA\\\\B'
+        self.assertEqual(strip_heredoc_bodies(command), (command, []))
+
+    def test_process_substitution_delays_the_body(self):
+        """A newline inside <( ) does not end the line that opened it."""
+        command = "cat <<EOF <(echo x\nrm -rf /tmp/x\n)\nliteral\nEOF"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, ["literal\n"])
+        self.assertIn("rm -rf /tmp/x", stripped)
+        self.assertNotIn("literal", stripped)
+
+    def test_output_process_substitution_delays_the_body(self):
+        """>( ) is a parsing unit of its own just as <( ) is."""
+        command = "cat <<EOF >(cat\nrm -rf /tmp/x\n)\nliteral\nEOF"
+        stripped, _ = strip_heredoc_bodies(command)
+        self.assertIn("rm -rf /tmp/x", stripped)
+
+    def test_paren_pattern_case_inside_a_substitution(self):
+        """The '(x)' pattern form balances, so the substitution stays open."""
+        command = ("cat <<EOF $(case x in (x) echo yes;; esac\n"
+                   "rm -rf /tmp/x\n)\nliteral\nEOF")
+        stripped, _ = strip_heredoc_bodies(command)
+        self.assertIn("rm -rf /tmp/x", stripped)
+        self.assertNotIn("literal", stripped)
+
     def test_delimiter_split_over_a_continued_line(self):
         """An unquoted body loses backslash-newline, so 'EO\\'+'F' ends it."""
         command = "cat <<EOF\ndata\nEO\\\nF\nrm -rf /tmp/x\nEOF"

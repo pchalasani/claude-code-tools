@@ -406,9 +406,11 @@ def _heredoc_delimiter(
             if end is None:
                 return None
             content = command[index + 2:end]
-            if ansi_c and '\\' in content:
-                # Decoding ANSI-C escapes is not worth it here: report no
-                # heredoc, which hands the body to the guards as commands.
+            if '\\' in content:
+                # Both forms unescape: $'...' decodes ANSI-C escapes and
+                # $"..." removes double-quote ones. Rather than replicate
+                # that, report no heredoc, which hands the body to the
+                # guards as commands.
                 return None
             quoted = True
             delimiter_parts.append(content)
@@ -680,8 +682,14 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
                 quote = character
             index += 1
             continue
-        if (quote is None and command.startswith('$(', index)
-                and not command.startswith('$((', index)):
+        if quote is None and (
+                (command.startswith('$(', index)
+                 and not command.startswith('$((', index))
+                or command.startswith('<(', index)
+                or command.startswith('>(', index)):
+            # A command substitution $( ), or a process substitution <( )
+            # or >( ): each is parsed as its own unit, so a newline inside
+            # one does not end the command line that contains it.
             open_parens.append('$(')
             depth += 1
             index += 2

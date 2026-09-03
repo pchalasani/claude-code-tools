@@ -205,6 +205,18 @@ class TestCheckRmCommand(unittest.TestCase):
         blocked, _ = check_rm_command(command)
         self.assertFalse(blocked, "literal rm in the second body is data")
 
+    def test_process_substitution_cannot_hide_rm(self):
+        """The rm runs inside <( ), before the heredoc body starts."""
+        command = "cat <<EOF <(echo x\nrm -rf /tmp/x\n)\nliteral\nEOF"
+        blocked, _ = check_rm_command(command)
+        self.assertTrue(blocked, "rm inside <( ) on the header is a command")
+
+    def test_localized_quote_delimiter_cannot_hide_rm(self):
+        """$\"A\\\\B\" unescapes, so bash ends that body before the rm."""
+        command = 'cat <<$"A\\\\B"\ndata\nA\\B\nrm -rf /tmp/x\nA\\\\B'
+        blocked, _ = check_rm_command(command)
+        self.assertTrue(blocked, "rm after a '$\"A\\\\B\"' body should be blocked")
+
     def test_double_quoted_escape_delimiter_cannot_hide_rm(self):
         """Bash ends that body at 'A\\B', so the next line is a command."""
         command = 'cat <<"A\\\\B"\ndata\nA\\B\nrm -rf /tmp/x\nA\\\\B'
