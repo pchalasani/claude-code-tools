@@ -97,6 +97,12 @@ not need to run the CLI, start a server, or assemble the structured payload.
 You can also ask for a single briefing at any point with “Give me a visual
 brief.”
 
+If you want to reply from the browser in Codex, launch the session with
+[`codex-dynamic`](/claude-code-tools/tools/codex-dynamic/) instead of plain
+`codex` before making that request. Plain Codex can publish the briefing, but
+it cannot receive browser questions as live notifications. Claude Code does
+not require a different launcher.
+
 Under the hood, `visual-brief serve` is a normal long-running CLI process;
 `visual-brief publish` does not start it. The skill makes the agent manage that
 process so this implementation detail stays out of the normal user workflow.
@@ -122,11 +128,12 @@ the row's **Chat** control. Type your question and send it with
 <kbd>Command</kbd> + <kbd>Enter</kbd> on macOS or <kbd>Ctrl</kbd> +
 <kbd>Enter</kbd> elsewhere.
 
-The page keeps your question beside the selected content, shows when the agent
-is working, and places the answer in the same inline thread. This works on the
-latest briefing and on earlier briefings in the ledger. Press `a`, or use the
-**Message agent** control above the latest briefing, when your message is
-about the session as a whole rather than one section.
+When the agent's watcher is connected, the page keeps your question beside the
+selected content, shows when the agent is working, and places the answer in the
+same inline thread. This works on the latest briefing and on earlier briefings
+in the ledger. Press `a`, or use the **Message agent** control above the latest
+briefing, when your message is about the session as a whole rather than one
+section.
 
 ## Manual CLI Workflow
 
