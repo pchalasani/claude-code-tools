@@ -47,6 +47,7 @@ def test_concat_json_arrays_handles_paginated_pages() -> None:
     assert m._concat_json_arrays('[]') == []
     assert m._concat_json_arrays('{"a":1}') is None
     assert m._concat_json_arrays('[1,') is None
+    assert m._concat_json_arrays('') is None  # empty is unknown, not []
 
 
 def test_parse_summary_reads_status_and_sha() -> None:
@@ -95,6 +96,8 @@ def out(name):
         sys.exit(1)
     sys.stdout.write(open(p).read()); sys.exit(0)
 open(os.path.join(d, "calls.log"), "a").write(" ".join(a) + "\n")
+if os.environ.get("FAKE_GH_STALL"):
+    import time; time.sleep(60)  # a hung gh: the hook must not wait for it
 if a[:2] == ["repo", "view"]:
     sys.stdout.write("acme/widgets\n"); sys.exit(0)
 if a[:2] == ["pr", "list"]:
@@ -153,6 +156,16 @@ def _mark_completed(repo: dict, sha: str) -> None:
     (repo["gh"] / "comments.json").write_text("[]" + json.dumps([{"body": body}]))
 
 
+def _expire_cache(repo: dict) -> None:
+    """Drop the 60 s GitHub-result cache but KEEP the once-per-state memory,
+    so tests exercise the dedupe rather than a wiped slate."""
+    f = repo["state"] / "acme__widgets.json"
+    if f.exists():
+        d = json.loads(f.read_text())
+        d.pop("cache", None)
+        f.write_text(json.dumps(d))
+
+
 def _hook(event: str, cwd: Path, **extra) -> dict | None:  # noqa: ANN003
     payload = {"hook_event_name": event, "cwd": str(cwd),
                "session_id": "s1", **extra}
@@ -187,8 +200,8 @@ def test_stop_nudges_again_for_new_head_or_new_threads(repo) -> None:  # noqa: A
     (repo["gh"] / "threads.json").write_text(json.dumps({"data": {"repository": {
         "pullRequest": {"reviewThreads": {
             "pageInfo": {"hasNextPage": False, "endCursor": None},
-            "nodes": [{"isResolved": False}]}}}}}))
-    (repo["state"] / "acme__widgets.json").unlink()  # drop the 60 s cache
+            "nodes": [{"id": "T1", "isResolved": False}]}}}}}))
+    _expire_cache(repo)
     out = _hook("Stop", repo["root"])
     assert out is not None and "1 unresolved review thread" in out["reason"]
     # ...and only once for that state.
@@ -211,6 +224,33 @@ def test_stop_nudges_again_after_a_push_moves_the_head(repo) -> None:  # noqa: A
     assert "no completed Codex review of the current head" in out["reason"]
     assert "@codex review" in out["reason"]
     assert _hook("Stop", repo["root"]) is None  # once per state
+
+
+def test_swapped_thread_same_count_is_a_new_state(repo) -> None:  # noqa: ANN001
+    """Resolve one thread, get another: count unchanged, finding is new."""
+    def threads(*ids):  # noqa: ANN002, ANN202
+        (repo["gh"] / "threads.json").write_text(json.dumps({"data": {"repository": {
+            "pullRequest": {"reviewThreads": {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [{"id": i, "isResolved": False} for i in ids]}}}}}))
+        _expire_cache(repo)
+
+    _mark_completed(repo, repo["head"])
+    threads("T1")
+    assert _hook("Stop", repo["root"]) is not None
+    assert _hook("Stop", repo["root"]) is None
+    threads("T2")  # T1 resolved, T2 appeared: still exactly one unresolved
+    out = _hook("Stop", repo["root"])
+    assert out is not None and "1 unresolved review thread" in out["reason"]
+    # And the dedupe memory survived: T1's key is still recorded.
+    state = json.loads((repo["state"] / "acme__widgets.json").read_text())
+    assert any(k.endswith(":T1") for k in state["nudged"])
+    assert any(k.endswith(":T2") for k in state["nudged"])
+
+
+def test_empty_gh_output_is_silence_not_a_nudge(repo) -> None:  # noqa: ANN001
+    (repo["gh"] / "comments.json").write_text("")  # gh "succeeded" with nothing
+    assert _hook("Stop", repo["root"]) is None
 
 
 def test_stop_never_nudges_while_already_continuing(repo) -> None:  # noqa: ANN001
@@ -237,6 +277,25 @@ def test_stop_silent_when_gh_is_broken(repo, tmp_path, monkeypatch) -> None:  # 
     only_git.mkdir()
     (only_git / "git").symlink_to(git)
     monkeypatch.setenv("PATH", str(only_git))  # git yes, gh no
+    assert _hook("Stop", repo["root"]) is None
+
+
+def test_stop_returns_within_budget_when_gh_hangs(repo, monkeypatch) -> None:  # noqa: ANN001
+    """A hung gh must not make the hook hang: every call is bounded and
+    the whole check finishes inside the host's hook timeout."""
+    import time
+
+    monkeypatch.setenv("FAKE_GH_STALL", "1")
+    t0 = time.monotonic()
+    assert _hook("Stop", repo["root"]) is None
+    assert time.monotonic() - t0 < 19  # hooks.json gives Stop 20 s
+
+
+def test_unwritable_state_means_silence_not_a_repeating_nudge(
+    repo, monkeypatch,  # noqa: ANN001
+) -> None:
+    monkeypatch.setenv("CODEX_REVIEW_NUDGE_STATE", "/dev/null/nope")
+    assert _hook("Stop", repo["root"]) is None
     assert _hook("Stop", repo["root"]) is None
 
 

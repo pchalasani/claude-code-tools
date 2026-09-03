@@ -152,6 +152,8 @@ def _concat_json_arrays(text: str) -> list | None:
     """Flatten ``gh api --paginate`` output: pages arrive as JSON arrays
     concatenated back to back (``[...][...]``). Works on every gh version
     (``--slurp`` does not). None if the text is not well-formed."""
+    if not text.strip():
+        return None  # nothing came back: unknown, never "no comments"
     dec = json.JSONDecoder()
     i, n, items = 0, len(text), []
     while i < n:
@@ -192,22 +194,22 @@ def parse_summary(body: str) -> tuple[str | None, str | None]:
     return None, None
 
 
-def open_prs_on_local_branches(root: str, cwd: str) -> list[dict]:
-    """Open PRs by the user whose head branch is checked out locally."""
+def open_prs_on_local_branches(root: str, cwd: str) -> tuple[list[dict], list[dict]]:
+    """(PRs on locally checked-out branches, all open PRs) by the user."""
     branches = _worktree_branches(root)
     prs = _gh_json(
         [
             "pr", "list", "--author", "@me", "--state", "open",
+            # gh pr list does not paginate; 200 open PRs by one author is
+            # beyond any real workflow, so truncation is accepted here.
             "--limit", "200", "--json", "number,headRefName,headRefOid,url",
         ],
         cwd=cwd,
     )
     if not isinstance(prs, list):
-        return []
-    return [
-        p for p in prs
-        if isinstance(p, dict) and p.get("headRefName") in branches
-    ]
+        return [], []
+    prs = [p for p in prs if isinstance(p, dict)]
+    return [p for p in prs if p.get("headRefName") in branches], prs
 
 
 def codex_status(slug: str, number: int, cwd: str) -> dict | None:
@@ -232,21 +234,23 @@ def codex_status(slug: str, number: int, cwd: str) -> dict | None:
     ]
     status, sha = parse_summary(bodies[-1]) if bodies else (None, None)
     owner, repo = slug.split("/", 1)
-    unresolved = 0
+    unresolved_ids: list[str] = []
     cursor = ""
     for _page in range(10):  # 1000 threads is far beyond any real PR
         after = f', after:"{cursor}"' if cursor else ""
         q = (
             '{repository(owner:"%s",name:"%s"){pullRequest(number:%d){'
             "reviewThreads(first:100%s){pageInfo{hasNextPage endCursor}"
-            "nodes{isResolved}}}}}" % (owner, repo, number, after)
+            "nodes{id isResolved}}}}}" % (owner, repo, number, after)
         )
         threads = _gh_json(["api", "graphql", "-f", f"query={q}"], cwd=cwd)
         if not isinstance(threads, dict):
             return None
         try:
             rt = threads["data"]["repository"]["pullRequest"]["reviewThreads"]
-            unresolved += sum(1 for n in rt["nodes"] if not n.get("isResolved"))
+            unresolved_ids += [
+                str(n.get("id")) for n in rt["nodes"] if not n.get("isResolved")
+            ]
             if not rt["pageInfo"]["hasNextPage"]:
                 break
             cursor = rt["pageInfo"]["endCursor"]
@@ -254,7 +258,12 @@ def codex_status(slug: str, number: int, cwd: str) -> dict | None:
             return None
     else:
         return None  # more pages than we will read: cannot tell
-    return {"status": status, "reviewed_sha": sha, "unresolved": unresolved}
+    return {
+        "status": status,
+        "reviewed_sha": sha,
+        "unresolved": len(unresolved_ids),
+        "unresolved_ids": sorted(unresolved_ids),
+    }
 
 
 def needs_nudge(pr: dict, st: dict) -> str | None:
@@ -293,11 +302,22 @@ class _StateLock:
     def __enter__(self) -> "_StateLock":
         try:
             STATE_DIR.mkdir(parents=True, exist_ok=True)
-            self._fh = open(self._path, "a")
-            fcntl.flock(self._fh, fcntl.LOCK_EX)
+            fh = open(self._path, "a")
         except OSError:
-            self._fh = None  # no lock: worst case one duplicate nudge
-        return self
+            return self  # no lock: worst case one duplicate nudge
+        # Never block on the lock: try briefly, then proceed unlocked.
+        # A stuck holder must not make this hook overrun its deadline.
+        give_up = time.monotonic() + 2.0
+        while True:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self._fh = fh
+                return self
+            except OSError:
+                if time.monotonic() > give_up:
+                    fh.close()
+                    return self
+                time.sleep(0.05)
 
     def __exit__(self, *exc) -> None:  # noqa: ANN002
         if self._fh is not None:
@@ -316,19 +336,24 @@ def _load_state(slug: str) -> dict:
         return {}
 
 
-def _save_state(slug: str, data: dict) -> None:
+def _save_state(slug: str, data: dict) -> bool:
+    """Persist state; False when it could not be written."""
     try:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         tmp = _state_path(slug).with_suffix(f".{os.getpid()}.tmp")
         tmp.write_text(json.dumps(data))
         os.replace(tmp, _state_path(slug))
+        return True
     except OSError:
-        pass  # losing the dedupe only risks one extra nudge
+        return False
 
 
 def state_key(pr: dict, st: dict) -> str:
-    head7 = str(pr.get("headRefOid") or "")[:7]
-    return f"{pr.get('number')}@{head7}:{st.get('unresolved', 0)}:{st.get('status')}"
+    head = str(pr.get("headRefOid") or "")  # full SHA: prefixes can collide
+    # Thread IDENTITIES, not a count: one resolved plus one new is a new
+    # state even though the count is unchanged.
+    ids = ",".join(st.get("unresolved_ids") or [])
+    return f"{pr.get('number')}@{head}:{st.get('status')}:{ids}"
 
 
 # -- events --------------------------------------------------------------------
@@ -380,10 +405,12 @@ def handle_stop(payload: dict) -> int:
     slug = _github_slug(root)
     if not slug:
         return 0
-    prs = open_prs_on_local_branches(root, cwd)
+    prs, all_open = open_prs_on_local_branches(root, cwd)
     if not prs:
         return 0
-    open_numbers = {str(p.get("number")) for p in prs}
+    # Prune against EVERY open PR, so removing a worktree does not erase
+    # a PR's once-per-state memory (it would re-nudge on re-checkout).
+    open_numbers = {str(p.get("number")) for p in all_open}
     with _StateLock(slug):
         state = _load_state(slug)
         cache = state.get("cache") if isinstance(state.get("cache"), dict) else {}
@@ -393,8 +420,9 @@ def handle_stop(payload: dict) -> int:
         for pr in prs:
             if time.monotonic() > _DEADLINE[0]:
                 break  # out of time: report what we have, never overrun
-            head7 = str(pr.get("headRefOid") or "")[:7]
-            ckey = f"{pr.get('number')}@{head7}"
+            head = str(pr.get("headRefOid") or "")
+            head7 = head[:7]
+            ckey = f"{pr.get('number')}@{head}"
             entry = cache.get(ckey)
             if isinstance(entry, dict) and now - float(entry.get("t", 0)) < _CACHE_TTL:
                 st = entry.get("st")
@@ -419,8 +447,13 @@ def handle_stop(payload: dict) -> int:
         # its once-per-state memory for as long as it stays open.
         nudged = {k: v for k, v in nudged.items() if k.split("@", 1)[0] in open_numbers}
         cache = {k: v for k, v in cache.items() if k.split("@", 1)[0] in open_numbers}
-        _save_state(slug, {"cache": cache, "nudged": nudged})
+        saved = _save_state(slug, {"cache": cache, "nudged": nudged})
     if not lines:
+        return 0
+    if not saved:
+        # Without the once-per-state memory a nudge would repeat on every
+        # stop, which is the one thing this hook must never do: stay
+        # silent instead.
         return 0
     msg = (
         "Codex review nudge (one-time for this PR state; stopping again "
