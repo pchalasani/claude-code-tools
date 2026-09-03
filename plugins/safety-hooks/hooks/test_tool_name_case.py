@@ -58,6 +58,10 @@ def run_hook(script: str, payload: dict, cwd: str) -> dict:
     # The commit hook has an escape hatch; keep it out of these tests so
     # a developer's shell cannot mask a real regression.
     env.pop("CCTOOLS_ALLOW_GIT", None)
+    # bash_hook.py resolves its sibling modules through CLAUDE_PLUGIN_ROOT
+    # when that is set. Drop it so these tests always exercise the hooks
+    # checked out next to this file, not an installed copy of the plugin.
+    env.pop("CLAUDE_PLUGIN_ROOT", None)
 
     result = subprocess.run(
         [sys.executable, str(HOOKS_DIR / script)],
