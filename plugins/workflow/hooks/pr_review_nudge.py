@@ -50,7 +50,53 @@ STATE_DIR = Path(
 
 # Commands that make a PR appear or change on GitHub.
 _PR_CREATE_RE = re.compile(r"\bgh\s+pr\s+create\b")
-_GIT_PUSH_RE = re.compile(r"\bgit\s+push\b")
+_GIT_PUSH_RE = re.compile(r"\bgit\s+push\b(?P<rest>[^|;&\n]*)")
+# push options that consume the next token
+_PUSH_VALUE_OPTS = {"-o", "--push-option", "--receive-pack", "--exec", "--repo"}
+
+
+def pushed_branches(cmd: str, cwd: str) -> list[str]:
+    """Branches a ``git push`` command sent, from its refspecs when given.
+
+    ``git push origin a b`` pushes ``a`` and ``b`` (dst of ``src:dst``
+    when a refspec is written), not the checked-out branch; only a bare
+    ``git push`` means the current branch. Options, their values, and
+    shell redirections are skipped. Best-effort: unrecognised forms fall
+    back to the current branch.
+    """
+    m = _GIT_PUSH_RE.search(cmd)
+    if not m:
+        return []
+    try:
+        import shlex
+
+        tokens = shlex.split(m.group("rest"))
+    except ValueError:
+        tokens = m.group("rest").split()
+    words: list[str] = []
+    skip = False
+    for tok in tokens:
+        if skip:
+            skip = False
+            continue
+        if tok in _PUSH_VALUE_OPTS:
+            skip = True
+            continue
+        if tok.startswith("-") or tok.startswith((">", "<", "2>")):
+            continue
+        words.append(tok)
+    # words: [remote, refspec...]
+    branches = []
+    for spec in words[1:]:
+        dst = spec.split(":", 1)[1] if ":" in spec else spec
+        dst = dst.replace("refs/heads/", "")
+        if dst and dst != "HEAD" and not dst.startswith("+"):
+            branches.append(dst)
+    if branches:
+        return branches
+    cur = _current_branch(cwd)
+    return [cur] if cur else []
+
 
 _LOOP_INSTRUCTIONS = (
     "Run the GitHub Codex review loop (github-codex-review skill): watch "
@@ -376,20 +422,22 @@ def handle_post_tool_use(payload: dict) -> int:
         )
         return 0
     if _GIT_PUSH_RE.search(cmd):
-        branch = _current_branch(cwd)
-        if not branch:
-            return 0
-        prs = _gh_json(
-            ["pr", "list", "--head", branch, "--state", "open", "--json", "number,url"],
-            cwd=cwd,
-        )
-        if isinstance(prs, list) and prs:
-            n = prs[0].get("number")
+        hits = []
+        for branch in pushed_branches(cmd, cwd)[:3]:
+            prs = _gh_json(
+                ["pr", "list", "--head", branch, "--author", "@me",
+                 "--state", "open", "--json", "number,url"],
+                cwd=cwd,
+            )
+            if isinstance(prs, list) and prs:
+                hits.append(f"#{prs[0].get('number')}")
+        if hits:
             _emit_context(
                 "PostToolUse",
-                f"You pushed to the branch of open PR #{n}. Codex reviews "
-                "are per head: comment '@codex review' on the PR to get a "
-                "fresh review of what you just pushed, then continue the loop.",
+                f"You pushed to the branch of open PR {', '.join(hits)}. "
+                "Codex reviews are per head: comment '@codex review' on the "
+                "PR to get a fresh review of what you just pushed, then "
+                "continue the loop.",
             )
     return 0
 

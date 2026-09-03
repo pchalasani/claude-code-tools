@@ -1,6 +1,6 @@
 {
   "name": "workflow",
-  "version": "1.14.0",
+  "version": "1.15.0",
   "description": "Workflow skills, agents, and hooks: code-walk-thru, log-work, make-issue-spec, socratic-quiz skills; ui-tester agent; a Codex review-loop nudge hook for open pull requests",
   "author": {
     "name": "Prasad Chalasani"

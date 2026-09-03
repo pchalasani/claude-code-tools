@@ -315,6 +315,34 @@ def test_post_tool_use_nudges_on_pr_create_and_push(repo) -> None:  # noqa: ANN0
                  tool_input={"command": "ls -la"}) is None
 
 
+@pytest.mark.parametrize(
+    "cmd,expect",
+    [
+        ("git push", ["feat/x"]),  # bare: current branch
+        ("git push -u origin feat/x", ["feat/x"]),
+        ("git push origin other-branch", ["other-branch"]),
+        ("git push origin HEAD:refs/heads/dst-branch", ["dst-branch"]),
+        ("git push --force-with-lease origin topic", ["topic"]),
+        ("git push origin main && echo done", ["main"]),
+        ("git push origin feat/x\necho done", ["feat/x"]),  # multiline
+        ("git push origin feat/x -o ci.skip", ["feat/x"]),  # option value
+        ("git push origin feat/x >/tmp/push.log 2>&1", ["feat/x"]),  # redirect
+        ("git push origin branch-a branch-b", ["branch-a", "branch-b"]),
+    ],
+)
+def test_pushed_branches_read_the_refspecs(repo, cmd, expect) -> None:  # noqa: ANN001
+    m = _load_module()
+    assert m.pushed_branches(cmd, str(repo["root"])) == expect
+
+
+def test_push_reminder_is_scoped_to_my_prs(repo) -> None:  # noqa: ANN001
+    _hook("PostToolUse", repo["root"], tool_name="Bash",
+          tool_input={"command": "git push origin feat/x"})
+    calls = (repo["gh"] / "calls.log").read_text()
+    head_call = [c for c in calls.splitlines() if "--head" in c][-1]
+    assert "--author @me" in head_call and "--head feat/x" in head_call
+
+
 def test_garbage_input_is_harmless() -> None:
     for raw in ("", "not json", "[]", json.dumps({"hook_event_name": "Weird"})):
         proc = subprocess.run([sys.executable, str(HOOK)], input=raw,
