@@ -147,9 +147,33 @@ visual-brief serve --port 8765
 
 `new` creates the run and prints its local URLs; it does not start the server.
 Run the separate `serve` command in another terminal and leave it running; it
-starts the shared loopback daemon. Then publish a structured update with
-`visual-brief publish --run <RUN> --file report.json`, using the run ID printed
-by `new`.
+starts the shared loopback daemon. A minimal `report.json` is:
+
+```json
+{
+  "id": "parser-check",
+  "timestamp": "2026-08-04T12:00:00Z",
+  "headline": "The parser check is complete",
+  "summary": "The focused checks pass.",
+  "lanes": [
+    {
+      "id": "results",
+      "name": "Results",
+      "items": [
+        {
+          "id": "focused-checks",
+          "glance": "The focused parser checks pass.",
+          "explanation": "The implementation matches the expected behavior.",
+          "trust": "verified-by-me"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Publish it with `visual-brief publish --run <RUN> --file report.json`, using the
+run ID printed by `new`.
 
 ## How Page Questions Reach the Agent
 
