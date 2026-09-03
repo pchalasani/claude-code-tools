@@ -30,15 +30,21 @@ def test_visual_brief_has_voxtype_release_target_parity() -> None:
     }
 
     assert expected <= targets
-    assert re.search(
-        r"^visual-brief-all:\s+visual-brief-release\s+visual-brief-publish$",
-        text,
-        flags=re.MULTILINE,
-    )
     for part in ("patch", "minor", "major"):
         recipe = rf"visual-brief-all-{part}:\n\t@\$\(MAKE\) "
         recipe += rf"visual-brief-release BUMP={part}"
         assert re.search(rf"^{recipe}$", text, flags=re.MULTILINE)
+
+
+def test_standalone_one_shot_releases_before_publishing() -> None:
+    """Parallel Make must not publish stale standalone-package artifacts."""
+    text = MAKEFILE.read_text()
+
+    for package in ("voxtype", "visual-brief"):
+        recipe = rf"^{package}-all:\n"
+        recipe += rf"\t@\$\(MAKE\) {package}-release\n"
+        recipe += rf"\t@\$\(MAKE\) {package}-publish$"
+        assert re.search(recipe, text, flags=re.MULTILINE)
 
 
 def test_visual_brief_release_conveniences_appear_in_help() -> None:

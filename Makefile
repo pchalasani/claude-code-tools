@@ -384,7 +384,9 @@ voxtype-publish:
 		UV_PUBLISH_TOKEN="$$PYPI_TOKEN" uv publish dist/voxtype-*'
 
 # One-shot: bump + tag + push + GitHub release + build + publish to PyPI
-voxtype-all: voxtype-release voxtype-publish
+voxtype-all:
+	@$(MAKE) voxtype-release
+	@$(MAKE) voxtype-publish
 	@echo "voxtype released and published!"
 
 # Named bump aliases mirroring the umbrella's all-patch/minor/major:
@@ -518,7 +520,9 @@ visual-brief-publish: visual-brief-frontend-check
 		UV_PUBLISH_TOKEN="$$PYPI_TOKEN" uv publish dist/visual_brief-*'
 
 # One-shot: bump + tag + push + GitHub release + build + publish to PyPI
-visual-brief-all: visual-brief-release visual-brief-publish
+visual-brief-all:
+	@$(MAKE) visual-brief-release
+	@$(MAKE) visual-brief-publish
 	@echo "visual-brief released and published!"
 
 # Named bump aliases matching the standalone Voxtype package workflow.
