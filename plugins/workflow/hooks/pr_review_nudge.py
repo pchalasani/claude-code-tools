@@ -28,7 +28,6 @@ hash-trusts the entry script only.
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import re
@@ -36,6 +35,11 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+try:  # POSIX only; without it the state lock is simply skipped
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
 
 _MAX_STDIN_BYTES = 1_000_000
 _GH_TIMEOUT = 6.0  # seconds per gh call
@@ -88,9 +92,10 @@ def pushed_branches(cmd: str, cwd: str) -> list[str]:
     # words: [remote, refspec...]
     branches = []
     for spec in words[1:]:
+        spec = spec.lstrip("+")  # "+branch" is the force marker
         dst = spec.split(":", 1)[1] if ":" in spec else spec
         dst = dst.replace("refs/heads/", "")
-        if dst and dst != "HEAD" and not dst.startswith("+"):
+        if dst and dst != "HEAD":
             branches.append(dst)
     if branches:
         return branches
@@ -346,6 +351,8 @@ class _StateLock:
         self._fh = None
 
     def __enter__(self) -> "_StateLock":
+        if fcntl is None:
+            return self  # no flock on this platform: run unlocked
         try:
             STATE_DIR.mkdir(parents=True, exist_ok=True)
             fh = open(self._path, "a")
@@ -416,6 +423,7 @@ def handle_post_tool_use(payload: dict) -> int:
     if not isinstance(cmd, str):
         return 0
     cwd = payload.get("cwd") or os.getcwd()
+    _DEADLINE[:] = [time.monotonic() + 10.0]  # hooks.json allows 15 s
     if _PR_CREATE_RE.search(cmd):
         _emit_context(
             "PostToolUse", "A pull request was just created. " + _LOOP_INSTRUCTIONS

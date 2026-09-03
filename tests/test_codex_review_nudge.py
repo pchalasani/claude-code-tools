@@ -291,6 +291,18 @@ def test_stop_returns_within_budget_when_gh_hangs(repo, monkeypatch) -> None:  #
     assert time.monotonic() - t0 < 19  # hooks.json gives Stop 20 s
 
 
+def test_push_lookups_finish_inside_the_post_tool_use_timeout(
+    repo, monkeypatch,  # noqa: ANN001
+) -> None:
+    import time
+
+    monkeypatch.setenv("FAKE_GH_STALL", "1")
+    t0 = time.monotonic()
+    assert _hook("PostToolUse", repo["root"], tool_name="Bash",
+                 tool_input={"command": "git push origin a b c"}) is None
+    assert time.monotonic() - t0 < 14  # hooks.json gives PostToolUse 15 s
+
+
 def test_unwritable_state_means_silence_not_a_repeating_nudge(
     repo, monkeypatch,  # noqa: ANN001
 ) -> None:
@@ -328,6 +340,7 @@ def test_post_tool_use_nudges_on_pr_create_and_push(repo) -> None:  # noqa: ANN0
         ("git push origin feat/x -o ci.skip", ["feat/x"]),  # option value
         ("git push origin feat/x >/tmp/push.log 2>&1", ["feat/x"]),  # redirect
         ("git push origin branch-a branch-b", ["branch-a", "branch-b"]),
+        ("git push origin +other-branch", ["other-branch"]),  # force marker
     ],
 )
 def test_pushed_branches_read_the_refspecs(repo, cmd, expect) -> None:  # noqa: ANN001
