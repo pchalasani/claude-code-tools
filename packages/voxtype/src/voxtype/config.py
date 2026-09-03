@@ -80,6 +80,20 @@ VALID_MODEL_ARCHS = (
     "medium-streaming",
 )
 
+# Modifier keys that may serve as a double-tap toggle trigger. Must stay
+# in sync with hotkey.DOUBLE_TAP_KEYS (a test enforces it); kept here so
+# config validation never imports the (pynput-backed) hotkey module.
+VALID_DOUBLE_TAP_KEYS = (
+    "left_alt",
+    "right_alt",
+    "left_cmd",
+    "right_cmd",
+    "left_ctrl",
+    "right_ctrl",
+    "left_shift",
+    "right_shift",
+)
+
 
 @dataclass
 class Config:
@@ -111,6 +125,8 @@ class Config:
             shape (1.0 = default; higher = more flexible, calmer < 1.0).
         overlay_speed: Overall animation speed multiplier (1.0 =
             default; lower = slower/gentler motion).
+        overlay_opacity: Whole-ghost opacity, 0.1 (barely there) to
+            1.0 (as drawn). Lower it if the ghost hides text under it.
         keepalive_minutes: Re-decode a short silent clip after this
             many minutes without a decode (parakeet-mlx only). Under
             system-wide memory pressure macOS evicts an idle model to
@@ -124,6 +140,14 @@ class Config:
             only).
         language: Language tag understood by Moonshine (e.g. "en").
         hotkey: Global toggle hotkey in pynput syntax, e.g. "<ctrl>+;".
+        double_tap_key: A second way to toggle recording, alongside
+            ``hotkey``: tap this modifier key twice, alone (e.g.
+            "right_alt" — the right Option key — for laptop use where
+            a chord is awkward). One of VALID_DOUBLE_TAP_KEYS; empty
+            disables. The key is never swallowed, so it keeps working
+            as a modifier; macOS only.
+        double_tap_ms: Maximum gap between the two taps, press to
+            press, in milliseconds (50–2000).
         wake_word: Phrase that activates dictation in "wake" mode.
         wake_word_aliases: Alternate spellings the transcriber may
             produce for the wake word (e.g. "claud", "clawed"); any
@@ -165,10 +189,13 @@ class Config:
     overlay: bool = True
     overlay_flex: float = 1.0
     overlay_speed: float = 1.0
+    overlay_opacity: float = 1.0
     keepalive_minutes: float = 0.0
     model_arch: str = "medium-streaming"
     language: str = "en"
     hotkey: str = "<ctrl>+;"
+    double_tap_key: str = ""
+    double_tap_ms: float = 400
     wake_word: str = "claude"
     wake_word_aliases: list[str] = field(default_factory=list)
     stop_phrase: str = "stop listening"
@@ -266,6 +293,40 @@ class Config:
                 raise ValueError(
                     f"{name} must be between 0 and 5, got {value!r}"
                 )
+        if (
+            isinstance(self.overlay_opacity, bool)
+            or not isinstance(self.overlay_opacity, (int, float))
+            or (
+                isinstance(self.overlay_opacity, float)
+                and not math.isfinite(self.overlay_opacity)
+            )
+            or not 0.1 <= self.overlay_opacity <= 1.0
+        ):
+            raise ValueError(
+                "overlay_opacity must be a number between 0.1 and 1.0, "
+                f"got {self.overlay_opacity!r}"
+            )
+        if not isinstance(self.double_tap_key, str) or (
+            self.double_tap_key and
+            self.double_tap_key not in VALID_DOUBLE_TAP_KEYS
+        ):
+            raise ValueError(
+                f"double_tap_key must be empty or one of "
+                f"{VALID_DOUBLE_TAP_KEYS}, got {self.double_tap_key!r}"
+            )
+        if (
+            isinstance(self.double_tap_ms, bool)
+            or not isinstance(self.double_tap_ms, (int, float))
+            or (
+                isinstance(self.double_tap_ms, float)
+                and not math.isfinite(self.double_tap_ms)
+            )
+            or not 50 <= self.double_tap_ms <= 2000
+        ):
+            raise ValueError(
+                "double_tap_ms must be a number of milliseconds between "
+                f"50 and 2000, got {self.double_tap_ms!r}"
+            )
         if isinstance(self.keepalive_minutes, bool) or not isinstance(
             self.keepalive_minutes, (int, float)
         ):
@@ -427,6 +488,9 @@ overlay = true
 overlay_flex = 1.0
 # Overall animation speed (lower = slower, gentler motion).
 overlay_speed = 1.0
+# Whole-ghost opacity, 0.1–1.0. Lower it (e.g. 0.6) if the ghost hides
+# the text underneath it.
+overlay_opacity = 1.0
 
 # Remove standalone filler words (uh, um, ...) from typed text.
 strip_fillers = true
@@ -453,6 +517,15 @@ language = "en"
 # Global toggle hotkey, pynput syntax. Examples: "<ctrl>+;",
 # "<ctrl>+<alt>+d", "<cmd>+<shift>+v"
 hotkey = "<ctrl>+;"
+
+# A second way to toggle recording (macOS): tap a modifier key twice,
+# on its own — handy on the laptop keyboard where a chord is awkward.
+# One of: left_alt right_alt left_cmd right_cmd left_ctrl right_ctrl
+# left_shift right_shift ("alt" is the Option key). The key still works
+# normally as a modifier. Empty disables.
+double_tap_key = ""
+# Max gap between the two taps, press to press, in milliseconds.
+double_tap_ms = 400
 
 # Wake word / stop phrase. The wake word is used in "wake" mode; the
 # stop phrase deactivates dictation wherever utterances are

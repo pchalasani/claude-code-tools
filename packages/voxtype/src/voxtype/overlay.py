@@ -49,6 +49,7 @@ def run_overlay(  # noqa: PLR0913
     on_ready: Callable[[], None] | None = None,
     flex: float = 1.0,
     speed: float = 1.0,
+    opacity: float = 1.0,
 ) -> None:
     """Show the ghost and block until ``stopped()`` returns True.
 
@@ -63,6 +64,10 @@ def run_overlay(  # noqa: PLR0913
             after AppKit is fully up, so the loop can't race and kill it.
         flex: Face shape-flex multiplier (config overlay_flex).
         speed: Animation speed multiplier (config overlay_speed).
+        opacity: Whole-panel alpha, 0.1–1.0 (config overlay_opacity).
+            Applied at the window level so every element — halo,
+            body, face — scales together and the drawing code keeps
+            its own per-element alphas.
 
     SIGINT is redirected to a flag-friendly handler while the loop
     runs (AppKit's run loop would otherwise swallow Ctrl+C), and
@@ -372,6 +377,7 @@ def run_overlay(  # noqa: PLR0913
     panel.setLevel_(AppKit.NSStatusWindowLevel)
     panel.setOpaque_(False)
     panel.setBackgroundColor_(NSColor.clearColor())
+    panel.setAlphaValue_(float(opacity))
     panel.setIgnoresMouseEvents_(True)
     panel.setHasShadow_(True)
     panel.setCollectionBehavior_(

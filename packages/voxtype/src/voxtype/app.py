@@ -585,6 +585,7 @@ class VoiceTypeApp:
                 on_ready=self._start_hotkeys_from_loop,
                 flex=self.cfg.overlay_flex,
                 speed=self.cfg.overlay_speed,
+                opacity=self.cfg.overlay_opacity,
             )
             return result["code"]
         while not self._stop.is_set():
@@ -667,16 +668,35 @@ class VoiceTypeApp:
                 )
                 continue
             bindings.append(binding)
-        if not bindings:
+        double_tap = None
+        if self.cfg.double_tap_key:
+            # Second toggle trigger: two taps of a lone modifier key
+            # (validated by Config, so no per-binding try here).
+            double_tap = (
+                self.cfg.double_tap_key,
+                self.cfg.double_tap_ms,
+                self.toggle,
+            )
+        if not bindings and double_tap is None:
             self._status("no valid hotkeys configured; hotkeys disabled")
             return None
         try:
-            return start_hotkeys(bindings)
+            listener = start_hotkeys(bindings, double_tap=double_tap)
         except ValueError as e:
             self._status(
                 f"invalid hotkey config ({e}); hotkeys disabled"
             )
             return None
+        if double_tap is not None and getattr(
+            listener, "double_tap_active", False
+        ):
+            # Only claim it when the listener actually armed it: the
+            # non-tap fallback reports the omission itself.
+            self._status(
+                f"double-tap {self.cfg.double_tap_key} also toggles "
+                "recording"
+            )
+        return listener
 
     @staticmethod
     def _status(msg: str) -> None:
