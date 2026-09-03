@@ -359,5 +359,19 @@ Settings → Privacy & Security), once each:
 - Quiet dynamic mic (Shure MV7 class)? Automatic
   gain control is built in; if speech still isn't
   detected, move closer to the mic.
+- `take was silent (...): microphone muted, held by
+  another app, or its stream went stale — reopening
+  the microphone`? voxtype measured no signal at all
+  during that take (a dead mic reads about a
+  millionth of full scale; even a quiet room reads a
+  thousand times more). Two known causes: a meeting
+  app (Zoom) left the mic muted at the system level
+  — unmute there, or tap the mic's own mute button —
+  or the audio stream went stale after the device
+  setup changed (opening the lid, plugging in a
+  mic). voxtype reopens the stream on its own, so
+  the stale case fixes itself: just dictate again.
+  Hold mode only; in wake/vad mode a dead mic simply
+  never hears anything.
 - Dictated into the wrong window? Set `paste_hotkey`
   and re-type the last session anywhere.
