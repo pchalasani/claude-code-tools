@@ -170,6 +170,41 @@ class TestCheckRmCommand(unittest.TestCase):
         blocked, _ = check_rm_command("echo $((1 << 2))\ntrue; rm -rf /tmp/x\n2")
         self.assertTrue(blocked, "rm after an arithmetic shift should be blocked")
 
+    def test_newline_separated_rm_is_blocked(self):
+        """A newline ends a command, so the next line is a command too."""
+        blocked, _ = check_rm_command("echo hi\nrm -rf /tmp/x")
+        self.assertTrue(blocked, "rm on its own line should be blocked")
+
+    def test_ansi_c_delimiter_cannot_fake_a_heredoc(self):
+        """<<$'EOF' ends at EOF, so a later rm is not inside the body."""
+        command = "cat <<$'EOF'\nliteral\nEOF\nrm -rf /tmp/x\n$EOF"
+        blocked, _ = check_rm_command(command)
+        self.assertTrue(blocked, "rm after a $'EOF' heredoc should be blocked")
+
+    def test_escaped_brace_cannot_fake_a_heredoc(self):
+        """'\\}' does not close ${...}, so '<<EOF' in it opens no heredoc."""
+        blocked, _ = check_rm_command(
+            "echo ${x:-\\}<<EOF}\nrm -rf /tmp/x\nEOF}")
+        self.assertTrue(blocked, "rm after '${x:-\\}<<EOF}' should be blocked")
+
+    def test_line_continuation_cannot_hide_rm_in_a_body(self):
+        """A continued header means the rm runs before the body starts."""
+        command = "cat <<EOF ; \\\nrm -rf /tmp/x\nliteral\nEOF"
+        blocked, _ = check_rm_command(command)
+        self.assertTrue(blocked, "rm on a continued header should be blocked")
+
+    def test_second_heredoc_body_cannot_hide_rm(self):
+        """Both bodies on a two-heredoc header are data, so the rm is not."""
+        command = "cat <<A <<'B'\nfirst\nA\necho <<X\nB\nrm -rf /tmp/x\nX"
+        blocked, _ = check_rm_command(command)
+        self.assertTrue(blocked, "rm after two heredoc bodies should be blocked")
+
+    def test_documenting_rm_in_a_second_heredoc_body_is_allowed(self):
+        """The second body is data, so documenting rm in it is not deletion."""
+        command = "cat <<A <<'B'\nliteral a\nA\nThe `rm -rf x` guard\nB"
+        blocked, _ = check_rm_command(command)
+        self.assertFalse(blocked, "literal rm in the second body is data")
+
     def test_complex_bypass_attempts(self):
         """Complex commands attempting to hide rm are blocked."""
         # Multiple levels of indirection

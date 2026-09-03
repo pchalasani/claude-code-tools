@@ -52,6 +52,21 @@ class TestExtractSubcommands(unittest.TestCase):
         result = extract_subcommands("echo hello; echo world")
         self.assertEqual(result, ["echo hello", "echo world"])
 
+    def test_newline_operator(self):
+        """A newline ends a command just as ';' does - security regression."""
+        result = extract_subcommands("echo ok\nrm foo")
+        self.assertEqual(result, ["echo ok", "rm foo"])
+
+    def test_newline_inside_quotes_is_not_a_separator(self):
+        """A newline in a quoted word is part of that word, not an operator."""
+        result = extract_subcommands("echo 'first\nrm foo'")
+        self.assertEqual(result, ["echo 'first\nrm foo'"])
+
+    def test_line_continuation_is_joined(self):
+        """A backslash-newline continues the line, so the shell removes it."""
+        result = extract_subcommands("echo ok ; \\\nrm foo")
+        self.assertEqual(result, ["echo ok", "rm foo"])
+
     def test_pipe_operator(self):
         """Split on | (pipe) operator - security regression test."""
         result = extract_subcommands("echo ok | rm foo")
@@ -314,6 +329,70 @@ class TestStripHeredocBodies(unittest.TestCase):
     def test_nested_arithmetic_is_skipped_whole(self):
         """Nested parentheses inside arithmetic are handled."""
         command = "echo $(( (1 << 2) + 3 ))\nrm -rf /tmp/x\n3 ))"
+        self.assertEqual(strip_heredoc_bodies(command), (command, []))
+
+    def test_ansi_c_quoted_delimiter_loses_its_dollar(self):
+        """<<$'EOF' ends the body at EOF, not at $EOF."""
+        command = "cat <<$'EOF'\nliteral\nEOF\nrm -rf /tmp/x\n$EOF"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, [])
+        self.assertIn("rm -rf /tmp/x", stripped)
+        self.assertNotIn("literal", stripped)
+
+    def test_ansi_c_escape_in_delimiter_is_not_a_heredoc(self):
+        """An undecodable ANSI-C delimiter blanks nothing, so guards see all."""
+        command = "cat <<$'E\\tOF'\nrm -rf /tmp/x\nE\tOF"
+        self.assertEqual(strip_heredoc_bodies(command), (command, []))
+
+    def test_escaped_brace_does_not_close_a_parameter_expansion(self):
+        """'\\}' is expansion text, so '<<EOF' after it opens no heredoc."""
+        command = "echo ${x:-\\}<<EOF}\nrm -rf /tmp/x\nEOF}"
+        self.assertEqual(strip_heredoc_bodies(command), (command, []))
+
+    def test_quoted_brace_does_not_close_a_parameter_expansion(self):
+        """A '}' inside quotes does not end the expansion either."""
+        command = "echo ${x:-'}'<<EOF}\nrm -rf /tmp/x\nEOF}"
+        self.assertEqual(strip_heredoc_bodies(command), (command, []))
+
+    def test_line_continuation_delays_the_body(self):
+        """A backslash-newline keeps the header open, so the body starts later."""
+        command = "cat <<EOF ; \\\nrm -rf /tmp/x\nliteral\nEOF"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, ["literal\n"])
+        self.assertIn("rm -rf /tmp/x", stripped)
+
+    def test_every_heredoc_on_the_line_is_consumed(self):
+        """Two heredocs on one header have two bodies, one after the other."""
+        command = "cat <<A <<'B'\nfirst\nA\necho <<X\nB\nrm -rf /tmp/x\nX"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, ["first\n"])
+        self.assertNotIn("echo <<X", stripped)
+        self.assertIn("rm -rf /tmp/x", stripped)
+
+    def test_second_body_of_a_multi_heredoc_line_is_data(self):
+        """The second body is data too, so its literal text is not a command."""
+        command = "cat <<A <<'B'\nliteral a\nA\nThe `rm -rf x` guard\nB"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, ["literal a\n"])
+        self.assertNotIn("rm -rf x", stripped)
+
+    def test_heredoc_after_a_comment_still_has_a_body(self):
+        """A trailing comment does not stop the body from starting."""
+        command = "cat <<'MD' # note\nrm -rf x\nMD"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, [])
+        self.assertNotIn("rm -rf x", stripped)
+
+    def test_ansi_c_string_does_not_confuse_quote_tracking(self):
+        """An escaped quote inside $'...' does not leave the scanner quoted."""
+        command = "echo $'don\\'t' <<'MD'\nrm -rf x\nMD"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, [])
+        self.assertNotIn("rm -rf x", stripped)
+
+    def test_unterminated_second_body_blanks_nothing(self):
+        """If any body is unclosed, no body is treated as data."""
+        command = "cat <<A <<B\nfirst\nA\nrm -rf /tmp/x"
         self.assertEqual(strip_heredoc_bodies(command), (command, []))
 
 
