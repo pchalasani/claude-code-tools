@@ -410,6 +410,36 @@ class TestStripHeredocBodies(unittest.TestCase):
         command = 'cat <<$"A\\\\B"\ndata\nA\\B\nrm -rf /tmp/x\nA\\\\B'
         self.assertEqual(strip_heredoc_bodies(command), (command, []))
 
+    def test_undecodable_delimiter_stops_the_scan(self):
+        """Declining one heredoc must not turn its body into a new header.
+
+        Bash ends the <<$'E\\x4fF' body at EOF and runs the rm after it. The
+        body holds "echo <<X", so scanning on would read that as a heredoc
+        and blank the rm. Nothing after an undecodable delimiter is blanked.
+        """
+        command = "cat <<$'E\\x4fF'\necho <<X\nEOF\nrm -rf /tmp/x\nX"
+        self.assertEqual(strip_heredoc_bodies(command), (command, []))
+
+    def test_case_pattern_paren_does_not_close_a_substitution(self):
+        """A ')' ending a case pattern is not the one closing '$('."""
+        command = ("cat <<EOF $(case x in x) echo yes;; esac\n"
+                   "rm -rf /tmp/x\n)\nliteral\nEOF")
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, ["literal\n"])
+        self.assertIn("rm -rf /tmp/x", stripped)
+
+    def test_case_outside_a_substitution_still_allows_a_heredoc(self):
+        """'esac' closes the case, so a later heredoc is found normally."""
+        command = "case x in x) echo yes;; esac\ncat <<'EOF'\nrm -rf /tmp/x\nEOF"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, [])
+        self.assertNotIn("rm -rf /tmp/x", stripped)
+
+    def test_herestring_operator_is_stepped_over_whole(self):
+        """The trailing '<<' of '<<<' must not be read as a heredoc."""
+        command = "cat <<<input\nrm -rf /tmp/x\ninput"
+        self.assertEqual(strip_heredoc_bodies(command), (command, []))
+
     def test_legacy_arithmetic_shift_is_not_a_heredoc(self):
         """$[1 << 2] is the deprecated arithmetic form, so '<<' is a shift."""
         command = "echo $[1 << 2]\nrm -rf /tmp/x\n2]"

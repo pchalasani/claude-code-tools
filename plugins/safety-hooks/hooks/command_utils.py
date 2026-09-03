@@ -371,8 +371,17 @@ def _end_of_single_quote(command: str, start: int, escapes: bool) -> int | None:
     return None
 
 
-def _heredoc_delimiter(
-        command: str, start: int) -> tuple[str, bool, bool, int] | None:
+# Returned for a delimiter whose quoting the shell would unescape, which
+# this parser does not replicate. It cannot be treated as "no heredoc":
+# the body would then be scanned as commands, and a '<<' inside that body
+# would be read as a real heredoc, blanking the commands after the body.
+# Scanning stops instead, so nothing further is blanked.
+_UNDECODABLE_DELIMITER = object()
+
+
+def _heredoc_delimiter(command: str, start: int):
+    # Return type is tuple[str, bool, bool, int], None, or the sentinel
+    # above; annotating that adds nothing a reader wants here.
     """
     Parse the delimiter word of the '<<' operator at the given index.
 
@@ -408,10 +417,8 @@ def _heredoc_delimiter(
             content = command[index + 2:end]
             if '\\' in content:
                 # Both forms unescape: $'...' decodes ANSI-C escapes and
-                # $"..." removes double-quote ones. Rather than replicate
-                # that, report no heredoc, which hands the body to the
-                # guards as commands.
-                return None
+                # $"..." removes double-quote ones.
+                return _UNDECODABLE_DELIMITER
             quoted = True
             delimiter_parts.append(content)
             index = end + 1
@@ -439,10 +446,8 @@ def _heredoc_delimiter(
                 return None
             content = command[index + 1:end]
             if character == '"' and '\\' in content:
-                # Quote removal would drop backslashes here. Rather than
-                # replicate that, report no heredoc: nothing is blanked and
-                # the guards see the body, which is the safe direction.
-                return None
+                # Quote removal would drop backslashes here.
+                return _UNDECODABLE_DELIMITER
             delimiter_parts.append(content)
             index = end + 1
         elif character == '\\':
@@ -569,6 +574,29 @@ def _heredoc_bodies(
 # function blank less, i.e. hand MORE text to the guards.
 _COMMENT_PRECEDERS = ' \t\n;&|(<>)'
 
+# A word only counts as a keyword when it stands alone.
+_WORD_PRECEDERS = ' \t\n;&|('
+
+
+def _keyword_at(command: str, index: int, keyword: str) -> bool:
+    """
+    Report whether a standalone keyword starts at the given index.
+
+    Args:
+        command: The full command string.
+        index: Index to test.
+        keyword: The word to look for, e.g. 'case'.
+
+    Returns:
+        True when the keyword is there as a whole word.
+    """
+    if not command.startswith(keyword, index):
+        return False
+    if index and command[index - 1] not in _WORD_PRECEDERS:
+        return False
+    after = index + len(keyword)
+    return after == len(command) or command[after] in ' \t\n;&|)'
+
 
 def _end_of_balanced(command: str, start: int, opener: str) -> int | None:
     """
@@ -659,6 +687,7 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
     # mistaken for the one closing the substitution.
     open_parens: list[str] = []
     depth = 0
+    case_depth = 0
     in_backtick = False
     # Heredocs opened on the command line now being scanned. Their bodies
     # all follow that line, in the order the operators appeared.
@@ -701,7 +730,22 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
             in_backtick = not in_backtick
             index += 1
             continue
+        if quote is None and (_keyword_at(command, index, 'case')
+                              or _keyword_at(command, index, 'esac')):
+            # Inside a case statement a ')' ends a pattern, so it must not
+            # be taken for the one closing a substitution.
+            if command[index] == 'c':
+                case_depth += 1
+                index += 4
+            else:
+                case_depth = max(0, case_depth - 1)
+                index += 4
+            continue
         if quote is None and character == ')' and open_parens:
+            if open_parens[-1] == '$(' and case_depth:
+                # A case pattern's ')', not the end of the substitution.
+                index += 1
+                continue
             if open_parens.pop() == '$(':
                 depth -= 1
                 # A heredoc whose substitution closed before any newline
@@ -777,10 +821,20 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
             if subscript_end is not None:
                 index = subscript_end
                 continue
-        if (quote is None and command.startswith('<<', index)
-                and not command.startswith('<<<', index)):
+        if quote is None and command.startswith('<<<', index):
+            # A here-string, whose expansions do run. Step over the whole
+            # operator: leaving the scan on its second '<' would read the
+            # remaining '<<' as a heredoc and blank the lines after it.
+            index += 3
+            continue
+        if quote is None and command.startswith('<<', index):
             delimiter = _heredoc_delimiter(command, index)
-            if delimiter is not None:
+            if delimiter is _UNDECODABLE_DELIMITER:
+                # The body of this one cannot be located. Stop rather than
+                # scan on: text inside that body could otherwise be read as
+                # another heredoc header and blank real commands.
+                break
+            if isinstance(delimiter, tuple):
                 word, quoted, strip_tabs, end = delimiter
                 pending.append((word, quoted, strip_tabs, depth))
                 index = end

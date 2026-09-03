@@ -205,6 +205,24 @@ class TestCheckRmCommand(unittest.TestCase):
         blocked, _ = check_rm_command(command)
         self.assertFalse(blocked, "literal rm in the second body is data")
 
+    def test_undecodable_delimiter_cannot_hide_rm(self):
+        """Bash ends that body at EOF, so the rm after it is a command."""
+        command = "cat <<$'E\\x4fF'\necho <<X\nEOF\nrm -rf /tmp/x\nX"
+        blocked, _ = check_rm_command(command)
+        self.assertTrue(blocked, "rm after an escaped delimiter's body blocks")
+
+    def test_case_pattern_paren_cannot_hide_rm(self):
+        """The substitution stays open past a case pattern's ')'."""
+        command = ("cat <<EOF $(case x in x) echo yes;; esac\n"
+                   "rm -rf /tmp/x\n)\nliteral\nEOF")
+        blocked, _ = check_rm_command(command)
+        self.assertTrue(blocked, "rm inside a still-open $( ) should be blocked")
+
+    def test_herestring_cannot_fake_a_heredoc(self):
+        """'cat <<<input' opens no heredoc, so the next line is a command."""
+        blocked, _ = check_rm_command("cat <<<input\nrm -rf /tmp/x\ninput")
+        self.assertTrue(blocked, "rm after a here-string should be blocked")
+
     def test_legacy_arithmetic_shift_cannot_fake_a_heredoc(self):
         """A shift in the deprecated $[ ] form must not blank a following rm."""
         blocked, _ = check_rm_command("echo $[1 << 2]\nrm -rf /tmp/x\n2]")
