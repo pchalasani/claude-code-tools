@@ -390,6 +390,41 @@ class TestStripHeredocBodies(unittest.TestCase):
         self.assertEqual(bodies, [])
         self.assertNotIn("rm -rf x", stripped)
 
+    def test_newline_in_a_substitution_does_not_start_the_body(self):
+        """An unfinished $( ) holds the command line open past the newline."""
+        command = "cat <<'EOF' $(echo start\nrm -rf /tmp/x)\nliteral\nEOF"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, [])
+        self.assertIn("rm -rf /tmp/x", stripped)
+        self.assertNotIn("literal", stripped)
+
+    def test_newline_in_backticks_does_not_start_the_body(self):
+        """Backtick substitution holds the line open the same way $( ) does."""
+        command = "cat <<'EOF' `echo start\nrm -rf /tmp/x`\nliteral\nEOF"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, [])
+        self.assertIn("rm -rf /tmp/x", stripped)
+        self.assertNotIn("literal", stripped)
+
+    def test_heredoc_inside_a_substitution_takes_its_body_there(self):
+        """A substitution is its own parsing unit, bodies included."""
+        command = "echo $(cat <<'EOF'\nrm -rf /tmp/x\nEOF\n)"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, [])
+        self.assertNotIn("rm -rf /tmp/x", stripped)
+
+    def test_substitution_closing_first_leaves_the_heredoc_bodyless(self):
+        """Bash reads that body inside the substitution, so there is none."""
+        command = "echo $(cat <<'EOF') tail\nrm -rf /tmp/x\nEOF"
+        self.assertEqual(strip_heredoc_bodies(command), (command, []))
+
+    def test_subshell_paren_does_not_delay_the_body(self):
+        """Plain '(' is not a substitution, so the body still starts next."""
+        command = "(cat <<'EOF'\nrm -rf /tmp/x\nEOF\n)"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, [])
+        self.assertNotIn("rm -rf /tmp/x", stripped)
+
     def test_unterminated_second_body_blanks_nothing(self):
         """If any body is unclosed, no body is treated as data."""
         command = "cat <<A <<B\nfirst\nA\nrm -rf /tmp/x"

@@ -476,7 +476,7 @@ def _end_of_heredoc_body(
 
 def _heredoc_bodies(
         command: str, start: int,
-        pending: list[tuple[str, bool, bool]]) -> tuple[int, list[str]] | None:
+        pending: list[tuple[str, bool, bool, int]]) -> tuple[int, list[str]] | None:
     """
     Consume the bodies of every heredoc declared on one command line.
 
@@ -488,8 +488,8 @@ def _heredoc_bodies(
         command: The full command string.
         start: Index where the first body begins (just past the newline
             that ends the command line).
-        pending: The (delimiter, quoted, strip_tabs) triples in the order
-            the heredocs were declared.
+        pending: The (delimiter, quoted, strip_tabs, depth) tuples in the
+            order the heredocs were declared; depth is unused here.
 
     Returns:
         Tuple (end, expanded_bodies): the index just past the last body's
@@ -499,7 +499,7 @@ def _heredoc_bodies(
     """
     cursor = start
     expanded_bodies = []
-    for delimiter, quoted, strip_tabs in pending:
+    for delimiter, quoted, strip_tabs, _ in pending:
         bounds = _end_of_heredoc_body(command, cursor, delimiter, strip_tabs)
         if bounds is None:
             return None
@@ -592,9 +592,14 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
     copied_to = 0
     index = 0
     quote = None
+    # A command substitution is parsed as its own unit, so it has its own
+    # command lines and its own heredoc bodies. Track how deep we are in
+    # one, and remember the depth each heredoc was opened at.
+    depth = 0
+    in_backtick = False
     # Heredocs opened on the command line now being scanned. Their bodies
     # all follow that line, in the order the operators appeared.
-    pending: list[tuple[str, bool, bool]] = []
+    pending: list[tuple[str, bool, bool, int]] = []
     while index < len(command):
         character = command[index]
         if character == '\\' and quote != "'":
@@ -615,7 +620,30 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
                 quote = character
             index += 1
             continue
+        if (quote is None and command.startswith('$(', index)
+                and not command.startswith('$((', index)):
+            depth += 1
+            index += 2
+            continue
+        if quote is None and character == '`':
+            # Backticks cannot nest, so one toggles the substitution.
+            depth += -1 if in_backtick else 1
+            in_backtick = not in_backtick
+            index += 1
+            continue
+        if quote is None and character == ')' and depth > 0 and not in_backtick:
+            depth -= 1
+            # A heredoc whose substitution closed before any newline never
+            # gets a body: bash reads it from inside that substitution.
+            pending = [item for item in pending if item[3] <= depth]
+            index += 1
+            continue
         if quote is None and character == '\n' and pending:
+            if pending[0][3] != depth:
+                # This newline is inside a deeper command substitution, so
+                # it does not end the line that opened these heredocs.
+                index += 1
+                continue
             # The command line ended: its heredoc bodies start here.
             bodies = _heredoc_bodies(command, index + 1, pending)
             pending = []
@@ -659,7 +687,7 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
             delimiter = _heredoc_delimiter(command, index)
             if delimiter is not None:
                 word, quoted, strip_tabs, end = delimiter
-                pending.append((word, quoted, strip_tabs))
+                pending.append((word, quoted, strip_tabs, depth))
                 index = end
                 continue
         index += 1

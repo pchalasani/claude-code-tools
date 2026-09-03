@@ -205,6 +205,30 @@ class TestCheckRmCommand(unittest.TestCase):
         blocked, _ = check_rm_command(command)
         self.assertFalse(blocked, "literal rm in the second body is data")
 
+    def test_rm_in_a_substitution_before_the_body_is_blocked(self):
+        """An unfinished $( ) means the rm runs before the body starts."""
+        command = "cat <<'EOF' $(echo start\nrm -rf /tmp/x)\nliteral\nEOF"
+        blocked, _ = check_rm_command(command)
+        self.assertTrue(blocked, "rm inside $( ) on the header is a command")
+
+    def test_rm_in_backticks_before_the_body_is_blocked(self):
+        """Backticks hold the header open just as $( ) does."""
+        command = "cat <<'EOF' `echo start\nrm -rf /tmp/x`\nliteral\nEOF"
+        blocked, _ = check_rm_command(command)
+        self.assertTrue(blocked, "rm inside backticks on the header is a command")
+
+    def test_bodyless_heredoc_in_a_substitution_cannot_hide_rm(self):
+        """The substitution closes first, so the next line is a command."""
+        command = "echo $(cat <<'EOF') tail\nrm -rf /tmp/x\nEOF"
+        blocked, _ = check_rm_command(command)
+        self.assertTrue(blocked, "rm is not a body when the body never starts")
+
+    def test_documenting_rm_inside_a_substitution_heredoc_is_allowed(self):
+        """A heredoc body inside $( ) is still data."""
+        command = "echo $(cat <<'EOF'\nThe `rm -rf x` guard.\nEOF\n)"
+        blocked, _ = check_rm_command(command)
+        self.assertFalse(blocked, "literal rm in a quoted body is data")
+
     def test_complex_bypass_attempts(self):
         """Complex commands attempting to hide rm are blocked."""
         # Multiple levels of indirection
