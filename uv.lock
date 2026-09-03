@@ -2673,7 +2673,7 @@ wheels = [
 
 [[package]]
 name = "visual-brief"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/visual-brief" }
 
 [package.dev-dependencies]
