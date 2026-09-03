@@ -205,6 +205,12 @@ class TestCheckRmCommand(unittest.TestCase):
         blocked, _ = check_rm_command(command)
         self.assertFalse(blocked, "literal rm in the second body is data")
 
+    def test_substitution_delimiter_cannot_fake_a_heredoc(self):
+        """'<<$(echo EOF)' ends at that literal line, so the rm is a command."""
+        command = "cat <<$(echo EOF)\npayload\n$(echo EOF)\nrm -rf /tmp/x\n$"
+        blocked, _ = check_rm_command(command)
+        self.assertTrue(blocked, "rm after a '$(echo EOF)' body should be blocked")
+
     def test_rm_in_a_substitution_before_the_body_is_blocked(self):
         """An unfinished $( ) means the rm runs before the body starts."""
         command = "cat <<'EOF' $(echo start\nrm -rf /tmp/x)\nliteral\nEOF"

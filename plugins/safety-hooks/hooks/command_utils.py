@@ -419,6 +419,23 @@ def _heredoc_delimiter(
             quoted = True
             delimiter_parts.append(content)
             index = end + 1
+        elif (command.startswith('$(', index)
+                or command.startswith('${', index)):
+            # No expansion happens on a delimiter word, so "$(echo EOF)" is
+            # the delimiter, literally, parentheses and all.
+            opener = '(' if command[index + 1] == '(' else '{'
+            end = _end_of_balanced(command, index + 1, opener)
+            if end is None:
+                return None
+            delimiter_parts.append(command[index:end])
+            index = end
+        elif character == '`':
+            # A backtick span is part of the word, and just as literal.
+            end = command.find('`', index + 1)
+            if end == -1:
+                return None
+            delimiter_parts.append(command[index:end + 1])
+            index = end + 1
         elif character in "'\"":
             quoted = True
             end = _end_of_single_quote(command, index, escapes=False)

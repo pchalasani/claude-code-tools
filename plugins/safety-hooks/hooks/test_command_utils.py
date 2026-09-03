@@ -390,6 +390,28 @@ class TestStripHeredocBodies(unittest.TestCase):
         self.assertEqual(bodies, [])
         self.assertNotIn("rm -rf x", stripped)
 
+    def test_substitution_in_a_delimiter_is_literal(self):
+        """No expansion runs on a delimiter word, so '$(echo EOF)' ends it."""
+        command = "cat <<$(echo EOF)\npayload\n$(echo EOF)\nrm -rf /tmp/x\n$"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, ["payload\n"])
+        self.assertIn("rm -rf /tmp/x", stripped)
+        self.assertNotIn("payload", stripped)
+
+    def test_parameter_expansion_in_a_delimiter_is_literal(self):
+        """'${x}' is the delimiter itself, not whatever x holds."""
+        command = "cat <<${x}\npayload\n${x}\nrm -rf /tmp/x\n$"
+        stripped, _ = strip_heredoc_bodies(command)
+        self.assertIn("rm -rf /tmp/x", stripped)
+        self.assertNotIn("payload", stripped)
+
+    def test_backticks_in_a_delimiter_are_literal(self):
+        """A backtick span belongs to the delimiter word, unexpanded."""
+        command = "cat <<`echo EOF`\npayload\n`echo EOF`\nrm -rf /tmp/x\n$"
+        stripped, _ = strip_heredoc_bodies(command)
+        self.assertIn("rm -rf /tmp/x", stripped)
+        self.assertNotIn("payload", stripped)
+
     def test_newline_in_a_substitution_does_not_start_the_body(self):
         """An unfinished $( ) holds the command line open past the newline."""
         command = "cat <<'EOF' $(echo start\nrm -rf /tmp/x)\nliteral\nEOF"
