@@ -1,0 +1,28 @@
+{
+  "description": "Nudge (never block) the agent to run the GitHub Codex review loop on its open pull requests",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "^[Bb][Aa][Ss][Hh]$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pr_review_nudge.py\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pr_review_nudge.py\"",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}
