@@ -115,6 +115,16 @@ class TestExtractSubshellCommands(unittest.TestCase):
         result = extract_subshell_commands("echo $(whoami)")
         self.assertEqual(result, ["whoami"])
 
+    def test_ansi_c_quoted_argument_inside_a_substitution(self):
+        """$'don\\'t' is one word: its escaped quote must not end quoting.
+
+        Regression: the quote-aware bracket balancing read the escaped
+        quote as the closing one, then took the real closing quote as an
+        opening one, and never saw the ')' -- hiding the rm.
+        """
+        command = "echo $(rm $'don\\'t')"
+        self.assertEqual(extract_subshell_commands(command), ["rm $'don\\'t'"])
+
     def test_backtick_subshell(self):
         """Extract command from backtick syntax."""
         result = extract_subshell_commands("echo `whoami`")

@@ -637,6 +637,16 @@ def _end_of_balanced(command: str, start: int, opener: str) -> int | None:
             # An escaped brace is expansion text, not the closing one.
             index += 2
             continue
+        if quote is None and command.startswith("$'", index):
+            # ANSI-C quoting: unlike '...', a backslash escapes the closing
+            # quote, so "$'don\\'t'" is one word. Reading it as plain
+            # single quoting would end the span early and lose the real
+            # closing bracket after it.
+            end = _end_of_single_quote(command, index + 1, escapes=True)
+            if end is None:
+                return None
+            index = end + 1
+            continue
         if character in "'\"":
             if quote == character:
                 quote = None
