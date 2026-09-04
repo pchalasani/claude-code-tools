@@ -5,7 +5,13 @@ import os
 import re
 import shlex
 import string
+import sys
 from typing import List, Optional, Tuple
+
+# Add the hooks directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from command_utils import strip_heredoc_bodies
 
 BLOCK_REASON = (
     "Blocked: Direct access to .env files is not allowed for security reasons.\n\n"
@@ -377,98 +383,6 @@ def _substitution_commands(command: str) -> List[str]:
                 index = cursor - 1
         index += 1
     return bodies
-
-
-def _heredoc_body(
-        command: str, start: int) -> Optional[Tuple[int, int, int, bool]]:
-    """Return body and delimiter bounds for one simple heredoc."""
-    index = start + 2
-    strip_tabs = index < len(command) and command[index] == '-'
-    if strip_tabs:
-        index += 1
-    while index < len(command) and command[index] in ' \t':
-        index += 1
-    delimiter_parts = []
-    quoted = False
-    while index < len(command) and command[index] not in ' \t\r\n;&|<>()':
-        character = command[index]
-        if character in "'\"":
-            quoted = True
-            end = command.find(character, index + 1)
-            if end == -1:
-                return None
-            delimiter_parts.append(command[index + 1:end])
-            index = end + 1
-        elif character == '\\':
-            if index + 1 >= len(command):
-                return None
-            quoted = True
-            delimiter_parts.append(command[index + 1])
-            index += 2
-        else:
-            delimiter_parts.append(character)
-            index += 1
-    delimiter = ''.join(delimiter_parts)
-    if not delimiter:
-        return None
-    body_start = command.find('\n', index)
-    if body_start == -1:
-        return None
-    body_start += 1
-    line_start = body_start
-    while line_start <= len(command):
-        line_end = command.find('\n', line_start)
-        if line_end == -1:
-            line_end = len(command)
-        line = command[line_start:line_end].removesuffix('\r')
-        if strip_tabs:
-            line = line.lstrip('\t')
-        if line == delimiter:
-            body_end = min(line_end + 1, len(command))
-            return body_start, line_start, body_end, quoted
-        if line_end == len(command):
-            return None
-        line_start = line_end + 1
-    return None
-
-
-def _without_heredoc_bodies(command: str) -> Tuple[str, List[str]]:
-    """Blank heredoc bodies and return bodies whose expansions execute."""
-    executable_bodies = []
-    pieces = []
-    copied_to = 0
-    index = 0
-    quote = None
-    while index < len(command):
-        character = command[index]
-        if character == '\\' and quote != "'":
-            index += 2
-            continue
-        if character in "'\"":
-            quote = None if quote == character else character \
-                if quote is None else quote
-            index += 1
-            continue
-        if (quote is None and command.startswith('<<', index)
-                and not command.startswith('<<<', index)):
-            heredoc = _heredoc_body(command, index)
-            if heredoc is not None:
-                body_start, delimiter_start, body_end, quoted = heredoc
-                pieces.append(command[copied_to:body_start])
-                blanked = ''.join(
-                    '\n' if char == '\n' else ' '
-                    for char in command[body_start:body_end]
-                )
-                pieces.append(blanked)
-                if not quoted:
-                    executable_bodies.append(
-                        command[body_start:delimiter_start])
-                copied_to = body_end
-                index = body_end
-                continue
-        index += 1
-    pieces.append(command[copied_to:])
-    return ''.join(pieces), executable_bodies
 
 
 def _split_env_command(segment: List[str], index: int) -> Optional[List[str]]:
@@ -867,7 +781,7 @@ def _nesting_fallback(command: str) -> bool:
     for _ in range(256):
         if not pending:
             return False
-        current, heredoc_bodies = _without_heredoc_bodies(pending.pop())
+        current, heredoc_bodies = strip_heredoc_bodies(pending.pop())
         pending.extend(_backtick_commands(current))
         pending.extend(_substitution_commands(current))
         for body in heredoc_bodies:
@@ -983,7 +897,7 @@ def check_env_file_access(
         if _nesting_fallback(command):
             return True, BLOCK_REASON
         return False, None
-    command, heredoc_bodies = _without_heredoc_bodies(command)
+    command, heredoc_bodies = strip_heredoc_bodies(command)
     nested_commands = _backtick_commands(command)
     nested_commands.extend(_substitution_commands(command))
     for body in heredoc_bodies:
@@ -1010,7 +924,6 @@ def check_env_file_access(
 # If run as a standalone script
 if __name__ == "__main__":
     import json
-    import sys
 
     data = json.load(sys.stdin)
 

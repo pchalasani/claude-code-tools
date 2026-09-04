@@ -160,6 +160,59 @@ def expand_command_aliases(command: str) -> str:
     return ''.join(result)
 
 
+def _split_command_lines(command: str) -> list[str]:
+    """
+    Split on the newlines the shell treats as command separators.
+
+    A newline ends a command like ';' does, but only outside quotes and
+    when it is not escaped: a backslash-newline continues the line, and a
+    newline inside a quoted word is part of that word.
+
+    Args:
+        command: A bash command string, possibly spanning several lines.
+
+    Returns:
+        The command lines, without the separating newlines. A continued
+        line is returned joined, with the backslash-newline removed the
+        way the shell removes it, so the command it continues into is
+        recognisable ("cat <<EOF ; \\\\\\n rm x" ends up as one line).
+    """
+    lines = []
+    pieces = []
+    line_start = 0
+    index = 0
+    quote = None
+    while index < len(command):
+        character = command[index]
+        if character == '\\' and quote != "'":
+            if index + 1 < len(command) and command[index + 1] == '\n':
+                # A backslash-newline continues the line; the shell removes
+                # both characters, so neither is part of any command.
+                pieces.append(command[line_start:index])
+                line_start = index + 2
+            index += 2
+            continue
+        if quote is None and command.startswith("$'", index):
+            # ANSI-C quoting: a backslash escapes the closing quote.
+            end = _end_of_single_quote(command, index + 1, escapes=True)
+            index = len(command) if end is None else end + 1
+            continue
+        if character in "'\"":
+            if quote == character:
+                quote = None
+            elif quote is None:
+                quote = character
+        elif quote is None and character == '\n':
+            pieces.append(command[line_start:index])
+            lines.append(''.join(pieces))
+            pieces = []
+            line_start = index + 1
+        index += 1
+    pieces.append(command[line_start:])
+    lines.append(''.join(pieces))
+    return lines
+
+
 def extract_subcommands(command: str) -> list[str]:
     """
     Split compound bash command into individual subcommands.
@@ -170,6 +223,7 @@ def extract_subcommands(command: str) -> list[str]:
         - ; (sequential)
         - | (pipe)
         - & (background)
+        - a newline outside quotes, which ends a command just as ';' does
 
     Multi-character operators (&&, ||) are matched before single-character
     variants to prevent partial matching (e.g., '&&' won't be split as '&' + '&').
@@ -187,10 +241,14 @@ def extract_subcommands(command: str) -> list[str]:
         ['echo ok', 'rm foo']
         >>> extract_subcommands("sleep 1 & rm bar")
         ['sleep 1', 'rm bar']
+        >>> extract_subcommands("echo ok\\nrm foo")
+        ['echo ok', 'rm foo']
     """
     if not command:
         return []
-    subcommands = re.split(r'\s*(?:&&|\|\||[;&|])\s*', command)
+    subcommands = []
+    for line in _split_command_lines(command):
+        subcommands.extend(re.split(r'\s*(?:&&|\|\||[;&|])\s*', line))
     return [cmd.strip() for cmd in subcommands if cmd.strip()]
 
 
@@ -199,7 +257,9 @@ def _extract_balanced_paren_content(command: str, start_idx: int) -> str | None:
     Extract content from balanced parentheses starting at given index.
 
     Given a string and the index of an opening '(', finds the matching
-    closing ')' accounting for nested parentheses.
+    closing ')' accounting for nested parentheses. A ')' inside quotes is
+    text, not the closing one: stopping at it would cut the substitution
+    short and hide the commands after it, as in "$(printf ')'; rm foo)".
 
     Args:
         command: The full command string.
@@ -216,18 +276,10 @@ def _extract_balanced_paren_content(command: str, start_idx: int) -> str | None:
     if start_idx >= len(command) or command[start_idx] != '(':
         return None
 
-    depth = 0
-    for i in range(start_idx, len(command)):
-        if command[i] == '(':
-            depth += 1
-        elif command[i] == ')':
-            depth -= 1
-            if depth == 0:
-                # Found the matching closing paren
-                return command[start_idx + 1:i]
-
-    # No matching closing paren found
-    return None
+    end = _end_of_balanced(command, start_idx, '(')
+    if end is None:
+        return None
+    return command[start_idx + 1:end - 1]
 
 
 def extract_subshell_commands(command: str) -> list[str]:
@@ -294,6 +346,617 @@ def extract_subshell_commands(command: str) -> list[str]:
     return subshell_commands
 
 
+def _end_of_single_quote(command: str, start: int, escapes: bool) -> int | None:
+    """
+    Return the index of the quote closing the one at start.
+
+    Args:
+        command: The full command string.
+        start: Index of the opening quote character.
+        escapes: Whether backslash escapes the quote inside this span, as
+            it does in ANSI-C quoting ($'...') but not in plain '...'.
+
+    Returns:
+        Index of the closing quote, or None when it is unterminated.
+    """
+    quote_character = command[start]
+    index = start + 1
+    while index < len(command):
+        if escapes and command[index] == '\\':
+            index += 2
+            continue
+        if command[index] == quote_character:
+            return index
+        index += 1
+    return None
+
+
+# Returned for a delimiter whose quoting the shell would unescape, which
+# this parser does not replicate. It cannot be treated as "no heredoc":
+# the body would then be scanned as commands, and a '<<' inside that body
+# would be read as a real heredoc, blanking the commands after the body.
+# Scanning stops instead, so nothing further is blanked.
+_UNDECODABLE_DELIMITER = object()
+
+
+def _heredoc_delimiter(command: str, start: int):
+    # Return type is tuple[str, bool, bool, int], None, or the sentinel
+    # above; annotating that adds nothing a reader wants here.
+    """
+    Parse the delimiter word of the '<<' operator at the given index.
+
+    Args:
+        command: The full command string.
+        start: Index of the '<' that starts the '<<' operator.
+
+    Returns:
+        Tuple (delimiter, quoted, strip_tabs, end) where delimiter is the
+        word after quote removal, quoted says whether any part of it was
+        quoted (so the shell performs no expansion in the body),
+        strip_tabs reflects the '<<-' form, and end is the index just past
+        the delimiter word. Returns None when no delimiter word is there.
+    """
+    index = start + 2
+    strip_tabs = index < len(command) and command[index] == '-'
+    if strip_tabs:
+        index += 1
+    while index < len(command) and command[index] in ' \t':
+        index += 1
+    delimiter_parts = []
+    quoted = False
+    while index < len(command) and command[index] not in ' \t\r\n;&|<>()':
+        character = command[index]
+        if (character == '$' and index + 1 < len(command)
+                and command[index + 1] in "'\""):
+            # $'EOF' and $"EOF" quote the delimiter; the '$' is not part
+            # of it, so bash ends the body at EOF, not at $EOF.
+            ansi_c = command[index + 1] == "'"
+            end = _end_of_single_quote(command, index + 1, escapes=ansi_c)
+            if end is None:
+                return None
+            content = command[index + 2:end]
+            if '\\' in content:
+                # Both forms unescape: $'...' decodes ANSI-C escapes and
+                # $"..." removes double-quote ones.
+                return _UNDECODABLE_DELIMITER
+            quoted = True
+            delimiter_parts.append(content)
+            index = end + 1
+        elif (command.startswith('$(', index)
+                or command.startswith('${', index)):
+            # No expansion happens on a delimiter word, so "$(echo EOF)" is
+            # the delimiter, literally, parentheses and all.
+            opener = '(' if command[index + 1] == '(' else '{'
+            end = _end_of_balanced(command, index + 1, opener)
+            if end is None:
+                return None
+            delimiter_parts.append(command[index:end])
+            index = end
+        elif character == '`':
+            # A backtick span is part of the word, and just as literal.
+            end = command.find('`', index + 1)
+            if end == -1:
+                return None
+            delimiter_parts.append(command[index:end + 1])
+            index = end + 1
+        elif character in "'\"":
+            quoted = True
+            end = _end_of_single_quote(command, index, escapes=False)
+            if end is None:
+                return None
+            content = command[index + 1:end]
+            if character == '"' and '\\' in content:
+                # Quote removal would drop backslashes here.
+                return _UNDECODABLE_DELIMITER
+            delimiter_parts.append(content)
+            index = end + 1
+        elif character == '\\':
+            if index + 1 >= len(command):
+                return None
+            if command[index + 1] == '\n':
+                # A continuation inside the word: the shell removes both
+                # characters before reading the delimiter, so "E\" + "OF"
+                # is the delimiter EOF, and is not quoted by it.
+                index += 2
+                continue
+            quoted = True
+            delimiter_parts.append(command[index + 1])
+            index += 2
+        else:
+            delimiter_parts.append(character)
+            index += 1
+    delimiter = ''.join(delimiter_parts)
+    if not delimiter:
+        return None
+    return delimiter, quoted, strip_tabs, index
+
+
+def _ends_with_continuation(line: str) -> bool:
+    """
+    Report whether a physical line ends in a backslash-newline pair.
+
+    Args:
+        line: One physical line, without its newline.
+
+    Returns:
+        True when the line ends with an odd number of backslashes, so the
+        last one escapes the newline instead of itself.
+    """
+    return (len(line) - len(line.rstrip('\\'))) % 2 == 1
+
+
+def _end_of_heredoc_body(
+        command: str, start: int, delimiter: str, strip_tabs: bool,
+        join_continuations: bool) -> tuple[int, int] | None:
+    """
+    Find the closing delimiter line of one heredoc body.
+
+    Args:
+        command: The full command string.
+        start: Index where the body begins (just past a newline).
+        delimiter: The delimiter word that ends the body.
+        strip_tabs: Whether the '<<-' form allows leading tabs on it.
+        join_continuations: Whether backslash-newline pairs are removed
+            while reading the body, as they are for an unquoted delimiter.
+            A delimiter can then be split over two lines ("EO\\" + "F").
+
+    Returns:
+        Tuple (delimiter_line_start, body_end): the index where the line
+        holding the delimiter begins -- which is where the body ends, and
+        with '<<-' may be a leading tab rather than the delimiter itself
+        -- and the index just past that line. None when the body is never
+        closed.
+    """
+    line_start = start
+    while line_start <= len(command):
+        # Read one logical line, which may span several physical ones.
+        parts = []
+        scan = line_start
+        while True:
+            line_end = command.find('\n', scan)
+            if line_end == -1:
+                line_end = len(command)
+            part = command[scan:line_end].removesuffix('\r')
+            if (join_continuations and line_end < len(command)
+                    and _ends_with_continuation(part)):
+                parts.append(part[:-1])
+                scan = line_end + 1
+                continue
+            parts.append(part)
+            break
+        line = ''.join(parts)
+        if strip_tabs:
+            line = line.lstrip('\t')
+        if line == delimiter:
+            return line_start, min(line_end + 1, len(command))
+        if line_end == len(command):
+            return None
+        line_start = line_end + 1
+    return None
+
+
+def _heredoc_bodies(
+        command: str, start: int,
+        pending: list[tuple[str, bool, bool, int]]) -> tuple[int, list[str]] | None:
+    """
+    Consume the bodies of every heredoc declared on one command line.
+
+    A command line may open several heredocs ("cat <<A <<'B'"); their
+    bodies follow the line in declaration order, one after another. Taking
+    them one at a time would read the second body as shell syntax.
+
+    Args:
+        command: The full command string.
+        start: Index where the first body begins (just past the newline
+            that ends the command line).
+        pending: The (delimiter, quoted, strip_tabs, depth) tuples in the
+            order the heredocs were declared; depth is unused here.
+
+    Returns:
+        Tuple (end, expanded_bodies): the index just past the last body's
+        delimiter line, and the bodies whose expansions the shell runs
+        (those with an unquoted delimiter). None when any body is
+        unterminated, in which case no body is treated as data.
+    """
+    cursor = start
+    expanded_bodies = []
+    for delimiter, quoted, strip_tabs, _ in pending:
+        bounds = _end_of_heredoc_body(
+            command, cursor, delimiter, strip_tabs,
+            join_continuations=not quoted)
+        if bounds is None:
+            return None
+        delimiter_line_start, body_end = bounds
+        if not quoted:
+            expanded_bodies.append(command[cursor:delimiter_line_start])
+        cursor = body_end
+    return cursor, expanded_bodies
+
+
+# A '#' only opens a comment at the start of a word, so it must follow
+# whitespace or an operator (or start the command). ')' is included because
+# '(echo x)# comment' is a comment; the cost is that the rarer '$(date)#tag',
+# where '#' is mid-word, is misread as one -- which only ever makes this
+# function blank less, i.e. hand MORE text to the guards.
+_COMMENT_PRECEDERS = ' \t\n;&|(<>)'
+
+# A reserved word is only reserved in command position: at the start of
+# the command, or right after an operator that begins a new one. Spaces
+# may sit in between, but not another word -- 'echo case' is an argument.
+_COMMAND_STARTERS = '\n;&|({'
+
+
+def _keyword_at(command: str, index: int, keyword: str) -> bool:
+    """
+    Report whether a reserved word in command position starts at index.
+
+    Args:
+        command: The full command string.
+        index: Index to test.
+        keyword: The word to look for, e.g. 'case'.
+
+    Returns:
+        True when the keyword is there as a whole word and bash would
+        read it as the reserved word rather than an ordinary argument.
+    """
+    if not command.startswith(keyword, index):
+        return False
+    before = index
+    while before and command[before - 1] in ' \t':
+        before -= 1
+    if before and command[before - 1] not in _COMMAND_STARTERS:
+        return False
+    after = index + len(keyword)
+    return after == len(command) or command[after] in ' \t\n;&|)'
+
+
+def _end_of_balanced(command: str, start: int, opener: str) -> int | None:
+    """
+    Return the index just past the bracket balancing the one at start.
+
+    Used to step over a span whose contents are not commands: an arithmetic
+    expansion $((...)), a parameter expansion ${...} or an array subscript
+    a[...]. A '<<' inside any of them is text or a shift, not a heredoc
+    operator.
+
+    Args:
+        command: The full command string.
+        start: Index of the opening bracket.
+        opener: The opening bracket character, '(', '{' or '['.
+
+    Returns:
+        Index just past the matching close, or None when unbalanced.
+    """
+    closer = {'(': ')', '{': '}', '[': ']'}[opener]
+    depth = 0
+    index = start
+    quote = None
+    while index < len(command):
+        character = command[index]
+        if character == '\\' and quote != "'":
+            # An escaped brace is expansion text, not the closing one.
+            index += 2
+            continue
+        if quote is None and command.startswith("$'", index):
+            # ANSI-C quoting: unlike '...', a backslash escapes the closing
+            # quote, so "$'don\\'t'" is one word. Reading it as plain
+            # single quoting would end the span early and lose the real
+            # closing bracket after it.
+            end = _end_of_single_quote(command, index + 1, escapes=True)
+            if end is None:
+                return None
+            index = end + 1
+            continue
+        if character in "'\"":
+            if quote == character:
+                quote = None
+            elif quote is None:
+                quote = character
+            index += 1
+            continue
+        if quote is None:
+            if character == opener:
+                depth += 1
+            elif character == closer:
+                depth -= 1
+                if depth == 0:
+                    return index + 1
+        index += 1
+    return None
+
+
+# The delimiter word as written: a plain name, optionally quoted one of
+# the three ways bash allows. Anything else ($'..', $"..", escapes inside
+# quotes, substitutions) is left to the shell.
+_SIMPLE_DELIMITER = re.compile(
+    r"""^(?:\\?[A-Za-z0-9_]+|'[A-Za-z0-9_]+'|"[A-Za-z0-9_]+")$""")
+
+# Header-line text that makes bash's tokenization non-trivial. Every
+# known way to blank a real command (a body boundary the scanner places
+# differently from bash) has needed one of these on the heredoc's own
+# line; refusing to blank when any is present makes the failure direction
+# over-blocking, which the guards tolerate. The list is deliberately
+# blunt: a '(' is enough, whether or not it opens a substitution.
+_COMPLEX_HEADER_MARKS = ('`', '$', '(', ')', '{', '}', '[', ']', '\\')
+_PLAIN_VARIABLE = re.compile(r'\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})')
+
+
+def _simple_heredoc_header(command: str, operator: int, end: int) -> bool:
+    """
+    Report whether a heredoc's header line is simple enough to trust.
+
+    The scanner approximates bash's tokenizer, and every divergence found
+    so far (parameter expansions, ANSI-C quoting, substitutions closing
+    before a newline, 'case' patterns, subscripts, escaped delimiters)
+    lets an attacker place a body boundary where bash does not, so that
+    a real command is blanked as data. Rather than chase each one, blank
+    bodies only when the header line -- the physical line holding the
+    '<<' -- carries none of the constructs those divergences need, and
+    the delimiter is a plain word with at most simple quoting.
+
+    Args:
+        command: The full command string.
+        operator: Index of the '<<' operator.
+        end: Index just past its delimiter word.
+
+    The same principle covers the spans the scanner steps over as
+    non-command text ($((...)), ${...}, $[...], name[...]=): a '<<' inside
+    one of those is a place where bash and this scanner could disagree
+    about whether a heredoc opened, so the caller blanks nothing then too.
+
+    Returns:
+        True when the header line has no complex construct and the
+        delimiter is plain, so the body boundaries are unambiguous.
+    """
+    line_start = command.rfind('\n', 0, operator) + 1
+    line_end = command.find('\n', operator)
+    if line_end == -1:
+        line_end = len(command)
+    raw = command[operator + 2:end].lstrip('-').strip(' \t')
+    if not _SIMPLE_DELIMITER.match(raw):
+        return False
+    header = command[line_start:operator + 2] + command[end:line_end]
+    # A plain variable reference ("$HOME", "${name}") cannot move a token
+    # boundary, and "cat > $HOME/notes.md <<'EOF'" is the common case.
+    header = _PLAIN_VARIABLE.sub('', header)
+    return not any(mark in header for mark in _COMPLEX_HEADER_MARKS)
+
+
+def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
+    """
+    Blank heredoc bodies and return the bodies the shell still expands.
+
+    A heredoc body is data, not code: the shell never runs its lines as
+    commands. When the delimiter is quoted (<<'EOF', <<"EOF", <<\\EOF) the
+    shell performs no expansion at all, so nothing in the body executes.
+    With an unquoted delimiter (<<EOF) only the body's expansions -- $(...)
+    and backticks -- execute.
+
+    Bodies begin after the command line that opens them, which is not the
+    same as the next newline: a backslash-newline continues that line, and
+    a newline inside quotes or inside an unfinished command substitution
+    does not end it. Every heredoc opened on one line is consumed, in
+    order, and a command substitution is its own parsing unit with its own
+    bodies.
+
+    Args:
+        command: A bash command string, possibly containing heredocs.
+
+    Returns:
+        Tuple (command_without_bodies, expanded_bodies). The first element
+        is the command with every heredoc body (and its closing delimiter
+        line) replaced by whitespace, preserving offsets and line breaks.
+        The second is the list of bodies whose expansions do execute.
+
+    Example:
+        >>> strip_heredoc_bodies("cat <<'EOF'\\n`rm x`\\nEOF")[1]
+        []
+        >>> strip_heredoc_bodies("cat <<EOF\\n`rm x`\\nEOF")[1]
+        ['`rm x`\\n']
+    """
+    expanded_bodies = []
+    pieces = []
+    copied_to = 0
+    index = 0
+    quote = None
+    # A command substitution is parsed as its own unit, so it has its own
+    # command lines and its own heredoc bodies. Track how deep we are in
+    # one, and remember the depth each heredoc was opened at. Grouping
+    # parentheses are tracked too, so that the ')' of a nested group is not
+    # mistaken for the one closing the substitution.
+    open_parens: list[str] = []
+    depth = 0
+    case_depth = 0
+    in_backtick = False
+    # Heredocs opened on the command line now being scanned. Their bodies
+    # all follow that line, in the order the operators appeared.
+    pending: list[tuple[str, bool, bool, int]] = []
+    while index < len(command):
+        character = command[index]
+        if character == '\\' and quote != "'":
+            # A backslash-newline continues the command line, so the body
+            # does not start here; skipping the pair keeps that newline
+            # out of the body-start decision below.
+            index += 2
+            continue
+        if quote is None and command.startswith("$'", index):
+            # ANSI-C quoting: a backslash escapes the closing quote.
+            end = _end_of_single_quote(command, index + 1, escapes=True)
+            index = len(command) if end is None else end + 1
+            continue
+        if character in "'\"":
+            if quote == character:
+                quote = None
+            elif quote is None:
+                quote = character
+            index += 1
+            continue
+        if quote is None and (
+                (command.startswith('$(', index)
+                 and not command.startswith('$((', index))
+                or command.startswith('<(', index)
+                or command.startswith('>(', index)):
+            # A command substitution $( ), or a process substitution <( )
+            # or >( ): each is parsed as its own unit, so a newline inside
+            # one does not end the command line that contains it.
+            open_parens.append('$(')
+            depth += 1
+            index += 2
+            continue
+        if quote is None and character == '`':
+            # Backticks cannot nest, so one toggles the substitution.
+            depth += -1 if in_backtick else 1
+            in_backtick = not in_backtick
+            if not in_backtick:
+                # Closing: a heredoc opened inside that never reached a
+                # newline gets no body, exactly as with ')' below. Left
+                # pending, it would swallow the first lines of a later
+                # substitution at the same depth as data.
+                pending = [item for item in pending if item[3] <= depth]
+            index += 1
+            continue
+        if quote is None and (_keyword_at(command, index, 'case')
+                              or _keyword_at(command, index, 'esac')):
+            # Inside a case statement a ')' ends a pattern, so it must not
+            # be taken for the one closing a substitution.
+            if command[index] == 'c':
+                case_depth += 1
+                index += 4
+            else:
+                case_depth = max(0, case_depth - 1)
+                index += 4
+            continue
+        if quote is None and character == ')' and open_parens:
+            if open_parens[-1] == '$(' and case_depth:
+                # A case pattern's ')', not the end of the substitution.
+                index += 1
+                continue
+            if open_parens.pop() == '$(':
+                depth -= 1
+                # A heredoc whose substitution closed before any newline
+                # never gets a body: bash reads it from inside there.
+                pending = [item for item in pending if item[3] <= depth]
+            index += 1
+            continue
+        if quote is None and character == '\n' and pending:
+            # Only the heredocs opened at this depth end here; ones opened
+            # further out belong to a command line this newline is nested
+            # inside, and wait for their own.
+            ready = [item for item in pending if item[3] == depth]
+            if not ready:
+                index += 1
+                continue
+            bodies = _heredoc_bodies(command, index + 1, ready)
+            pending = [item for item in pending if item[3] != depth]
+            if bodies is None:
+                index += 1
+                continue
+            body_end, expanded = bodies
+            if any('$' in body or '`' in body for body in expanded):
+                # An unquoted body's expansions do run, and finding the
+                # commands among them needs a second parser with the same
+                # divergences: a case pattern's ')' closes '$(' early, and
+                # "${x@P}" runs a substitution held in x with no '$(' in
+                # the body at all. Leave such a body unblanked so the
+                # guards see it whole; quote the delimiter to document
+                # commands.
+                return command, []
+            pieces.append(command[copied_to:index + 1])
+            pieces.append(''.join(
+                '\n' if char == '\n' else ' '
+                for char in command[index + 1:body_end]
+            ))
+            expanded_bodies.extend(expanded)
+            copied_to = body_end
+            index = body_end
+            continue
+        if quote is None and character == '#' and (
+                index == 0 or command[index - 1] in _COMMENT_PRECEDERS):
+            # A comment runs to end of line, so any '<<' in it is text.
+            newline = command.find('\n', index)
+            if newline == -1:
+                break
+            # Stop on the newline itself: it may still end a command line
+            # whose heredoc bodies start right after the comment.
+            index = newline
+            continue
+        if quote is None and command.startswith('((', index):
+            # '<<' inside $((1 << 2)) is a left shift, not a heredoc.
+            arithmetic_end = _end_of_balanced(command, index, '(')
+            if arithmetic_end is not None:
+                if '<<' in command[index:arithmetic_end]:
+                    return command, []   # see _simple_heredoc_header
+                index = arithmetic_end
+                continue
+        if quote is None and command.startswith('${', index):
+            # '<<' inside ${x:-<<EOF} is expansion text, not a heredoc.
+            expansion_end = _end_of_balanced(command, index + 1, '{')
+            if expansion_end is not None:
+                if '<<' in command[index:expansion_end]:
+                    return command, []   # see _simple_heredoc_header
+                index = expansion_end
+                continue
+        if quote is None and command.startswith('$[', index):
+            # $[1 << 2] is the deprecated arithmetic form, still a shift.
+            legacy_end = _end_of_balanced(command, index + 1, '[')
+            if legacy_end is not None:
+                if '<<' in command[index:legacy_end]:
+                    return command, []   # see _simple_heredoc_header
+                index = legacy_end
+                continue
+        if quote is None and character == '(':
+            # A grouping or subshell paren. It is not a parsing unit of its
+            # own, but it has to be balanced so that its ')' is not taken
+            # for the one closing a substitution. Checked after the
+            # arithmetic and expansion skips above, which own their parens.
+            open_parens.append('(')
+            index += 1
+            continue
+        if (quote is None and character == '[' and index > 0
+                and (command[index - 1].isalnum()
+                     or command[index - 1] == '_')):
+            # An array subscript is an arithmetic context, so the '<<' in
+            # "a[1<<2]=foo" is a shift. But only an assignment word gets
+            # that reading: in "echo a[<<EOF]" bash sees the argument "a["
+            # followed by a heredoc delimited by "EOF]". So the bracket is
+            # skipped only when the balanced span is followed by '=' or
+            # '+=', i.e. it really is "name[subscript]=value".
+            subscript_end = _end_of_balanced(command, index, '[')
+            if subscript_end is not None and (
+                    command.startswith('=', subscript_end)
+                    or command.startswith('+=', subscript_end)):
+                if '<<' in command[index:subscript_end]:
+                    return command, []   # see _simple_heredoc_header
+                index = subscript_end
+                continue
+        if quote is None and command.startswith('<<<', index):
+            # A here-string, whose expansions do run. Step over the whole
+            # operator: leaving the scan on its second '<' would read the
+            # remaining '<<' as a heredoc and blank the lines after it.
+            index += 3
+            continue
+        if quote is None and command.startswith('<<', index):
+            delimiter = _heredoc_delimiter(command, index)
+            if delimiter is _UNDECODABLE_DELIMITER:
+                # The body of this one cannot be located. Stop rather than
+                # scan on: text inside that body could otherwise be read as
+                # another heredoc header and blank real commands.
+                break
+            if isinstance(delimiter, tuple):
+                word, quoted, strip_tabs, end = delimiter
+                if depth or in_backtick or not _simple_heredoc_header(
+                        command, index, end):
+                    # Not provably simple: blank NOTHING in this command.
+                    # See _simple_heredoc_header for why.
+                    return command, []
+                pending.append((word, quoted, strip_tabs, depth))
+                index = end
+                continue
+        index += 1
+    pieces.append(command[copied_to:])
+    return ''.join(pieces), expanded_bodies
+
+
 def extract_all_commands(command: str) -> list[str]:
     """
     Recursively extract all commands from a bash command string.
@@ -304,6 +967,10 @@ def extract_all_commands(command: str) -> list[str]:
 
     This is the recommended function for security hooks that need to
     inspect all commands, including those hidden in subshells.
+
+    Heredoc bodies are treated as the data they are: a quoted delimiter
+    (<<'EOF') means nothing in the body executes, and an unquoted one
+    (<<EOF) means only the body's $() and backtick expansions execute.
 
     Args:
         command: A bash command string, possibly compound with subshells.
@@ -316,18 +983,30 @@ def extract_all_commands(command: str) -> list[str]:
         ['echo $(rm foo)', 'ls', 'rm foo']
         >>> extract_all_commands("cat `echo secret` | grep pass")
         ['cat `echo secret`', 'grep pass', 'echo secret']
+        >>> extract_all_commands("cat > f <<'EOF'\\n`rm x` is blocked\\nEOF")
+        ["cat > f <<'EOF'"]
     """
     if not command:
         return []
 
+    # Heredoc bodies are data, so their lines are not commands. Blank them
+    # out first; expanded_bodies holds the bodies (unquoted delimiters only)
+    # whose substitutions the shell does run.
+    stripped, expanded_bodies = strip_heredoc_bodies(command)
+
     all_commands = []
 
     # First, extract top-level subcommands (split on operators)
-    subcommands = extract_subcommands(command)
+    subcommands = extract_subcommands(stripped)
     all_commands.extend(subcommands)
 
     # Then, extract commands from subshells within the original command
-    subshell_cmds = extract_subshell_commands(command)
+    subshell_cmds = extract_subshell_commands(stripped)
+
+    # Only the substitutions inside an unquoted heredoc body execute; the
+    # surrounding text is literal, so it is not split into subcommands.
+    for body in expanded_bodies:
+        subshell_cmds.extend(extract_subshell_commands(body))
 
     # Recursively process subshell commands (they may contain nested subshells
     # or chained operators)
