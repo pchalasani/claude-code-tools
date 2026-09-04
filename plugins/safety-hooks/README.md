@@ -27,6 +27,12 @@ decisions to Claude Code.
 - **Behavior**: Blocks deletion and suggests moving files to a TRASH/ directory
   instead, with logging in TRASH-FILES.md
 - **Purpose**: Prevent accidental/permanent file deletion
+- **Heredocs**: a heredoc body is data, so `cat > notes.md <<'EOF'` may
+  mention `rm` freely. Bodies are only treated as data when the heredoc is
+  *simple*: the `<<` line has no substitution, backticks, brackets, braces
+  or backslashes (plain `$VAR` is fine) and the delimiter is a plain word,
+  optionally quoted. Anything more exotic is scanned in full, which can
+  over-block but never lets a hidden command through.
 
 #### 1b. git_add_block_hook.py
 

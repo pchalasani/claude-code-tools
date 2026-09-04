@@ -341,14 +341,6 @@ class TestStripHeredocBodies(unittest.TestCase):
         command = "echo $(( (1 << 2) + 3 ))\nrm -rf /tmp/x\n3 ))"
         self.assertEqual(strip_heredoc_bodies(command), (command, []))
 
-    def test_ansi_c_quoted_delimiter_loses_its_dollar(self):
-        """<<$'EOF' ends the body at EOF, not at $EOF."""
-        command = "cat <<$'EOF'\nliteral\nEOF\nrm -rf /tmp/x\n$EOF"
-        stripped, bodies = strip_heredoc_bodies(command)
-        self.assertEqual(bodies, [])
-        self.assertIn("rm -rf /tmp/x", stripped)
-        self.assertNotIn("literal", stripped)
-
     def test_ansi_c_escape_in_delimiter_is_not_a_heredoc(self):
         """An undecodable ANSI-C delimiter blanks nothing, so guards see all."""
         command = "cat <<$'E\\tOF'\nrm -rf /tmp/x\nE\tOF"
@@ -363,13 +355,6 @@ class TestStripHeredocBodies(unittest.TestCase):
         """A '}' inside quotes does not end the expansion either."""
         command = "echo ${x:-'}'<<EOF}\nrm -rf /tmp/x\nEOF}"
         self.assertEqual(strip_heredoc_bodies(command), (command, []))
-
-    def test_line_continuation_delays_the_body(self):
-        """A backslash-newline keeps the header open, so the body starts later."""
-        command = "cat <<EOF ; \\\nrm -rf /tmp/x\nliteral\nEOF"
-        stripped, bodies = strip_heredoc_bodies(command)
-        self.assertEqual(bodies, ["literal\n"])
-        self.assertIn("rm -rf /tmp/x", stripped)
 
     def test_every_heredoc_on_the_line_is_consumed(self):
         """Two heredocs on one header have two bodies, one after the other."""
@@ -393,13 +378,6 @@ class TestStripHeredocBodies(unittest.TestCase):
         self.assertEqual(bodies, [])
         self.assertNotIn("rm -rf x", stripped)
 
-    def test_ansi_c_string_does_not_confuse_quote_tracking(self):
-        """An escaped quote inside $'...' does not leave the scanner quoted."""
-        command = "echo $'don\\'t' <<'MD'\nrm -rf x\nMD"
-        stripped, bodies = strip_heredoc_bodies(command)
-        self.assertEqual(bodies, [])
-        self.assertNotIn("rm -rf x", stripped)
-
     def test_escape_in_a_double_quoted_delimiter_is_not_a_heredoc(self):
         """Quote removal would drop a backslash, so decline to blank."""
         command = 'cat <<"A\\\\B"\ndata\nA\\B\nrm -rf /tmp/x\nA\\\\B'
@@ -410,21 +388,6 @@ class TestStripHeredocBodies(unittest.TestCase):
         command = 'cat <<$"A\\\\B"\ndata\nA\\B\nrm -rf /tmp/x\nA\\\\B'
         self.assertEqual(strip_heredoc_bodies(command), (command, []))
 
-    def test_delimiter_word_split_by_a_continuation(self):
-        """The shell removes the backslash-newline, so "E\\"+"OF" is EOF."""
-        command = "cat <<E\\\nOF\necho <<X\nEOF\nrm -rf /tmp/x\nX"
-        stripped, bodies = strip_heredoc_bodies(command)
-        self.assertEqual(bodies, ["echo <<X\n"])
-        self.assertIn("rm -rf /tmp/x", stripped)
-        self.assertNotIn("echo <<X", stripped)
-
-    def test_each_substitution_ends_its_own_heredocs(self):
-        """An outer heredoc does not swallow a newline inside $( )."""
-        command = "cat <<OUT $(cat <<IN\n)\nIN\nrm -rf /tmp/x\n)\nouter\nOUT"
-        stripped, _ = strip_heredoc_bodies(command)
-        self.assertIn("rm -rf /tmp/x", stripped)
-        self.assertNotIn("outer", stripped)
-
     def test_undecodable_delimiter_stops_the_scan(self):
         """Declining one heredoc must not turn its body into a new header.
 
@@ -434,14 +397,6 @@ class TestStripHeredocBodies(unittest.TestCase):
         """
         command = "cat <<$'E\\x4fF'\necho <<X\nEOF\nrm -rf /tmp/x\nX"
         self.assertEqual(strip_heredoc_bodies(command), (command, []))
-
-    def test_case_pattern_paren_does_not_close_a_substitution(self):
-        """A ')' ending a case pattern is not the one closing '$('."""
-        command = ("cat <<EOF $(case x in x) echo yes;; esac\n"
-                   "rm -rf /tmp/x\n)\nliteral\nEOF")
-        stripped, bodies = strip_heredoc_bodies(command)
-        self.assertEqual(bodies, ["literal\n"])
-        self.assertIn("rm -rf /tmp/x", stripped)
 
     def test_case_outside_a_substitution_still_allows_a_heredoc(self):
         """'esac' closes the case, so a later heredoc is found normally."""
@@ -465,34 +420,11 @@ class TestStripHeredocBodies(unittest.TestCase):
         command = "a[1<<2]=foo\nrm -rf /tmp/x\n2]=foo"
         self.assertEqual(strip_heredoc_bodies(command), (command, []))
 
-    def test_bracket_that_is_not_a_subscript_still_allows_a_heredoc(self):
-        """A '[' after whitespace is a glob or test, not a subscript."""
-        command = "ls [ab]* ; cat <<EOF\nrm -rf /tmp/x\nEOF"
-        stripped, bodies = strip_heredoc_bodies(command)
-        self.assertEqual(bodies, ["rm -rf /tmp/x\n"])
-        self.assertNotIn("rm -rf /tmp/x", stripped)
-
-    def test_process_substitution_delays_the_body(self):
-        """A newline inside <( ) does not end the line that opened it."""
-        command = "cat <<EOF <(echo x\nrm -rf /tmp/x\n)\nliteral\nEOF"
-        stripped, bodies = strip_heredoc_bodies(command)
-        self.assertEqual(bodies, ["literal\n"])
-        self.assertIn("rm -rf /tmp/x", stripped)
-        self.assertNotIn("literal", stripped)
-
     def test_output_process_substitution_delays_the_body(self):
         """>( ) is a parsing unit of its own just as <( ) is."""
         command = "cat <<EOF >(cat\nrm -rf /tmp/x\n)\nliteral\nEOF"
         stripped, _ = strip_heredoc_bodies(command)
         self.assertIn("rm -rf /tmp/x", stripped)
-
-    def test_paren_pattern_case_inside_a_substitution(self):
-        """The '(x)' pattern form balances, so the substitution stays open."""
-        command = ("cat <<EOF $(case x in (x) echo yes;; esac\n"
-                   "rm -rf /tmp/x\n)\nliteral\nEOF")
-        stripped, _ = strip_heredoc_bodies(command)
-        self.assertIn("rm -rf /tmp/x", stripped)
-        self.assertNotIn("literal", stripped)
 
     def test_delimiter_split_over_a_continued_line(self):
         """An unquoted body loses backslash-newline, so 'EO\\'+'F' ends it."""
@@ -504,59 +436,6 @@ class TestStripHeredocBodies(unittest.TestCase):
     def test_quoted_body_keeps_a_continued_delimiter_literal(self):
         """With a quoted delimiter nothing is unescaped, so it does not end."""
         command = "cat <<'EOF'\ndata\nEO\\\nF\nrm -rf /tmp/x\nEOF"
-        stripped, bodies = strip_heredoc_bodies(command)
-        self.assertEqual(bodies, [])
-        self.assertNotIn("rm -rf /tmp/x", stripped)
-
-    def test_nested_group_paren_does_not_close_the_substitution(self):
-        """The ')' of '(echo x)' closes the group, not the '$(' around it."""
-        command = "cat <<EOF $( (echo x)\nrm -rf /tmp/x\n)\nliteral\nEOF"
-        stripped, bodies = strip_heredoc_bodies(command)
-        self.assertEqual(bodies, ["literal\n"])
-        self.assertIn("rm -rf /tmp/x", stripped)
-        self.assertNotIn("literal", stripped)
-
-    def test_substitution_in_a_delimiter_is_literal(self):
-        """No expansion runs on a delimiter word, so '$(echo EOF)' ends it."""
-        command = "cat <<$(echo EOF)\npayload\n$(echo EOF)\nrm -rf /tmp/x\n$"
-        stripped, bodies = strip_heredoc_bodies(command)
-        self.assertEqual(bodies, ["payload\n"])
-        self.assertIn("rm -rf /tmp/x", stripped)
-        self.assertNotIn("payload", stripped)
-
-    def test_parameter_expansion_in_a_delimiter_is_literal(self):
-        """'${x}' is the delimiter itself, not whatever x holds."""
-        command = "cat <<${x}\npayload\n${x}\nrm -rf /tmp/x\n$"
-        stripped, _ = strip_heredoc_bodies(command)
-        self.assertIn("rm -rf /tmp/x", stripped)
-        self.assertNotIn("payload", stripped)
-
-    def test_backticks_in_a_delimiter_are_literal(self):
-        """A backtick span belongs to the delimiter word, unexpanded."""
-        command = "cat <<`echo EOF`\npayload\n`echo EOF`\nrm -rf /tmp/x\n$"
-        stripped, _ = strip_heredoc_bodies(command)
-        self.assertIn("rm -rf /tmp/x", stripped)
-        self.assertNotIn("payload", stripped)
-
-    def test_newline_in_a_substitution_does_not_start_the_body(self):
-        """An unfinished $( ) holds the command line open past the newline."""
-        command = "cat <<'EOF' $(echo start\nrm -rf /tmp/x)\nliteral\nEOF"
-        stripped, bodies = strip_heredoc_bodies(command)
-        self.assertEqual(bodies, [])
-        self.assertIn("rm -rf /tmp/x", stripped)
-        self.assertNotIn("literal", stripped)
-
-    def test_newline_in_backticks_does_not_start_the_body(self):
-        """Backtick substitution holds the line open the same way $( ) does."""
-        command = "cat <<'EOF' `echo start\nrm -rf /tmp/x`\nliteral\nEOF"
-        stripped, bodies = strip_heredoc_bodies(command)
-        self.assertEqual(bodies, [])
-        self.assertIn("rm -rf /tmp/x", stripped)
-        self.assertNotIn("literal", stripped)
-
-    def test_heredoc_inside_a_substitution_takes_its_body_there(self):
-        """A substitution is its own parsing unit, bodies included."""
-        command = "echo $(cat <<'EOF'\nrm -rf /tmp/x\nEOF\n)"
         stripped, bodies = strip_heredoc_bodies(command)
         self.assertEqual(bodies, [])
         self.assertNotIn("rm -rf /tmp/x", stripped)
@@ -576,17 +455,129 @@ class TestStripHeredocBodies(unittest.TestCase):
         self.assertEqual(strip_heredoc_bodies(command), (command, []))
         self.assertIn("rm -rf /tmp/x", extract_all_commands(command))
 
-    def test_subshell_paren_does_not_delay_the_body(self):
-        """Plain '(' is not a substitution, so the body still starts next."""
-        command = "(cat <<'EOF'\nrm -rf /tmp/x\nEOF\n)"
-        stripped, bodies = strip_heredoc_bodies(command)
-        self.assertEqual(bodies, [])
-        self.assertNotIn("rm -rf /tmp/x", stripped)
+    def test_case_as_an_argument_is_not_the_keyword(self):
+        """Only a 'case' in command position opens a case statement.
+
+        Bash runs the rm: 'echo case' is an argument, so both ')' close
+        their substitutions and the OUT body's '<<X' is literal.
+        """
+        command = ("cat <<OUT $(echo case; echo $(echo hi)\n)\n"
+                   "echo <<X\nOUT\nrm -rf /tmp/x\nX")
+        self.assertIn("rm -rf /tmp/x", extract_all_commands(command))
+
+    def test_bracket_after_an_argument_is_not_a_subscript(self):
+        """'echo a[<<EOF]' is the argument 'a[' plus a heredoc to 'EOF]'.
+
+        Bash runs the rm: the body ends at 'EOF]', and the '<<X' inside
+        it is literal, not a second heredoc.
+        """
+        command = "echo a[<<EOF]\necho <<X\nEOF]\nrm -rf /tmp/x\nX"
+        self.assertIn("rm -rf /tmp/x", extract_all_commands(command))
+
+    def test_assignment_subscript_shift_is_still_not_a_heredoc(self):
+        """The subscript rule still covers the real assignment form."""
+        command = "a[1<<2]=foo\nrm -rf /tmp/x"
+        self.assertIn("rm -rf /tmp/x", extract_all_commands(command))
 
     def test_unterminated_second_body_blanks_nothing(self):
         """If any body is unclosed, no body is treated as data."""
         command = "cat <<A <<B\nfirst\nA\nrm -rf /tmp/x"
         self.assertEqual(strip_heredoc_bodies(command), (command, []))
+
+    # Every construct below has, at some point, let the scanner place a
+    # body boundary where bash does not, so that a real command was
+    # blanked as data. The policy is therefore to blank nothing when the
+    # header line carries any of them: the guards then see the whole
+    # command, which can only over-block.
+    COMPLEX_HEADERS = {
+        "ansi-c delimiter": "cat <<$'EOF'\nliteral\nEOF\nrm -rf /tmp/x\n$EOF",
+        "ansi-c string on the line": "echo $'don\\'t' <<'MD'\nrm -rf x\nMD",
+        "backticks in the delimiter": "cat <<`echo EOF`\npayload\n`echo EOF`",
+        "glob bracket on the line": "ls [ab]* ; cat <<EOF\nrm -rf /tmp/x\nEOF",
+        "case pattern in a substitution": (
+            "cat <<EOF $(case x in x) echo yes;; esac\nrm -rf /tmp/x\n)\n"
+            "literal\nEOF"),
+        "delimiter split by a continuation": (
+            "cat <<E\\\nOF\necho <<X\nEOF\nrm -rf /tmp/x\nX"),
+        "nested heredocs": (
+            "cat <<OUT $(cat <<IN\n)\nIN\nrm -rf /tmp/x\n)\nouter\nOUT"),
+        "heredoc inside a substitution": (
+            "echo $(cat <<'EOF'\nrm -rf /tmp/x\nEOF\n)"),
+        "continuation after the header": (
+            "cat <<EOF ; \\\nrm -rf /tmp/x\nliteral\nEOF"),
+        "group inside a substitution": (
+            "cat <<EOF $( (echo x)\nrm -rf /tmp/x\n)\nliteral\nEOF"),
+        "newline inside a substitution": (
+            "cat <<'EOF' $(echo start\nrm -rf /tmp/x)\nliteral\nEOF"),
+        "newline inside backticks": (
+            "cat <<'EOF' `echo start\nrm -rf /tmp/x`\nliteral\nEOF"),
+        "expansion as the delimiter": "cat <<${x}\npayload\n${x}\nrm -rf /tmp/x",
+        "paren case pattern": (
+            "cat <<EOF $(case x in (x) echo yes;; esac\nrm -rf /tmp/x\n)\n"
+            "literal\nEOF"),
+        "process substitution": (
+            "cat <<EOF <(echo x\nrm -rf /tmp/x\n)\nliteral\nEOF"),
+        "subshell group": "(cat <<'EOF'\nrm -rf /tmp/x\nEOF\n)",
+        "substitution as the delimiter": (
+            "cat <<$(echo EOF)\npayload\n$(echo EOF)\nrm -rf /tmp/x"),
+        "parameter expansion with default": (
+            "echo ${x:-<<EOF}\nrm -rf /tmp/x\nEOF}"),
+        "array assignment on the line": "a[1<<2]=foo\nrm -rf /tmp/x",
+    }
+
+    def test_complex_headers_are_never_blanked(self):
+        """A header line with any complex construct disables blanking."""
+        for name, command in self.COMPLEX_HEADERS.items():
+            with self.subTest(name):
+                self.assertEqual(strip_heredoc_bodies(command), (command, []))
+
+    # Strings reviewers used to blank a real rm. Each is accepted by bash
+    # and runs the rm; each must reach the guards.
+    KNOWN_BYPASSES = [
+        "echo ${x:-<<EOF}\nrm -rf /tmp/x\nEOF}",
+        "echo ${x:-\\}<<EOF}\nrm -rf /tmp/x\nEOF}",
+        "cat <<A <<'B'\nfirst\nA\necho <<X\nB\nrm -rf /tmp/x\nX",
+        "cat <<$'EOF'\nliteral\nEOF\nrm -rf /tmp/x\n$EOF",
+        "cat <<EOF ; \\\nrm -rf /tmp/x\nliteral\nEOF",
+        "cat <<E\\\nOF\necho <<X\nEOF\nrm -rf /tmp/x\nX",
+        "cat <<EOF $( (echo x)\nrm -rf /tmp/x\n)\nliteral\nEOF",
+        "cat <<EOF <(echo x\nrm -rf /tmp/x\n)\nliteral\nEOF",
+        "cat <<OUT $(cat <<IN\n)\nIN\nrm -rf /tmp/x\n)\nouter\nOUT",
+        "echo `cat <<IN ` ; echo `\nrm -rf /tmp/x\nIN\n`",
+        "cat <<OUT $(echo case; echo $(echo hi)\n)\necho <<X\nOUT\n"
+        "rm -rf /tmp/x\nX",
+        "echo a[<<EOF]\necho <<X\nEOF]\nrm -rf /tmp/x\nX",
+        "cat <<OUT $(if true; then case x in x) :;; esac; fi\n"
+        "rm -rf /tmp/x\n)\npayload\nOUT",
+        "echo a[<<EOF]=x\necho <<X\nEOF]=x\nrm -rf /tmp/x\nX",
+        "cat <<\"A\\\\B\"\nA\\B\nrm -rf /tmp/x\nA\\\\B",
+    ]
+
+    def test_known_bypasses_reach_the_guards(self):
+        """No reviewer-found bypass hides the rm from extract_all_commands."""
+        for command in self.KNOWN_BYPASSES:
+            with self.subTest(command):
+                found = [c for c in extract_all_commands(command)
+                         if c.strip().startswith("rm ")]
+                self.assertTrue(found, command)
+
+    def test_plain_variable_on_the_header_still_blanks(self):
+        """'cat > $HOME/x.md <<EOF' is the common case and must work."""
+        command = "cat > $HOME/notes.md <<'EOF'\nrm -rf x is bad\nEOF"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, [])
+        self.assertNotIn("rm -rf", stripped)
+        command = "cat > ${DIR}/notes.md <<EOF\nrm -rf x is bad\nEOF"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, ["rm -rf x is bad\n"])
+        self.assertNotIn("rm -rf", stripped)
+
+    def test_backslash_quoted_plain_delimiter_still_blanks(self):
+        """<<\\EOF is one of the three simple quotings and stays supported."""
+        command = "cat <<\\EOF\n`rm x`\nEOF"
+        stripped, bodies = strip_heredoc_bodies(command)
+        self.assertEqual(bodies, [])
+        self.assertNotIn("rm x", stripped)
 
 
 class TestExpandCommandAliases(unittest.TestCase):

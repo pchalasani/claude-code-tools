@@ -299,11 +299,15 @@ class TestCheckRmCommand(unittest.TestCase):
         blocked, _ = check_rm_command(command)
         self.assertTrue(blocked, "rm is not a body when the body never starts")
 
-    def test_documenting_rm_inside_a_substitution_heredoc_is_allowed(self):
-        """A heredoc body inside $( ) is still data."""
+    def test_documenting_rm_inside_a_substitution_heredoc_over_blocks(self):
+        """A heredoc inside $( ) is not blanked, so this over-blocks.
+
+        That is the chosen failure direction: substitutions on the header
+        line are where every known bypass lived.
+        """
         command = "echo $(cat <<'EOF'\nThe `rm -rf x` guard.\nEOF\n)"
         blocked, _ = check_rm_command(command)
-        self.assertFalse(blocked, "literal rm in a quoted body is data")
+        self.assertTrue(blocked, "complex header: body is not blanked")
 
     def test_complex_bypass_attempts(self):
         """Complex commands attempting to hide rm are blocked."""

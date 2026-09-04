@@ -580,13 +580,15 @@ def _heredoc_bodies(
 # function blank less, i.e. hand MORE text to the guards.
 _COMMENT_PRECEDERS = ' \t\n;&|(<>)'
 
-# A word only counts as a keyword when it stands alone.
-_WORD_PRECEDERS = ' \t\n;&|('
+# A reserved word is only reserved in command position: at the start of
+# the command, or right after an operator that begins a new one. Spaces
+# may sit in between, but not another word -- 'echo case' is an argument.
+_COMMAND_STARTERS = '\n;&|({'
 
 
 def _keyword_at(command: str, index: int, keyword: str) -> bool:
     """
-    Report whether a standalone keyword starts at the given index.
+    Report whether a reserved word in command position starts at index.
 
     Args:
         command: The full command string.
@@ -594,11 +596,15 @@ def _keyword_at(command: str, index: int, keyword: str) -> bool:
         keyword: The word to look for, e.g. 'case'.
 
     Returns:
-        True when the keyword is there as a whole word.
+        True when the keyword is there as a whole word and bash would
+        read it as the reserved word rather than an ordinary argument.
     """
     if not command.startswith(keyword, index):
         return False
-    if index and command[index - 1] not in _WORD_PRECEDERS:
+    before = index
+    while before and command[before - 1] in ' \t':
+        before -= 1
+    if before and command[before - 1] not in _COMMAND_STARTERS:
         return False
     after = index + len(keyword)
     return after == len(command) or command[after] in ' \t\n;&|)'
@@ -647,6 +653,63 @@ def _end_of_balanced(command: str, start: int, opener: str) -> int | None:
                     return index + 1
         index += 1
     return None
+
+
+# The delimiter word as written: a plain name, optionally quoted one of
+# the three ways bash allows. Anything else ($'..', $"..", escapes inside
+# quotes, substitutions) is left to the shell.
+_SIMPLE_DELIMITER = re.compile(
+    r"""^(?:\\?[A-Za-z0-9_]+|'[A-Za-z0-9_]+'|"[A-Za-z0-9_]+")$""")
+
+# Header-line text that makes bash's tokenization non-trivial. Every
+# known way to blank a real command (a body boundary the scanner places
+# differently from bash) has needed one of these on the heredoc's own
+# line; refusing to blank when any is present makes the failure direction
+# over-blocking, which the guards tolerate. The list is deliberately
+# blunt: a '(' is enough, whether or not it opens a substitution.
+_COMPLEX_HEADER_MARKS = ('`', '$', '(', ')', '{', '}', '[', ']', '\\')
+_PLAIN_VARIABLE = re.compile(r'\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})')
+
+
+def _simple_heredoc_header(command: str, operator: int, end: int) -> bool:
+    """
+    Report whether a heredoc's header line is simple enough to trust.
+
+    The scanner approximates bash's tokenizer, and every divergence found
+    so far (parameter expansions, ANSI-C quoting, substitutions closing
+    before a newline, 'case' patterns, subscripts, escaped delimiters)
+    lets an attacker place a body boundary where bash does not, so that
+    a real command is blanked as data. Rather than chase each one, blank
+    bodies only when the header line -- the physical line holding the
+    '<<' -- carries none of the constructs those divergences need, and
+    the delimiter is a plain word with at most simple quoting.
+
+    Args:
+        command: The full command string.
+        operator: Index of the '<<' operator.
+        end: Index just past its delimiter word.
+
+    The same principle covers the spans the scanner steps over as
+    non-command text ($((...)), ${...}, $[...], name[...]=): a '<<' inside
+    one of those is a place where bash and this scanner could disagree
+    about whether a heredoc opened, so the caller blanks nothing then too.
+
+    Returns:
+        True when the header line has no complex construct and the
+        delimiter is plain, so the body boundaries are unambiguous.
+    """
+    line_start = command.rfind('\n', 0, operator) + 1
+    line_end = command.find('\n', operator)
+    if line_end == -1:
+        line_end = len(command)
+    raw = command[operator + 2:end].lstrip('-').strip(' \t')
+    if not _SIMPLE_DELIMITER.match(raw):
+        return False
+    header = command[line_start:operator + 2] + command[end:line_end]
+    # A plain variable reference ("$HOME", "${name}") cannot move a token
+    # boundary, and "cat > $HOME/notes.md <<'EOF'" is the common case.
+    header = _PLAIN_VARIABLE.sub('', header)
+    return not any(mark in header for mark in _COMPLEX_HEADER_MARKS)
 
 
 def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
@@ -802,18 +865,24 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
             # '<<' inside $((1 << 2)) is a left shift, not a heredoc.
             arithmetic_end = _end_of_balanced(command, index, '(')
             if arithmetic_end is not None:
+                if '<<' in command[index:arithmetic_end]:
+                    return command, []   # see _simple_heredoc_header
                 index = arithmetic_end
                 continue
         if quote is None and command.startswith('${', index):
             # '<<' inside ${x:-<<EOF} is expansion text, not a heredoc.
             expansion_end = _end_of_balanced(command, index + 1, '{')
             if expansion_end is not None:
+                if '<<' in command[index:expansion_end]:
+                    return command, []   # see _simple_heredoc_header
                 index = expansion_end
                 continue
         if quote is None and command.startswith('$[', index):
             # $[1 << 2] is the deprecated arithmetic form, still a shift.
             legacy_end = _end_of_balanced(command, index + 1, '[')
             if legacy_end is not None:
+                if '<<' in command[index:legacy_end]:
+                    return command, []   # see _simple_heredoc_header
                 index = legacy_end
                 continue
         if quote is None and character == '(':
@@ -828,10 +897,17 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
                 and (command[index - 1].isalnum()
                      or command[index - 1] == '_')):
             # An array subscript is an arithmetic context, so the '<<' in
-            # "a[1<<2]=foo" is a shift. A '[' that does not follow a name
-            # is the test command or a glob, and is left alone.
+            # "a[1<<2]=foo" is a shift. But only an assignment word gets
+            # that reading: in "echo a[<<EOF]" bash sees the argument "a["
+            # followed by a heredoc delimited by "EOF]". So the bracket is
+            # skipped only when the balanced span is followed by '=' or
+            # '+=', i.e. it really is "name[subscript]=value".
             subscript_end = _end_of_balanced(command, index, '[')
-            if subscript_end is not None:
+            if subscript_end is not None and (
+                    command.startswith('=', subscript_end)
+                    or command.startswith('+=', subscript_end)):
+                if '<<' in command[index:subscript_end]:
+                    return command, []   # see _simple_heredoc_header
                 index = subscript_end
                 continue
         if quote is None and command.startswith('<<<', index):
@@ -849,6 +925,11 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
                 break
             if isinstance(delimiter, tuple):
                 word, quoted, strip_tabs, end = delimiter
+                if depth or in_backtick or not _simple_heredoc_header(
+                        command, index, end):
+                    # Not provably simple: blank NOTHING in this command.
+                    # See _simple_heredoc_header for why.
+                    return command, []
                 pending.append((word, quoted, strip_tabs, depth))
                 index = end
                 continue
