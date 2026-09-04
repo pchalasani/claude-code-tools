@@ -734,6 +734,12 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
             # Backticks cannot nest, so one toggles the substitution.
             depth += -1 if in_backtick else 1
             in_backtick = not in_backtick
+            if not in_backtick:
+                # Closing: a heredoc opened inside that never reached a
+                # newline gets no body, exactly as with ')' below. Left
+                # pending, it would swallow the first lines of a later
+                # substitution at the same depth as data.
+                pending = [item for item in pending if item[3] <= depth]
             index += 1
             continue
         if quote is None and (_keyword_at(command, index, 'case')

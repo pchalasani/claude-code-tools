@@ -566,6 +566,16 @@ class TestStripHeredocBodies(unittest.TestCase):
         command = "echo $(cat <<'EOF') tail\nrm -rf /tmp/x\nEOF"
         self.assertEqual(strip_heredoc_bodies(command), (command, []))
 
+    def test_backticks_closing_first_leave_the_heredoc_bodyless(self):
+        """A closed backtick span drops its heredoc, like ')' does.
+
+        Bash runs the rm here: the first span closes before any newline,
+        so its heredoc has no body, and the second span is code.
+        """
+        command = "echo `cat <<IN ` ; echo `\nrm -rf /tmp/x\nIN\n`"
+        self.assertEqual(strip_heredoc_bodies(command), (command, []))
+        self.assertIn("rm -rf /tmp/x", extract_all_commands(command))
+
     def test_subshell_paren_does_not_delay_the_body(self):
         """Plain '(' is not a substitution, so the body still starts next."""
         command = "(cat <<'EOF'\nrm -rf /tmp/x\nEOF\n)"
