@@ -193,7 +193,7 @@ all-patch: release-preflight
 	if gh release view v$$VERSION >/dev/null 2>&1; then \
 		echo "Release v$$VERSION already exists"; \
 	else \
-		gh release create v$$VERSION --title "v$$VERSION"; \
+		gh release create v$$VERSION --title "v$$VERSION" --generate-notes; \
 	fi
 	@echo "Cleaning old builds..."
 	rm -rf dist/*
@@ -213,7 +213,7 @@ all-minor: release-preflight
 	if gh release view v$$VERSION >/dev/null 2>&1; then \
 		echo "Release v$$VERSION already exists"; \
 	else \
-		gh release create v$$VERSION --title "v$$VERSION"; \
+		gh release create v$$VERSION --title "v$$VERSION" --generate-notes; \
 	fi
 	@echo "Cleaning old builds..."
 	rm -rf dist/*
@@ -233,7 +233,7 @@ all-major: release-preflight
 	if gh release view v$$VERSION >/dev/null 2>&1; then \
 		echo "Release v$$VERSION already exists"; \
 	else \
-		gh release create v$$VERSION --title "v$$VERSION"; \
+		gh release create v$$VERSION --title "v$$VERSION" --generate-notes; \
 	fi
 	@echo "Cleaning old builds..."
 	rm -rf dist/*
@@ -244,7 +244,7 @@ all-major: release-preflight
 release-github: release-preflight
 	@echo "Creating GitHub release..."
 	@VERSION=$$(grep "^version" pyproject.toml | head -1 | cut -d'"' -f2); \
-	gh release create v$$VERSION --title "v$$VERSION"
+	gh release create v$$VERSION --title "v$$VERSION" --generate-notes
 	@echo "GitHub release created!"
 
 lmsh:
