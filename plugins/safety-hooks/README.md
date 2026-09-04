@@ -31,8 +31,13 @@ decisions to Claude Code.
   mention `rm` freely. Bodies are only treated as data when the heredoc is
   *simple*: the `<<` line has no substitution, backticks, brackets, braces
   or backslashes (plain `$VAR` is fine) and the delimiter is a plain word,
-  optionally quoted. Anything more exotic is scanned in full, which can
-  over-block but never lets a hidden command through.
+  optionally quoted. With an unquoted delimiter the body's expansions run
+  (`$(...)`, backticks, even `${x@P}`), so an unquoted body containing `$`
+  or a backtick is scanned in full too. Anything more exotic is scanned in
+  full, which can over-block but never blanks a line bash would run. Quote
+  the delimiter when documenting commands. (Commands built at run time, e.g.
+  `eval "$x"` or `${x@P}`, are outside what any of these guards inspect,
+  heredoc or not.)
 
 #### 1b. git_add_block_hook.py
 

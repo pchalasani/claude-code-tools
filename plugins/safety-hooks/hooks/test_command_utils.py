@@ -523,6 +523,11 @@ class TestStripHeredocBodies(unittest.TestCase):
         "parameter expansion with default": (
             "echo ${x:-<<EOF}\nrm -rf /tmp/x\nEOF}"),
         "array assignment on the line": "a[1<<2]=foo\nrm -rf /tmp/x",
+        "substitution in an unquoted body": (
+            "cat <<EOF\n$(case x in x) echo yes;; esac; rm -rf /tmp/x)\nEOF"),
+        "backticks in an unquoted body": "cat <<EOF\n`rm -rf /tmp/x`\nEOF",
+        "prompt expansion in an unquoted body": (
+            "x='$''(rm -rf /tmp/x)'; cat <<EOF\n${x@P}\nEOF"),
     }
 
     def test_complex_headers_are_never_blanked(self):
@@ -550,8 +555,14 @@ class TestStripHeredocBodies(unittest.TestCase):
         "cat <<OUT $(if true; then case x in x) :;; esac; fi\n"
         "rm -rf /tmp/x\n)\npayload\nOUT",
         "echo a[<<EOF]=x\necho <<X\nEOF]=x\nrm -rf /tmp/x\nX",
+        "cat <<EOF\n$(case x in x) echo yes;; esac; rm -rf /tmp/x)\nEOF",
         "cat <<\"A\\\\B\"\nA\\B\nrm -rf /tmp/x\nA\\\\B",
     ]
+    # Not listed above: "x='$''(rm -rf /tmp/x)'; cat <<EOF\n${x@P}\nEOF".
+    # The scanner leaves that body unblanked (see COMPLEX_HEADERS), but
+    # the rm is then inside a quoted assignment, which no guard inspects:
+    # commands built at run time ("eval", "${x@P}") are outside what the
+    # guards claim to catch, with or without a heredoc.
 
     def test_known_bypasses_reach_the_guards(self):
         """No reviewer-found bypass hides the rm from extract_all_commands."""

@@ -842,6 +842,15 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
                 index += 1
                 continue
             body_end, expanded = bodies
+            if any('$' in body or '`' in body for body in expanded):
+                # An unquoted body's expansions do run, and finding the
+                # commands among them needs a second parser with the same
+                # divergences: a case pattern's ')' closes '$(' early, and
+                # "${x@P}" runs a substitution held in x with no '$(' in
+                # the body at all. Leave such a body unblanked so the
+                # guards see it whole; quote the delimiter to document
+                # commands.
+                return command, []
             pieces.append(command[copied_to:index + 1])
             pieces.append(''.join(
                 '\n' if char == '\n' else ' '
