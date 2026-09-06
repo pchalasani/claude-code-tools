@@ -3357,6 +3357,7 @@ def search(
                     pass
             # Continue loop to return to Rust TUI
 
-
+from claude_code_tools.transfer_session import transfer
+main.add_command(transfer)
 if __name__ == "__main__":
     main()
