@@ -108,6 +108,14 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any]:
             "crash inspect partial artifacts before removing this directory."
         ) from error
     created: list[Path] = []
+    commit_started = False
+    retain_lock = False
+
+    def mark_commit_started() -> None:
+        """Stop destructive cleanup before entering a possibly durable commit."""
+        nonlocal commit_started
+        commit_started = True
+
     try:
         validate_files(home, manifest)
         for relative, metadata in manifest["artifacts"].items():
@@ -131,16 +139,24 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any]:
         if manifest["agent"] == "codex":
             from claude_code_tools.transfer_codex import import_databases
 
-            import_databases(manifest, home)
+            import_databases(manifest, home, before_commit=mark_commit_started)
         result["imported_files"] = len(created)
         result["verified_files"] = len(manifest["artifacts"])
         return result
-    except BaseException:
+    except BaseException as error:
+        if commit_started:
+            retain_lock = True
+            raise ValueError(
+                f"Database commit outcome may be uncertain. Verified files and "
+                f"recovery lock were retained at {lock}; inspect destination "
+                "database rows before retrying or removing the lock."
+            ) from error
         for target in reversed(created):
             target.unlink(missing_ok=True)
         raise
     finally:
-        lock.rmdir()
+        if not retain_lock:
+            lock.rmdir()
 
 
 def main() -> None:

@@ -277,3 +277,69 @@ def test_archived_codex_session_resolves(
     assert json.loads(result.output)["plan"]["files"] == [
         f"archived_sessions/{SID}.jsonl"
     ]
+
+
+def test_interrupt_after_real_database_commit_preserves_rollouts(
+    workspace: dict[str, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A late interrupt cannot delete rollouts referenced by committed rows."""
+    import sqlite3
+
+    from claude_code_tools.transfer_session import prepare_transfer
+    from tests.test_transfer_codex import profile, thread
+
+    home = tmp_path / "codex"
+    destination = tmp_path / "codex-destination"
+    profile(home)
+    profile(destination)
+    thread(home, SID)
+    with sqlite3.connect(home / "state_5.sqlite") as db:
+        db.execute(
+            "UPDATE threads SET cwd=?,sandbox_policy=?",
+            (
+                str(workspace["source"]),
+                json.dumps({"type": "workspace-write", "writable_roots": []}),
+            ),
+        )
+    staging = tmp_path / "staging"
+    manifest = prepare_transfer(
+        "codex", home, SID, destination, workspace["target"], staging
+    )
+    request = {
+        "operation": "import",
+        "destination_home": str(destination),
+        "destination_project": str(workspace["target"]),
+        "manifest": manifest,
+        "data": {
+            relative: base64.b64encode(
+                (staging / "files" / relative).read_bytes()
+            ).decode()
+            for relative in manifest["files"]
+        },
+    }
+    original_connect = sqlite3.connect
+
+    class InterruptedCommit(sqlite3.Connection):
+        """Commit real SQLite data, then simulate deferred signal delivery."""
+
+        def commit(self) -> None:
+            super().commit()
+            raise KeyboardInterrupt
+
+    def connect(database: Any, *args: Any, **kwargs: Any) -> sqlite3.Connection:
+        if database == ":memory:":
+            kwargs["factory"] = InterruptedCommit
+        return original_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    with pytest.raises(ValueError, match="commit outcome may be uncertain"):
+        handle_request(request)
+    with original_connect(destination / "state_5.sqlite") as db:
+        assert db.execute("SELECT count(*) FROM threads WHERE id=?", (SID,)).fetchone()[
+            0
+        ]
+    for relative in manifest["files"]:
+        assert (destination / relative).read_bytes() == (
+            staging / "files" / relative
+        ).read_bytes()
+    assert (destination / ".aichat-transfer.lock").is_dir()

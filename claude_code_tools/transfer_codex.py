@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
 from typing import Any
@@ -474,12 +475,17 @@ def validate_databases(manifest: dict[str, Any], destination_home: Path) -> None
 
 
 def import_databases(
-    manifest: dict[str, Any], destination_home: Path, dry_run: bool = False
+    manifest: dict[str, Any],
+    destination_home: Path,
+    dry_run: bool = False,
+    before_commit: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Insert selected rows atomically on SQL failure, refusing existing state.
 
     Files must already be installed and verified by the caller. This transaction
-    is the last import step. SQLite rolls back all attached databases on SQL
+    is the last import step. ``before_commit`` marks when callers must retain
+    files on interruption because the commit outcome may be unknown.
+    SQLite rolls back all attached databases on SQL
     errors; crash atomicity across WAL databases is not guaranteed by SQLite.
     """
     validate_databases(manifest, destination_home)
@@ -507,6 +513,8 @@ def import_databases(
                         query,
                         [[row[column] for column in columns] for row in table["rows"]],
                     )
+            if before_commit is not None:
+                before_commit()
             connection.commit()
         except Exception:
             connection.rollback()

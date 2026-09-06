@@ -103,7 +103,9 @@ proof that those files were transferred.
 
 Payload files are checksummed before and after import. Existing differing files
 or Codex database rows stop the operation. Ordinary import failures roll back new
-files and database inserts; the source remains intact. SQLite cannot guarantee
+files and database inserts; the source remains intact. If a database commit is
+interrupted or raises an error, verified files and the recovery lock remain for
+inspection. SQLite cannot guarantee
 crash atomicity across multiple WAL databases. If the machine or process crashes,
 inspect the destination before retrying. A retained `.aichat-transfer.lock`
 directory signals that an import may have been interrupted. Do not remove it
