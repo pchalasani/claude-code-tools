@@ -114,3 +114,59 @@ def test_copies_subagent_metadata_and_reports_runtime(tmp_path: Path) -> None:
     )
     assert json.loads(staged.read_text())["cwd"] == "/new/project/sub"
     assert any("Session-linked tasks" in warning for warning in result["warnings"])
+
+
+def test_includes_referenced_plan_only(tmp_path: Path) -> None:
+    home, transcript = fixture_home(tmp_path)
+    with transcript.open("a") as handle:
+        handle.write(json.dumps({"slug": "dancing-quiet-fox"}) + "\n")
+    plans = home / "plans"
+    plans.mkdir()
+    (plans / "dancing-quiet-fox.md").write_text("Continue research")
+    (plans / "unrelated.md").write_text("Other session")
+    result = export(home, tmp_path)
+    assert "plans/dancing-quiet-fox.md" in result["files"]
+    assert "plans/unrelated.md" not in result["files"]
+
+
+def test_detects_changed_and_added_sources(tmp_path: Path) -> None:
+    """Use a real racing writer; export must refuse the unstable snapshot."""
+    import threading
+    import time
+
+    home, transcript = fixture_home(tmp_path)
+    results = transcript.with_suffix("") / "tool-results"
+    results.mkdir(parents=True)
+    # Large enough to hold the copy open while the companion writer runs.
+    (results / "large.txt").write_bytes(b"x" * (32 * 1024 * 1024))
+    stop = threading.Event()
+    started = threading.Event()
+
+    def mutate() -> None:
+        index = 0
+        while not stop.is_set():
+            (results / "changing.txt").write_text(str(index))
+            started.set()
+            index += 1
+            time.sleep(0.0001)
+
+    thread = threading.Thread(target=mutate)
+    thread.start()
+    try:
+        assert started.wait(5)
+        with pytest.raises(ValueError, match="Source changed"):
+            export(home, tmp_path)
+    finally:
+        stop.set()
+        thread.join(5)
+        assert not thread.is_alive()
+
+
+def test_inventory_detects_new_file(tmp_path: Path) -> None:
+    from claude_code_tools.transfer_claude import _fingerprint
+
+    root = tmp_path / "sidecar"
+    root.mkdir()
+    before = _fingerprint([root])
+    (root / "new.txt").write_text("new output")
+    assert _fingerprint([root]) != before

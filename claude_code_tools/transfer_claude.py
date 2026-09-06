@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,18 @@ def _regular_files(root: Path) -> list[Path]:
     result: list[Path] = []
     for child in sorted(root.iterdir()):
         result.extend(_regular_files(child))
+    return result
+
+
+def _fingerprint(paths: list[Path]) -> dict[str, tuple[int, int, int, int]]:
+    """Capture source identity and write timestamps for a stable export."""
+    result: dict[str, tuple[int, int, int, int]] = {}
+    for root in paths:
+        for path in _regular_files(root):
+            stat = path.stat()
+            result[str(path)] = (
+                stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+            )
     return result
 
 
@@ -106,6 +119,7 @@ def export_session(
     if transcript.parent.is_symlink():
         raise ValueError(f"Cannot transfer symlink: {transcript.parent}")
     _regular_files(transcript)
+    transcript_before = _fingerprint([transcript])
     records = _read_records(transcript)
     cwds = {
         record["cwd"] for record in records
@@ -116,6 +130,29 @@ def export_session(
             "Claude transcript must identify exactly one project cwd; "
             f"found {len(cwds)}. Map multiple working directories manually."
         )
+    plans = sorted({
+        source_home / "plans" / f"{record['slug']}.md"
+        for record in records
+        if isinstance(record.get("slug"), str)
+        and re.fullmatch(r"[A-Za-z0-9_-]+", record["slug"])
+    })
+    roots = [
+        transcript, transcript.with_suffix(""), transcript.parent / "memory",
+        source_home / "file-history" / session_id,
+        source_home / "tasks" / session_id,
+        *plans,
+    ]
+
+    def inventory() -> dict[str, tuple[int, int, int, int]]:
+        """Include newly added companions and detect duplicate transcripts."""
+        if list(projects.glob(f"*/{session_id}.jsonl")) != matches:
+            raise ValueError("Source changed during export: transcript discovery")
+        todos = sorted((source_home / "todos").glob(f"{session_id}-agent-*.json"))
+        return _fingerprint([*roots, *todos])
+
+    before = inventory()
+    if any(before.get(path) != value for path, value in transcript_before.items()):
+        raise ValueError("Source changed during export: transcript metadata")
     source_project = next(iter(cwds))
     if source_project == "/":
         raise ValueError("Transferring a filesystem-root project is unsupported")
@@ -174,6 +211,13 @@ def export_session(
     for todo in sorted(todos.glob(f"{session_id}-agent-*.json")):
         _regular_files(todo)
         stage(todo, todo.relative_to(source_home))
+    plans_root = source_home / "plans"
+    if plans and plans_root.is_symlink():
+        raise ValueError(f"Cannot transfer symlink: {plans_root}")
+    for plan in plans:
+        if plan.exists():
+            stage(plan, plan.relative_to(source_home))
+            shared_files.append(plan.relative_to(source_home).as_posix())
     memory = transcript.parent / "memory"
     for source in _regular_files(memory):
         relative = project_relative / "memory" / source.relative_to(memory)
@@ -181,7 +225,7 @@ def export_session(
         shared_files.append(relative.as_posix())
     if shared_files:
         warnings.append(
-            "Project memory is shared across conversations; destination files "
+            "Project memory and plan files may be shared; destination files "
             "must be absent or byte-identical. Memory prose retains source paths."
         )
     for category in ("tasks", "teams", "workflows", "session-env"):
@@ -194,6 +238,8 @@ def export_session(
                     f"Session-linked {category} runtime exists and is excluded; "
                     "recreate any needed background work explicitly."
                 )
+    if inventory() != before:
+        raise ValueError("Source changed during export; stop the session and retry")
     return {
         "ok": True,
         "files": sorted(files),
