@@ -184,3 +184,44 @@ def test_inventory_detects_new_file(tmp_path: Path) -> None:
     before = _fingerprint([root])
     (root / "new.txt").write_text("new output")
     assert _fingerprint([root]) != before
+
+
+@pytest.mark.parametrize(
+    "cwd", ["/other/repo", "/old/project-extra", "/old/project/../other", "relative"]
+)
+def test_rejects_unmappable_sidecar_cwd(tmp_path: Path, cwd: str) -> None:
+    """External subagent projects cannot silently retain source-machine cwd."""
+    home, transcript = fixture_home(tmp_path)
+    sidecar = transcript.with_suffix("") / "subagents" / "agent-child.jsonl"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(json.dumps({"type": "user", "cwd": cwd}) + "\n")
+    with pytest.raises(ValueError, match="cwd needs an explicit mapping"):
+        export(home, tmp_path)
+
+
+def test_maps_sidecar_project_subdirectory(tmp_path: Path) -> None:
+    """A subagent inside the selected project retains its relative directory."""
+    home, transcript = fixture_home(tmp_path)
+    sidecar = transcript.with_suffix("") / "subagents" / "agent-child.jsonl"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "type": "user",
+                "cwd": "/old/project/subdir",
+                "message": {"content": "Historical /old/project/subdir"},
+            }
+        )
+        + "\n"
+    )
+    export(home, tmp_path)
+    copied = (
+        tmp_path
+        / "bundle/files/projects/-new-project"
+        / SID
+        / "subagents"
+        / sidecar.name
+    )
+    record = json.loads(copied.read_text())
+    assert record["cwd"] == "/new/project/subdir"
+    assert record["message"]["content"] == "Historical /old/project/subdir"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 import shutil
 from pathlib import Path
@@ -73,7 +74,15 @@ def _map_record(
 ) -> dict[str, Any]:
     """Rewrite operational metadata, never historical message/tool prose."""
     if isinstance(record.get("cwd"), str):
-        record["cwd"] = _remap(record["cwd"], source, destination)
+        try:
+            relative = Path(posixpath.normpath(record["cwd"])).relative_to(
+                Path(posixpath.normpath(source))
+            )
+        except ValueError as error:
+            raise ValueError(
+                f"Claude artifact cwd needs an explicit mapping: {record['cwd']}"
+            ) from error
+        record["cwd"] = str(Path(destination) / relative)
     if record.get("type") == "file-history-snapshot":
         snapshot = record.get("snapshot", {})
         if isinstance(snapshot, dict):
