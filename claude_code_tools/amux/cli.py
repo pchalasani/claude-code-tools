@@ -20,6 +20,7 @@ import subprocess
 import sys
 
 from . import cache, render, scan
+from .filters import directory_argument, select_agents
 from .model import Agent
 
 _FZF_HEADER = (
@@ -46,6 +47,9 @@ def _agents_for_display(max_age: float) -> tuple[list[Agent], bool]:
 
 def _display(agents: list[Agent], args: argparse.Namespace) -> list[Agent]:
     """Refresh ages even for cached rows, then apply the requested view."""
+    agents = select_agents(
+        agents, getattr(args, "repo", None), getattr(args, "directory", None),
+    )
     for agent in agents:
         agent.classify_inactivity(args.dormant_hours)
     if args.dormant:
@@ -112,6 +116,14 @@ def cmd_pick(args: argparse.Namespace) -> int:
         f" --dormant-hours {args.dormant_hours} --sort {args.sort}"
         + (" --dormant" if args.dormant else "")
     )
+    # Keep user values out of fzf's action/placeholder parser as well as the shell.
+    reload_env = dict(os.environ)
+    if args.repo is not None:
+        reload_env["AMUX_RELOAD_REPO"] = args.repo
+        view_flags += ' --repo="$AMUX_RELOAD_REPO"'
+    if args.directory is not None:
+        reload_env["AMUX_RELOAD_DIR"] = args.directory
+        view_flags += ' --dir="$AMUX_RELOAD_DIR"'
     binds = [
         f"ctrl-r:reload({self_cmd} rows --refresh{view_flags})",
         # Opening on cached rows is what makes this instant; refresh the
@@ -153,6 +165,7 @@ def cmd_pick(args: argparse.Namespace) -> int:
         input=render.picker_lines(agents),
         stdout=subprocess.PIPE,
         text=True,
+        env=reload_env,
     )
     if proc.returncode != 0 or not proc.stdout.strip():
         return 0
@@ -216,6 +229,14 @@ def build_parser() -> argparse.ArgumentParser:
         )
     for command in (pick, lst, rows):
         command.add_argument(
+            "--repo", "--project", dest="repo", metavar="NAME",
+            help="exact repository name, including linked Git worktrees",
+        )
+        command.add_argument(
+            "--dir", dest="directory", type=directory_argument, metavar="PATH",
+            help="only agents in this directory or its subdirectories",
+        )
+        command.add_argument(
             "--dormant", action="store_true",
             help="show waiting agents with old known submitted input only",
         )
@@ -238,7 +259,20 @@ def main(argv: list[str] | None = None) -> int:
     # only ["pick"] -- reparsing dropped global options, so `amux --max-age 0`
     # silently used the 30s default.
     known = {"pick", "list", "scan", "rows"}
-    if not any(tok in known | {"-h", "--help"} for tok in raw):
+    value_options = {
+        "--repo", "--project", "--dir", "--max-age", "--dormant-hours", "--sort",
+    }
+    tokens = iter(raw)
+    explicit_command = False
+    for token in tokens:
+        if token in value_options:
+            next(tokens, None)
+        elif token in known | {"-h", "--help"}:
+            explicit_command = True
+            break
+        elif not token.startswith("-"):
+            break
+    if not explicit_command:
         raw.insert(0, "pick")
     args = parser.parse_args(raw)
     if not scan.tmux_available():
