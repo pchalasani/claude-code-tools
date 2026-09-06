@@ -11,15 +11,18 @@ import shlex
 import sqlite3
 import subprocess
 import tempfile
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
 import click
 
 from claude_code_tools.move_account import (
-    find_codex_sessions_in_home,
+    SessionCandidate,
+    _tiered_match,
     find_sessions_in_home,
 )
+from claude_code_tools.resolve_session_names import codex_thread_names
 from claude_code_tools.transfer_remote import handle_request, project_state
 
 
@@ -79,8 +82,19 @@ def prepare_transfer(
     staging: Path,
 ) -> dict[str, Any]:
     """Resolve a unique session and build a scoped, checksummed transfer plan."""
-    finder = find_codex_sessions_in_home if agent == "codex" else find_sessions_in_home
-    matches = finder(source_home, session)
+    if agent == "codex":
+        database = source_home / "state_5.sqlite"
+        names = codex_thread_names(source_home)
+        with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as db:
+            candidates = [
+                SessionCandidate(Path(path), sid, name or names.get(sid, ""))
+                for sid, path, name in db.execute(
+                    "SELECT id, rollout_path, name FROM threads"
+                )
+            ]
+        matches = _tiered_match(candidates, session)
+    else:
+        matches = find_sessions_in_home(source_home, session)
     if len(matches) != 1:
         candidates = ", ".join(candidate.session_id for candidate in matches[:10])
         raise ValueError(
@@ -158,7 +172,11 @@ def prepare_transfer(
     show_default=True,
     help="Python 3.11+ executable on the SSH destination.",
 )
-@click.option("--dry-run", is_flag=True, help="Inspect without destination writes.")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Inspect without importing destination account data.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Print a structured report.")
 @click.pass_context
 def transfer(
@@ -235,7 +253,11 @@ def transfer(
         for relative, metadata in manifest["artifacts"].items():
             click.echo(f"  {relative} ({metadata['size']} bytes)")
         for database in manifest.get("databases", []):
-            click.echo(f"  Database records: {database['name']}")
+            for table in database["tables"]:
+                click.echo(
+                    f"  {database['name']}:{table['name']} "
+                    f"({len(table['rows'])} records)"
+                )
         for warning in manifest["warnings"]:
             click.echo(f"Note: {warning}")
         click.echo(f"Resume on destination:\n  {manifest['resume_command']}")

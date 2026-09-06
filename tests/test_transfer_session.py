@@ -228,3 +228,52 @@ def test_command_is_registered() -> None:
     result = CliRunner().invoke(main, ["transfer", "--help"])
     assert result.exit_code == 0
     assert "--destination-project" in result.output
+
+
+def test_archived_codex_session_resolves(
+    workspace: dict[str, Path], tmp_path: Path
+) -> None:
+    """Archived SQLite-indexed threads remain eligible for public transfer."""
+    import sqlite3
+
+    from tests.test_transfer_codex import profile, thread
+
+    home = tmp_path / "codex"
+    destination = tmp_path / "codex-destination"
+    profile(home)
+    profile(destination)
+    thread(home, SID)
+    original = home / "sessions" / "2026" / f"{SID}.jsonl"
+    archived = home / "archived_sessions" / original.name
+    archived.parent.mkdir()
+    original.rename(archived)
+    with sqlite3.connect(home / "state_5.sqlite") as db:
+        db.execute(
+            "UPDATE threads SET cwd=?,rollout_path=?,sandbox_policy=?,archived=1",
+            (
+                str(workspace["source"]),
+                str(archived),
+                json.dumps({"type": "workspace-write", "writable_roots": []}),
+            ),
+        )
+    args = [
+        "transfer",
+        SID,
+        "--agent",
+        "codex",
+        "--source-home",
+        str(home),
+        "--to",
+        "local",
+        "--destination-home",
+        str(destination),
+        "--destination-project",
+        str(workspace["target"]),
+        "--dry-run",
+        "--json",
+    ]
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["plan"]["files"] == [
+        f"archived_sessions/{SID}.jsonl"
+    ]
