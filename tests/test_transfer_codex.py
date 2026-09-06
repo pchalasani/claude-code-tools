@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -299,3 +300,73 @@ def test_remaps_managed_sandbox_metadata(tmp_path: Path) -> None:
     assert entries[0]["path"]["path"] == "/new/.git"
     assert entries[1]["path"]["path"] == "/dest/memories"
     assert entries[2] == policy["file_system"]["entries"][2]
+
+
+@pytest.mark.parametrize("kind", ["descendant", "writable_root", "managed_profile"])
+def test_rejects_parent_escape_in_operational_paths(tmp_path: Path, kind: str) -> None:
+    """A lexical prefix cannot grant containment to a parent-escaping path."""
+    source = tmp_path / "source"
+    profile(source)
+    thread(source, "root")
+    with sqlite3.connect(source / "state_5.sqlite") as db:
+        if kind == "descendant":
+            thread(source, "child")
+            db.execute(
+                "UPDATE threads SET cwd='/old/project/../outside' WHERE id='child'"
+            )
+            db.execute(
+                "INSERT INTO thread_spawn_edges VALUES ('root','child','completed')"
+            )
+        else:
+            if kind == "writable_root":
+                policy = {
+                    "type": "workspace-write",
+                    "writable_roots": ["/old/project/../outside"],
+                }
+            else:
+                policy = {
+                    "file_system": {
+                        "type": "restricted",
+                        "entries": [
+                            {
+                                "path": {
+                                    "type": "path",
+                                    "path": str(source / "../outside"),
+                                }
+                            }
+                        ],
+                    }
+                }
+            db.execute("UPDATE threads SET sandbox_policy=?", (json.dumps(policy),))
+    with pytest.raises(ValueError, match="needs a mapping"):
+        export_session(
+            source, "root", Path("/new/home"), Path("/new/project"), tmp_path / "bundle"
+        )
+
+
+def test_normalizes_valid_project_paths(tmp_path: Path) -> None:
+    """Normalization preserves valid project-relative cwd and writable roots."""
+    source = tmp_path / "source"
+    profile(source)
+    thread(source, "root")
+    thread(source, "child")
+    with sqlite3.connect(source / "state_5.sqlite") as db:
+        db.execute("INSERT INTO thread_spawn_edges VALUES ('root','child','completed')")
+        db.execute("UPDATE threads SET cwd='/old/project/sub/../src' WHERE id='child'")
+        policy = {
+            "type": "workspace-write",
+            "writable_roots": ["/old/project/sub/../src"],
+        }
+        db.execute("UPDATE threads SET sandbox_policy=?", (json.dumps(policy),))
+    result = export_session(
+        source, "root", Path("/new/home"), Path("/new/project"), tmp_path / "bundle"
+    )
+    rows = next(
+        table["rows"]
+        for db in result["databases"]
+        for table in db["tables"]
+        if table["name"] == "threads"
+    )
+    child = next(row for row in rows if row["id"] == "child")
+    assert child["cwd"] == "/new/project/src"
+    assert json.loads(child["sandbox_policy"])["writable_roots"] == ["/new/project/src"]

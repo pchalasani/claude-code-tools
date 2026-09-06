@@ -8,6 +8,7 @@ Rollouts remain byte-exact because paginated history stores byte offsets.
 from __future__ import annotations
 
 import json
+import posixpath
 import shutil
 import sqlite3
 from collections.abc import Callable
@@ -206,7 +207,10 @@ def _rows(
 def _mapped_cwd(cwd: str, source: Path, destination: Path) -> str:
     """Map working directories within the selected project only."""
     try:
-        return str(destination / Path(cwd).relative_to(source))
+        relative = Path(posixpath.normpath(cwd)).relative_to(
+            Path(posixpath.normpath(str(source)))
+        )
+        return str(Path(posixpath.normpath(str(destination))) / relative)
     except ValueError as exc:
         raise ValueError(
             f"Descendant working directory needs a mapping: {cwd}"
@@ -389,7 +393,7 @@ def export_session(
                 for entry in filesystem.get("entries", []):
                     location = entry["path"]
                     if location["type"] == "path":
-                        original_path = Path(location["path"])
+                        original_path = Path(posixpath.normpath(location["path"]))
                         if original_path.is_relative_to(source_home):
                             location["path"] = str(
                                 destination_home
