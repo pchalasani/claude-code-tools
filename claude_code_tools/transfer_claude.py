@@ -35,7 +35,10 @@ def _fingerprint(paths: list[Path]) -> dict[str, tuple[int, int, int, int]]:
         for path in _regular_files(root):
             stat = path.stat()
             result[str(path)] = (
-                stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+                stat.st_ino,
+                stat.st_size,
+                stat.st_mtime_ns,
+                stat.st_ctime_ns,
             )
     return result
 
@@ -51,7 +54,7 @@ def _read_records(path: Path) -> list[dict[str, Any]]:
         except ValueError as exc:
             raise ValueError(f"Invalid JSON in {path}, line {number}") from exc
         if not isinstance(record, dict):
-            raise ValueError(f"Expected object in {path}, line {number}")
+            raise ValueError(f"Expected object in {path}, line {number}")  # noqa: TRY004
         records.append(record)
     return records
 
@@ -61,7 +64,7 @@ def _remap(path: str, source: str, destination: str) -> str:
     if path == source:
         return destination
     if path.startswith(source.rstrip("/") + "/"):
-        return destination.rstrip("/") + path[len(source.rstrip("/")):]
+        return destination.rstrip("/") + path[len(source.rstrip("/")) :]
     return path
 
 
@@ -122,7 +125,8 @@ def export_session(
     transcript_before = _fingerprint([transcript])
     records = _read_records(transcript)
     cwds = {
-        record["cwd"] for record in records
+        record["cwd"]
+        for record in records
         if isinstance(record.get("cwd"), str) and record["cwd"].startswith("/")
     }
     if len(cwds) != 1:
@@ -130,14 +134,18 @@ def export_session(
             "Claude transcript must identify exactly one project cwd; "
             f"found {len(cwds)}. Map multiple working directories manually."
         )
-    plans = sorted({
-        source_home / "plans" / f"{record['slug']}.md"
-        for record in records
-        if isinstance(record.get("slug"), str)
-        and re.fullmatch(r"[A-Za-z0-9_-]+", record["slug"])
-    })
+    plans = sorted(
+        {
+            source_home / "plans" / f"{record['slug']}.md"
+            for record in records
+            if isinstance(record.get("slug"), str)
+            and re.fullmatch(r"[A-Za-z0-9_-]+", record["slug"])
+        }
+    )
     roots = [
-        transcript, transcript.with_suffix(""), transcript.parent / "memory",
+        transcript,
+        transcript.with_suffix(""),
+        transcript.parent / "memory",
         source_home / "file-history" / session_id,
         source_home / "tasks" / session_id,
         *plans,
@@ -161,12 +169,18 @@ def export_session(
     files: list[str] = []
     shared_files: list[str] = []
     warnings = [
-        "Historical message/tool text retains original paths; inspect referenced "
-        "external files, plans and attachments before resuming.",
-        "Credentials, settings, plugins, shell environment, live processes, "
-        "scheduled jobs and workflow/team runtime are not transferred.",
-        "Submitted-input history and project-wide session indexes are not merged; "
-        "resume using the printed session UUID.",
+        (
+            "Historical message/tool text retains original paths; inspect referenced "
+            "external files, plans and attachments before resuming."
+        ),
+        (
+            "Credentials, settings, plugins, shell environment, live processes, "
+            "scheduled jobs and workflow/team runtime are not transferred."
+        ),
+        (
+            "Submitted-input history and project-wide session indexes are not merged; "
+            "resume using the printed session UUID."
+        ),
     ]
 
     def stage(source: Path, relative: Path, rewrite: bool = False) -> None:
@@ -193,7 +207,8 @@ def export_session(
         if relative.parts[0] not in {"subagents", "tool-results"}:
             raise ValueError(f"Unsupported Claude session sidecar: {relative}")
         stage(
-            source, project_relative / session_id / relative,
+            source,
+            project_relative / session_id / relative,
             rewrite=source.suffix == ".jsonl",
         )
     for category in ("file-history", "tasks"):
@@ -230,14 +245,12 @@ def export_session(
         )
     for category in ("tasks", "teams", "workflows", "session-env"):
         root = source_home / category
-        if (root / session_id).exists() or (
-            root / f"session-{session_id[:8]}"
-        ).exists():
-            if category != "tasks" or (root / f"session-{session_id[:8]}").exists():
-                warnings.append(
-                    f"Session-linked {category} runtime exists and is excluded; "
-                    "recreate any needed background work explicitly."
-                )
+        short_runtime = (root / f"session-{session_id[:8]}").exists()
+        if short_runtime or (category != "tasks" and (root / session_id).exists()):
+            warnings.append(
+                f"Session-linked {category} runtime exists and is excluded; "
+                "recreate any needed background work explicitly."
+            )
     if inventory() != before:
         raise ValueError("Source changed during export; stop the session and retry")
     return {

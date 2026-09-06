@@ -41,6 +41,12 @@ def profile(path: Path) -> None:
                     )
                 connection.execute(f'CREATE TABLE "{table}" ({",".join(columns)})')
 
+    with sqlite3.connect(path / "queue_1.sqlite") as connection:
+        connection.execute(
+            "CREATE TABLE queued_thread_revisions "
+            "(revision INTEGER PRIMARY KEY, thread_id TEXT NOT NULL UNIQUE)"
+        )
+
 
 def insert(path: Path, database: str, table: str, values: dict[str, Any]) -> None:
     """Insert a fixture row, supplying required scalar fields."""

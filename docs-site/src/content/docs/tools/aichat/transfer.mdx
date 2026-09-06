@@ -1,0 +1,113 @@
+---
+title: "Transfer Between Machines"
+---
+
+`aichat transfer` copies a saved Claude or Codex conversation to another account
+home, locally or over SSH. It preserves the source and prints a command to resume
+in the destination project. It does not start an agent or move a running process.
+
+## Prepare and inspect
+
+Exit the source agent. Prepare the destination's authentication, settings, plugins,
+dependencies, and ignored project files separately. Both Git worktrees must be
+clean, including untracked files, and checked out at the same commit. If the
+session started in a repository subdirectory, select that same subdirectory on the
+destination. The command checks these conditions; it does not push commits or copy
+repository contents.
+
+Use an SSH alias from your SSH configuration, or `user@host`:
+
+```bash
+aichat transfer SESSION_UUID \
+  --agent claude \
+  --source-home ~/.claude-work \
+  --to workstation \
+  --destination-home '~/.claude-work' \
+  --destination-project '~/Git/project' \
+  --dry-run
+```
+
+Quote destination paths starting with `~`, so the destination expands them. SSH
+uses your normal keys, configuration, and host verification, with batch mode
+requiring authentication to work without an interactive prompt. The destination
+needs Git and Python 3.11 or later. Use `--remote-python /path/to/python3` when its
+noninteractive SSH environment selects an older interpreter. It need not have
+`aichat` installed.
+
+The report lists copied paths, database imports, omissions, conflicts, and the
+resume command. Add `--json` for checksums, byte counts, and structured database
+records. Treat JSON reports as private: database rows contain conversation text.
+Dry-run performs checks without importing account data. SQLite readers may use
+WAL reader-coordination files when inspecting an existing database.
+
+Remove `--dry-run` to copy. Run the printed resume command on the destination,
+then continue that copy of the conversation. To transfer in the reverse direction,
+run the command on the other machine with the account and project paths reversed.
+A changed conversation already present at the destination causes a conflict;
+reconcile or preserve it in a separate account home before importing.
+
+## Options
+
+- `--agent claude|codex`: required; selects the source format.
+- `--source-home PATH`: source account home. Defaults to the corresponding global
+  `--claude-home`/`--codex-home` option, environment variable, or standard home.
+- `--to HOST`: required SSH destination, or `local` for a local copy.
+- `--destination-home PATH`: required destination account home.
+- `--destination-project PATH`: required prepared Git project directory.
+- `--remote-python PATH`: destination interpreter; defaults to `python3`.
+- `--dry-run`: inspect and validate without importing.
+- `--json`: output an explicit `ok` flag and a detailed plan.
+
+A full UUID is the least ambiguous session reference. Unique names and partial
+UUIDs also work within the selected source home. Ambiguous matches fail and list
+candidate UUIDs.
+
+## Included state
+
+### Claude
+
+Transfers the conversation transcript, subagent transcripts, saved tool results,
+session tasks/todos, file-history backups, project memory, and plans explicitly
+referenced by transcript slug. Operational working-directory and file-backup
+metadata are remapped. Historical message text keeps its original paths.
+
+Project memory and plans may be shared with other conversations. Existing files
+must be absent or byte-identical; differing destination files are never overwritten.
+Multiple recorded project directories, symbolic-link artifacts, malformed records,
+and unknown sidecar types require manual handling and produce an error.
+
+### Codex
+
+Supports the recognized SQLite column schemas from Codex 0.153.4. Initialize a
+matching Codex version in the destination account first. Unknown schemas fail with
+an explicit error rather than discarding history. Older JSONL-only profiles are
+not supported by this command.
+
+Transfers the selected thread and its descendants, rollout files, paginated
+history records, per-thread memory records, and goals. Active goals are imported
+paused. Pending queued input, unfinished turns, and unknown thread artifacts
+prevent transfer. Dynamic tool definitions can be retained, but the corresponding
+tool implementations must exist on the destination.
+
+Rollout bytes remain unchanged because paginated history stores byte offsets into
+those files. Working-directory and rollout-path database metadata are remapped;
+the resume command explicitly selects the destination project. Historical paths
+in messages remain historical. Destination UI project/section membership is reset.
+
+## Boundaries and recovery
+
+Settings, credentials, plugins, jobs, terminal processes, and workflow/team runtime
+are not copied. Input-history files and global session indexes are not merged;
+resume by the printed UUID. References to external files in old messages are not
+proof that those files were transferred.
+
+Payload files are checksummed before and after import. Existing differing files
+or Codex database rows stop the operation. Ordinary import failures roll back new
+files and database inserts; the source remains intact. SQLite cannot guarantee
+crash atomicity across multiple WAL databases. If the machine or process crashes,
+inspect the destination before retrying. A retained `.aichat-transfer.lock`
+directory signals that an import may have been interrupted. Do not remove it
+while another transfer is running.
+
+The transfer uses local temporary staging and an in-memory SSH payload. Available
+memory and temporary disk space must accommodate the selected session history.

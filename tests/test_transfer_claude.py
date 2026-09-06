@@ -17,10 +17,18 @@ def fixture_home(tmp_path: Path) -> tuple[Path, Path]:
     project.mkdir(parents=True)
     records = [
         {"type": "custom-title", "customTitle": "Research", "sessionId": SID},
-        {"type": "user", "cwd": "/old/project", "sessionId": SID,
-         "message": {"content": "Read /old/project/code.py"}},
-        {"type": "file-history-snapshot", "snapshot": {
-            "trackedFileBackups": {"/old/project/code.py": {"version": 1}}}},
+        {
+            "type": "user",
+            "cwd": "/old/project",
+            "sessionId": SID,
+            "message": {"content": "Read /old/project/code.py"},
+        },
+        {
+            "type": "file-history-snapshot",
+            "snapshot": {
+                "trackedFileBackups": {"/old/project/code.py": {"version": 1}}
+            },
+        },
     ]
     transcript = project / f"{SID}.jsonl"
     transcript.write_text("\n".join(json.dumps(r) for r in records) + "\n")
@@ -30,7 +38,10 @@ def fixture_home(tmp_path: Path) -> tuple[Path, Path]:
 def export(home: Path, tmp_path: Path) -> dict:
     """Stage to a destination that need not exist on this machine."""
     return export_session(
-        home, SID, Path("/remote/.claude-work"), Path("/new/project"),
+        home,
+        SID,
+        Path("/remote/.claude-work"),
+        Path("/new/project"),
         tmp_path / "bundle",
     )
 
@@ -109,8 +120,11 @@ def test_copies_subagent_metadata_and_reports_runtime(tmp_path: Path) -> None:
     subagent.write_text(json.dumps({"cwd": "/old/project/sub", "type": "user"}))
     (home / "tasks" / f"session-{SID[:8]}").mkdir(parents=True)
     result = export(home, tmp_path)
-    staged = tmp_path / "bundle/files/projects/-new-project" / SID / (
-        "subagents/agent-123.jsonl"
+    staged = (
+        tmp_path
+        / "bundle/files/projects/-new-project"
+        / SID
+        / ("subagents/agent-123.jsonl")
     )
     assert json.loads(staged.read_text())["cwd"] == "/new/project/sub"
     assert any("Session-linked tasks" in warning for warning in result["warnings"])

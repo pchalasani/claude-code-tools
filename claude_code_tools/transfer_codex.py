@@ -182,6 +182,9 @@ def _check_schema(connection: sqlite3.Connection, database: str) -> None:
     for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'"):
         table = row[0]
         # New per-thread tables may contain essential state we do not understand.
+        if database == "queue_1.sqlite" and table == "queued_thread_revisions":
+            # A wake-up counter, not queued content; never restart remote work.
+            continue
         if table not in SCHEMAS[database]:
             if not table.replace("_", "").isalnum():
                 raise ValueError(f"Unsupported Codex table name: {table!r}")
