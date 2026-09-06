@@ -60,13 +60,25 @@ def _read_records(path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def _remap(path: str, source: str, destination: str) -> str:
-    """Map one absolute project path using a directory boundary."""
-    if path == source:
-        return destination
-    if path.startswith(source.rstrip("/") + "/"):
-        return destination.rstrip("/") + path[len(source.rstrip("/")) :]
-    return path
+def _remap(
+    path: str,
+    source: str,
+    destination: str,
+    *,
+    relative_ok: bool = False,
+    label: str = "file-history path",
+) -> str:
+    """Map a normalized project path, preserving valid relative backup keys."""
+    original = Path(path)
+    root = Path(posixpath.normpath(source))
+    candidate = root / original if relative_ok else original
+    try:
+        relative = Path(posixpath.normpath(str(candidate))).relative_to(root)
+    except ValueError as error:
+        raise ValueError(f"Claude {label} needs an explicit mapping: {path}") from error
+    if relative_ok and not original.is_absolute():
+        return str(relative)
+    return str(Path(destination) / relative)
 
 
 def _map_record(
@@ -74,24 +86,37 @@ def _map_record(
 ) -> dict[str, Any]:
     """Rewrite operational metadata, never historical message/tool prose."""
     if isinstance(record.get("cwd"), str):
-        try:
-            relative = Path(posixpath.normpath(record["cwd"])).relative_to(
-                Path(posixpath.normpath(source))
-            )
-        except ValueError as error:
-            raise ValueError(
-                f"Claude artifact cwd needs an explicit mapping: {record['cwd']}"
-            ) from error
-        record["cwd"] = str(Path(destination) / relative)
+        record["cwd"] = _remap(record["cwd"], source, destination, label="artifact cwd")
     if record.get("type") == "file-history-snapshot":
         snapshot = record.get("snapshot", {})
         if isinstance(snapshot, dict):
             backups = snapshot.get("trackedFileBackups")
             if isinstance(backups, dict):
-                snapshot["trackedFileBackups"] = {
-                    _remap(path, source, destination): value
-                    for path, value in backups.items()
-                }
+                mapped: dict[str, Any] = {}
+                for path, value in backups.items():
+                    key = _remap(path, source, destination, relative_ok=True)
+                    if key in mapped:
+                        raise ValueError(f"Normalized file-history collision: {path}")
+                    if isinstance(value, dict):
+                        parent = value.get("realParentDir")
+                        if isinstance(parent, str):
+                            value["realParentDir"] = _remap(
+                                parent,
+                                source,
+                                destination,
+                                label="file-history realParentDir",
+                            )
+                        backup_name = value.get("backupFileName")
+                        if isinstance(backup_name, str):
+                            normalized = Path(posixpath.normpath(backup_name))
+                            if normalized.is_absolute() or ".." in normalized.parts:
+                                raise ValueError(
+                                    "File-history backupFileName leaves its session "
+                                    f"backup directory: {backup_name}"
+                                )
+                            value["backupFileName"] = str(normalized)
+                    mapped[key] = value
+                snapshot["trackedFileBackups"] = mapped
     return record
 
 

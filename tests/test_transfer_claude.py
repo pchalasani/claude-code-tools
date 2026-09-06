@@ -225,3 +225,106 @@ def test_maps_sidecar_project_subdirectory(tmp_path: Path) -> None:
     record = json.loads(copied.read_text())
     assert record["cwd"] == "/new/project/subdir"
     assert record["message"]["content"] == "Historical /old/project/subdir"
+
+
+@pytest.mark.parametrize(
+    "key", ["/old/project/../outside.py", "/other/repo/file.py", "../outside.py"]
+)
+def test_rejects_unmappable_file_history(tmp_path: Path, key: str) -> None:
+    """File-history keys cannot escape the selected project after normalization."""
+    home, transcript = fixture_home(tmp_path)
+    with transcript.open("a") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "type": "file-history-snapshot",
+                    "snapshot": {"trackedFileBackups": {key: {"version": 1}}},
+                }
+            )
+            + "\n"
+        )
+    with pytest.raises(ValueError, match="file-history path needs an explicit mapping"):
+        export(home, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("realParentDir", "/old/project/../outside"),
+        ("realParentDir", "/other/repo"),
+        ("backupFileName", "../outside"),
+        ("backupFileName", "/other/backup"),
+    ],
+)
+def test_rejects_unmappable_backup_metadata(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    """The paths inside backup values receive the same containment checks."""
+    home, transcript = fixture_home(tmp_path)
+    with transcript.open("a") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "type": "file-history-snapshot",
+                    "snapshot": {"trackedFileBackups": {"file.py": {field: value}}},
+                }
+            )
+            + "\n"
+        )
+    with pytest.raises(ValueError, match="(realParentDir|backupFileName)"):
+        export(home, tmp_path)
+
+
+def test_preserves_relative_backup_keys_and_maps_real_parent(tmp_path: Path) -> None:
+    """Native relative keys stay relative and real parent directories relocate."""
+    home, transcript = fixture_home(tmp_path)
+    with transcript.open("a") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "type": "file-history-snapshot",
+                    "snapshot": {
+                        "trackedFileBackups": {
+                            "src/../file.py": {
+                                "realParentDir": "/old/project/src/..",
+                                "backupFileName": "backup@v1",
+                                "version": 1,
+                            },
+                        }
+                    },
+                }
+            )
+            + "\n"
+        )
+    export(home, tmp_path)
+    copied = tmp_path / "bundle/files/projects/-new-project" / transcript.name
+    record = json.loads(copied.read_text().splitlines()[-1])
+    assert record["snapshot"]["trackedFileBackups"] == {
+        "file.py": {
+            "realParentDir": "/new/project",
+            "backupFileName": "backup@v1",
+            "version": 1,
+        },
+    }
+
+
+def test_rejects_normalized_backup_key_collision(tmp_path: Path) -> None:
+    """Normalization cannot silently discard one of two backup records."""
+    home, transcript = fixture_home(tmp_path)
+    with transcript.open("a") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "type": "file-history-snapshot",
+                    "snapshot": {
+                        "trackedFileBackups": {
+                            "src/../file.py": {"version": 1},
+                            "file.py": {"version": 2},
+                        }
+                    },
+                }
+            )
+            + "\n"
+        )
+    with pytest.raises(ValueError, match="file-history collision"):
+        export(home, tmp_path)
