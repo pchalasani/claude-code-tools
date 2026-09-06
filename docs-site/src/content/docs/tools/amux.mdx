@@ -26,6 +26,28 @@ In the picker, rows are sorted by urgency, the right-hand pane shows a live
 preview of whatever is highlighted, `enter` jumps to that pane, and `ctrl-r`
 refreshes.
 
+## Filter by repository or directory
+
+```bash
+amux list --repo proposalwriter
+amux list --repo proposalwriter --dormant --sort oldest
+amux --repo proposalwriter                         # interactive picker
+amux list --dir ~/Git/proposalwriter               # this directory and below
+amux --dir .                                      # picker for the current directory
+```
+
+`--repo NAME` (also `--project NAME`) matches the exact, case-sensitive repository
+name shown by Amux, or the main repository directory name for linked Git
+worktrees. Thus `--repo proposalwriter` also includes sessions in linked
+worktrees with different directory names. This matches local repository names,
+not GitHub `owner/repo` URLs.
+
+`--dir PATH` matches a directory and its descendants, with `~`, relative paths,
+and symlinks resolved. It does not include sibling worktrees outside that
+subtree. Combine both flags to require both matches. Filters work with table,
+JSON, cached results, and the picker; automatic and Ctrl-r refreshes preserve
+them. The shared scan cache always retains agents from all projects.
+
 ## Agent states
 
 Every pane running an agent gets one of four states, sorted most urgent first:
