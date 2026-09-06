@@ -372,10 +372,31 @@ def export_session(
             files.append(str(relative))
             thread["rollout_path"] = str(destination_home / relative)
             policy = json.loads(thread["sandbox_policy"])
-            if not isinstance(policy, dict) or "file_system" in policy:
-                raise ValueError(
+            if not isinstance(policy, dict):
+                raise ValueError(  # noqa: TRY004
                     "Unsupported sandbox policy; configure portable policy"
                 )
+            if "file_system" in policy:
+                filesystem = policy["file_system"]
+                if not isinstance(filesystem, dict) or filesystem.get("type") != (
+                    "restricted"
+                ):
+                    raise ValueError("Unsupported managed sandbox policy")
+                for entry in filesystem.get("entries", []):
+                    location = entry["path"]
+                    if location["type"] == "path":
+                        original_path = Path(location["path"])
+                        if original_path.is_relative_to(source_home):
+                            location["path"] = str(
+                                destination_home
+                                / original_path.relative_to(source_home)
+                            )
+                        else:
+                            location["path"] = _mapped_cwd(
+                                str(original_path), source_project, destination_project
+                            )
+                    elif location["type"] != "special":
+                        raise ValueError("Unsupported managed sandbox path")
             if "writable_roots" in policy:
                 if not isinstance(policy["writable_roots"], list):
                     raise ValueError("Unsupported sandbox writable roots")
