@@ -11,7 +11,10 @@ resume command. The default operation is a dry run; add `--apply` to copy.
 Exit the source agent and prepare the destination project and authentication.
 Transfer copies conversation state, not the repository, running processes, or
 credentials. Both Git worktrees must be clean, including untracked files, at the
-same commit. Select corresponding subdirectories if the conversation used one.
+same commit. This also applies to each secondary working directory actually used
+by a child session or sidecar, including those supplied through `--map`. Artifact
+locations and sandbox-only paths do not trigger Git checks. Select corresponding
+subdirectories if the conversation used one.
 
 Inspect a copy to an SSH host:
 
@@ -141,7 +144,8 @@ Apply reported remedies on the destination. In particular, a copied Chrome MCP
 configuration does not carry a logged-in browser or extension connection.
 A listening port is not proof of browser authentication or a working MCP session.
 Hook scripts are not executed by preflight; path checks do not prove runtime
-imports or every hook's behavior. Shell compounds and builtin launchers are
+imports or every hook's behavior. Shell compounds, builtin launchers, and `env`
+wrappers are
 reported as unverified rather than interpreted as missing executables. Use safe
 synthetic hook tests when diagnosing
 an actual runtime failure.
