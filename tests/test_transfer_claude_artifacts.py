@@ -387,3 +387,37 @@ def test_subagent_file_history_backup_gaps_are_reported(tmp_path: Path) -> None:
     )
     copied = tmp_path / "bundle/files" / existing.relative_to(home)
     assert copied.read_bytes() == existing.read_bytes()
+
+
+def test_subagent_only_plan_slugs_copy_and_report_gaps(tmp_path: Path) -> None:
+    """Plan discovery includes selected sidecar records before source snapshotting."""
+    home, transcript = fixture_home(tmp_path)
+    plans = home / "plans"
+    plans.mkdir()
+    existing = plans / "sidecar-existing-plan.md"
+    existing.write_text("the selected subagent plan")
+    missing = plans / "sidecar-missing-plan.md"
+    unrelated = plans / "unrelated-plan.md"
+    unrelated.write_text("another session plan")
+    sidecar = transcript.with_suffix("") / "subagents/agent-planning.jsonl"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        "".join(
+            json.dumps(record) + "\n"
+            for record in [
+                {"cwd": "/old/project", "slug": existing.stem, "type": "user"},
+                {"cwd": "/old/project", "slug": missing.stem, "type": "assistant"},
+            ]
+        )
+    )
+    result = export_session(
+        home, SID, Path("/remote/profile"), Path("/new/project"), tmp_path / "bundle"
+    )
+    relative = existing.relative_to(home)
+    assert str(relative) in result["files"]
+    assert str(relative) in result["shared_files"]
+    assert (tmp_path / "bundle/files" / relative).read_bytes() == existing.read_bytes()
+    assert {"path": str(missing), "reason": "missing_at_source"} in result[
+        "missing_at_source"
+    ]
+    assert str(unrelated.relative_to(home)) not in result["files"]

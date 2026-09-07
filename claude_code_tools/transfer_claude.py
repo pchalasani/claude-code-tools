@@ -185,10 +185,16 @@ def export_session(
             "Claude transcript must identify exactly one project cwd; "
             f"found {len(cwds)}. Map multiple working directories manually."
         )
+    subagents = transcript.with_suffix("") / "subagents"
+    subagent_before = _fingerprint([subagents])
+    plan_records = list(records)
+    for source in _regular_files(subagents):
+        if source.suffix == ".jsonl":
+            plan_records.extend(_read_records(source))
     plans = sorted(
         {
             source_home / "plans" / f"{record['slug']}.md"
-            for record in records
+            for record in plan_records
             if isinstance(record.get("slug"), str)
             and re.fullmatch(r"[A-Za-z0-9_-]+", record["slug"])
         }
@@ -211,6 +217,8 @@ def export_session(
         return _fingerprint([*roots, *todos])
 
     before = inventory()
+    if _fingerprint([subagents]) != subagent_before:
+        raise ValueError("Source changed during export: subagent plan discovery")
     if any(before.get(path) != value for path, value in transcript_before.items()):
         raise ValueError("Source changed during export: transcript metadata")
     if not cwds:
