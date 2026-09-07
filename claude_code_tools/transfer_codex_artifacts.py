@@ -53,6 +53,11 @@ class CodexArtifacts:
             (str(source_project), str(destination_project)),
             (str(source_home), str(destination_home)),
         ]
+        self.historical: list[dict[str, str]] = []
+        prior_map = source_home / "transfer-support" / session_id / "path-map.json"
+        if prior_map.is_file():
+            self.historical = json.loads(prior_map.read_text()).get("path_mappings", [])
+            self.historical.sort(key=lambda item: len(item["source"]), reverse=True)
         self.mappings.sort(key=lambda pair: len(pair[0]), reverse=True)
         self.references: set[str] = set()
         self.files: list[str] = []
@@ -93,6 +98,13 @@ class CodexArtifacts:
         """Recognize literal support references in the selected session only."""
         for value in re.findall(r'/[^\s"\'<>`]+', text):
             value = value.rstrip(".,:;)\\")
+            for mapping in self.historical:
+                try:
+                    tail = Path(value).relative_to(mapping["source"])
+                    value = str(Path(mapping["destination"]) / tail)
+                    break
+                except ValueError:
+                    continue
             path = Path(value)
             try:
                 relative = path.relative_to(self.source_home)
@@ -163,6 +175,8 @@ class CodexArtifacts:
                 )
         for value in sorted(self.references):
             source = Path(value)
+            if source.is_dir():
+                continue
             if not source.is_file():
                 self.missing.append(value)
                 continue
@@ -212,6 +226,13 @@ class CodexArtifacts:
             "path_mappings": [
                 {"source": old, "destination": new} for old, new in self.mappings
             ]
-            + self.reference_mappings,
+            + self.reference_mappings
+            + [
+                {
+                    "source": item["source"],
+                    "destination": self.map_path(item["destination"]),
+                }
+                for item in self.historical
+            ],
             "metadata_updates": updates,
         }

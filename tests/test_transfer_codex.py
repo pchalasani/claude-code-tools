@@ -468,3 +468,41 @@ def test_index_rename_exports_only_latest(tmp_path: Path) -> None:
     assert manifest["metadata_updates"][0]["rows"] == [
         {"id": "root", "thread_name": "current name"}
     ]
+
+
+def test_second_transfer_recovers_historical_attachment(tmp_path: Path) -> None:
+    """Round trips resolve preserved prose through the previous transfer map."""
+    source = tmp_path / "second-machine"
+    profile(source)
+    thread(source, "root", mode="legacy")
+    original = "/first-machine/.codex/attachments/root/goal.txt"
+    attachment = source / "attachments/root/goal.txt"
+    attachment.parent.mkdir(parents=True)
+    attachment.write_text("goal attachment")
+    prior = source / "transfer-support/root/path-map.json"
+    prior.parent.mkdir(parents=True)
+    prior.write_text(
+        json.dumps(
+            {
+                "path_mappings": [
+                    {"source": "/first-machine/.codex", "destination": str(source)}
+                ]
+            }
+        )
+    )
+    with (source / "sessions/2026/root.jsonl").open("a") as stream:
+        stream.write(
+            json.dumps(
+                {"type": "response_item", "payload": {"text": "Read " + original}}
+            )
+            + "\n"
+        )
+    destination = tmp_path / "third-machine"
+    manifest = export_session(
+        source, "root", destination, Path("/new/project"), tmp_path / "stage"
+    )
+    assert "attachments/root/goal.txt" in manifest["files"]
+    assert {"source": "/first-machine/.codex", "destination": str(destination)} in (
+        manifest["path_mappings"]
+    )
+    assert not manifest["missing_at_source"]
