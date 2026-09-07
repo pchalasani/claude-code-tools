@@ -320,12 +320,15 @@ def export_session(
     }
     support = source_home / "transfer-support" / session_id
     old_guide = support / "path-map.json"
+    available_aliases: set[str] = set()
     if old_guide.is_file():
         try:
             previous = json.loads(old_guide.read_text())
             for old, current in previous.get("path_mappings", {}).items():
                 if not isinstance(old, str) or not isinstance(current, str):
                     raise ValueError("Invalid prior path mapping")  # noqa: TRY004
+                if Path(current).is_file():
+                    available_aliases.add(old)
                 for source_prefix in sorted(mappings, key=len, reverse=True):
                     if current == source_prefix or current.startswith(
                         source_prefix + "/"
@@ -344,7 +347,9 @@ def export_session(
         stage(source, relative)
         mappings[str(source)] = str(destination_home / relative)
     scratch, gaps = discover_scratch(records, session_id, source_project)
-    missing_at_source.extend(gaps)
+    missing_at_source.extend(
+        gap for gap in gaps if gap["path"] not in available_aliases
+    )
     for source, relative in scratch:
         old = source.stat()
         stage(source, relative)
