@@ -55,6 +55,10 @@ export default defineConfig({
                   slug: "tools/aichat/port",
                 },
                 {
+                  label: "Transfer Between Machines",
+                  slug: "tools/aichat/transfer",
+                },
+                {
                   label: "Move Account",
                   slug: "tools/aichat/move-account",
                 },

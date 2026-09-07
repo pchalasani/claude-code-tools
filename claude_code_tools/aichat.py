@@ -17,7 +17,6 @@ etc.) are still available.
 """
 
 import click
-
 from claude_code_tools.session_cli_resolution import (
     resolve_cli_session as _resolve_cli_session,
     resolve_export_session as _resolve_export_session,
@@ -210,7 +209,7 @@ def main(ctx, claude_home, codex_home):
     help_mode = any(arg in cli_args for arg in ('-h', '--help'))
     should_skip = (
         help_mode
-        or ctx.invoked_subcommand in ('port', 'resolve', 'trim-in-place')
+        or ctx.invoked_subcommand in ('port', 'resolve', 'trim-in-place', 'transfer')
         or ctx.invoked_subcommand in skip_auto_index_cmds
         or any(cmd in sys.argv for cmd in skip_auto_index_cmds)
     )
@@ -3357,6 +3356,7 @@ def search(
                     pass
             # Continue loop to return to Rust TUI
 
-
+from claude_code_tools.transfer_session import transfer
+main.add_command(transfer)
 if __name__ == "__main__":
     main()
