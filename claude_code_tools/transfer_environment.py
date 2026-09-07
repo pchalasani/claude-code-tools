@@ -373,12 +373,7 @@ def _inspect_environment(agent: str, home: Path, runtime_home: Path) -> dict[str
                         and not words[1].startswith("-")
                         else None
                     )
-                    shell_inline = (
-                        launcher_name in {"bash", "sh", "zsh"}
-                        and len(words) > 2
-                        and words[1] == "-c"
-                    )
-                    if interpreter and script_operand is None and not shell_inline:
+                    if interpreter and script_operand is None:
                         instruction = (
                             "Inspect interpreter options to identify the actual hook "
                             "script or inline program, then use a safe runtime check."

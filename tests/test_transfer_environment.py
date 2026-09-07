@@ -346,31 +346,37 @@ def test_compound_and_builtin_hooks_are_unverified(tmp_path: Path, monkeypatch) 
     assert not marker.exists()
 
 
-def test_quoted_bash_wrapper_remains_inspectable(tmp_path: Path, monkeypatch) -> None:
-    """Operators inside a quoted bash argument do not become outer composition."""
+def test_shell_inline_hooks_remain_unverified(tmp_path: Path, monkeypatch) -> None:
+    """Shell availability cannot establish that an inline hook command exists."""
     home = tmp_path / "profile"
     home.mkdir()
+    commands = [
+        '/bin/bash -c "echo hello && echo world"',
+        '/bin/bash -c "definitely-missing-hook-command"',
+        '/bin/sh -c "definitely-missing-hook-command"',
+    ]
     (home / "settings.json").write_text(
         json.dumps(
             {
                 "hooks": {
                     "PreToolUse": [
-                        {
-                            "hooks": [
-                                {"command": '/bin/bash -c "echo hello && echo world"'}
-                            ]
-                        }
+                        {"hooks": [{"command": command} for command in commands]}
                     ]
                 }
             }
         )
     )
     monkeypatch.setenv("PATH", str(tmp_path / "no-native-cli"))
-    checks = inspect_environment("claude", home)["checks"]["configured_hooks"]
-    assert len(checks) == 1
-    assert checks[0]["ran"] and checks[0]["ok"]
-    assert checks[0]["launcher_available"]
-    assert checks[0]["runtime_executed"] is False
+    result = inspect_environment("claude", home)
+    checks = result["checks"]["configured_hooks"]
+    assert len(checks) == len(commands)
+    for check in checks:
+        assert not check["ran"] and not check["ok"]
+        assert check["reason"] == "Interpreter hook operand is unverified"
+        assert "launcher_available" not in check
+        assert check["runtime_executed"] is False
+        assert check["remediation"]
+    assert any("inline program" in item for item in result["remediation"])
 
 
 def test_failed_simple_hooks_surface_sanitized_summary(
