@@ -295,8 +295,12 @@ def export_session(
 
         mappings = normalize_path_mappings(path_mappings).items()
         for old, new in mappings:
-            if Path(old).is_relative_to(source_home):
-                expected_home_path = Path(destination_home) / Path(old).relative_to(
+            # Keep lexical containment, but also recognize an existing symlink
+            # alias (and any not-yet-created suffix beneath that alias).
+            for source_endpoint in {Path(old), Path(old).resolve()}:
+                if not source_endpoint.is_relative_to(source_home):
+                    continue
+                expected_home_path = destination_home / source_endpoint.relative_to(
                     source_home
                 )
                 if posixpath.normpath(new) != posixpath.normpath(

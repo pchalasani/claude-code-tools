@@ -136,3 +136,55 @@ def test_codex_home_mapping_cannot_override_profile_destination(
         assert [
             item for item in manifest["path_mappings"] if item["source"] == str(home)
         ] == [{"source": str(home), "destination": str(destination)}]
+
+
+@pytest.mark.parametrize("suffix", ["", "/attachments", "/not-created-yet"])
+@pytest.mark.parametrize("conflict", [False, True])
+def test_codex_account_alias_mapping_guard(
+    tmp_path: Path, suffix: str, conflict: bool
+) -> None:
+    """An account symlink cannot reroute operational metadata outside its profile."""
+    import json
+
+    from claude_code_tools.transfer_codex import export_session
+    from tests.test_transfer_codex import profile, thread
+
+    home, destination = tmp_path / "real-source", tmp_path / "destination"
+    profile(home)
+    thread(home, "root", mode="legacy")
+    (home / "attachments").mkdir()
+    alias = tmp_path / "account-alias"
+    alias.symlink_to(home, target_is_directory=True)
+    referenced = str(alias) + suffix
+    rollout = home / "sessions/2026/root.jsonl"
+    rollout.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {
+                    "cwd": "/old/project",
+                    "sandbox_policy": {
+                        "type": "workspace-write",
+                        "writable_roots": [referenced],
+                    },
+                },
+            }
+        )
+        + "\n"
+    )
+    expected = str(destination) + suffix
+    mappings = [(referenced, "/wrong/profile" if conflict else expected)]
+    args = (alias, "root", destination, Path("/new/project"), tmp_path / "stage")
+    if conflict:
+        with pytest.raises(ValueError, match="Account home mapping conflicts"):
+            export_session(*args, path_mappings=mappings)
+        assert not (tmp_path / "stage").exists()
+    else:
+        manifest = export_session(*args, path_mappings=mappings)
+        copied = json.loads(
+            (tmp_path / "stage/files/sessions/2026/root.jsonl").read_text()
+        )
+        assert copied["payload"]["sandbox_policy"]["writable_roots"] == [expected]
+        assert {"source": referenced, "destination": expected} in manifest[
+            "path_mappings"
+        ]
