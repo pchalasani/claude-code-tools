@@ -91,7 +91,12 @@ Codex supports the recognized native SQLite schemas, including selected threads
 and descendants, paginated history, memory records, and native goals. Goal status
 is preserved. Selected session-index and import-provenance records are merged
 without replacing unrelated records. Recognized referenced attachments and
-supporting files are included. Initialize a compatible Codex account schema on
+supporting files are included. Unscoped external temporary files are not copied
+merely because their paths appear in conversation text. The plan lists excluded
+paths. Use a narrow explicit `--map OLD NEW` pair to opt in, or copy them manually.
+Opted-in artifacts are stored under account-scoped `transfer-support`; consult
+the generated path guide for the actual location. Initialize a compatible Codex
+account schema on
 the destination first; unknown schemas, unfinished turns, queued input, and
 unsupported thread artifacts produce explicit errors.
 
@@ -143,7 +148,11 @@ an actual runtime failure.
 Payloads are checksummed, existing differing files/records are refused, and
 new files are published atomically. Before import, a private journal and backups
 are retained under `.aichat-transfer-backups/` inside the destination account.
-Unrelated destination database rows and metadata are preserved.
+Unrelated destination database rows and metadata are preserved. Codex session
+index records are appended without replacing concurrent unrelated entries.
+An existing `external_agent_session_imports.json` that needs additional selected
+records is refused because native writers offer no safe concurrent merge. Use
+a separate destination account; already-present identical records need no write.
 
 After interruption, rerun the same command with `--apply --recover`. Recovery
 requires the same plan and refuses a live competing importer. It verifies

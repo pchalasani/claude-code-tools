@@ -440,10 +440,11 @@ def test_default_report_displays_missing_source_artifacts(
 
 
 @pytest.mark.parametrize("apply", [False, True])
-def test_codex_missing_artifact_in_normal_report(
-    workspace: dict[str, Path], tmp_path: Path, apply: bool
+@pytest.mark.parametrize("excluded", [False, True])
+def test_codex_artifact_disclosures_in_normal_report(
+    workspace: dict[str, Path], tmp_path: Path, apply: bool, excluded: bool
 ) -> None:
-    """Codex string-shaped source gaps render on both inspection and copy."""
+    """Codex gaps and exclusions render on both inspection and copy."""
     import sqlite3
 
     from tests.test_transfer_codex import profile, thread
@@ -453,7 +454,11 @@ def test_codex_missing_artifact_in_normal_report(
     profile(home)
     profile(destination)
     thread(home, SID)
-    missing = home / "attachments/missing.txt"
+    missing = (
+        Path("/tmp/aichat-unowned-fixture.txt")
+        if excluded
+        else home / "attachments/missing.txt"
+    )
     rollout = home / "sessions/2026" / f"{SID}.jsonl"
     with rollout.open("a") as stream:
         stream.write(
@@ -491,7 +496,10 @@ def test_codex_missing_artifact_in_normal_report(
         args.append("--apply")
     result = CliRunner().invoke(main, args)
     assert result.exit_code == 0, result.output
-    assert f"Missing at source (not copied): {missing}" in result.output
+    label = (
+        "Excluded external artifact" if excluded else "Missing at source (not copied)"
+    )
+    assert f"{label}: {missing}" in result.output
 
 
 @pytest.mark.parametrize("apply", [False, True])

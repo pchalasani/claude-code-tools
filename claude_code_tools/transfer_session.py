@@ -404,6 +404,13 @@ def transfer(
         for gap in manifest.get("missing_at_source", []):
             path = gap["path"] if isinstance(gap, dict) else gap
             click.echo(f"Missing at source (not copied): {path}")
+        for excluded in manifest.get("excluded_artifacts", []):
+            click.echo(f"Excluded external artifact: {excluded['path']}")
+        if manifest.get("excluded_artifacts"):
+            click.echo(
+                "Note: Copy these files manually or explicitly opt in with a "
+                "narrow --map source/destination pair."
+            )
         for warning in manifest["warnings"]:
             click.echo(f"Note: {warning}")
         comparison = report.get("environment_comparison", {})
