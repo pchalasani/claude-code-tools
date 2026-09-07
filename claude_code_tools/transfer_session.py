@@ -402,7 +402,8 @@ def transfer(
                     f"({len(table['rows'])} records)"
                 )
         for gap in manifest.get("missing_at_source", []):
-            click.echo(f"Missing at source (not copied): {gap['path']}")
+            path = gap["path"] if isinstance(gap, dict) else gap
+            click.echo(f"Missing at source (not copied): {path}")
         for warning in manifest["warnings"]:
             click.echo(f"Note: {warning}")
         comparison = report.get("environment_comparison", {})

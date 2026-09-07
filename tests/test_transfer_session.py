@@ -436,3 +436,58 @@ def test_default_report_displays_missing_source_artifacts(
     missing = workspace["home"] / "plans/missing-fixture-plan.md"
     assert f"Missing at source (not copied): {missing}" in result.output
     assert not workspace["destination"].exists()
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_codex_missing_artifact_in_normal_report(
+    workspace: dict[str, Path], tmp_path: Path, apply: bool
+) -> None:
+    """Codex string-shaped source gaps render on both inspection and copy."""
+    import sqlite3
+
+    from tests.test_transfer_codex import profile, thread
+
+    home = tmp_path / "codex"
+    destination = tmp_path / "codex-destination"
+    profile(home)
+    profile(destination)
+    thread(home, SID)
+    missing = home / "attachments/missing.txt"
+    rollout = home / "sessions/2026" / f"{SID}.jsonl"
+    with rollout.open("a") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "content": [{"type": "input_text", "text": str(missing)}],
+                    },
+                }
+            )
+            + "\n"
+        )
+    with sqlite3.connect(home / "state_5.sqlite") as db:
+        db.execute("UPDATE threads SET cwd=?", (str(workspace["source"]),))
+    args = [
+        "transfer",
+        SID,
+        "--agent",
+        "codex",
+        "--source-home",
+        str(home),
+        "--to",
+        "local",
+        "--destination-home",
+        str(destination),
+        "--destination-project",
+        str(workspace["target"]),
+        "--map",
+        "/old/project",
+        str(workspace["target"]),
+    ]
+    if apply:
+        args.append("--apply")
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    assert f"Missing at source (not copied): {missing}" in result.output
