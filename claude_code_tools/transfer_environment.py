@@ -52,7 +52,7 @@ def _registrations(value: Any) -> list[dict[str, Any]]:
         for item in value:
             result.extend(_registrations(item))
     elif isinstance(value, dict):
-        identity = value.get("id") or value.get("name") or value.get("pluginId")
+        identity = value.get("pluginId") or value.get("id") or value.get("name")
         if isinstance(identity, str) and re.fullmatch(r"[\w@./:-]{1,200}", identity):
             item = {"id": identity}
             for key in ("enabled", "version", "scope"):
@@ -96,7 +96,16 @@ def _inspect_environment(agent: str, home: Path, runtime_home: Path) -> dict[str
             [executable, "--version"], version_environment
         )
         native = (
-            _run([executable, "plugin", "list", "--json"], environment)
+            _run(
+                [
+                    executable,
+                    "plugin",
+                    "list",
+                    "--json",
+                    *(_codex_marketplace_args(home) if agent == "codex" else []),
+                ],
+                environment,
+            )
             if home.is_dir()
             else {"ran": False, "ok": False, "error": "Account not initialized"}
         )
@@ -127,6 +136,21 @@ def _inspect_environment(agent: str, home: Path, runtime_home: Path) -> dict[str
                 native["error"] = "Unrecognized plugin JSON schema"
         native["registrations"] = registrations
         native["count"] = len(registrations)
+        if agent == "codex":
+            cached = _codex_cached_registrations(home)
+            native["cached_registrations"] = cached
+            native["command_ok"] = native["ok"]
+            native["scope"] = "unauthenticated isolated native discovery"
+            omitted = sorted(set(cached) - {item["id"] for item in registrations})
+            native["cached_not_in_native_probe"] = omitted
+            native["complete"] = native["ok"] and not omitted
+            if omitted:
+                native["ok"] = False
+                warnings.append(
+                    "The isolated Codex plugin probe omits cached plugins; "
+                    "bundled/remote availability may depend on account auth. "
+                    "Cache presence alone does not prove effective availability."
+                )
         checks["native_plugins"] = native
     else:
         remediation.append(f"Install {agent}, then rerun the environment check.")
@@ -284,8 +308,20 @@ def _inspect_environment(agent: str, home: Path, runtime_home: Path) -> dict[str
     )
     if not checks.get("native_plugins", {}).get("ok", False):
         remediation.append(
-            f"Run {agent} plugin list --json with the selected account "
-            "home; repair registrations without copying credentials."
+            "Run "
+            + shlex.join(
+                [
+                    "env",
+                    ("CODEX_HOME=" if agent == "codex" else "CLAUDE_CONFIG_DIR=")
+                    + str(home),
+                    agent,
+                    "plugin",
+                    "list",
+                    "--json",
+                ]
+            )
+            + " in the original account to verify authenticated availability; "
+            "repair registrations without copying credentials."
         )
     return {
         "ran": True,
@@ -309,6 +345,12 @@ def inspect_environment(agent: str, home: Path) -> dict[str, Any]:
             source = home / relative
             if source.is_file():
                 target = runtime_home / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, target)
+                target.chmod(0o600)
+        if agent == "codex":
+            for source in _codex_metadata_files(home):
+                target = runtime_home / source.relative_to(home)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(source, target)
                 target.chmod(0o600)
@@ -358,6 +400,12 @@ def compare_environments(
         "ok": ran and not missing and not disabled,
         "missing_or_disabled_plugins": missing,
         "newly_disabled_skills": disabled,
+        "static_cache_only_in_source": sorted(
+            set(source_plugins.get("cached_registrations", []))
+            - set(target_plugins.get("cached_registrations", []))
+        ),
+        "runtime_parity_verified": ran,
+        "static_cache_note": "Cache differences are advisory, not proof of effective availability.",
         "remediation": (
             ["Plugin availability could not be compared; complete both native checks."]
             if not ran
@@ -368,3 +416,56 @@ def compare_environments(
             else []
         ),
     }
+
+
+def _codex_metadata_files(home: Path) -> list[Path]:
+    """List manifest-only cache metadata; exclude auth, executables and databases."""
+    root = home / "plugins/cache"
+    return sorted(
+        {
+            path
+            for pattern in (
+                "*/*/*/.codex-plugin/plugin.json",
+                "*/*/*/.claude-plugin/plugin.json",
+                "*/*/.codex-remote-plugin-install.json",
+            )
+            for path in root.glob(pattern)
+            if path.is_file()
+        }
+    )
+
+
+def _codex_cached_registrations(home: Path) -> list[str]:
+    """Identify cache candidates separately from proven native availability."""
+    root = home / "plugins/cache"
+    return sorted(
+        {
+            f"{path.relative_to(root).parts[1]}@{path.relative_to(root).parts[0]}"
+            for path in _codex_metadata_files(home)
+        }
+    )
+
+
+def _codex_marketplace_args(home: Path) -> list[str]:
+    """Point git marketplace discovery at existing checkouts, never fetch or clone."""
+    try:
+        settings = tomllib.loads((home / "config.toml").read_text())
+    except (OSError, ValueError):
+        return []
+    args: list[str] = []
+    for name, value in settings.get("marketplaces", {}).items():
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", name) or not isinstance(value, dict):
+            continue
+        if value.get("source_type") != "git":
+            continue
+        checkout = home / ".tmp/marketplaces" / name
+        if checkout.is_dir():
+            args.extend(
+                [
+                    "-c",
+                    f'marketplaces.{name}.source_type="local"',
+                    "-c",
+                    f"marketplaces.{name}.source={json.dumps(str(checkout))}",
+                ]
+            )
+    return args

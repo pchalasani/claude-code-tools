@@ -147,3 +147,65 @@ def test_environment_comparison_distinguishes_unknown_from_match() -> None:
     assert difference["missing_or_disabled_plugins"] == ["example@market"]
     unknown = compare_environments(environment(True), {})
     assert not unknown["ran"] and not unknown["ok"]
+
+
+def test_codex_git_marketplace_probe_and_incomplete_cache(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Snapshot git sources resolve locally; auth-dependent cache stays unverified."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    cli = bindir / "codex"
+    cli.write_text("""#!/bin/sh
+if [ "$1" = --version ]; then echo 0.153.4; exit 0; fi
+case "$*" in *marketplaces.fixture.source_type*) ;; *) exit 5;; esac
+if [ ! -f "$CODEX_HOME/plugins/cache/fixture/tool/1/.codex-plugin/plugin.json" ]; then exit 6; fi
+echo '{"installed":[{"name":"tool","pluginId":"tool@fixture","enabled":true}],"available":[]}'
+""")
+    cli.chmod(0o700)
+    monkeypatch.setenv("PATH", str(bindir))
+    home = tmp_path / "profile"
+    (home / ".tmp/marketplaces/fixture").mkdir(parents=True)
+    (home / "config.toml").write_text(
+        '[marketplaces.fixture]\nsource_type="git"\nsource="https://example.invalid/repo"\n'
+    )
+    for marketplace, name in [("fixture", "tool"), ("bundled", "account-only")]:
+        manifest = (
+            home / "plugins/cache" / marketplace / name / "1/.codex-plugin/plugin.json"
+        )
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(json.dumps({"name": name, "version": "1"}))
+    check = inspect_environment("codex", home)["checks"]["native_plugins"]
+    assert check["ran"] and check["command_ok"]
+    assert check["registrations"][0]["id"] == "tool@fixture"
+    assert not check["complete"] and not check["ok"]
+    assert check["cached_not_in_native_probe"] == ["account-only@bundled"]
+
+
+def test_partial_native_parity_does_not_invent_missing_plugins() -> None:
+    from claude_code_tools.transfer_environment import compare_environments
+
+    source = {
+        "checks": {
+            "native_plugins": {
+                "ran": True,
+                "ok": False,
+                "registrations": [{"id": "visible@market"}],
+                "cached_registrations": ["visible@market", "hidden@bundled"],
+            }
+        }
+    }
+    target = {
+        "checks": {
+            "native_plugins": {
+                "ran": True,
+                "ok": False,
+                "registrations": [],
+                "cached_registrations": ["hidden@bundled"],
+            }
+        }
+    }
+    result = compare_environments(source, target)
+    assert not result["runtime_parity_verified"]
+    assert result["missing_or_disabled_plugins"] == []
+    assert result["static_cache_only_in_source"] == ["visible@market"]
