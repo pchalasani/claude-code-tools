@@ -371,3 +371,37 @@ def test_quoted_bash_wrapper_remains_inspectable(tmp_path: Path, monkeypatch) ->
     assert checks[0]["ran"] and checks[0]["ok"]
     assert checks[0]["launcher_available"]
     assert checks[0]["runtime_executed"] is False
+
+
+def test_failed_simple_hooks_surface_sanitized_summary(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Normal-output warning fields expose failed hooks without leaking commands."""
+    home = tmp_path / "profile"
+    home.mkdir()
+    commands = [
+        "nonexistent-hook-launcher --token TOPSECRET",
+        "/bin/bash /missing/private-hook.sh --token TOPSECRET",
+        '"unterminated TOPSECRET',
+    ]
+    (home / "settings.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {"hooks": [{"command": command} for command in commands]}
+                    ]
+                }
+            }
+        )
+    )
+    monkeypatch.setenv("PATH", str(tmp_path / "no-native-cli"))
+    result = inspect_environment("claude", home)
+    summary = "\n".join(result["warnings"] + result["remediation"])
+    assert "3 configured hook check(s) failed" in summary
+    assert "install missing launchers" in summary
+    assert "missing script paths" in summary
+    assert "repair invalid quoting" in summary
+    assert "TOPSECRET" not in json.dumps(result)
+    assert "nonexistent-hook-launcher" not in summary
+    assert "/missing/private-hook.sh" not in summary

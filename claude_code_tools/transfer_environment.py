@@ -368,6 +368,21 @@ def _inspect_environment(agent: str, home: Path, runtime_home: Path) -> dict[str
                             "runtime_executed": False,
                         }
                     )
+    failed_simple_hooks = [
+        check for check in hook_checks if check.get("ran") and not check.get("ok")
+    ]
+    if failed_simple_hooks:
+        warnings.append(
+            f"{len(failed_simple_hooks)} configured hook check(s) failed: "
+            "a command could not be parsed, a launcher was unavailable, or a "
+            "referenced script was missing."
+        )
+        remediation.append(
+            "Inspect the selected account's hook declarations and enabled plugin "
+            "hook files. Correct missing script paths or install missing launchers "
+            "on the agent PATH, repair invalid quoting, then rerun the preflight. "
+            "Command text is withheld because it may contain secrets."
+        )
     checks["configured_hooks"] = hook_checks
     warnings.append(
         "Hook commands were inspected, not executed. Plugin hook imports "
