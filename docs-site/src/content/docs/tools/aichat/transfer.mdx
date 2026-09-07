@@ -133,7 +133,9 @@ Apply reported remedies on the destination. In particular, a copied Chrome MCP
 configuration does not carry a logged-in browser or extension connection.
 A listening port is not proof of browser authentication or a working MCP session.
 Hook scripts are not executed by preflight; path checks do not prove runtime
-imports or every hook's behavior. Use safe synthetic hook tests when diagnosing
+imports or every hook's behavior. Shell compounds and builtin launchers are
+reported as unverified rather than interpreted as missing executables. Use safe
+synthetic hook tests when diagnosing
 an actual runtime failure.
 
 ## Interrupted copies and recovery
