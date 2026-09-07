@@ -352,6 +352,29 @@ def _inspect_environment(agent: str, home: Path, runtime_home: Path) -> dict[str
                         )
                         remediation.append(instruction)
                         continue
+                    relative_scripts = [
+                        word
+                        for word in words
+                        if not word.startswith(("/", "-"))
+                        and word.endswith((".py", ".sh"))
+                    ]
+                    if relative_scripts:
+                        instruction = (
+                            "Resolve relative hook script paths against the agent's "
+                            "actual working directory, or use explicit absolute paths; "
+                            "then perform a safe runtime check."
+                        )
+                        hook_checks.append(
+                            {
+                                "ran": False,
+                                "ok": False,
+                                "reason": "Relative hook script path is unverified without runtime cwd",
+                                "runtime_executed": False,
+                                "remediation": instruction,
+                            }
+                        )
+                        remediation.append(instruction)
+                        continue
                     paths = [
                         path
                         for word in words

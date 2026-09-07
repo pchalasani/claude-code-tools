@@ -461,3 +461,32 @@ def test_env_hook_wrapper_cannot_prove_interpreter_available(
     assert "launcher_available" not in checks[0]
     assert checks[0]["remediation"]
     assert not checks[0]["runtime_executed"]
+
+
+def test_relative_hook_script_is_not_verified_from_launcher_only(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An installed interpreter cannot prove a cwd-relative hook script is present."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    executable = bindir / "python"
+    executable.write_text("#!/bin/sh\nexit 87\n")
+    executable.chmod(0o700)
+    home = tmp_path / "profile"
+    home.mkdir()
+    (home / "settings.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [{"hooks": [{"command": "python missing-hook.py"}]}]
+                }
+            }
+        )
+    )
+    monkeypatch.setenv("PATH", str(bindir))
+    result = inspect_environment("claude", home)
+    check = result["checks"]["configured_hooks"][0]
+    assert check["ran"] is False and check["ok"] is False
+    assert "Relative hook script path" in check["reason"]
+    assert check["runtime_executed"] is False
+    assert any("actual working directory" in item for item in result["remediation"])

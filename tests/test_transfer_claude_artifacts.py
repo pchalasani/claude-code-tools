@@ -179,3 +179,35 @@ def test_unicode_line_separators_inside_native_jsonl(tmp_path: Path) -> None:
         records = [json.loads(line) for line in path.read_text().split("\n") if line]
         assert records[-1]["message"]["content"] == text
         assert records[-1]["cwd"] == "/new/project"
+
+
+def test_scratch_link_cannot_copy_another_sessions_subagent(tmp_path: Path) -> None:
+    """A .jsonl/subagents shape alone does not authorize another session's log."""
+    home, transcript = fixture_home(tmp_path)
+    unrelated = transcript.parent / "another-session/subagents/agent-private.jsonl"
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text("unrelated conversation must not be copied")
+    with tempfile.TemporaryDirectory(prefix="claude-transfer-", dir="/tmp") as name:
+        scratch = Path(name) / "project" / SID / "scratchpad"
+        scratch.mkdir(parents=True)
+        link = scratch / "task.output"
+        link.symlink_to(unrelated)
+        with transcript.open("a") as stream:
+            stream.write(json.dumps({"message": {"content": f"Read {link}"}}) + "\n")
+        result = export_session(
+            home,
+            SID,
+            Path("/remote/profile"),
+            Path("/new/project"),
+            tmp_path / "bundle",
+        )
+        assert str(link) not in result["path_mappings"]
+        assert {"path": str(link), "reason": "unsupported_symlink_target"} in result[
+            "missing_at_source"
+        ]
+        for path in (tmp_path / "bundle/files").rglob("*"):
+            if path.is_file():
+                assert (
+                    b"unrelated conversation must not be copied"
+                    not in path.read_bytes()
+                )

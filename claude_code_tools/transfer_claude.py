@@ -364,7 +364,7 @@ def export_session(
         relative = source.relative_to(source_home)
         stage(source, relative)
         mappings[str(source)] = str(destination_home / relative)
-    scratch, gaps = discover_scratch(records, session_id, source_project)
+    scratch, gaps = discover_scratch(records, session_id, source_project, sidecar)
     missing_at_source.extend(
         gap for gap in gaps if gap["path"] not in available_aliases
     )

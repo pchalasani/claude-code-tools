@@ -15,15 +15,17 @@ def discover_scratch(
     records: list[dict[str, Any]],
     session_id: str,
     source_project: str | None = None,
+    sidecar_root: Path | None = None,
 ) -> tuple[list[tuple[Path, Path]], list[dict[str, str]]]:
     """Inventory referenced temporary files and session-owned scratch directories.
 
     Only Claude temporary buckets explicitly mentioned in the transcript qualify.
     Arbitrary absolute paths in conversation text are not permission to copy files.
-    Symlinks are materialized only when they target a regular Claude subagent log.
+    Symlinks are materialized only for subagent logs inside selected session roots.
     """
     text = json.dumps(records, ensure_ascii=False)
     references = set(re.findall(r"/(?:private/)?tmp/claude-[^\s\"'<>\\]+", text))
+    allowed_roots = [sidecar_root.resolve()] if sidecar_root else []
     if source_project:
         from claude_code_tools.session_utils import encode_claude_project_path
 
@@ -34,6 +36,7 @@ def discover_scratch(
             root = base / f"claude-{os.getuid()}" / project / session_id
             if root.is_dir() and not root.is_symlink():
                 references.add(str(root.resolve()))
+                allowed_roots.append(root.resolve())
     files: dict[Path, Path] = {}
     missing: list[dict[str, str]] = []
     for raw in sorted(references):
@@ -56,6 +59,7 @@ def discover_scratch(
                     target.is_file()
                     and target.suffix == ".jsonl"
                     and target.parent.name == "subagents"
+                    and any(target.is_relative_to(root) for root in allowed_roots)
                 ):
                     missing.append(
                         {"path": str(candidate), "reason": "unsupported_symlink_target"}
