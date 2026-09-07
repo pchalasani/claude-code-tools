@@ -128,3 +128,34 @@ def test_unreferenced_native_scratch(tmp_path: Path, monkeypatch) -> None:
     mapped = Path(result["path_mappings"][str(scratch / "goal.txt")])
     copied = tmp_path / "bundle/files" / mapped.relative_to("/remote/profile")
     assert copied.read_text() == "Native scratch without literal reference"
+
+
+def test_prior_transfer_scratch_survives_return(tmp_path: Path) -> None:
+    """Previously relocated scratch and original historical aliases survive a return."""
+    home, _ = fixture_home(tmp_path)
+    support = home / "transfer-support" / SID
+    artifact = support / "scratch/hash/goal.txt"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("goal from the first machine")
+    (support / "path-map.json").write_text(
+        json.dumps(
+            {
+                "path_mappings": {"/tmp/old-original/goal.txt": str(artifact)},
+                "missing_at_source": [
+                    {"path": "/tmp/old-original/gone", "reason": "missing_at_source"}
+                ],
+            }
+        )
+    )
+    result = export_session(
+        home, SID, Path("/return/profile"), Path("/return/project"), tmp_path / "bundle"
+    )
+    target = Path("/return/profile") / artifact.relative_to(home)
+    assert result["path_mappings"]["/tmp/old-original/goal.txt"] == str(target)
+    assert (tmp_path / "bundle/files" / artifact.relative_to(home)).read_text() == (
+        "goal from the first machine"
+    )
+    assert not any(name.endswith("/path-map.json") for name in result["files"])
+    assert any(
+        item["path"] == "/tmp/old-original/gone" for item in result["missing_at_source"]
+    )
