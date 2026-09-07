@@ -291,11 +291,9 @@ def export_session(
         if len(threads) != len(ids):
             raise ValueError("A descendant thread is missing from the source index")
         source_project = Path(root["cwd"])
-        mappings = (
-            path_mappings.items()
-            if isinstance(path_mappings, dict)
-            else path_mappings or []
-        )
+        from claude_code_tools.transfer_paths import normalize_path_mappings
+
+        mappings = normalize_path_mappings(path_mappings).items()
         for old, new in mappings:
             if posixpath.normpath(old) == posixpath.normpath(str(source_project)) and (
                 posixpath.normpath(new) != posixpath.normpath(str(destination_project))

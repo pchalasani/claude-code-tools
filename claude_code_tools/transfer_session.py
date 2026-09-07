@@ -283,13 +283,12 @@ def transfer(
         raise click.UsageError("Use either --apply or --dry-run, not both.")
     if recover and not apply:
         raise click.UsageError("--recover requires --apply")
-    mapped: dict[str, str] = {}
-    for old, new in path_mappings:
-        if not Path(old).is_absolute() or not Path(new).is_absolute():
-            raise click.UsageError("--map requires two absolute paths")
-        if old in mapped and mapped[old] != new:
-            raise click.UsageError("Conflicting destinations for the same --map source")
-        mapped[old] = new
+    from claude_code_tools.transfer_paths import normalize_path_mappings
+
+    try:
+        mapped = normalize_path_mappings(path_mappings)
+    except ValueError as error:
+        raise click.UsageError(str(error)) from error
     dry_run = not apply
     variable = "CODEX_HOME" if agent == "codex" else "CLAUDE_CONFIG_DIR"
     configured = (ctx.obj or {}).get(f"{agent}_home")
@@ -320,7 +319,7 @@ def transfer(
                     Path(probe["destination_home"]),
                     Path(probe["project"]["path"]),
                     staging,
-                    dict(path_mappings),
+                    mapped,
                 )
             else:
                 bundle = destination_request(
@@ -329,7 +328,7 @@ def transfer(
                     {
                         "operation": "export",
                         "agent": agent,
-                        "path_mappings": dict(path_mappings),
+                        "path_mappings": mapped,
                         "source_home": str(source_home),
                         "session": session,
                         "destination_home": probe["destination_home"],
