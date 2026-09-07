@@ -291,6 +291,24 @@ def export_session(
         if len(threads) != len(ids):
             raise ValueError("A descendant thread is missing from the source index")
         source_project = Path(root["cwd"])
+        mappings = (
+            path_mappings.items()
+            if isinstance(path_mappings, dict)
+            else path_mappings or []
+        )
+        for old, new in mappings:
+            if posixpath.normpath(old) == posixpath.normpath(str(source_project)) and (
+                posixpath.normpath(new) != posixpath.normpath(str(destination_project))
+            ):
+                raise ValueError(
+                    "Primary project mapping conflicts with destination_project; "
+                    "use the same destination for the primary project."
+                )
+        path_mappings = [
+            (old, new)
+            for old, new in mappings
+            if posixpath.normpath(old) != posixpath.normpath(str(source_project))
+        ]
         artifacts = CodexArtifacts(
             source_home,
             destination_home,

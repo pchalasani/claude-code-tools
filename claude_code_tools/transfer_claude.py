@@ -224,6 +224,19 @@ def export_session(
     if source_project == "/":
         raise ValueError("Transferring a filesystem-root project is unsupported")
     destination = str(destination_project)
+    for old, new in (path_mappings or {}).items():
+        if posixpath.normpath(old) == posixpath.normpath(source_project) and (
+            posixpath.normpath(new) != posixpath.normpath(destination)
+        ):
+            raise ValueError(
+                "Primary project mapping conflicts with destination_project; "
+                "use the same destination for the primary project."
+            )
+    path_mappings = {
+        old: new
+        for old, new in (path_mappings or {}).items()
+        if posixpath.normpath(old) != posixpath.normpath(source_project)
+    }
     project_relative = Path("projects") / encode_claude_project_path(destination)
     files: list[str] = []
     shared_files: list[str] = []
