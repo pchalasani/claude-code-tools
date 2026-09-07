@@ -786,3 +786,72 @@ def test_explicit_external_symlink_is_refused(tmp_path: Path) -> None:
                 tmp_path / "stage",
                 [(str(link), "/new/support/linked.txt")],
             )
+
+
+@pytest.mark.parametrize(
+    "representation", ["structured", "quoted", "backtick", "whole_text", "artifact"]
+)
+def test_support_paths_with_spaces_are_not_truncated(
+    tmp_path: Path, representation: str
+) -> None:
+    """Explicit JSON paths and quoted references retain their complete filenames."""
+    source = tmp_path / "source"
+    profile(source)
+    thread(source, "root", mode="legacy")
+    attachment = source / "attachments/root/goal notes.txt"
+    attachment.parent.mkdir(parents=True)
+    attachment.write_text("COMPLETE SPACED ATTACHMENT")
+    if representation == "structured":
+        payload = {"path": str(attachment)}
+    elif representation == "quoted":
+        payload = {"text": f'Read "{attachment}" and then continue.'}
+    elif representation == "backtick":
+        payload = {"text": f"Read `{attachment}` and then continue."}
+    else:
+        payload = {"text": str(attachment)}
+    if representation == "artifact":
+        insert(
+            source,
+            "state_5.sqlite",
+            "thread_artifacts",
+            {
+                "id": "artifact",
+                "thread_id": "root",
+                "artifact_type": "attachment",
+                "identity_key": "spaced-file",
+                "payload": json.dumps({"path": str(attachment)}),
+            },
+        )
+    else:
+        with (source / "sessions/2026/root.jsonl").open("a") as stream:
+            stream.write(
+                json.dumps({"type": "response_item", "payload": payload}) + "\n"
+            )
+    manifest = export_session(
+        source,
+        "root",
+        tmp_path / "destination",
+        Path("/new/project"),
+        tmp_path / "stage",
+    )
+    assert "attachments/root/goal notes.txt" in manifest["files"]
+    assert not manifest["missing_at_source"]
+    assert (tmp_path / "stage/files/attachments/root/goal notes.txt").read_text() == (
+        "COMPLETE SPACED ATTACHMENT"
+    )
+
+
+def test_reference_parser_preserves_missing_quoted_paths_and_prose() -> None:
+    """Quoted missing files remain one gap; ordinary prose is not a filename."""
+    from claude_code_tools.transfer_codex_artifacts import reference_candidates
+
+    assert reference_candidates(
+        json.dumps(
+            {
+                "text": 'Read "/unavailable/goal notes.txt" and /unavailable/plain.txt afterward.'
+            }
+        )
+    ) == {"/unavailable/goal notes.txt", "/unavailable/plain.txt"}
+    assert reference_candidates(
+        json.dumps({"attachment_path": "/unavailable/missing attachment.txt"})
+    ) == {"/unavailable/missing attachment.txt"}

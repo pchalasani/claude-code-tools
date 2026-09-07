@@ -27,6 +27,60 @@ def latest_session_index(home: Path) -> dict[str, dict[str, Any]]:
     return latest
 
 
+def reference_candidates(text: str) -> set[str]:
+    """Extract complete structured/quoted paths before scanning unquoted prose."""
+    candidates: set[str] = set()
+
+    def visit(value: Any, key: str = "") -> None:
+        if isinstance(value, dict):
+            for field, child in value.items():
+                visit(child, field)
+            return
+        if isinstance(value, list):
+            for child in value:
+                visit(child, key)
+            return
+        if not isinstance(value, str):
+            return
+        # Some database artifact payloads contain a JSON document as a string.
+        if value.startswith(("{", "[")):
+            try:
+                nested = json.loads(value)
+            except json.JSONDecodeError:
+                pass
+            else:
+                visit(nested)
+                return
+        if (
+            value.startswith("/")
+            and "\n" not in value
+            and (
+                key
+                in {"path", "file_path", "attachment_path", "image_path", "local_path"}
+                or Path(value).exists()
+            )
+        ):
+            candidates.add(value)
+            return
+        # Mask quoted spans so the fallback cannot also invent a truncated path.
+        quoted = re.compile(r"([\"'`])(/[^\n]*?)\1")
+
+        def collect(match: re.Match[str]) -> str:
+            candidates.add(match.group(2))
+            return " " * len(match.group(0))
+
+        remaining = quoted.sub(collect, value)
+        for path in re.findall(r'/[^\s"\'<>`]+', remaining):
+            candidates.add(path.rstrip(".,:;)\\"))
+
+    try:
+        document = json.loads(text)
+    except json.JSONDecodeError:
+        document = text
+    visit(document)
+    return candidates
+
+
 class CodexArtifacts:
     """Collect selected references without copying account configuration or auth."""
 
@@ -99,8 +153,7 @@ class CodexArtifacts:
 
     def discover(self, text: str) -> None:
         """Recognize literal support references in the selected session only."""
-        for value in re.findall(r'/[^\s"\'<>`]+', text):
-            value = value.rstrip(".,:;)\\")
+        for value in reference_candidates(text):
             for mapping in self.historical:
                 try:
                     tail = Path(value).relative_to(mapping["source"])
