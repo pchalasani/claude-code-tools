@@ -309,3 +309,65 @@ def test_plugin_hooks_array_reports_warning(tmp_path: Path, monkeypatch) -> None
     assert any(
         "hooks.json must contain an object" in item for item in report["warnings"]
     )
+
+
+def test_compound_and_builtin_hooks_are_unverified(tmp_path: Path, monkeypatch) -> None:
+    """Shell composition is not mistaken for a missing executable or executed."""
+    home = tmp_path / "profile"
+    home.mkdir()
+    marker = tmp_path / "must-not-exist"
+    commands = [
+        f'cd "{tmp_path}" && python hook.py',
+        f'cd "{tmp_path}"&&python hook.py',
+        f'echo test > "{marker}"',
+        "export EXAMPLE=value",
+    ]
+    (home / "settings.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {"hooks": [{"command": command} for command in commands]}
+                    ]
+                }
+            }
+        )
+    )
+    monkeypatch.setenv("PATH", str(tmp_path / "no-native-cli"))
+    report = inspect_environment("claude", home)
+    checks = report["checks"]["configured_hooks"]
+    assert len(checks) == len(commands)
+    for check in checks:
+        assert check["ran"] is False and check["ok"] is False
+        assert "unverified" in check["reason"]
+        assert "launcher_available" not in check
+        assert check["runtime_executed"] is False
+        assert check["remediation"]
+    assert not marker.exists()
+
+
+def test_quoted_bash_wrapper_remains_inspectable(tmp_path: Path, monkeypatch) -> None:
+    """Operators inside a quoted bash argument do not become outer composition."""
+    home = tmp_path / "profile"
+    home.mkdir()
+    (home / "settings.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "hooks": [
+                                {"command": '/bin/bash -c "echo hello && echo world"'}
+                            ]
+                        }
+                    ]
+                }
+            }
+        )
+    )
+    monkeypatch.setenv("PATH", str(tmp_path / "no-native-cli"))
+    checks = inspect_environment("claude", home)["checks"]["configured_hooks"]
+    assert len(checks) == 1
+    assert checks[0]["ran"] and checks[0]["ok"]
+    assert checks[0]["launcher_available"]
+    assert checks[0]["runtime_executed"] is False

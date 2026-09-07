@@ -274,6 +274,11 @@ def _inspect_environment(agent: str, home: Path, runtime_home: Path) -> dict[str
                     )
                     try:
                         words = shlex.split(command)
+                        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+                        lexer.whitespace_split = True
+                        compound = any(
+                            re.fullmatch(r"[;&|()<>]+", token) for token in lexer
+                        )
                     except ValueError:
                         hook_checks.append(
                             {
@@ -285,6 +290,62 @@ def _inspect_environment(agent: str, home: Path, runtime_home: Path) -> dict[str
                         continue
                     while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
                         words.pop(0)
+                    builtins = {
+                        "cd",
+                        "export",
+                        "source",
+                        ".",
+                        "exec",
+                        "eval",
+                        "set",
+                        "unset",
+                        "readonly",
+                        "alias",
+                        "unalias",
+                        "return",
+                        "break",
+                        "continue",
+                        "trap",
+                        "umask",
+                        "ulimit",
+                        "wait",
+                        "read",
+                        "printf",
+                        "echo",
+                        "test",
+                        "[",
+                        "true",
+                        "false",
+                        "type",
+                        "command",
+                        "builtin",
+                        "hash",
+                        "enable",
+                        "dirs",
+                        "pushd",
+                        "popd",
+                        "declare",
+                        "local",
+                        "typeset",
+                        "let",
+                    }
+                    if compound or (words and words[0] in builtins):
+                        instruction = (
+                            "Inspect this compound or builtin hook manually and use "
+                            "a safe runtime input to verify it; the transfer probe "
+                            "does not evaluate shell syntax."
+                        )
+                        hook_checks.append(
+                            {
+                                "ran": False,
+                                "ok": False,
+                                "reason": "Compound or shell-builtin hook is unverified",
+                                "runtime_executed": False,
+                                "remediation": instruction,
+                            }
+                        )
+                        remediation.append(instruction)
+                        continue
                     paths = [
                         path
                         for word in words
