@@ -130,6 +130,8 @@ def prepare_transfer(
     )
     if manifest.get("ok") is not True:
         raise ValueError("Session adapter did not report successful export")
+    from claude_code_tools.transfer_remote import capture_operational_projects
+
     manifest.update(
         {
             "agent": agent,
@@ -138,6 +140,7 @@ def prepare_transfer(
             "destination_home": str(destination_home),
             "destination_project": str(destination_project),
             "project_state": project_state(Path(manifest["source_project"])),
+            "operational_projects": capture_operational_projects(manifest),
         }
     )
     artifacts = {}
@@ -414,7 +417,11 @@ def transfer(
         for warning in manifest["warnings"]:
             click.echo(f"Note: {warning}")
         comparison = report.get("environment_comparison", {})
-        for field in ("missing_or_disabled_plugins", "newly_disabled_skills"):
+        for field in (
+            "missing_or_disabled_plugins",
+            "newly_disabled_skills",
+            "newly_denied_skills",
+        ):
             if comparison.get(field):
                 click.echo(f"Environment {field}: {', '.join(comparison[field])}")
         for remedy in comparison.get("remediation", []):

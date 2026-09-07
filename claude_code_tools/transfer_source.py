@@ -58,7 +58,10 @@ def resolve_session(home: Path, agent: str, query: str) -> str:
 
 def export_request(request: dict[str, Any]) -> dict[str, Any]:
     """Export a checksummed bundle; never launch the source agent."""
-    from claude_code_tools.transfer_remote import project_state
+    from claude_code_tools.transfer_remote import (
+        capture_operational_projects,
+        project_state,
+    )
 
     agent = request["agent"]
     if agent not in {"claude", "codex"}:
@@ -86,6 +89,7 @@ def export_request(request: dict[str, Any]) -> dict[str, Any]:
                 "destination_home": request["destination_home"],
                 "destination_project": request["destination_project"],
                 "project_state": project_state(Path(manifest["source_project"])),
+                "operational_projects": capture_operational_projects(manifest),
             }
         )
         artifacts = {}

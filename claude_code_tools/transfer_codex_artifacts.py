@@ -61,6 +61,7 @@ class CodexArtifacts:
             self.historical.sort(key=lambda item: len(item["source"]), reverse=True)
         self.mappings.sort(key=lambda pair: len(pair[0]), reverse=True)
         self.references: set[str] = set()
+        self.operational_cwds: set[tuple[str, str]] = set()
         self.files: list[str] = []
         self.missing: list[str] = []
         self.excluded: set[str] = set()
@@ -154,6 +155,10 @@ class CodexArtifacts:
             before = json.dumps(record, sort_keys=True)
             if record.get("type") in ("session_meta", "turn_context"):
                 payload = record.get("payload", {})
+                if isinstance(payload.get("cwd"), str):
+                    self.operational_cwds.add(
+                        (payload["cwd"], self.map_required(payload["cwd"]))
+                    )
                 for key in ("cwd", "sandbox_policy", "permissions"):
                     if key in payload:
                         payload[key] = self.structural(payload[key])
@@ -274,6 +279,10 @@ class CodexArtifacts:
             )
         materialized_sources = {item["source"] for item in self.reference_mappings}
         return {
+            "operational_cwds": [
+                {"source": old, "destination": new}
+                for old, new in sorted(self.operational_cwds)
+            ],
             "excluded_artifacts": [
                 {
                     "path": value,

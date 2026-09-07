@@ -34,6 +34,36 @@ def project_state(project: Path) -> dict[str, Any]:
     }
 
 
+def capture_operational_projects(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """Record Git evidence for actual rewritten cwd paths, not artifact mappings."""
+    return [
+        {
+            "source": project_state(Path(pair["source"])),
+            "destination": pair["destination"],
+        }
+        for pair in manifest.get("operational_cwds", [])
+    ]
+
+
+def validate_operational_projects(manifest: dict[str, Any]) -> None:
+    """Require every operational worktree to match before publishing session data."""
+    for pair in manifest.get("operational_projects", []):
+        source = pair["source"]
+        destination = project_state(Path(pair["destination"]))
+        if source["changes"] or destination["changes"]:
+            raise ValueError(
+                f"Operational worktree must be clean: {source['path']} -> {destination['path']}"
+            )
+        if (source["head"], source["relative"]) != (
+            destination["head"],
+            destination["relative"],
+        ):
+            raise ValueError(
+                f"Operational worktree revision/subdirectory differs: "
+                f"{source['path']} -> {destination['path']}"
+            )
+
+
 def safe_target(home: Path, relative: str) -> Path:
     """Reject traversal and links inside the explicitly selected account home."""
     path = PurePosixPath(relative)
@@ -107,6 +137,7 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any]:
             "Destination revision/project subdirectory differs. Fetch and check "
             f"out {expected['head']} in the destination worktree first."
         )
+    validate_operational_projects(manifest)
     from claude_code_tools.transfer_journal import (
         TransferJournal,
         append_jsonl_rows,
@@ -157,6 +188,7 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any]:
             manifest.get("session_ids", [manifest.get("session_id", "")])
         )
         validate_files(home, manifest)
+        validate_operational_projects(manifest)
         journal.backup(manifest)
         journal.save("publishing_files")
         for relative, data in decoded.items():

@@ -486,6 +486,9 @@ def export_session(
                     roots.append(artifacts.map_required(root_path))
                 policy["writable_roots"] = roots
             thread["sandbox_policy"] = json.dumps(policy)
+            artifacts.operational_cwds.add(
+                (thread["cwd"], artifacts.map_required(thread["cwd"]))
+            )
             thread["cwd"] = artifacts.map_required(thread["cwd"])
             # Destination UI collections belong to that machine/account.
             for key in (

@@ -255,6 +255,8 @@ def export_session(
         ),
     ]
 
+    operational_cwds: set[tuple[str, str]] = set()
+
     def stage(source: Path, relative: Path, rewrite: bool = False) -> None:
         """Copy a verified file into a fresh private staging directory."""
         target = staging / "files" / relative
@@ -262,10 +264,13 @@ def export_session(
         if target.exists() or target.is_symlink():
             raise ValueError(f"Staging collision: {relative}")
         if rewrite:
-            transformed = [
-                _map_record(record, source_project, destination, path_mappings)
-                for record in _read_records(source)
-            ]
+            transformed = []
+            for record in _read_records(source):
+                original_cwd = record.get("cwd")
+                mapped = _map_record(record, source_project, destination, path_mappings)
+                if isinstance(original_cwd, str) and original_cwd.startswith("/"):
+                    operational_cwds.add((original_cwd, mapped["cwd"]))
+                transformed.append(mapped)
             target.write_text("".join(json.dumps(r) + "\n" for r in transformed))
         else:
             shutil.copyfile(source, target)
@@ -400,6 +405,9 @@ def export_session(
         "ok": True,
         "files": sorted(files),
         "shared_files": sorted(shared_files),
+        "operational_cwds": [
+            {"source": old, "destination": new} for old, new in sorted(operational_cwds)
+        ],
         "source_project": source_project,
         "warnings": warnings,
         "missing_at_source": missing_at_source,

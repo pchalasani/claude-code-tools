@@ -38,6 +38,24 @@ def git(directory: Path, *args: str) -> str:
     ).strip()
 
 
+def relocate_codex_fixture(home: Path, source: Path) -> None:
+    """Keep native rollout cwd and byte offsets consistent with a real test repo."""
+    import sqlite3
+
+    rollout = home / "sessions/2026" / f"{SID}.jsonl"
+    original = rollout.read_bytes()
+    record = json.loads(original)
+    record["payload"]["cwd"] = str(source)
+    rewritten = (json.dumps(record) + "\n").encode()
+    rollout.write_bytes(rewritten)
+    with sqlite3.connect(home / "thread_history_1.sqlite") as db:
+        db.execute("UPDATE thread_turns SET rollout_byte_offset=?", (len(rewritten),))
+        db.execute(
+            "UPDATE thread_history_projection_state SET next_rollout_byte_offset=?",
+            (len(rewritten),),
+        )
+
+
 @pytest.fixture
 def workspace(tmp_path: Path) -> dict[str, Path]:
     """Create matching clean worktrees and one saved Claude conversation."""
@@ -247,6 +265,7 @@ def test_archived_codex_session_resolves(
     profile(home)
     profile(destination)
     thread(home, SID)
+    relocate_codex_fixture(home, workspace["source"])
     original = home / "sessions" / "2026" / f"{SID}.jsonl"
     archived = home / "archived_sessions" / original.name
     archived.parent.mkdir()
@@ -301,6 +320,7 @@ def test_interrupt_after_real_database_commit_preserves_rollouts(
     profile(home)
     profile(destination)
     thread(home, SID)
+    relocate_codex_fixture(home, workspace["source"])
     with sqlite3.connect(home / "state_5.sqlite") as db:
         db.execute(
             "UPDATE threads SET cwd=?,sandbox_policy=?",
@@ -454,6 +474,7 @@ def test_codex_artifact_disclosures_in_normal_report(
     profile(home)
     profile(destination)
     thread(home, SID)
+    relocate_codex_fixture(home, workspace["source"])
     missing = (
         Path("/tmp/aichat-unowned-fixture.txt")
         if excluded
