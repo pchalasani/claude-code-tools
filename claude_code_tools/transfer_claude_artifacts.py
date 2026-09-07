@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
 
 
 def discover_scratch(
-    records: list[dict[str, Any]], session_id: str
+    records: list[dict[str, Any]],
+    session_id: str,
+    source_project: str | None = None,
 ) -> tuple[list[tuple[Path, Path]], list[dict[str, str]]]:
     """Inventory referenced temporary files and session-owned scratch directories.
 
@@ -20,6 +23,16 @@ def discover_scratch(
     """
     text = json.dumps(records, ensure_ascii=False)
     references = set(re.findall(r"/(?:private/)?tmp/claude-[^\s\"'<>\\]+", text))
+    if source_project:
+        from claude_code_tools.session_utils import encode_claude_project_path
+
+        project = encode_claude_project_path(source_project)
+        # Native Unix Claude scratch convention. Probe exact session paths only;
+        # never inventory another session or recursively search temporary roots.
+        for base in (Path("/tmp"), Path("/private/tmp")):
+            root = base / f"claude-{os.getuid()}" / project / session_id
+            if root.is_dir() and not root.is_symlink():
+                references.add(str(root.resolve()))
     files: dict[Path, Path] = {}
     missing: list[dict[str, str]] = []
     for raw in sorted(references):

@@ -315,7 +315,7 @@ def export_session(
         source_project: destination,
         **(path_mappings or {}),
     }
-    scratch, gaps = discover_scratch(records, session_id)
+    scratch, gaps = discover_scratch(records, session_id, source_project)
     missing_at_source.extend(gaps)
     for source, relative in scratch:
         old = source.stat()
