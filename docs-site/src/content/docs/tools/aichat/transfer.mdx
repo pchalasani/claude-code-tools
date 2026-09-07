@@ -63,7 +63,8 @@ Each SSH peer needs Git and Python 3.11+, but does not need `aichat` installed.
 - `--destination-home PATH`: required destination account home.
 - `--destination-project PATH`: required prepared Git project directory.
 - `--map OLD NEW`: additional absolute source/destination path pair; repeat for
-  descendant worktrees or other operational paths outside the main project.
+  descendant worktrees or other operational paths outside the main project. A pair
+  cannot override the primary `--destination-project` mapping.
 - `--remote-python PATH`: SSH helper interpreter; defaults to `python3`.
 - `--apply`: perform the copy after validation.
 - `--dry-run`: explicitly request the default inspection; incompatible with apply.
@@ -94,7 +95,9 @@ without replacing unrelated records. Recognized referenced attachments and
 supporting files are included. Unscoped external temporary files are not copied
 merely because their paths appear in conversation text. The plan lists excluded
 paths. Use a narrow explicit `--map OLD NEW` pair to opt in, or copy them manually.
-Opted-in artifacts are stored under account-scoped `transfer-support`; consult
+Codex support artifacts must not use symlinked files or directories to escape
+their approved location. Opted-in artifacts use account-scoped `transfer-support`;
+consult
 the generated path guide for the actual location. Initialize a compatible Codex
 account schema on
 the destination first; unknown schemas, unfinished turns, queued input, and
