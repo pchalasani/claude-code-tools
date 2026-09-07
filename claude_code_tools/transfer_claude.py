@@ -357,6 +357,10 @@ def export_session(
         if (old.st_size, old.st_mtime_ns) != (new.st_size, new.st_mtime_ns):
             raise ValueError("Source scratch file changed during export")
         mappings[str(source)] = str(destination_home / relative)
+        if str(source).startswith("/private/tmp/") and Path("/tmp").resolve() == Path(
+            "/private/tmp"
+        ):
+            mappings[str(source)[len("/private") :]] = str(destination_home / relative)
     for record in records:
         snapshot = record.get("snapshot")
         backups = (
