@@ -85,6 +85,7 @@ def arguments(workspace: dict[str, Path]) -> list[str]:
     """Return the public command for a local fixture transfer."""
     return [
         "transfer",
+        "--apply",
         SID,
         "--agent",
         "claude",
@@ -104,7 +105,9 @@ def test_dry_run_then_copy_and_repeat(workspace: dict[str, Path]) -> None:
     """Dry-run is read-only; copying is verified and does not remove source."""
     runner = CliRunner()
     before = workspace["transcript"].read_bytes()
-    result = runner.invoke(main, arguments(workspace) + ["--dry-run"])
+    result = runner.invoke(
+        main, [arg for arg in arguments(workspace) if arg != "--apply"]
+    )
     assert result.exit_code == 0, result.output
     plan = json.loads(result.output)["plan"]
     assert not workspace["destination"].exists()
@@ -114,7 +117,7 @@ def test_dry_run_then_copy_and_repeat(workspace: dict[str, Path]) -> None:
     assert result.exit_code == 0, result.output
     report = json.loads(result.output)
     assert report["ok"] is True
-    assert report["destination"]["verified_files"] == 1
+    assert report["destination"]["verified_files"] == 2
     copied = next(workspace["destination"].glob("projects/*/*.jsonl"))
     assert json.loads(copied.read_text())["cwd"] == str(workspace["target"])
     assert workspace["transcript"].read_bytes() == before
@@ -261,6 +264,9 @@ def test_archived_codex_session_resolves(
         SID,
         "--agent",
         "codex",
+        "--map",
+        "/old/project",
+        str(workspace["target"]),
         "--source-home",
         str(home),
         "--to",
@@ -275,7 +281,8 @@ def test_archived_codex_session_resolves(
     result = CliRunner().invoke(main, args)
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["plan"]["files"] == [
-        f"archived_sessions/{SID}.jsonl"
+        f"archived_sessions/{SID}.jsonl",
+        f"transfer-support/{SID}/path-map.json",
     ]
 
 
@@ -303,7 +310,13 @@ def test_interrupt_after_real_database_commit_preserves_rollouts(
         )
     staging = tmp_path / "staging"
     manifest = prepare_transfer(
-        "codex", home, SID, destination, workspace["target"], staging
+        "codex",
+        home,
+        SID,
+        destination,
+        workspace["target"],
+        staging,
+        path_mappings={"/old/project": str(workspace["target"])},
     )
     request = {
         "operation": "import",
@@ -343,3 +356,37 @@ def test_interrupt_after_real_database_commit_preserves_rollouts(
             staging / "files" / relative
         ).read_bytes()
     assert (destination / ".aichat-transfer.lock").is_dir()
+
+
+def test_apply_and_dry_run_are_mutually_exclusive(workspace: dict[str, Path]) -> None:
+    """Ambiguous execution intent never writes destination data."""
+    result = CliRunner().invoke(main, arguments(workspace) + ["--dry-run"])
+    assert result.exit_code == 2
+    assert "either --apply or --dry-run" in result.output
+    assert not workspace["destination"].exists()
+
+
+def test_remote_source_bootstrap_exports_without_installed_package(
+    workspace: dict[str, Path],
+) -> None:
+    """The shipped stdlib helper can read a remote source and return its bundle."""
+    request = {
+        "operation": "export",
+        "agent": "claude",
+        "session": SID,
+        "source_home": str(workspace["home"]),
+        "destination_home": str(workspace["destination"]),
+        "destination_project": str(workspace["target"]),
+    }
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", remote_bootstrap()],
+        input=json.dumps(request),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    report = json.loads(result.stdout)
+    assert report["ran"] is True and report["ok"] is True
+    assert report["manifest"]["session_id"] == SID
+    assert report["data"]
+    assert not workspace["destination"].exists()

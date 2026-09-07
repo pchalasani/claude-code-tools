@@ -28,21 +28,38 @@ from claude_code_tools.transfer_remote import handle_request, project_state
 
 def remote_bootstrap() -> str:
     """Build a standard-library helper; the destination need not install aichat."""
-    modules = {}
-    for name in ("transfer_codex", "transfer_remote"):
-        path = Path(__file__).with_name(f"{name}.py")
-        modules[f"claude_code_tools.{name}"] = path.read_text()
-    encoded = base64.b64encode(json.dumps(modules).encode()).decode()
-    return (
-        "import sys,types,json,base64; "
-        "assert sys.version_info >= (3,11), 'Python 3.11+ is required'; "
-        "sys.modules['claude_code_tools']=types.ModuleType('claude_code_tools'); "
-        f"sources=json.loads(base64.b64decode('{encoded}')); "
-        "\nfor name,source in sources.items():\n"
-        " module=types.ModuleType(name); sys.modules[name]=module; "
-        "exec(compile(source,name,'exec'),module.__dict__)\n"
-        "sys.modules['claude_code_tools.transfer_remote'].main()"
+    import inspect
+    import zlib
+
+    from claude_code_tools.session_utils import encode_claude_project_path
+
+    modules = {
+        f"claude_code_tools.{path.stem}": path.read_text()
+        for path in Path(__file__).parent.glob("transfer_*.py")
+        if path.stem != "transfer_session"
+    }
+    modules["claude_code_tools.session_utils"] = inspect.getsource(
+        encode_claude_project_path
     )
+    encoded = base64.b64encode(zlib.compress(json.dumps(modules).encode())).decode()
+    return f"""import sys, types, json, base64, zlib, importlib.abc, importlib.util
+assert sys.version_info >= (3,11), 'Python 3.11+ is required'
+sources = json.loads(zlib.decompress(base64.b64decode({encoded!r})))
+package = types.ModuleType('claude_code_tools')
+package.__path__ = []
+sys.modules['claude_code_tools'] = package
+class Loader(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in sources:
+            return importlib.util.spec_from_loader(fullname, self)
+    def create_module(self, spec):
+        return None
+    def exec_module(self, module):
+        exec(compile(sources[module.__name__], module.__name__, 'exec'), module.__dict__)
+sys.meta_path.insert(0, Loader())
+from claude_code_tools.transfer_remote import main
+main()
+"""
 
 
 def destination_request(
@@ -80,6 +97,7 @@ def prepare_transfer(
     destination_home: Path,
     destination_project: Path,
     staging: Path,
+    path_mappings: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Resolve a unique session and build a scoped, checksummed transfer plan."""
     if agent == "codex":
@@ -108,6 +126,7 @@ def prepare_transfer(
         destination_home,
         destination_project,
         staging,
+        path_mappings=path_mappings,
     )
     if manifest.get("ok") is not True:
         raise ValueError("Session adapter did not report successful export")
@@ -155,13 +174,41 @@ def prepare_transfer(
     return manifest
 
 
+def stage_path_guide(manifest: dict[str, Any], staging: Path) -> None:
+    """Persist artifact mappings without rewriting historical conversation text."""
+    relative = f"transfer-support/{manifest['session_id']}/path-map.json"
+    guide = {
+        "purpose": "Resolve historical artifact paths on this destination",
+        "instructions": (
+            "Use the longest matching source prefix in path_mappings. "
+            "Conversation text is unchanged. missing_at_source entries were "
+            "already absent before this copy and may need to be recreated."
+        ),
+        "path_mappings": manifest.get("path_mappings", {}),
+        "missing_at_source": manifest.get("missing_at_source", []),
+    }
+    content = (json.dumps(guide, indent=2) + "\n").encode()
+    target = staging / "files" / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(content)
+    manifest["files"].append(relative)
+    manifest["artifacts"][relative] = {
+        "size": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+    manifest["path_guide"] = str(Path(manifest["destination_home"]) / relative)
+
+
 @click.command("transfer")
 @click.argument("session")
 @click.option("--agent", type=click.Choice(["claude", "codex"]), required=True)
 @click.option(
     "--source-home",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    type=click.Path(file_okay=False, path_type=Path),
     help="Source profile (defaults to the agent's configured home).",
+)
+@click.option(
+    "--from", "source_host", default="local", help="Source SSH alias, or local."
 )
 @click.option("--to", "host", required=True, help="SSH host/alias, or 'local'.")
 @click.option("--destination-home", required=True, help="Destination agent profile.")
@@ -172,6 +219,19 @@ def prepare_transfer(
     show_default=True,
     help="Python 3.11+ executable on the SSH destination.",
 )
+@click.option(
+    "--map",
+    "path_mappings",
+    type=(str, str),
+    multiple=True,
+    help="Additional source/destination path pair; repeat as needed.",
+)
+@click.option(
+    "--recover",
+    is_flag=True,
+    help="With --apply, retry the same interrupted transfer plan.",
+)
+@click.option("--apply", is_flag=True, help="Apply the verified copy plan.")
 @click.option(
     "--dry-run",
     is_flag=True,
@@ -184,29 +244,49 @@ def transfer(
     session: str,
     agent: str,
     source_home: Path | None,
+    source_host: str,
     host: str,
     destination_home: str,
     destination_project: str,
     remote_python: str,
     dry_run: bool,
+    apply: bool,
+    recover: bool,
+    path_mappings: tuple[tuple[str, str], ...],
     as_json: bool,
 ) -> None:
     """Copy a saved conversation and supported artifacts, preserving the source.
 
     Exit the source agent first. Prepare a clean destination Git worktree at the
-    same commit. Inspect --dry-run before copying. Existing differing artifacts
+    same commit. Inspect the default dry-run plan, then use --apply to copy. Existing differing artifacts
     are never overwritten; account credentials/settings are not transferred.
     Quote destination paths beginning with ~ so the destination expands them.
     """
+    if apply and dry_run:
+        raise click.UsageError("Use either --apply or --dry-run, not both.")
+    if recover and not apply:
+        raise click.UsageError("--recover requires --apply")
+    mapped: dict[str, str] = {}
+    for old, new in path_mappings:
+        if not Path(old).is_absolute() or not Path(new).is_absolute():
+            raise click.UsageError("--map requires two absolute paths")
+        if old in mapped and mapped[old] != new:
+            raise click.UsageError("Conflicting destinations for the same --map source")
+        mapped[old] = new
+    dry_run = not apply
     variable = "CODEX_HOME" if agent == "codex" else "CLAUDE_CONFIG_DIR"
     configured = (ctx.obj or {}).get(f"{agent}_home")
-    source_home = (
-        Path(source_home or configured or os.environ.get(variable, f"~/.{agent}"))
-        .expanduser()
-        .resolve()
-    )
+    if source_host == "local":
+        source_home = (
+            Path(source_home or configured or os.environ.get(variable, f"~/.{agent}"))
+            .expanduser()
+            .resolve()
+        )
+    else:
+        source_home = Path(source_home or f"~/.{agent}")
     request = {
         "operation": "probe",
+        "agent": agent,
         "destination_home": destination_home,
         "destination_project": destination_project,
     }
@@ -215,18 +295,53 @@ def transfer(
         probe = destination_request(host, remote_python, request)
         with tempfile.TemporaryDirectory(prefix="aichat-transfer-") as directory:
             staging = Path(directory)
-            manifest = prepare_transfer(
-                agent,
-                source_home,
-                session,
-                Path(probe["destination_home"]),
-                Path(probe["project"]["path"]),
-                staging,
-            )
+            if source_host == "local":
+                manifest = prepare_transfer(
+                    agent,
+                    source_home,
+                    session,
+                    Path(probe["destination_home"]),
+                    Path(probe["project"]["path"]),
+                    staging,
+                    dict(path_mappings),
+                )
+            else:
+                bundle = destination_request(
+                    source_host,
+                    remote_python,
+                    {
+                        "operation": "export",
+                        "agent": agent,
+                        "path_mappings": dict(path_mappings),
+                        "source_home": str(source_home),
+                        "session": session,
+                        "destination_home": probe["destination_home"],
+                        "destination_project": probe["project"]["path"],
+                    },
+                )
+                manifest = bundle["manifest"]
+                from claude_code_tools.transfer_remote import safe_target
+
+                for relative, encoded in bundle["data"].items():
+                    target = safe_target(staging / "files", relative)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(base64.b64decode(encoded, validate=True))
+                command = ["env", f"{variable}={probe['destination_home']}", agent]
+                if agent == "codex":
+                    command += ["--cd", probe["project"]["path"], "resume"]
+                else:
+                    command += ["--resume"]
+                command.append(manifest["session_id"])
+                manifest["resume_command"] = (
+                    f"cd {shlex.quote(probe['project']['path'])} && "
+                    + shlex.join(command)
+                )
+            stage_path_guide(manifest, staging)
             request.update({"operation": "validate", "manifest": manifest})
             result = destination_request(host, remote_python, request)
             if not dry_run:
                 request["operation"] = "import"
+                request["recover"] = recover
                 request["data"] = {
                     relative: base64.b64encode(
                         (staging / "files" / relative).read_bytes()
@@ -235,13 +350,15 @@ def transfer(
                 }
                 result = destination_request(host, remote_python, request)
             report = {
+                "ran": True,
                 "ok": True,
                 "dry_run": dry_run,
                 "plan": manifest,
                 "destination": result,
+                "environment": probe.get("environment"),
             }
     except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError) as error:
-        report = {"ok": False, "error": str(error), "plan": manifest}
+        report = {"ran": True, "ok": False, "error": str(error), "plan": manifest}
     if as_json:
         click.echo(json.dumps(report, indent=2))
     elif not report["ok"]:
@@ -260,6 +377,12 @@ def transfer(
                 )
         for warning in manifest["warnings"]:
             click.echo(f"Note: {warning}")
+        environment = report.get("environment") or {}
+        for warning in environment.get("warnings", []):
+            click.echo(f"Environment: {warning}")
+        for remedy in environment.get("remediation", []):
+            click.echo(f"Remediation: {remedy}")
+        click.echo(f"Artifact path guide: {manifest['path_guide']}")
         click.echo(f"Resume on destination:\n  {manifest['resume_command']}")
     if not report["ok"]:
         ctx.exit(1)
