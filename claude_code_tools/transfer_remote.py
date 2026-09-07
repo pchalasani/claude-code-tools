@@ -109,9 +109,11 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any]:
         )
     from claude_code_tools.transfer_journal import (
         TransferJournal,
+        append_jsonl_rows,
         atomic_write,
         check_active_sessions,
         metadata_content,
+        missing_jsonl_rows,
     )
 
     activity = check_active_sessions(
@@ -172,6 +174,10 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any]:
             )
         journal.save("updating_metadata")
         for path, update in metadata_paths:
+            if update["format"] == "jsonl":
+                pending = missing_jsonl_rows(path, update)
+                append_jsonl_rows(path, update, pending)
+                continue
             before = path.read_bytes() if path.exists() else None
             data = metadata_content(path, update)
             if before != (path.read_bytes() if path.exists() else None):

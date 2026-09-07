@@ -90,3 +90,56 @@ def test_atomic_publication_never_overwrites(tmp_path: Path) -> None:
         atomic_write(path, b"old transferred work")
     assert path.read_bytes() == b"newer user work"
     assert not list(tmp_path.glob(".transfer-*"))
+
+
+def test_index_publication_preserves_interleaved_append(tmp_path: Path) -> None:
+    """A native append after planning survives selected-row publication byte-exactly."""
+    from claude_code_tools.transfer_journal import append_jsonl_rows, missing_jsonl_rows
+
+    path = tmp_path / "session_index.jsonl"
+    original = b'{"id":"existing", "thread_name":"preserve formatting"}\n'
+    native = b'{"id":"concurrent", "thread_name":"native append"}\n'
+    path.write_bytes(original)
+    update = {"key": "id", "rows": [{"id": "selected", "thread_name": "copied"}]}
+    pending = missing_jsonl_rows(path, update)
+    descriptor = os.open(path, os.O_WRONLY | os.O_APPEND)
+    try:
+        assert os.write(descriptor, native) == len(native)
+    finally:
+        os.close(descriptor)
+    append_jsonl_rows(path, update, pending)
+    result = path.read_bytes()
+    assert result.startswith(original + native)
+    assert [json.loads(line)["id"] for line in result.splitlines()] == [
+        "existing",
+        "concurrent",
+        "selected",
+    ]
+    append_jsonl_rows(path, update, missing_jsonl_rows(path, update))
+    assert path.read_bytes() == result
+
+
+def test_index_publication_refuses_selected_conflict(tmp_path: Path) -> None:
+    """A same-session rename between planning and publication is never replaced."""
+    from claude_code_tools.transfer_journal import append_jsonl_rows, missing_jsonl_rows
+
+    path = tmp_path / "session_index.jsonl"
+    update = {"key": "id", "rows": [{"id": "selected", "thread_name": "copied"}]}
+    pending = missing_jsonl_rows(path, update)
+    newer = b'{"id":"selected","thread_name":"newer native name"}\n'
+    path.write_bytes(newer)
+    with pytest.raises(ValueError, match="differs"):
+        append_jsonl_rows(path, update, pending)
+    assert path.read_bytes() == newer
+
+
+def test_incomplete_index_tail_requires_inspection(tmp_path: Path) -> None:
+    """Interrupted appends are preserved rather than trimmed during recovery."""
+    from claude_code_tools.transfer_journal import missing_jsonl_rows
+
+    path = tmp_path / "session_index.jsonl"
+    partial = b'{"id":"unfinished'
+    path.write_bytes(partial)
+    with pytest.raises(ValueError, match="Incomplete destination index"):
+        missing_jsonl_rows(path, {"key": "id", "rows": []})
+    assert path.read_bytes() == partial

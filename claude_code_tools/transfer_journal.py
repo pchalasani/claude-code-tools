@@ -90,7 +90,7 @@ class TransferJournal:
         digest = hashlib.sha256(
             json.dumps(manifest, sort_keys=True).encode()
         ).hexdigest()
-        home.mkdir(parents=True, exist_ok=True)
+        home.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.guard = os.open(
             home / ".aichat-transfer.guard", os.O_CREAT | os.O_RDWR, 0o600
         )
@@ -217,3 +217,53 @@ def metadata_content(path: Path, update: dict[str, Any]) -> bytes:
     if document is None:
         return b"".join((json.dumps(row) + "\n").encode() for row in rows)
     return json.dumps(document).encode()
+
+
+def missing_jsonl_rows(path: Path, update: dict[str, Any]) -> list[dict[str, Any]]:
+    """Plan only missing selected index entries without rewriting prior bytes."""
+    raw = path.read_bytes() if path.exists() else b""
+    if raw and not raw.endswith(b"\n"):
+        raise ValueError("Incomplete destination index tail; inspect before recovery")
+    rows = [json.loads(line) for line in raw.splitlines() if line]
+    key = update["key"]
+    existing = {row[key]: row for row in rows if key in row}
+    missing = []
+    for row in update["rows"]:
+        if row[key] in existing:
+            if existing[row[key]] != row:
+                raise ValueError(f"Destination metadata differs: {path.name}")
+        else:
+            missing.append(row)
+            existing[row[key]] = row
+    return missing
+
+
+def append_jsonl_rows(
+    path: Path, update: dict[str, Any], pending: list[dict[str, Any]]
+) -> None:
+    """Append complete selected records, preserving concurrent unrelated appends.
+
+    Each record uses one O_APPEND write. A short write is never repaired by
+    truncating the index: retain the journal and require inspection instead.
+    """
+    # Recheck before publication: a concurrently completed identical import need
+    # not append duplicate rows, and a selected-key change is still a conflict.
+    missing = missing_jsonl_rows(path, update)
+    allowed = {json.dumps(row, sort_keys=True) for row in pending}
+    if any(json.dumps(row, sort_keys=True) not in allowed for row in missing):
+        raise ValueError("Destination index changed before append")
+    if missing:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            for row in missing:
+                data = (json.dumps(row) + "\n").encode()
+                if os.write(descriptor, data) != len(data):
+                    raise ValueError(
+                        "Partial index append; retained bytes require inspection "
+                        "before recovery, never truncate newer destination work"
+                    )
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    if missing_jsonl_rows(path, update):
+        raise ValueError("Appended metadata verification failed")
