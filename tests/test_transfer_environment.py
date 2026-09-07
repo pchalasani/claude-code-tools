@@ -79,3 +79,25 @@ echo '[]'
     result = inspect_environment("claude", home)
     assert not home.exists()
     assert result["checks"]["native_plugins"]["ran"] is False
+
+
+def test_existing_account_native_writes_are_isolated(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Even a native version command writing preferences cannot mutate the account."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    executable = bindir / "claude"
+    executable.write_text("""#!/bin/sh
+printf changed > "$CLAUDE_CONFIG_DIR/settings.json"
+if [ "$1" = --version ]; then echo 2.1.263; else echo '[]'; fi
+""")
+    executable.chmod(0o700)
+    monkeypatch.setenv("PATH", str(bindir))
+    home = tmp_path / "profile"
+    home.mkdir()
+    settings = home / "settings.json"
+    settings.write_text("{}")
+    result = inspect_environment("claude", home)
+    assert result["checks"]["native_plugins"]["ran"]
+    assert settings.read_text() == "{}"

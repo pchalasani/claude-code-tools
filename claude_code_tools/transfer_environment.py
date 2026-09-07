@@ -9,6 +9,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import tempfile
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -67,7 +68,7 @@ def _registrations(value: Any) -> list[dict[str, Any]]:
     return result
 
 
-def inspect_environment(agent: str, home: Path) -> dict[str, Any]:
+def _inspect_environment(agent: str, home: Path, runtime_home: Path) -> dict[str, Any]:
     """Inspect versions, effective plugin discovery, overrides and hook dependencies.
 
     Hooks are never executed. Configuration is inspected without returning command
@@ -77,7 +78,9 @@ def inspect_environment(agent: str, home: Path) -> dict[str, Any]:
     if agent not in {"claude", "codex"}:
         raise ValueError("Agent must be claude or codex")
     environment = dict(os.environ)
-    environment["CLAUDE_CONFIG_DIR" if agent == "claude" else "CODEX_HOME"] = str(home)
+    environment["CLAUDE_CONFIG_DIR" if agent == "claude" else "CODEX_HOME"] = str(
+        runtime_home
+    )
     checks: dict[str, Any] = {}
     warnings: list[str] = []
     remediation: list[str] = []
@@ -89,8 +92,6 @@ def inspect_environment(agent: str, home: Path) -> dict[str, Any]:
     }
     if executable:
         version_environment = dict(environment)
-        version_environment.pop("CLAUDE_CONFIG_DIR", None)
-        version_environment.pop("CODEX_HOME", None)
         checks["native_version"] = _version(
             [executable, "--version"], version_environment
         )
@@ -281,3 +282,29 @@ def inspect_environment(agent: str, home: Path) -> dict[str, Any]:
         "warnings": warnings,
         "remediation": remediation,
     }
+
+
+def inspect_environment(agent: str, home: Path) -> dict[str, Any]:
+    """Inspect an account while containing native CLI writes in a private snapshot."""
+    with tempfile.TemporaryDirectory(prefix="aichat-environment-") as directory:
+        runtime_home = Path(directory)
+        for relative in (
+            "settings.json",
+            "config.toml",
+            "plugins/installed_plugins.json",
+            "plugins/known_marketplaces.json",
+        ):
+            source = home / relative
+            if source.is_file():
+                target = runtime_home / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, target)
+                target.chmod(0o600)
+        result = _inspect_environment(agent, home, runtime_home)
+        result["checks"]["native_probe_isolation"] = {
+            "ran": True,
+            "ok": True,
+            "account_writes": "temporary snapshot",
+            "cache_paths": "registrations may reference existing read-only inputs",
+        }
+        return result
