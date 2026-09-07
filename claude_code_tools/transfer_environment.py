@@ -240,6 +240,12 @@ def _inspect_environment(agent: str, home: Path, runtime_home: Path) -> dict[str
                     definition = Path(root) / "hooks" / "hooks.json"
                     if definition.is_file():
                         content = json.loads(definition.read_text())
+                        if not isinstance(content, dict):
+                            warnings.append(
+                                "Installed plugin hooks.json must contain an object; "
+                                "its hook declarations were not inspected."
+                            )
+                            continue
                         content["_plugin_root"] = root
                         hook_sources.append(content)
         except (OSError, ValueError, AttributeError):
@@ -277,6 +283,8 @@ def _inspect_environment(agent: str, home: Path, runtime_home: Path) -> dict[str
                             }
                         )
                         continue
+                    while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+                        words.pop(0)
                     paths = [
                         path
                         for word in words

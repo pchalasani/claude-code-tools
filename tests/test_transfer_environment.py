@@ -251,3 +251,61 @@ def test_plugin_root_direct_executable_with_spaces(tmp_path: Path, monkeypatch) 
     assert checks[0]["script_paths_checked"] == 1
     assert checks[0]["missing_script_paths"] == 0
     assert not marker.exists()
+
+
+def test_hook_assignment_prefix_does_not_hide_launcher(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Leading shell assignments are metadata, never the executable to locate."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    executable = bindir / "python"
+    executable.write_text("#!/bin/sh\nexit 73\n")
+    executable.chmod(0o700)
+    script = tmp_path / "hook.py"
+    script.write_text('raise AssertionError("must not run")\n')
+    home = tmp_path / "profile"
+    home.mkdir()
+    (home / "settings.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "hooks": [
+                                {
+                                    "command": f'PYTHONPATH="/some path" MODE=test python "{script}"'
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        )
+    )
+    monkeypatch.setenv("PATH", str(bindir))
+    checks = inspect_environment("claude", home)["checks"]["configured_hooks"]
+    assert len(checks) == 1
+    assert checks[0]["ran"] and checks[0]["ok"]
+    assert checks[0]["launcher_available"]
+    assert checks[0]["script_paths_checked"] == 1
+    assert not checks[0]["runtime_executed"]
+
+
+def test_plugin_hooks_array_reports_warning(tmp_path: Path, monkeypatch) -> None:
+    """Valid JSON with a non-object root produces diagnostics instead of a crash."""
+    home = tmp_path / "profile"
+    plugin = home / "plugins/cache/example/1"
+    hooks = plugin / "hooks/hooks.json"
+    hooks.parent.mkdir(parents=True)
+    hooks.write_text("[]")
+    (home / "plugins/installed_plugins.json").write_text(
+        json.dumps({"plugins": {"example@fixture": [{"installPath": str(plugin)}]}})
+    )
+    monkeypatch.setenv("PATH", str(tmp_path / "no-native-cli"))
+    report = inspect_environment("claude", home)
+    assert report["ran"] and report["ok"]
+    assert report["checks"]["configured_hooks"] == []
+    assert any(
+        "hooks.json must contain an object" in item for item in report["warnings"]
+    )
