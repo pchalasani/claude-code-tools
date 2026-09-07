@@ -545,3 +545,24 @@ def test_default_report_exposes_failed_destination_hook(
     assert "Remediation:" in result.output
     assert "PRIVATE_HOOK_TOKEN" not in result.output
     assert not (destination / "projects").exists()
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_account_home_permissions_are_private_on_creation(
+    workspace: dict[str, Path], existing: bool
+) -> None:
+    """New homes are private even with umask 022; existing modes are preserved."""
+    import os
+    import stat
+
+    destination = workspace["destination"]
+    if existing:
+        destination.mkdir()
+        destination.chmod(0o750)
+    previous = os.umask(0o022)
+    try:
+        result = CliRunner().invoke(main, arguments(workspace))
+    finally:
+        os.umask(previous)
+    assert result.exit_code == 0, result.output
+    assert stat.S_IMODE(destination.stat().st_mode) == (0o750 if existing else 0o700)
