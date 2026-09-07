@@ -336,6 +336,12 @@ def transfer(
                     f"cd {shlex.quote(probe['project']['path'])} && "
                     + shlex.join(command)
                 )
+            if source_host == "local":
+                from claude_code_tools.transfer_environment import inspect_environment
+
+                source_environment = inspect_environment(agent, source_home)
+            else:
+                source_environment = bundle.get("environment", {})
             stage_path_guide(manifest, staging)
             request.update({"operation": "validate", "manifest": manifest})
             result = destination_request(host, remote_python, request)
@@ -349,13 +355,19 @@ def transfer(
                     for relative in manifest["files"]
                 }
                 result = destination_request(host, remote_python, request)
+            from claude_code_tools.transfer_environment import compare_environments
+
             report = {
+                "environment_comparison": compare_environments(
+                    source_environment, probe.get("environment", {})
+                ),
                 "ran": True,
                 "ok": True,
                 "dry_run": dry_run,
                 "plan": manifest,
                 "destination": result,
                 "environment": probe.get("environment"),
+                "source_environment": source_environment,
             }
     except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError) as error:
         report = {"ran": True, "ok": False, "error": str(error), "plan": manifest}
@@ -377,6 +389,12 @@ def transfer(
                 )
         for warning in manifest["warnings"]:
             click.echo(f"Note: {warning}")
+        comparison = report.get("environment_comparison", {})
+        for field in ("missing_or_disabled_plugins", "newly_disabled_skills"):
+            if comparison.get(field):
+                click.echo(f"Environment {field}: {', '.join(comparison[field])}")
+        for remedy in comparison.get("remediation", []):
+            click.echo(f"Remediation: {remedy}")
         environment = report.get("environment") or {}
         for warning in environment.get("warnings", []):
             click.echo(f"Environment: {warning}")

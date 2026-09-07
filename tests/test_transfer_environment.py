@@ -101,3 +101,49 @@ if [ "$1" = --version ]; then echo 2.1.263; else echo '[]'; fi
     result = inspect_environment("claude", home)
     assert result["checks"]["native_plugins"]["ran"]
     assert settings.read_text() == "{}"
+
+
+def test_native_empty_plugin_collection_is_recognized(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A successful empty native collection differs from an unknown result schema."""
+    executable = tmp_path / "codex"
+    home = tmp_path / "account"
+    home.mkdir()
+    monkeypatch.setenv("PATH", str(tmp_path))
+    for payload, expected in [
+        ({"installed": [], "available": []}, True),
+        ({"installed": [{"unknown_field": True}], "available": []}, False),
+    ]:
+        executable.write_text(
+            '#!/bin/sh\nif [ "$1" = --version ]; then echo 0.153.4; else\n'
+            + "echo '"
+            + json.dumps(payload)
+            + "'\nfi\n"
+        )
+        executable.chmod(0o700)
+        result = inspect_environment("codex", home)
+        assert result["checks"]["native_plugins"]["ran"] is True
+        assert result["checks"]["native_plugins"]["ok"] is expected
+
+
+def test_environment_comparison_distinguishes_unknown_from_match() -> None:
+    from claude_code_tools.transfer_environment import compare_environments
+
+    def environment(enabled: bool) -> dict:
+        return {
+            "checks": {
+                "native_plugins": {
+                    "ran": True,
+                    "ok": True,
+                    "registrations": [{"id": "example@market", "enabled": enabled}],
+                }
+            }
+        }
+
+    assert compare_environments(environment(True), environment(True))["ok"]
+    difference = compare_environments(environment(True), environment(False))
+    assert difference["ran"] and not difference["ok"]
+    assert difference["missing_or_disabled_plugins"] == ["example@market"]
+    unknown = compare_environments(environment(True), {})
+    assert not unknown["ran"] and not unknown["ok"]

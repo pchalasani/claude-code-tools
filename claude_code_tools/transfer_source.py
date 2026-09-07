@@ -20,9 +20,14 @@ def resolve_session(home: Path, agent: str, query: str) -> str:
             (home / "state_5.sqlite").as_uri() + "?mode=ro", uri=True
         ) as db:
             columns = {r[1] for r in db.execute("PRAGMA table_info(threads)")}
-            name = "name" if "name" in columns else "title"
-            for sid, title in db.execute(f"SELECT id, {name} FROM threads"):
-                candidates[sid] = {title or ""}
+            fields = [field for field in ("name", "title") if field in columns]
+            for row in db.execute("SELECT id," + ",".join(fields) + " FROM threads"):
+                candidates[row[0]] = {value for value in row[1:] if value}
+        from claude_code_tools.transfer_codex_artifacts import latest_session_index
+
+        for sid, row in latest_session_index(home).items():
+            if sid in candidates and isinstance(row.get("thread_name"), str):
+                candidates[sid].add(row["thread_name"])
     else:
         for path in (home / "projects").glob("*/*.jsonl"):
             names = candidates.setdefault(path.stem, set())
@@ -93,4 +98,12 @@ def export_request(request: dict[str, Any]) -> dict[str, Any]:
             }
             data[relative] = base64.b64encode(content).decode()
         manifest["artifacts"] = artifacts
-        return {"ran": True, "ok": True, "manifest": manifest, "data": data}
+        from claude_code_tools.transfer_environment import inspect_environment
+
+        return {
+            "ran": True,
+            "ok": True,
+            "manifest": manifest,
+            "data": data,
+            "environment": inspect_environment(agent, home),
+        }

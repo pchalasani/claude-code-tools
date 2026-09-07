@@ -108,7 +108,19 @@ def _inspect_environment(agent: str, home: Path, runtime_home: Path) -> dict[str
                 if not isinstance(parsed, (dict, list)):
                     raise ValueError("Unsupported plugin JSON")  # noqa: TRY004
                 registrations = _registrations(parsed)
-                if parsed and not registrations:
+                collections = (
+                    [
+                        parsed[key]
+                        for key in ("plugins", "installed", "available", "marketplaces")
+                        if key in parsed
+                    ]
+                    if isinstance(parsed, dict)
+                    else []
+                )
+                known_empty = bool(collections) and all(
+                    isinstance(value, list) and not value for value in collections
+                )
+                if parsed and not registrations and not known_empty:
                     raise ValueError("Unrecognized plugin JSON schema")
             except ValueError:
                 native["ok"] = False
@@ -308,3 +320,51 @@ def inspect_environment(agent: str, home: Path) -> dict[str, Any]:
             "cache_paths": "registrations may reference existing read-only inputs",
         }
         return result
+
+
+def compare_environments(
+    source: dict[str, Any], target: dict[str, Any]
+) -> dict[str, Any]:
+    """Compare discovered plugin availability and explicit skill disablement."""
+    left = source.get("checks", {})
+    right = target.get("checks", {})
+    source_plugins = left.get("native_plugins", {})
+    target_plugins = right.get("native_plugins", {})
+    ran = all(
+        item.get("ran") is True and item.get("ok") is True
+        for item in (source_plugins, target_plugins)
+    )
+    missing: list[str] = []
+    if ran:
+        desired = {
+            item["id"]
+            for item in source_plugins.get("registrations", [])
+            if item.get("enabled") is not False
+        }
+        available = {
+            item["id"]
+            for item in target_plugins.get("registrations", [])
+            if item.get("enabled") is not False
+        }
+        missing = sorted(desired - available)
+    source_overrides = left.get("skill_registration_overrides", {})
+    disabled = sorted(
+        name
+        for name, value in right.get("skill_registration_overrides", {}).items()
+        if value == "off" and source_overrides.get(name) != "off"
+    )
+    return {
+        "ran": ran,
+        "ok": ran and not missing and not disabled,
+        "missing_or_disabled_plugins": missing,
+        "newly_disabled_skills": disabled,
+        "remediation": (
+            ["Plugin availability could not be compared; complete both native checks."]
+            if not ran
+            else [
+                "Install/enable the listed plugins and review the destination skill overrides."
+            ]
+            if missing or disabled
+            else []
+        ),
+    }
