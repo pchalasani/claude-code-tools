@@ -11,6 +11,7 @@ from typing import Any
 from uuid import UUID
 
 from claude_code_tools.session_utils import encode_claude_project_path
+from claude_code_tools.transfer_claude_artifacts import discover_scratch
 
 
 def _regular_files(root: Path) -> list[Path]:
@@ -82,11 +83,23 @@ def _remap(
 
 
 def _map_record(
-    record: dict[str, Any], source: str, destination: str
+    record: dict[str, Any],
+    source: str,
+    destination: str,
+    path_mappings: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Rewrite operational metadata, never historical message/tool prose."""
+    mappings = {source: destination, **(path_mappings or {})}
+
+    def map_path(path: str, **kwargs: Any) -> str:
+        for old in sorted(mappings, key=len, reverse=True):
+            normalized = posixpath.normpath(path)
+            if normalized == old or normalized.startswith(old.rstrip("/") + "/"):
+                return _remap(path, old, mappings[old], **kwargs)
+        return _remap(path, source, destination, **kwargs)
+
     if isinstance(record.get("cwd"), str):
-        record["cwd"] = _remap(record["cwd"], source, destination, label="artifact cwd")
+        record["cwd"] = map_path(record["cwd"], label="artifact cwd")
     if record.get("type") == "file-history-snapshot":
         snapshot = record.get("snapshot", {})
         if isinstance(snapshot, dict):
@@ -94,16 +107,14 @@ def _map_record(
             if isinstance(backups, dict):
                 mapped: dict[str, Any] = {}
                 for path, value in backups.items():
-                    key = _remap(path, source, destination, relative_ok=True)
+                    key = map_path(path, relative_ok=True)
                     if key in mapped:
                         raise ValueError(f"Normalized file-history collision: {path}")
                     if isinstance(value, dict):
                         parent = value.get("realParentDir")
                         if isinstance(parent, str):
-                            value["realParentDir"] = _remap(
+                            value["realParentDir"] = map_path(
                                 parent,
-                                source,
-                                destination,
                                 label="file-history realParentDir",
                             )
                         backup_name = value.get("backupFileName")
@@ -126,6 +137,7 @@ def export_session(
     destination_home: Path,
     destination_project: Path,
     staging: Path,
+    path_mappings: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Stage one conversation and its supported persistent companion files.
 
@@ -135,6 +147,7 @@ def export_session(
         destination_home: Absolute remote account home (not accessed locally).
         destination_project: Absolute project directory on the destination.
         staging: Empty local bundle directory; payload is written under files/.
+        path_mappings: Additional absolute source-to-destination project mappings.
 
     Returns:
         A manifest fragment listing destination-home-relative files and warnings.
@@ -163,7 +176,7 @@ def export_session(
         for record in records
         if isinstance(record.get("cwd"), str) and record["cwd"].startswith("/")
     }
-    if len(cwds) != 1:
+    if len(cwds) != 1 and not path_mappings:
         raise ValueError(
             "Claude transcript must identify exactly one project cwd; "
             f"found {len(cwds)}. Map multiple working directories manually."
@@ -195,7 +208,16 @@ def export_session(
     before = inventory()
     if any(before.get(path) != value for path, value in transcript_before.items()):
         raise ValueError("Source changed during export: transcript metadata")
-    source_project = next(iter(cwds))
+    if not cwds:
+        raise ValueError("Claude transcript has no absolute cwd")
+    source_project = next(
+        (
+            cwd
+            for cwd in sorted(cwds)
+            if encode_claude_project_path(cwd) == transcript.parent.name
+        ),
+        min(cwds),
+    )
     if source_project == "/":
         raise ValueError("Transferring a filesystem-root project is unsupported")
     destination = str(destination_project)
@@ -225,7 +247,7 @@ def export_session(
             raise ValueError(f"Staging collision: {relative}")
         if rewrite:
             transformed = [
-                _map_record(record, source_project, destination)
+                _map_record(record, source_project, destination, path_mappings)
                 for record in _read_records(source)
             ]
             target.write_text("".join(json.dumps(r) + "\n" for r in transformed))
@@ -243,7 +265,7 @@ def export_session(
         stage(
             source,
             project_relative / session_id / relative,
-            rewrite=source.suffix == ".jsonl",
+            rewrite=relative.parts[0] == "subagents" and source.suffix == ".jsonl",
         )
     for category in ("file-history", "tasks"):
         root = source_home / category
@@ -263,10 +285,13 @@ def export_session(
     plans_root = source_home / "plans"
     if plans and plans_root.is_symlink():
         raise ValueError(f"Cannot transfer symlink: {plans_root}")
+    missing_at_source: list[dict[str, str]] = []
     for plan in plans:
         if plan.exists():
             stage(plan, plan.relative_to(source_home))
             shared_files.append(plan.relative_to(source_home).as_posix())
+        else:
+            missing_at_source.append({"path": str(plan), "reason": "missing_at_source"})
     memory = transcript.parent / "memory"
     for source in _regular_files(memory):
         relative = project_relative / "memory" / source.relative_to(memory)
@@ -285,6 +310,40 @@ def export_session(
                 f"Session-linked {category} runtime exists and is excluded; "
                 "recreate any needed background work explicitly."
             )
+    mappings = {
+        str(source_home): str(destination_home),
+        source_project: destination,
+        **(path_mappings or {}),
+    }
+    scratch, gaps = discover_scratch(records, session_id)
+    missing_at_source.extend(gaps)
+    for source, relative in scratch:
+        old = source.stat()
+        stage(source, relative)
+        new = source.stat()
+        if (old.st_size, old.st_mtime_ns) != (new.st_size, new.st_mtime_ns):
+            raise ValueError("Source scratch file changed during export")
+        mappings[str(source)] = str(destination_home / relative)
+    for record in records:
+        snapshot = record.get("snapshot")
+        backups = (
+            snapshot.get("trackedFileBackups", {}) if isinstance(snapshot, dict) else {}
+        )
+        if not isinstance(backups, dict):
+            continue
+        for value in backups.values():
+            name = value.get("backupFileName") if isinstance(value, dict) else None
+            if isinstance(name, str):
+                backup = source_home / "file-history" / session_id / name
+                if not backup.is_file():
+                    missing_at_source.append(
+                        {"path": str(backup), "reason": "missing_at_source"}
+                    )
+    if scratch:
+        warnings.append(
+            "Scratch symlinks are materialized as regular files; "
+            "consult path mappings for historical references."
+        )
     if inventory() != before:
         raise ValueError("Source changed during export; stop the session and retry")
     return {
@@ -293,4 +352,6 @@ def export_session(
         "shared_files": sorted(shared_files),
         "source_project": source_project,
         "warnings": warnings,
+        "missing_at_source": missing_at_source,
+        "path_mappings": mappings,
     }

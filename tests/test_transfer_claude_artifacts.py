@@ -1,0 +1,104 @@
+"""Regression coverage for session artifacts discovered during real migrations."""
+
+import json
+import tempfile
+from pathlib import Path
+
+from claude_code_tools.transfer_claude import export_session
+from tests.test_transfer_claude import SID, fixture_home
+
+
+def test_goal_and_tool_jsonl_preserved(tmp_path: Path) -> None:
+    """Native goal attachments and arbitrary persisted output retain their content."""
+    home, transcript = fixture_home(tmp_path)
+    goal = {
+        "type": "attachment",
+        "attachment": {
+            "type": "goal_status",
+            "met": False,
+            "condition": "Read /old/project/report",
+            "sentinel": True,
+        },
+    }
+    with transcript.open("a") as stream:
+        stream.write(json.dumps(goal) + "\n")
+    output = transcript.with_suffix("") / "tool-results" / "output.jsonl"
+    output.parent.mkdir(parents=True)
+    content = b'{"cwd":"/unrelated/data","value": 1}\nnot JSON at all\n'
+    output.write_bytes(content)
+    export_session(
+        home, SID, Path("/remote/profile"), Path("/new/project"), tmp_path / "bundle"
+    )
+    root = tmp_path / "bundle/files/projects/-new-project"
+    assert json.loads((root / transcript.name).read_text().splitlines()[-1]) == goal
+    assert (root / SID / "tool-results/output.jsonl").read_bytes() == content
+
+
+def test_scratch_symlink_missing_and_mapping(tmp_path: Path) -> None:
+    """Copy session scratch, materialize a log link, and report missing references."""
+    home, transcript = fixture_home(tmp_path)
+    with tempfile.TemporaryDirectory(prefix="claude-transfer-", dir="/tmp") as name:
+        scratch = Path(name) / "project" / SID / "scratchpad"
+        scratch.mkdir(parents=True)
+        (scratch / "plan.txt").write_text("scratch goal")
+        log = transcript.with_suffix("") / "subagents/agent-child.jsonl"
+        log.parent.mkdir(parents=True)
+        log.write_text(json.dumps({"cwd": "/old/project", "type": "user"}))
+        (scratch / "child.output").symlink_to(log)
+        missing = scratch / "gone.txt"
+        with transcript.open("a") as stream:
+            stream.write(
+                json.dumps(
+                    {
+                        "message": {
+                            "content": f"Read {scratch}/plan.txt then {missing}"
+                        },
+                        "slug": "missing-plan",
+                    }
+                )
+                + "\n"
+            )
+        result = export_session(
+            home,
+            SID,
+            Path("/remote/profile"),
+            Path("/new/project"),
+            tmp_path / "bundle",
+        )
+        assert str(missing) in {item["path"] for item in result["missing_at_source"]}
+        assert str(home / "plans/missing-plan.md") in {
+            item["path"] for item in result["missing_at_source"]
+        }
+        mapping = result["path_mappings"]
+        for original in (scratch / "plan.txt", scratch / "child.output"):
+            relative = Path(mapping[str(original)]).relative_to("/remote/profile")
+            copied = tmp_path / "bundle/files" / relative
+            assert copied.is_file() and not copied.is_symlink()
+            assert copied.read_bytes() == original.read_bytes()
+
+
+def test_multiple_explicit_projects(tmp_path: Path) -> None:
+    """Explicit mappings support transcript cwd transitions into another worktree."""
+    home, transcript = fixture_home(tmp_path)
+    with transcript.open("a") as stream:
+        stream.write(
+            json.dumps(
+                {"cwd": "/other/tree", "message": {"content": "Historical /other/tree"}}
+            )
+            + "\n"
+        )
+    export_session(
+        home,
+        SID,
+        Path("/remote/profile"),
+        Path("/new/project"),
+        tmp_path / "bundle",
+        path_mappings={"/other/tree": "/new/tree"},
+    )
+    record = json.loads(
+        (tmp_path / "bundle/files/projects/-new-project" / transcript.name)
+        .read_text()
+        .splitlines()[-1]
+    )
+    assert record["cwd"] == "/new/tree"
+    assert record["message"]["content"] == "Historical /other/tree"
