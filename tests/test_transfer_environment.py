@@ -490,3 +490,53 @@ def test_relative_hook_script_is_not_verified_from_launcher_only(
     assert "Relative hook script path" in check["reason"]
     assert check["runtime_executed"] is False
     assert any("actual working directory" in item for item in result["remediation"])
+
+
+def test_javascript_hook_operands_are_checked(tmp_path: Path, monkeypatch) -> None:
+    """A node launcher alone cannot verify missing or cwd-relative JS hook files."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    node = bindir / "node"
+    marker = tmp_path / "must-not-run"
+    node.write_text('#!/bin/sh\ntouch "' + str(marker) + '"\n')
+    node.chmod(0o700)
+    home = tmp_path / "profile"
+    home.mkdir()
+    commands = []
+    for extension in ("js", "mjs", "cjs"):
+        valid = tmp_path / f"valid hook.{extension}"
+        valid.write_text('throw new Error("must not execute");\n')
+        commands.extend(
+            [
+                f'node "{tmp_path}/missing.{extension}"',
+                f"node relative-hook.{extension}",
+                f'node "{valid}"',
+            ]
+        )
+    (home / "settings.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {"hooks": [{"command": command} for command in commands]}
+                    ]
+                }
+            }
+        )
+    )
+    monkeypatch.setenv("PATH", str(bindir))
+    result = inspect_environment("claude", home)
+    checks = result["checks"]["configured_hooks"]
+    assert len(checks) == 9
+    for index in (0, 3, 6):
+        missing, relative, valid = checks[index : index + 3]
+        assert missing["ran"] and not missing["ok"]
+        assert missing["launcher_available"]
+        assert missing["missing_script_paths"] == 1
+        assert not relative["ran"] and not relative["ok"]
+        assert "Relative hook script path" in relative["reason"]
+        assert valid["ran"] and valid["ok"]
+        assert valid["script_paths_checked"] == 1
+        assert valid["missing_script_paths"] == 0
+    assert all(not check["runtime_executed"] for check in checks)
+    assert not marker.exists()

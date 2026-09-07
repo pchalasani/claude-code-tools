@@ -356,7 +356,7 @@ def _inspect_environment(agent: str, home: Path, runtime_home: Path) -> dict[str
                         word
                         for word in words
                         if not word.startswith(("/", "-"))
-                        and word.endswith((".py", ".sh"))
+                        and word.endswith((".py", ".sh", ".js", ".mjs", ".cjs"))
                     ]
                     if relative_scripts:
                         instruction = (
@@ -380,8 +380,11 @@ def _inspect_environment(agent: str, home: Path, runtime_home: Path) -> dict[str
                         for word in words
                         for path in (
                             [word]
-                            if word.startswith("/") and word.endswith((".py", ".sh"))
-                            else re.findall(r"/[^\s\"'<>;]+\.(?:py|sh)\b", word)
+                            if word.startswith("/")
+                            and word.endswith((".py", ".sh", ".js", ".mjs", ".cjs"))
+                            else re.findall(
+                                r"/[^\s\"'<>;]+\.(?:py|sh|js|mjs|cjs)\b", word
+                            )
                         )
                     ]
                     missing_paths = sum(not Path(path).is_file() for path in paths)
