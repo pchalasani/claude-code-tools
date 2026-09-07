@@ -540,3 +540,31 @@ def test_javascript_hook_operands_are_checked(tmp_path: Path, monkeypatch) -> No
         assert valid["missing_script_paths"] == 0
     assert all(not check["runtime_executed"] for check in checks)
     assert not marker.exists()
+
+
+def test_skill_override_disabled_representations_are_equivalent() -> None:
+    """Boolean/string enabled and disabled forms compare consistently both ways."""
+    from claude_code_tools.transfer_environment import compare_environments
+
+    def environment(value):
+        return {
+            "checks": {
+                "native_plugins": {"ran": True, "ok": True, "registrations": []},
+                "skill_registration_overrides": {}
+                if value is None
+                else {"example": value},
+            }
+        }
+
+    for source in (None, True, "on", False, "off"):
+        for destination in (None, True, "on", False, "off"):
+            newly_disabled = (destination is False or destination == "off") and not (
+                source is False or source == "off"
+            )
+            result = compare_environments(environment(source), environment(destination))
+            assert result["ran"]
+            assert result["newly_disabled_skills"] == (
+                ["example"] if newly_disabled else []
+            )
+            assert result["ok"] is (not newly_disabled)
+            assert result["runtime_parity_verified"] is (not newly_disabled)

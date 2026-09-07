@@ -514,10 +514,15 @@ def compare_environments(
         }
         missing = sorted(desired - available)
     source_overrides = left.get("skill_registration_overrides", {})
+    source_disabled = {
+        name
+        for name, value in source_overrides.items()
+        if value is False or value == "off"
+    }
     disabled = sorted(
         name
         for name, value in right.get("skill_registration_overrides", {}).items()
-        if value == "off" and source_overrides.get(name) != "off"
+        if (value is False or value == "off") and name not in source_disabled
     )
     denied = sorted(
         set(right.get("skill_overrides", [])) - set(left.get("skill_overrides", []))
