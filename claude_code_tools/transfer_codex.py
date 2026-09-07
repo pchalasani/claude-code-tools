@@ -2,19 +2,20 @@
 
 Supports the explicitly recognized Codex SQLite schemas. This module uses only
 stdlib so the transfer transport can execute it on a remote Python interpreter.
-Rollouts remain byte-exact because paginated history stores byte offsets.
+Structural rollout paths are mapped with corresponding history byte offsets.
 """
 
 from __future__ import annotations
 
 import json
 import posixpath
-import shutil
 import sqlite3
 from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
 from typing import Any
+
+from claude_code_tools.transfer_codex_artifacts import CodexArtifacts
 
 # PRAGMA table_info contracts, captured from Codex 0.153.4. Never guess how to
 # migrate an unknown internal schema; initialize matching Codex on the target.
@@ -223,6 +224,7 @@ def export_session(
     destination_home: Path,
     destination_project: Path,
     staging: Path,
+    path_mappings: list[tuple[str, str]] | dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Stage a session and descendants without copying unrelated account data.
 
@@ -274,6 +276,15 @@ def export_session(
         if len(threads) != len(ids):
             raise ValueError("A descendant thread is missing from the source index")
         source_project = Path(root["cwd"])
+        artifacts = CodexArtifacts(
+            source_home,
+            destination_home,
+            source_project,
+            destination_project,
+            staging,
+            session_id,
+            path_mappings,
+        )
         rollout_stats = {}
         for thread in threads:
             path = Path(thread["rollout_path"])
@@ -281,7 +292,7 @@ def export_session(
             rollout_stats[thread["id"]] = (stat.st_size, stat.st_mtime_ns)
         warnings = [
             (
-                "Historical rollout paths and conversation prose are preserved; "
+                "Historical conversation prose is preserved; "
                 "resume with --cd pointing to the destination project."
             ),
             (
@@ -290,6 +301,7 @@ def export_session(
             ),
         ]
         databases: list[dict[str, Any]] = []
+        source_rows: list[tuple[str, str, str, list[dict[str, Any]]]] = []
         for database, connection in connections.items():
             tables: list[dict[str, Any]] = []
             for table, schema in SCHEMAS[database].items():
@@ -299,6 +311,16 @@ def export_session(
                     rows = _rows(connection, table, ids, "parent_thread_id")
                 else:
                     rows = _rows(connection, table, ids)
+                key = (
+                    "id"
+                    if table == "threads"
+                    else (
+                        "parent_thread_id"
+                        if table == "thread_spawn_edges"
+                        else "thread_id"
+                    )
+                )
+                source_rows.append((database, table, key, json.loads(json.dumps(rows))))
                 if table == "queued_items" and rows:
                     raise ValueError(
                         "Session has queued input; drain it before transfer"
@@ -308,18 +330,16 @@ def export_session(
                         "Dynamic tool definitions are copied; their implementations "
                         "must be configured separately on the destination."
                     )
-                if table == "thread_artifacts" and rows:
-                    raise ValueError("Session has unsupported thread artifacts")
+                if table == "thread_artifacts":
+                    for row in rows:
+                        artifacts.discover(row["payload"])
                 if table == "thread_turns" and any(
                     row["status"] not in ("completed", "interrupted", "failed")
                     for row in rows
                 ):
                     raise ValueError("Session has an unfinished turn; stop it first")
-                if table == "thread_goals":
-                    for row in rows:
-                        if row["status"] == "active":
-                            row["status"] = "paused"
-                            warnings.append("An active goal is imported paused.")
+                for row in rows:
+                    artifacts.discover(json.dumps(row))
                 if rows:
                     tables.append({"name": table, "schema": schema, "rows": rows})
             if tables:
@@ -368,7 +388,25 @@ def export_session(
                             raise ValueError(
                                 "History offset exceeds the source rollout"
                             )
-            shutil.copyfile(rollout, target)
+            offset_mapping = artifacts.rollout(rollout, target)
+            for database in databases:
+                if database["name"] != "thread_history_1.sqlite":
+                    continue
+                for table in database["tables"]:
+                    for row in table["rows"]:
+                        if row["thread_id"] != thread["id"]:
+                            continue
+                        for field in (
+                            "rollout_byte_offset",
+                            "rollout_end_byte_offset",
+                            "next_rollout_byte_offset",
+                        ):
+                            if row.get(field) is not None:
+                                if row[field] not in offset_mapping:
+                                    raise ValueError(
+                                        "History offset is not a record boundary"
+                                    )
+                                row[field] = offset_mapping[row[field]]
             after = rollout.stat()
             if (before.st_size, before.st_mtime_ns) != (
                 after.st_size,
@@ -400,8 +438,8 @@ def export_session(
                                 / original_path.relative_to(source_home)
                             )
                         else:
-                            location["path"] = _mapped_cwd(
-                                str(original_path), source_project, destination_project
+                            location["path"] = artifacts.map_required(
+                                str(original_path)
                             )
                     elif location["type"] != "special":
                         raise ValueError("Unsupported managed sandbox path")
@@ -412,14 +450,10 @@ def export_session(
                 for root_path in policy["writable_roots"]:
                     if not isinstance(root_path, str):
                         raise ValueError("Unsupported sandbox writable root")  # noqa: TRY004
-                    roots.append(
-                        _mapped_cwd(root_path, source_project, destination_project)
-                    )
+                    roots.append(artifacts.map_required(root_path))
                 policy["writable_roots"] = roots
             thread["sandbox_policy"] = json.dumps(policy)
-            thread["cwd"] = _mapped_cwd(
-                thread["cwd"], source_project, destination_project
-            )
+            thread["cwd"] = artifacts.map_required(thread["cwd"])
             # Destination UI collections belong to that machine/account.
             for key in (
                 "project_id",
@@ -428,7 +462,34 @@ def export_session(
                 "section_entered_at_ms",
             ):
                 thread[key] = None
+        support = artifacts.finish(ids)
+        # Re-read outside each original snapshot: any selected state change means
+        # the independent database snapshots cannot be treated as one export.
+        for database, table, key, original_rows in source_rows:
+            with closing(_connect(source_home / database)) as fresh:
+                actual_rows = _rows(fresh, table, ids, key)
+                canonical = lambda rows: sorted(
+                    json.dumps(row, sort_keys=True) for row in rows
+                )
+                if canonical(actual_rows) != canonical(original_rows):
+                    raise ValueError(
+                        "Source database changed during export; stop it first"
+                    )
+        for thread_id, (size, modified) in rollout_stats.items():
+            original_thread = next(
+                row
+                for db, table, key, rows in source_rows
+                if table == "threads"
+                for row in rows
+                if row["id"] == thread_id
+            )
+            final_stat = Path(original_thread["rollout_path"]).stat()
+            if (final_stat.st_size, final_stat.st_mtime_ns) != (size, modified):
+                raise ValueError("Source rollout changed during export; stop it first")
+        files.extend(support.pop("files"))
         return {
+            **support,
+            "ran": True,
             "ok": True,
             "agent": "codex",
             "session_id": session_id,
@@ -462,6 +523,31 @@ def validate_databases(manifest: dict[str, Any], destination_home: Path) -> None
                     raise ValueError(f"Unsupported table: {table_name}")
                 if table["schema"] != SCHEMAS[name][table_name]:
                     raise ValueError(f"Incompatible transfer schema: {table_name}")
+                selection_key = (
+                    "id"
+                    if table_name == "threads"
+                    else (
+                        "parent_thread_id"
+                        if table_name == "thread_spawn_edges"
+                        else "thread_id"
+                    )
+                )
+                selected_ids = manifest.get("session_ids", [])
+                if selected_ids:
+                    existing_rows = _rows(
+                        connection, table_name, selected_ids, selection_key
+                    )
+                    expected_rows = {
+                        json.dumps(row, sort_keys=True) for row in table["rows"]
+                    }
+                    if any(
+                        json.dumps(row, sort_keys=True) not in expected_rows
+                        for row in existing_rows
+                    ):
+                        raise ValueError(
+                            f"Destination session state exists and differs: {table_name}. "
+                            "Use a separate account home; conversations are never merged."
+                        )
                 columns = [column[1] for column in table["schema"]]
                 keys = [column[1] for column in table["schema"] if column[5]]
                 for row in table["rows"]:
@@ -469,12 +555,14 @@ def validate_databases(manifest: dict[str, Any], destination_home: Path) -> None
                         raise ValueError(f"Invalid row columns: {table_name}")
                     where = " AND ".join(f'"{key}"=?' for key in keys)
                     existing = connection.execute(
-                        f'SELECT 1 FROM "{table_name}" WHERE {where}',
+                        f'SELECT * FROM "{table_name}" WHERE {where}',
                         [row[key] for key in keys],
                     ).fetchone()
-                    if existing:
+                    if existing and dict(existing) != row:
                         raise ValueError(
-                            f"Destination session state exists: {table_name}"
+                            f"Destination session state exists and differs: {table_name}. "
+                            "Use a separate destination account home; independently "
+                            "continued conversations are never merged."
                         )
 
 
@@ -513,14 +601,39 @@ def import_databases(
                         f'INSERT INTO d{number}."{table["name"]}" ({names}) '
                         f"VALUES ({placeholders})"
                     )
-                    connection.executemany(
-                        query,
-                        [[row[column] for column in columns] for row in table["rows"]],
-                    )
+                    keys = [c[1] for c in table["schema"] if c[5]]
+                    where = " AND ".join(f'"{key}"=?' for key in keys)
+                    for row in table["rows"]:
+                        existing = connection.execute(
+                            f'SELECT {names} FROM d{number}."{table["name"]}" WHERE {where}',
+                            [row[key] for key in keys],
+                        ).fetchone()
+                        values = [row[column] for column in columns]
+                        if existing is None:
+                            connection.execute(query, values)
+                        elif list(existing) != values:
+                            raise ValueError("Destination changed during import")
             if before_commit is not None:
                 before_commit()
             connection.commit()
         except Exception:
             connection.rollback()
             raise
-    return {"ok": True, "dry_run": False}
+    verify_databases(manifest, destination_home)
+    return {"ran": True, "ok": True, "dry_run": False}
+
+
+def verify_databases(manifest: dict[str, Any], destination_home: Path) -> None:
+    """Require every imported row to exist and equal the selected snapshot."""
+    for database in manifest.get("databases", []):
+        with closing(_connect(destination_home / database["name"])) as connection:
+            for table in database["tables"]:
+                keys = [c[1] for c in table["schema"] if c[5]]
+                where = " AND ".join(f'"{key}"=?' for key in keys)
+                for row in table["rows"]:
+                    actual = connection.execute(
+                        f'SELECT * FROM "{table["name"]}" WHERE {where}',
+                        [row[key] for key in keys],
+                    ).fetchone()
+                    if actual is None or dict(actual) != row:
+                        raise ValueError("Imported database row verification failed")

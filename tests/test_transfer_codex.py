@@ -164,7 +164,8 @@ def test_roundtrip_preserves_offsets_and_selects_descendants(tmp_path: Path) -> 
     assert manifest["ok"]
     assert manifest["session_ids"] == ["root", "child"]
     assert len(manifest["files"]) == 2
-    assert (tmp_path / "files" / manifest["files"][0]).read_bytes() == original
+    mapped = (tmp_path / "files" / manifest["files"][0]).read_bytes()
+    assert json.loads(mapped)["payload"]["cwd"] == "/new/project"
     validate_databases(manifest, destination)
     assert import_databases(manifest, destination)["ok"]
     with sqlite3.connect(destination / "state_5.sqlite") as connection:
@@ -175,7 +176,7 @@ def test_roundtrip_preserves_offsets_and_selects_descendants(tmp_path: Path) -> 
     with sqlite3.connect(destination / "thread_history_1.sqlite") as connection:
         assert connection.execute(
             'SELECT rollout_byte_offset FROM thread_turns WHERE thread_id="root"'
-        ).fetchone()[0] == len(original)
+        ).fetchone()[0] == len(mapped)
         assert (
             "/old/project"
             in connection.execute(
@@ -184,10 +185,13 @@ def test_roundtrip_preserves_offsets_and_selects_descendants(tmp_path: Path) -> 
         )
     with sqlite3.connect(destination / "goals_1.sqlite") as connection:
         assert connection.execute("SELECT status FROM thread_goals").fetchone()[0] == (
-            "paused"
+            "active"
         )
     assert (source / "sessions/2026/root.jsonl").read_bytes() == original
-    with pytest.raises(ValueError, match="exists"):
+    assert import_databases(manifest, destination)["ok"]
+    with sqlite3.connect(destination / "state_5.sqlite") as connection:
+        connection.execute("UPDATE threads SET title='continued' WHERE id='root'")
+    with pytest.raises(ValueError, match="exists and differs"):
         import_databases(manifest, destination)
 
 
@@ -370,3 +374,75 @@ def test_normalizes_valid_project_paths(tmp_path: Path) -> None:
     child = next(row for row in rows if row["id"] == "child")
     assert child["cwd"] == "/new/project/src"
     assert json.loads(child["sandbox_policy"])["writable_roots"] == ["/new/project/src"]
+
+
+def test_selected_support_and_metadata(tmp_path: Path) -> None:
+    """Preserve prose, native goals and selected attachments with exact offsets."""
+    source, destination = tmp_path / "source", tmp_path / "destination"
+    profile(source)
+    thread(source, "root", mode="legacy")
+    attachment = source / "attachments" / "root" / "goal.txt"
+    attachment.parent.mkdir(parents=True)
+    attachment.write_text("native goal supporting document")
+    missing = source / "attachments" / "root" / "absent.txt"
+    rollout = source / "sessions/2026/root.jsonl"
+    prose = {
+        "type": "response_item",
+        "payload": {
+            "text": f"Read {attachment} and {missing}; /old/project stays historical"
+        },
+    }
+    original_line = (json.dumps(prose) + "\n").encode()
+    with rollout.open("ab") as stream:
+        stream.write(original_line)
+    (source / "session_index.jsonl").write_text(
+        json.dumps({"id": "root", "thread_name": "example"})
+        + "\n"
+        + json.dumps({"id": "unrelated", "thread_name": "private"})
+        + "\n"
+    )
+    (source / "external_agent_session_imports.json").write_text(
+        json.dumps(
+            {"records": [{"imported_thread_id": "root", "source_session_id": "old"}]}
+        )
+    )
+    manifest = export_session(
+        source, "root", destination, Path("/new/project"), tmp_path / "stage"
+    )
+    assert str(missing) in manifest["missing_at_source"]
+    assert "attachments/root/goal.txt" in manifest["files"]
+    assert (
+        (tmp_path / "stage/files/sessions/2026/root.jsonl")
+        .read_bytes()
+        .endswith(original_line)
+    )
+    assert len(manifest["metadata_updates"]) == 2
+    assert manifest["metadata_updates"][0]["rows"] == [
+        {"id": "root", "thread_name": "example"}
+    ]
+
+
+def test_explicit_descendant_mapping(tmp_path: Path) -> None:
+    """Linked-worktree descendants may have explicit independent project mappings."""
+    source = tmp_path / "source"
+    profile(source)
+    thread(source, "root")
+    thread(source, "child")
+    with sqlite3.connect(source / "state_5.sqlite") as db:
+        db.execute("UPDATE threads SET cwd='/another/worktree' WHERE id='child'")
+    insert(
+        source,
+        "state_5.sqlite",
+        "thread_spawn_edges",
+        {"parent_thread_id": "root", "child_thread_id": "child", "status": "completed"},
+    )
+    manifest = export_session(
+        source,
+        "root",
+        tmp_path / "target",
+        Path("/new/project"),
+        tmp_path / "stage",
+        path_mappings=[("/another/worktree", "/new/linked")],
+    )
+    rows = manifest["databases"][0]["tables"][0]["rows"]
+    assert next(row for row in rows if row["id"] == "child")["cwd"] == "/new/linked"
