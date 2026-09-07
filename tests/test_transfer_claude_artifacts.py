@@ -159,3 +159,23 @@ def test_prior_transfer_scratch_survives_return(tmp_path: Path) -> None:
     assert any(
         item["path"] == "/tmp/old-original/gone" for item in result["missing_at_source"]
     )
+
+
+def test_unicode_line_separators_inside_native_jsonl(tmp_path: Path) -> None:
+    """JSONL records use LF, not Unicode separators inside conversation strings."""
+    home, transcript = fixture_home(tmp_path)
+    text = "First\u2028second\u2029third\u0085fourth"
+    record = {"type": "user", "cwd": "/old/project", "message": {"content": text}}
+    with transcript.open("a") as stream:
+        stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+    subagent = transcript.with_suffix("") / "subagents/agent-child.jsonl"
+    subagent.parent.mkdir(parents=True)
+    subagent.write_text(json.dumps(record, ensure_ascii=False) + "\n")
+    export_session(
+        home, SID, Path("/remote/profile"), Path("/new/project"), tmp_path / "bundle"
+    )
+    root = tmp_path / "bundle/files/projects/-new-project"
+    for path in (root / transcript.name, root / SID / "subagents/agent-child.jsonl"):
+        records = [json.loads(line) for line in path.read_text().split("\n") if line]
+        assert records[-1]["message"]["content"] == text
+        assert records[-1]["cwd"] == "/new/project"

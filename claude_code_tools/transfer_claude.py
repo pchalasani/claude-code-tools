@@ -48,7 +48,7 @@ def _fingerprint(paths: list[Path]) -> dict[str, tuple[int, int, int, int]]:
 def _read_records(path: Path) -> list[dict[str, Any]]:
     """Read complete JSONL records, rejecting corrupt or partial transcripts."""
     records: list[dict[str, Any]] = []
-    for number, line in enumerate(path.read_text().splitlines(), 1):
+    for number, line in enumerate(path.read_text().split("\n"), 1):
         if not line.strip():
             continue
         try:
