@@ -389,7 +389,7 @@ def export_session(
             "/private/tmp"
         ):
             mappings[str(source)[len("/private") :]] = str(destination_home / relative)
-    for record in records:
+    for record in scratch_records:
         snapshot = record.get("snapshot")
         backups = (
             snapshot.get("trackedFileBackups", {}) if isinstance(snapshot, dict) else {}

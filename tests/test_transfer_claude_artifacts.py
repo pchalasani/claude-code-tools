@@ -351,3 +351,39 @@ def test_subagent_secondary_worktree_scratch_and_gaps(
             "source": "/secondary/worktree",
             "destination": "/remote/secondary",
         } in result["operational_cwds"]
+
+
+def test_subagent_file_history_backup_gaps_are_reported(tmp_path: Path) -> None:
+    """Selected sidecar snapshots receive the same missing-backup check as main."""
+    home, transcript = fixture_home(tmp_path)
+    existing = home / "file-history" / SID / "existing@v1"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("preserved historical contents")
+    missing = existing.parent / "missing@v2"
+    sidecar = transcript.with_suffix("") / "subagents/agent-history.jsonl"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "type": "file-history-snapshot",
+                "snapshot": {
+                    "trackedFileBackups": {
+                        "existing.py": {"backupFileName": existing.name, "version": 1},
+                        "missing.py": {"backupFileName": missing.name, "version": 2},
+                    }
+                },
+            }
+        )
+        + "\n"
+    )
+    result = export_session(
+        home, SID, Path("/remote/profile"), Path("/new/project"), tmp_path / "bundle"
+    )
+    assert {"path": str(missing), "reason": "missing_at_source"} in result[
+        "missing_at_source"
+    ]
+    assert not any(
+        item["path"] == str(existing) for item in result["missing_at_source"]
+    )
+    copied = tmp_path / "bundle/files" / existing.relative_to(home)
+    assert copied.read_bytes() == existing.read_bytes()
