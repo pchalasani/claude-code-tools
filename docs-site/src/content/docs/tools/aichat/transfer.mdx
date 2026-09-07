@@ -121,6 +121,12 @@ loopback availability. Native discovery uses temporary account configuration
 snapshots and does not copy authentication into them. An absent destination
 account is reported as uninitialized rather than created by inspection.
 
+An auth-free Codex snapshot may omit account-dependent bundled or remote plugins.
+Preflight reports that discovery as incomplete, lists cached registrations
+separately, and does not label native omissions as missing destination plugins.
+Run `codex plugin list --json` in the original account to verify its authenticated
+view. Cached manifests and enabled flags alone do not prove runtime availability.
+
 Settings, plugins, credentials, jobs, and machine services are not synchronized.
 Apply reported remedies on the destination. In particular, a copied Chrome MCP
 configuration does not carry a logged-in browser or extension connection.
