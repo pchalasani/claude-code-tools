@@ -295,3 +295,59 @@ def test_native_scratch_rejects_symlinked_ancestor(
     for path in (tmp_path / "bundle/files").rglob("*"):
         if path.is_file():
             assert secret.read_bytes() not in path.read_bytes()
+
+
+def test_subagent_secondary_worktree_scratch_and_gaps(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Subagent records contribute mapped cwd roots and surviving/missing scratch."""
+    home, transcript = fixture_home(tmp_path)
+    sidecar = transcript.with_suffix("") / "subagents/agent-secondary.jsonl"
+    sidecar.parent.mkdir(parents=True)
+    with tempfile.TemporaryDirectory(prefix="claude-transfer-", dir="/tmp") as name:
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: name)
+        bucket = Path(name) / f"claude-{os.getuid()}"
+        scratch = bucket / "-secondary-worktree" / SID / "scratchpad"
+        scratch.mkdir(parents=True)
+        existing = scratch / "retained.txt"
+        existing.write_text("selected subagent scratch")
+        unreferenced = scratch / "goal.txt"
+        unreferenced.write_text("subagent scratch used through a shell variable")
+        missing = scratch / "gone.txt"
+        unrelated = bucket / "-unrelated-worktree" / SID / "scratchpad/private.txt"
+        unrelated.parent.mkdir(parents=True)
+        unrelated.write_text("unrelated worktree must not be included")
+        sidecar.write_text(
+            json.dumps(
+                {
+                    "type": "user",
+                    "cwd": "/secondary/worktree",
+                    "message": {
+                        "content": f"Read {existing}, {missing}, and {unrelated}"
+                    },
+                }
+            )
+            + "\n"
+        )
+        result = export_session(
+            home,
+            SID,
+            Path("/remote/profile"),
+            Path("/new/project"),
+            tmp_path / "bundle",
+            path_mappings={"/secondary/worktree": "/remote/secondary"},
+        )
+        for source in (existing, unreferenced):
+            destination = Path(result["path_mappings"][str(source.resolve())])
+            copied = (
+                tmp_path / "bundle/files" / destination.relative_to("/remote/profile")
+            )
+            assert copied.read_bytes() == source.read_bytes()
+        assert {"path": str(missing), "reason": "missing_at_source"} in result[
+            "missing_at_source"
+        ]
+        assert str(unrelated) not in result["path_mappings"]
+        assert {
+            "source": "/secondary/worktree",
+            "destination": "/remote/secondary",
+        } in result["operational_cwds"]

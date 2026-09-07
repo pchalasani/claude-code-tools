@@ -6,6 +6,7 @@ import json
 import posixpath
 import re
 import shutil
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -257,6 +258,7 @@ def export_session(
     ]
 
     operational_cwds: set[tuple[str, str]] = set()
+    scratch_records: list[dict[str, Any]] = []
 
     def stage(source: Path, relative: Path, rewrite: bool = False) -> None:
         """Copy a verified file into a fresh private staging directory."""
@@ -267,6 +269,7 @@ def export_session(
         if rewrite:
             transformed = []
             for record in _read_records(source):
+                scratch_records.append(deepcopy(record))
                 original_cwd = record.get("cwd")
                 mapped = _map_record(record, source_project, destination, path_mappings)
                 if isinstance(original_cwd, str) and original_cwd.startswith("/"):
@@ -365,7 +368,13 @@ def export_session(
         relative = source.relative_to(source_home)
         stage(source, relative)
         mappings[str(source)] = str(destination_home / relative)
-    scratch, gaps = discover_scratch(records, session_id, source_project, sidecar)
+    scratch, gaps = discover_scratch(
+        scratch_records,
+        session_id,
+        source_project,
+        sidecar,
+        additional_projects=[old for old, _ in operational_cwds],
+    )
     missing_at_source.extend(
         gap for gap in gaps if gap["path"] not in available_aliases
     )

@@ -16,6 +16,7 @@ def discover_scratch(
     session_id: str,
     source_project: str | None = None,
     sidecar_root: Path | None = None,
+    additional_projects: list[str] | None = None,
 ) -> tuple[list[tuple[Path, Path]], list[dict[str, str]]]:
     """Inventory referenced temporary files and session-owned scratch directories.
 
@@ -26,10 +27,13 @@ def discover_scratch(
     text = json.dumps(records, ensure_ascii=False)
     references = set(re.findall(r"/(?:private/)?tmp/claude-[^\s\"'<>\\]+", text))
     allowed_roots = [sidecar_root.resolve()] if sidecar_root else []
+    source_projects = set(additional_projects or [])
     if source_project:
+        source_projects.add(source_project)
+    for source_path in sorted(source_projects):
         from claude_code_tools.session_utils import encode_claude_project_path
 
-        project = encode_claude_project_path(source_project)
+        project = encode_claude_project_path(source_path)
         # Native Unix Claude scratch convention. Probe exact session paths only;
         # never inventory another session or recursively search temporary roots.
         for base in (Path(tempfile.gettempdir()), Path("/tmp"), Path("/private/tmp")):
