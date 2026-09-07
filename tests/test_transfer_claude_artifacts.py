@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -421,3 +422,115 @@ def test_subagent_only_plan_slugs_copy_and_report_gaps(tmp_path: Path) -> None:
         "missing_at_source"
     ]
     assert str(unrelated.relative_to(home)) not in result["files"]
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        "account",
+        "subtree",
+        "alias",
+        "alias-missing-tail",
+        "encoded-project",
+        "alias-encoded-project",
+    ],
+)
+@pytest.mark.parametrize("conflicting", [True, False])
+def test_claude_account_mappings_retain_destination_layout(
+    tmp_path: Path, scope: str, conflicting: bool
+) -> None:
+    """Account mappings and aliases cannot redirect copied artifacts elsewhere."""
+    home, transcript = fixture_home(tmp_path)
+    alias = tmp_path / "account-alias"
+    alias.symlink_to(home, target_is_directory=True)
+    relative = Path(".")
+    if scope == "account":
+        old = home
+    elif scope == "subtree":
+        relative = Path("projects")
+        old = home / relative
+    elif scope == "alias":
+        old = alias
+    elif scope in {"encoded-project", "alias-encoded-project"}:
+        relative = Path("projects/-old-project")
+        old = (alias if scope == "alias-encoded-project" else home) / relative
+    else:
+        relative = Path("plans/future")
+        old = alias / relative
+    destination_home = Path("/remote/profile")
+    expected = str(
+        destination_home
+        / (Path("projects/-new-project") if "encoded-project" in scope else relative)
+    )
+    mapped = "/unrelated/destination" if conflicting else expected
+    if conflicting:
+        with pytest.raises(ValueError, match="Account home mapping conflicts"):
+            export_session(
+                home,
+                SID,
+                destination_home,
+                Path("/new/project"),
+                tmp_path / "bundle",
+                path_mappings={str(old): mapped},
+            )
+    else:
+        result = export_session(
+            home,
+            SID,
+            destination_home,
+            Path("/new/project"),
+            tmp_path / "bundle",
+            path_mappings={str(old): mapped},
+        )
+        assert result["ok"]
+        assert result["path_mappings"][str(old)] == expected
+        assert (
+            result["path_mappings"][str(transcript.parent)]
+            == "/remote/profile/projects/-new-project"
+        )
+        if scope == "alias":
+            assert (
+                result["path_mappings"][str(alias / "projects/-old-project")]
+                == "/remote/profile/projects/-new-project"
+            )
+        assert (
+            tmp_path / "bundle/files/projects/-new-project" / transcript.name
+        ).is_file()
+
+
+def test_encoded_project_path_guide_composes_on_second_copy(tmp_path: Path) -> None:
+    """Historical tool-result paths follow the actual encoded folder on both hops."""
+    home, transcript = fixture_home(tmp_path)
+    result_file = transcript.with_suffix("") / "tool-results/result.txt"
+    result_file.parent.mkdir(parents=True)
+    result_file.write_text("persisted output")
+    first_home = tmp_path / "first-destination"
+    first = export_session(
+        home, SID, first_home, Path("/new/project"), tmp_path / "first-bundle"
+    )
+    shutil.copytree(tmp_path / "first-bundle/files", first_home)
+    guide = first_home / "transfer-support" / SID / "path-map.json"
+    guide.parent.mkdir(parents=True)
+    guide.write_text(
+        json.dumps(
+            {
+                "path_mappings": first["path_mappings"],
+                "missing_at_source": first["missing_at_source"],
+            }
+        )
+    )
+    second = export_session(
+        first_home,
+        SID,
+        Path("/returned/profile"),
+        Path("/returned/project"),
+        tmp_path / "second-bundle",
+    )
+    expected_parent = Path("/returned/profile/projects/-returned-project")
+    assert second["path_mappings"][str(transcript.parent)] == str(expected_parent)
+    relative_tail = result_file.relative_to(transcript.parent)
+    destination = expected_parent / relative_tail
+    copied = (
+        tmp_path / "second-bundle/files" / destination.relative_to("/returned/profile")
+    )
+    assert copied.read_bytes() == result_file.read_bytes()

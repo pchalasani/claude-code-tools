@@ -170,6 +170,38 @@ def export_session(
     if len(matches) != 1:
         raise ValueError(f"Expected one Claude transcript; found {len(matches)}")
     transcript = matches[0]
+    resolved_home = source_home.resolve()
+    source_project_prefix = transcript.parent.relative_to(source_home)
+    destination_project_prefix = Path("projects") / encode_claude_project_path(
+        str(destination_project)
+    )
+    account_aliases: dict[str, str] = {}
+    for old, new in path_mappings.items():
+        old_path = Path(old)
+        if old_path.is_relative_to(source_home):
+            relative = old_path.relative_to(source_home)
+        elif old_path.resolve().is_relative_to(resolved_home):
+            relative = old_path.resolve().relative_to(resolved_home)
+        else:
+            continue
+        relocated = (
+            destination_project_prefix / relative.relative_to(source_project_prefix)
+            if relative.is_relative_to(source_project_prefix)
+            else relative
+        )
+        expected = posixpath.normpath(str(destination_home / relocated))
+        if posixpath.normpath(new) != expected:
+            raise ValueError(
+                "Account home mapping conflicts with destination_home; "
+                "profile paths must retain their location within the selected account."
+            )
+        path_mappings[old] = expected
+        if source_project_prefix.is_relative_to(relative):
+            alias = old_path / source_project_prefix.relative_to(relative)
+            account_aliases[str(alias)] = str(
+                destination_home / destination_project_prefix
+            )
+    path_mappings.update(account_aliases)
     if transcript.parent.is_symlink():
         raise ValueError(f"Cannot transfer symlink: {transcript.parent}")
     _regular_files(transcript)
@@ -345,6 +377,7 @@ def export_session(
             )
     mappings = {
         str(source_home): str(destination_home),
+        str(transcript.parent): str(destination_home / project_relative),
         source_project: destination,
         **(path_mappings or {}),
     }
