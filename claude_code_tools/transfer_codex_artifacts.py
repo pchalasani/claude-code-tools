@@ -22,7 +22,7 @@ def latest_session_index(home: Path) -> dict[str, dict[str, Any]]:
                 continue
             row = json.loads(line)
             if not isinstance(row, dict) or not isinstance(row.get("id"), str):
-                raise ValueError("Malformed Codex session index row")
+                raise ValueError("Malformed Codex session index row")  # noqa: TRY004
             latest[row["id"]] = row
     return latest
 
