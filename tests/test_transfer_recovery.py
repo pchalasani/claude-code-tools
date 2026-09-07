@@ -143,3 +143,90 @@ def test_incomplete_index_tail_requires_inspection(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Incomplete destination index"):
         missing_jsonl_rows(path, {"key": "id", "rows": []})
     assert path.read_bytes() == partial
+
+
+def test_shared_json_additions_refused_without_modifying_other_records(
+    tmp_path: Path,
+) -> None:
+    """Existing native-owned JSON cannot safely receive selected-row additions."""
+    from claude_code_tools.transfer_journal import publish_json_metadata
+
+    path = tmp_path / "external_agent_session_imports.json"
+    original = b'{ "records": [{"id":"other","note":"native work"}] }\n'
+    path.write_bytes(original)
+    update = {
+        "format": "json",
+        "container": "records",
+        "key": "id",
+        "rows": [{"id": "selected"}],
+    }
+    with pytest.raises(ValueError, match="separate destination account"):
+        metadata_content(path, update)
+    with pytest.raises(ValueError, match="separate destination account"):
+        publish_json_metadata(path, update)
+    assert path.read_bytes() == original
+
+
+def test_shared_json_identical_selected_records_are_not_rewritten(
+    tmp_path: Path,
+) -> None:
+    """Semantic equality preserves original bytes, inode and write timestamp."""
+    from claude_code_tools.transfer_journal import publish_json_metadata
+
+    path = tmp_path / "external_agent_session_imports.json"
+    original = b'{ "extra": true, "records": [{"id":"other"},{"id":"selected"}] }\n'
+    path.write_bytes(original)
+    before = path.stat()
+    update = {
+        "format": "json",
+        "container": "records",
+        "key": "id",
+        "rows": [{"id": "selected"}],
+    }
+    assert metadata_content(path, update) == original
+    publish_json_metadata(path, update)
+    after = path.stat()
+    assert path.read_bytes() == original
+    assert (before.st_ino, before.st_mtime_ns) == (after.st_ino, after.st_mtime_ns)
+
+
+def test_shared_json_publish_preserves_concurrent_creation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A native creation at publication wins; atomic no-clobber refuses the copy."""
+    from claude_code_tools import transfer_journal
+
+    path = tmp_path / "external_agent_session_imports.json"
+    original_link = transfer_journal.os.link
+    native = b'{"records":[{"id":"native-created"}]}'
+
+    def concurrent_link(source, destination):
+        Path(destination).write_bytes(native)
+        return original_link(source, destination)
+
+    monkeypatch.setattr(transfer_journal.os, "link", concurrent_link)
+    update = {
+        "format": "json",
+        "container": "records",
+        "key": "id",
+        "rows": [{"id": "selected"}],
+    }
+    with pytest.raises(ValueError, match="appeared during publication"):
+        transfer_journal.publish_json_metadata(path, update)
+    assert path.read_bytes() == native
+    assert not list(tmp_path.glob(".transfer-*"))
+
+
+def test_shared_json_absent_document_is_published(tmp_path: Path) -> None:
+    """An absent metadata document can receive selected records without replacement."""
+    from claude_code_tools.transfer_journal import publish_json_metadata
+
+    path = tmp_path / "external_agent_session_imports.json"
+    update = {
+        "format": "json",
+        "container": "records",
+        "key": "id",
+        "rows": [{"id": "selected"}],
+    }
+    publish_json_metadata(path, update)
+    assert json.loads(path.read_text()) == {"records": [{"id": "selected"}]}

@@ -193,14 +193,14 @@ class TransferJournal:
 
 
 def metadata_content(path: Path, update: dict[str, Any]) -> bytes:
-    """Merge selected keys only, refusing differing destination history."""
+    """Plan selected metadata; never rewrite an existing shared JSON document."""
     raw = path.read_bytes() if path.exists() else b""
     container = update.get("container")
     if update["format"] == "jsonl":
         rows = [json.loads(line) for line in raw.splitlines() if line]
         document = None
     elif update["format"] == "json" and container == "records":
-        document = json.loads(raw) if raw else {"records": []}
+        document = json.loads(raw) if path.exists() else {"records": []}
         rows = document["records"]
     else:
         raise ValueError("Unsupported metadata update format")
@@ -212,11 +212,17 @@ def metadata_content(path: Path, update: dict[str, Any]) -> bytes:
             if by_key[identity] != row:
                 raise ValueError(f"Destination metadata differs: {path.name}")
         else:
+            if document is not None and path.exists():
+                raise ValueError(
+                    "Existing shared JSON metadata requires additions; transfer "
+                    "cannot safely replace a document native agents may update. "
+                    "Use a separate destination account home."
+                )
             rows.append(row)
             by_key[identity] = row
     if document is None:
         return b"".join((json.dumps(row) + "\n").encode() for row in rows)
-    return json.dumps(document).encode()
+    return raw if path.exists() else json.dumps(document).encode()
 
 
 def missing_jsonl_rows(path: Path, update: dict[str, Any]) -> list[dict[str, Any]]:
@@ -267,3 +273,19 @@ def append_jsonl_rows(
             os.close(descriptor)
     if missing_jsonl_rows(path, update):
         raise ValueError("Appended metadata verification failed")
+
+
+def publish_json_metadata(path: Path, update: dict[str, Any]) -> None:
+    """Verify existing selected records or publish an absent document without clobber."""
+    if path.exists():
+        metadata_content(path, update)
+        return
+    data = metadata_content(path, update)
+    try:
+        atomic_write(path, data)
+    except FileExistsError as error:
+        raise ValueError(
+            "Shared JSON metadata appeared during publication and was preserved. "
+            "Inspect it or use a separate destination account home before retrying."
+        ) from error
+    metadata_content(path, update)

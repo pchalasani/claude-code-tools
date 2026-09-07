@@ -114,6 +114,7 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any]:
         check_active_sessions,
         metadata_content,
         missing_jsonl_rows,
+        publish_json_metadata,
     )
 
     activity = check_active_sessions(
@@ -178,14 +179,7 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any]:
                 pending = missing_jsonl_rows(path, update)
                 append_jsonl_rows(path, update, pending)
                 continue
-            before = path.read_bytes() if path.exists() else None
-            data = metadata_content(path, update)
-            if before != (path.read_bytes() if path.exists() else None):
-                raise ValueError("Destination metadata changed during import")
-            if before != data:
-                atomic_write(path, data, replace=before is not None)
-            if metadata_content(path, update) != path.read_bytes():
-                raise ValueError("Metadata verification failed")
+            publish_json_metadata(path, update)
         validate_files(home, manifest)
         result.update(
             {
