@@ -723,3 +723,66 @@ def test_session_owned_temporary_reference_is_copied(tmp_path: Path) -> None:
             tmp_path / "stage/files" / copied[0]
         ).read_text() == "SESSION SCRATCH FIXTURE"
         assert not manifest["excluded_artifacts"]
+
+
+@pytest.mark.parametrize("linked_parent", [False, True])
+def test_support_symlink_escape_refused(tmp_path: Path, linked_parent: bool) -> None:
+    """Allowed profile prefixes never authorize reading linked external files."""
+    source = tmp_path / "source"
+    profile(source)
+    thread(source, "root", mode="legacy")
+    external = tmp_path / "outside"
+    external.mkdir()
+    (external / "payload.txt").write_text("SECRET MUST NOT ENTER BUNDLE")
+    attachments = source / "attachments"
+    if linked_parent:
+        attachments.symlink_to(external, target_is_directory=True)
+    else:
+        attachments.mkdir()
+        (attachments / "payload.txt").symlink_to(external / "payload.txt")
+    reference = attachments / "payload.txt"
+    with (source / "sessions/2026/root.jsonl").open("a") as stream:
+        stream.write(
+            json.dumps(
+                {"type": "response_item", "payload": {"text": "Read " + str(reference)}}
+            )
+            + "\n"
+        )
+    stage = tmp_path / "stage"
+    with pytest.raises(ValueError, match="Symlinked support artifact"):
+        export_session(
+            source, "root", tmp_path / "destination", Path("/new/project"), stage
+        )
+    assert not (stage / "files/attachments/payload.txt").exists()
+
+
+def test_explicit_external_symlink_is_refused(tmp_path: Path) -> None:
+    """An explicit path mapping does not authorize following a linked file."""
+    import tempfile
+
+    source = tmp_path / "source"
+    profile(source)
+    thread(source, "root", mode="legacy")
+    with tempfile.TemporaryDirectory(
+        prefix="codex-transfer-test-", dir="/tmp"
+    ) as directory:
+        external = Path(directory) / "secret.txt"
+        external.write_text("DISPOSABLE SECRET")
+        link = Path(directory) / "linked.txt"
+        link.symlink_to(external)
+        with (source / "sessions/2026/root.jsonl").open("a") as stream:
+            stream.write(
+                json.dumps(
+                    {"type": "response_item", "payload": {"text": "Read " + str(link)}}
+                )
+                + "\n"
+            )
+        with pytest.raises(ValueError, match="Symlinked support artifact"):
+            export_session(
+                source,
+                "root",
+                tmp_path / "destination",
+                Path("/new/project"),
+                tmp_path / "stage",
+                [(str(link), "/new/support/linked.txt")],
+            )

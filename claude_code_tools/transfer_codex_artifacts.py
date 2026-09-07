@@ -165,6 +165,39 @@ class CodexArtifacts:
         target.write_bytes(output)
         return offsets
 
+    def checked_artifact(self, source: Path) -> Path:
+        """Reject linked artifacts and escapes from the approved lexical root."""
+        for component in (source, *source.parents):
+            if component.is_symlink():
+                # macOS's system temporary-directory alias is the sole exception.
+                if component == Path("/tmp") and component.resolve() == Path(
+                    "/private/tmp"
+                ):
+                    continue
+                raise ValueError(
+                    "Symlinked support artifact or parent is not transferable"
+                )
+        try:
+            relative = source.relative_to(self.source_home)
+            approved = self.source_home / relative.parts[0]
+            if relative.parts[0] == "transfer-support":
+                approved /= self.session_id
+        except ValueError:
+            approved = None
+            for old, _ in self.explicit_mappings:
+                if source.is_relative_to(Path(old)):
+                    approved = Path(old)
+                    break
+            if approved is None and self.session_id in source.parts:
+                index = source.parts.index(self.session_id)
+                approved = Path(*source.parts[: index + 1])
+            if approved is None:
+                raise ValueError("Support artifact has no approved source root")
+        resolved = source.resolve()
+        if not resolved.is_relative_to(approved.resolve()):
+            raise ValueError("Support artifact escapes its approved source root")
+        return resolved
+
     def finish(self, ids: list[str]) -> dict[str, Any]:
         """Stage references and return shared-index updates for a guarded merge."""
         updates = []
@@ -194,13 +227,13 @@ class CodexArtifacts:
                 )
         for value in sorted(self.references):
             source = Path(value)
+            resolved = self.checked_artifact(source)
             if source.is_dir():
                 continue
             if not source.is_file():
                 self.missing.append(value)
                 continue
             # Never follow a reference into configuration or an authentication file.
-            resolved = source.resolve()
             if any(
                 part
                 in {
