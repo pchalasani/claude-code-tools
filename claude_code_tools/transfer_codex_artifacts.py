@@ -112,6 +112,11 @@ class CodexArtifacts:
                 if value.startswith(("/tmp/", "/private/tmp/")):
                     self.references.add(value)
                 continue
+            if len(relative.parts) > 2 and relative.parts[:2] == (
+                "transfer-support",
+                self.session_id,
+            ):
+                self.references.add(value)
             if relative.parts and relative.parts[0] in {
                 "attachments",
                 "memories",

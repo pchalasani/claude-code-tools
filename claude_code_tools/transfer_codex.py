@@ -506,6 +506,38 @@ def export_session(
 
 def validate_databases(manifest: dict[str, Any], destination_home: Path) -> None:
     """Check destination schemas and conflicts without changing any database."""
+    # Absence is selected state too: an omitted source table/database must not
+    # inherit an unrelated destination goal, queue, memory, or history row.
+    selected_ids = manifest.get("session_ids", [])
+    exported = {
+        database["name"]: {table["name"]: table["rows"] for table in database["tables"]}
+        for database in manifest.get("databases", [])
+    }
+    for name, tables in SCHEMAS.items():
+        path = destination_home / name
+        if not path.exists():
+            continue
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("Destination database must be a regular file")
+        with closing(_connect(path)) as connection:
+            _check_schema(connection, name)
+            for table in tables:
+                if table in exported.get(name, {}):
+                    continue
+                key = (
+                    "id"
+                    if table == "threads"
+                    else (
+                        "parent_thread_id"
+                        if table == "thread_spawn_edges"
+                        else "thread_id"
+                    )
+                )
+                if selected_ids and _rows(connection, table, selected_ids, key):
+                    raise ValueError(
+                        f"Destination-only session state exists and differs: {name}/{table}. "
+                        "Use a separate account home; conversations are never merged."
+                    )
     for database in manifest.get("databases", []):
         name = database["name"]
         if name not in SCHEMAS:

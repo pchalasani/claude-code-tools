@@ -506,3 +506,75 @@ def test_second_transfer_recovers_historical_attachment(tmp_path: Path) -> None:
         manifest["path_mappings"]
     )
     assert not manifest["missing_at_source"]
+
+
+@pytest.mark.parametrize("source_database_present", [True, False])
+def test_destination_only_goal_is_a_conflict(
+    tmp_path: Path, source_database_present: bool
+) -> None:
+    """An empty or absent source goal DB cannot inherit a target active goal."""
+    source, destination = tmp_path / "source", tmp_path / "destination"
+    profile(source)
+    profile(destination)
+    thread(source, "root")
+    if not source_database_present:
+        (source / "goals_1.sqlite").unlink()
+    manifest = export_session(
+        source, "root", destination, Path("/new/project"), tmp_path / "stage"
+    )
+    insert(
+        destination,
+        "goals_1.sqlite",
+        "thread_goals",
+        {
+            "thread_id": "root",
+            "goal_id": "destination-goal",
+            "objective": "new work",
+            "status": "active",
+        },
+    )
+    with pytest.raises(ValueError, match="Destination-only session state"):
+        import_databases(manifest, destination)
+    with sqlite3.connect(destination / "goals_1.sqlite") as db:
+        assert (
+            db.execute("SELECT objective FROM thread_goals").fetchone()[0] == "new work"
+        )
+    with sqlite3.connect(destination / "state_5.sqlite") as db:
+        assert db.execute("SELECT count(*) FROM threads").fetchone()[0] == 0
+
+
+def test_second_transfer_preserves_external_scratch(tmp_path: Path) -> None:
+    """A preserved old tmp literal resolves to previously materialized support."""
+    source = tmp_path / "second-machine"
+    profile(source)
+    thread(source, "root", mode="legacy")
+    original = "/private/tmp/original-session/scratch.txt"
+    scratch = source / "transfer-support/root/external/scratch.txt"
+    scratch.parent.mkdir(parents=True)
+    scratch.write_text("external scratch content")
+    prior = source / "transfer-support/root/path-map.json"
+    prior.write_text(
+        json.dumps(
+            {"path_mappings": [{"source": original, "destination": str(scratch)}]}
+        )
+    )
+    with (source / "sessions/2026/root.jsonl").open("a") as stream:
+        stream.write(
+            json.dumps(
+                {"type": "response_item", "payload": {"text": "Read " + original}}
+            )
+            + "\n"
+        )
+    target = tmp_path / "third-machine"
+    manifest = export_session(
+        source, "root", target, Path("/new/project"), tmp_path / "stage"
+    )
+    relative = "transfer-support/root/external/scratch.txt"
+    assert relative in manifest["files"]
+    assert (
+        tmp_path / "stage/files" / relative
+    ).read_text() == "external scratch content"
+    assert {"source": original, "destination": str(target / relative)} in manifest[
+        "path_mappings"
+    ]
+    assert not manifest["missing_at_source"]
