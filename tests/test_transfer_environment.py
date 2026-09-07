@@ -210,3 +210,44 @@ def test_partial_native_parity_does_not_invent_missing_plugins() -> None:
     assert not result["runtime_parity_verified"]
     assert result["missing_or_disabled_plugins"] == []
     assert result["static_cache_only_in_source"] == ["visible@market"]
+
+
+def test_plugin_root_direct_executable_with_spaces(tmp_path: Path, monkeypatch) -> None:
+    """A quoted direct plugin script resolves after plugin-root expansion."""
+    home = tmp_path / "account"
+    root = home / "plugins/cache/test plugin/1"
+    script = root / "scripts/pretooluse.sh"
+    script.parent.mkdir(parents=True)
+    marker = tmp_path / "must-not-run"
+    script.write_text("#!/bin/sh\ntouch " + str(marker) + "\n")
+    script.chmod(0o700)
+    hooks = root / "hooks/hooks.json"
+    hooks.parent.mkdir()
+    hooks.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "hooks": [
+                                {
+                                    "command": '"${CLAUDE_PLUGIN_ROOT}/scripts/pretooluse.sh"'
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        )
+    )
+    (home / "plugins/installed_plugins.json").write_text(
+        json.dumps({"plugins": {"test@fixture": [{"installPath": str(root)}]}})
+    )
+    monkeypatch.setenv("PATH", str(tmp_path / "no-native-cli"))
+    checks = inspect_environment("claude", home)["checks"]["configured_hooks"]
+    assert len(checks) == 1
+    assert checks[0]["ran"] and checks[0]["ok"]
+    assert checks[0]["launcher_available"]
+    assert checks[0]["script_paths_checked"] == 1
+    assert checks[0]["missing_script_paths"] == 0
+    assert not marker.exists()

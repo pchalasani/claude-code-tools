@@ -263,6 +263,9 @@ def _inspect_environment(agent: str, home: Path, runtime_home: Path) -> dict[str
                     command = hook.get("command", "")
                     if not isinstance(command, str):
                         continue
+                    command = command.replace(
+                        "${CLAUDE_PLUGIN_ROOT}", source.get("_plugin_root", "")
+                    )
                     try:
                         words = shlex.split(command)
                     except ValueError:
@@ -274,10 +277,15 @@ def _inspect_environment(agent: str, home: Path, runtime_home: Path) -> dict[str
                             }
                         )
                         continue
-                    command = command.replace(
-                        "${CLAUDE_PLUGIN_ROOT}", source.get("_plugin_root", "")
-                    )
-                    paths = re.findall(r"/[^\s\"'<>;]+\.(?:py|sh)\b", command)
+                    paths = [
+                        path
+                        for word in words
+                        for path in (
+                            [word]
+                            if word.startswith("/") and word.endswith((".py", ".sh"))
+                            else re.findall(r"/[^\s\"'<>;]+\.(?:py|sh)\b", word)
+                        )
+                    ]
                     missing_paths = sum(not Path(path).is_file() for path in paths)
                     launcher = words[0] if words else ""
                     found = bool(shutil.which(launcher)) if launcher else False
