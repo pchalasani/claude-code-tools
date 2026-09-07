@@ -513,3 +513,35 @@ def test_duplicate_claude_uuid_in_other_project_is_refused(
     assert existing.read_bytes() == content
     assert list((destination / "projects").glob("*/*.jsonl")) == [existing]
     assert not (destination / ".aichat-transfer.lock").exists()
+
+
+def test_default_report_exposes_failed_destination_hook(
+    workspace: dict[str, Path],
+) -> None:
+    """A missing destination hook launcher is visible without JSON output."""
+    destination = workspace["destination"]
+    destination.mkdir()
+    (destination / "settings.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "hooks": [
+                                {
+                                    "command": "aichat-fixture-missing-launcher --token PRIVATE_HOOK_TOKEN"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        )
+    )
+    args = [arg for arg in arguments(workspace) if arg not in ("--apply", "--json")]
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    assert "1 configured hook check(s) failed" in result.output
+    assert "Remediation:" in result.output
+    assert "PRIVATE_HOOK_TOKEN" not in result.output
+    assert not (destination / "projects").exists()
