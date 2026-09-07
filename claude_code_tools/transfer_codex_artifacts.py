@@ -103,8 +103,19 @@ class CodexArtifacts:
             if isinstance(path_mappings, dict)
             else path_mappings or []
         )
-        self.explicit_mappings = list(additional)
-        self.mappings = self.explicit_mappings + [
+        additional = list(additional)
+        self.account_aliases = [
+            (old, str(Path(old).resolve()))
+            for old, _ in additional
+            if Path(old).resolve().is_relative_to(source_home)
+        ]
+        self.account_aliases.sort(key=lambda pair: len(pair[0]), reverse=True)
+        self.explicit_mappings = [
+            (old, new)
+            for old, new in additional
+            if not Path(old).resolve().is_relative_to(source_home)
+        ]
+        self.mappings = additional + [
             (str(source_project), str(destination_project)),
             (str(source_home), str(destination_home)),
         ]
@@ -154,6 +165,16 @@ class CodexArtifacts:
     def discover(self, text: str) -> None:
         """Recognize literal support references in the selected session only."""
         for value in reference_candidates(text):
+            # Declared account aliases are operational mappings, not consent to
+            # collect arbitrary external files. Read their canonical in-profile
+            # path while preserving the alias-to-destination mapping for prose.
+            for alias, canonical in self.account_aliases:
+                try:
+                    tail = Path(value).relative_to(alias)
+                except ValueError:
+                    continue
+                value = str(Path(canonical) / tail)
+                break
             for mapping in self.historical:
                 try:
                     tail = Path(value).relative_to(mapping["source"])

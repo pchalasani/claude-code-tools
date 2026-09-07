@@ -188,3 +188,93 @@ def test_codex_account_alias_mapping_guard(
         assert {"source": referenced, "destination": expected} in manifest[
             "path_mappings"
         ]
+
+
+@pytest.mark.parametrize("suffix", ["", "/attachments", "/not-created-yet"])
+def test_public_export_accepts_valid_tmp_account_alias(
+    tmp_path: Path, suffix: str
+) -> None:
+    """A tmp account alias remains operational, with real attachment bytes copied."""
+    import json
+    import sqlite3
+    import tempfile
+
+    from claude_code_tools.transfer_source import export_request
+    from tests.test_transfer_codex import profile, thread
+    from tests.test_transfer_session import git
+
+    project = tmp_path / "project"
+    project.mkdir()
+    git(project, "init")
+    (project / "README").write_text("fixture")
+    git(project, "add", "README")
+    git(
+        project,
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=f@example.test",
+        "commit",
+        "-m",
+        "fixture",
+    )
+    home = tmp_path / "source"
+    profile(home)
+    thread(home, "root", mode="legacy")
+    attachment = home / "attachments/note.txt"
+    attachment.parent.mkdir()
+    attachment.write_text("ALIAS PAYLOAD")
+    destination = tmp_path / "destination"
+    with tempfile.TemporaryDirectory(
+        prefix="codex-account-alias-", dir="/tmp"
+    ) as directory:
+        alias = Path(directory) / "alias"
+        alias.symlink_to(home, target_is_directory=True)
+        reference = str(alias) + suffix
+        with sqlite3.connect(home / "state_5.sqlite") as db:
+            db.execute(
+                "UPDATE threads SET cwd=?,sandbox_policy=?",
+                (
+                    str(project),
+                    json.dumps(
+                        {"type": "workspace-write", "writable_roots": [reference]}
+                    ),
+                ),
+            )
+        rollout = home / "sessions/2026/root.jsonl"
+        rollout.write_text(
+            json.dumps(
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "cwd": str(project),
+                        "sandbox_policy": {"writable_roots": [reference]},
+                    },
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {"text": str(alias / "attachments/note.txt")},
+                }
+            )
+            + "\n"
+        )
+        mappings = {str(alias): str(destination), reference: str(destination) + suffix}
+        result = export_request(
+            {
+                "agent": "codex",
+                "source_home": str(home),
+                "session": "root",
+                "destination_home": str(destination),
+                "destination_project": str(project),
+                "path_mappings": mappings,
+            }
+        )
+        assert result["ran"] and result["ok"]
+        assert "attachments/note.txt" in result["manifest"]["files"]
+        assert not result["manifest"]["excluded_artifacts"]
+        assert {"source": str(alias), "destination": str(destination)} in result[
+            "manifest"
+        ]["path_mappings"]
