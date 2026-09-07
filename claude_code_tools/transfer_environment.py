@@ -329,9 +329,11 @@ def _inspect_environment(agent: str, home: Path, runtime_home: Path) -> dict[str
                         "typeset",
                         "let",
                     }
-                    if compound or (words and words[0] in builtins):
+                    env_wrapper = bool(words and Path(words[0]).name == "env")
+                    if compound or (words and words[0] in builtins) or env_wrapper:
                         instruction = (
-                            "Inspect this compound or builtin hook manually and use "
+                            "Inspect this compound, builtin, or environment-wrapper hook "
+                            "manually and use "
                             "a safe runtime input to verify it; the transfer probe "
                             "does not evaluate shell syntax."
                         )
@@ -339,7 +341,11 @@ def _inspect_environment(agent: str, home: Path, runtime_home: Path) -> dict[str
                             {
                                 "ran": False,
                                 "ok": False,
-                                "reason": "Compound or shell-builtin hook is unverified",
+                                "reason": (
+                                    "Environment-wrapper hook is unverified"
+                                    if env_wrapper
+                                    else "Compound or shell-builtin hook is unverified"
+                                ),
                                 "runtime_executed": False,
                                 "remediation": instruction,
                             }
@@ -487,16 +493,20 @@ def compare_environments(
         for name, value in right.get("skill_registration_overrides", {}).items()
         if value == "off" and source_overrides.get(name) != "off"
     )
+    denied = sorted(
+        set(right.get("skill_overrides", [])) - set(left.get("skill_overrides", []))
+    )
     return {
         "ran": ran,
-        "ok": ran and not missing and not disabled,
+        "ok": ran and not missing and not disabled and not denied,
         "missing_or_disabled_plugins": missing,
         "newly_disabled_skills": disabled,
+        "newly_denied_skills": denied,
         "static_cache_only_in_source": sorted(
             set(source_plugins.get("cached_registrations", []))
             - set(target_plugins.get("cached_registrations", []))
         ),
-        "runtime_parity_verified": ran and not missing and not disabled,
+        "runtime_parity_verified": ran and not missing and not disabled and not denied,
         "static_cache_note": "Cache differences are advisory, not proof of effective availability.",
         "remediation": (
             ["Plugin availability could not be compared; complete both native checks."]
@@ -504,7 +514,7 @@ def compare_environments(
             else [
                 "Install/enable the listed plugins and review the destination skill overrides."
             ]
-            if missing or disabled
+            if missing or disabled or denied
             else []
         ),
     }

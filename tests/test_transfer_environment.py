@@ -405,3 +405,59 @@ def test_failed_simple_hooks_surface_sanitized_summary(
     assert "TOPSECRET" not in json.dumps(result)
     assert "nonexistent-hook-launcher" not in summary
     assert "/missing/private-hook.sh" not in summary
+
+
+def test_added_skill_permission_denies_prevent_parity() -> None:
+    """Matching plugins do not imply parity when destination denies another skill."""
+    from claude_code_tools.transfer_environment import compare_environments
+
+    native = {"ran": True, "ok": True, "registrations": [{"id": "tool@fixture"}]}
+    source = {
+        "checks": {"native_plugins": native, "skill_overrides": ["Skill(existing)"]}
+    }
+    target = {
+        "checks": {
+            "native_plugins": native,
+            "skill_overrides": ["Skill(existing)", "Skill(newly-denied)"],
+        }
+    }
+    result = compare_environments(source, target)
+    assert result["ran"]
+    assert not result["ok"] and not result["runtime_parity_verified"]
+    assert result["newly_denied_skills"] == ["Skill(newly-denied)"]
+    assert result["remediation"]
+    same = compare_environments(source, source)
+    assert same["ok"] and same["newly_denied_skills"] == []
+
+
+def test_env_hook_wrapper_cannot_prove_interpreter_available(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An available env binary does not prove its wrapped interpreter exists."""
+    home = tmp_path / "profile"
+    home.mkdir()
+    (home / "settings.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "hooks": [
+                                {
+                                    "command": "/usr/bin/env definitely-missing-python hook.py"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        )
+    )
+    monkeypatch.setenv("PATH", str(tmp_path / "no-interpreters"))
+    checks = inspect_environment("claude", home)["checks"]["configured_hooks"]
+    assert len(checks) == 1
+    assert not checks[0]["ran"] and not checks[0]["ok"]
+    assert checks[0]["reason"] == "Environment-wrapper hook is unverified"
+    assert "launcher_available" not in checks[0]
+    assert checks[0]["remediation"]
+    assert not checks[0]["runtime_executed"]
