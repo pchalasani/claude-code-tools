@@ -49,7 +49,11 @@ def discover_scratch(
         candidates = [path] if path.is_file() else []
         # Enumerate only a UUID-owned directory, never the whole project bucket.
         for parent in (path, *path.parents):
-            if session_id in parent.name and parent.is_dir():
+            if (
+                parent.name == session_id
+                and parent.is_dir()
+                and parent.resolve() in allowed_roots
+            ):
                 candidates.extend(parent.rglob("*"))
                 break
         for candidate in candidates:
@@ -66,6 +70,13 @@ def discover_scratch(
                     )
                     continue
             elif not candidate.is_file():
+                continue
+            elif not any(
+                candidate.resolve().is_relative_to(root) for root in allowed_roots
+            ):
+                missing.append(
+                    {"path": str(candidate), "reason": "outside_selected_session"}
+                )
                 continue
             # A hash separates equal basenames in different source directories.
             key = hashlib.sha256(str(candidate).encode()).hexdigest()[:16]

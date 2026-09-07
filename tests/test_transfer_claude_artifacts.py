@@ -1,6 +1,7 @@
 """Regression coverage for session artifacts discovered during real migrations."""
 
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -34,11 +35,14 @@ def test_goal_and_tool_jsonl_preserved(tmp_path: Path) -> None:
     assert (root / SID / "tool-results/output.jsonl").read_bytes() == content
 
 
-def test_scratch_symlink_missing_and_mapping(tmp_path: Path) -> None:
+def test_scratch_symlink_missing_and_mapping(tmp_path: Path, monkeypatch) -> None:
     """Copy session scratch, materialize a log link, and report missing references."""
     home, transcript = fixture_home(tmp_path)
     with tempfile.TemporaryDirectory(prefix="claude-transfer-", dir="/tmp") as name:
-        scratch = Path(name) / "project" / SID / "scratchpad"
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: name)
+        scratch = (
+            Path(name) / f"claude-{os.getuid()}" / "-old-project" / SID / "scratchpad"
+        )
         scratch.mkdir(parents=True)
         (scratch / "plan.txt").write_text("scratch goal")
         log = transcript.with_suffix("") / "subagents/agent-child.jsonl"
@@ -181,14 +185,19 @@ def test_unicode_line_separators_inside_native_jsonl(tmp_path: Path) -> None:
         assert records[-1]["cwd"] == "/new/project"
 
 
-def test_scratch_link_cannot_copy_another_sessions_subagent(tmp_path: Path) -> None:
+def test_scratch_link_cannot_copy_another_sessions_subagent(
+    tmp_path: Path, monkeypatch
+) -> None:
     """A .jsonl/subagents shape alone does not authorize another session's log."""
     home, transcript = fixture_home(tmp_path)
     unrelated = transcript.parent / "another-session/subagents/agent-private.jsonl"
     unrelated.parent.mkdir(parents=True)
     unrelated.write_text("unrelated conversation must not be copied")
     with tempfile.TemporaryDirectory(prefix="claude-transfer-", dir="/tmp") as name:
-        scratch = Path(name) / "project" / SID / "scratchpad"
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: name)
+        scratch = (
+            Path(name) / f"claude-{os.getuid()}" / "-old-project" / SID / "scratchpad"
+        )
         scratch.mkdir(parents=True)
         link = scratch / "task.output"
         link.symlink_to(unrelated)
@@ -211,3 +220,42 @@ def test_scratch_link_cannot_copy_another_sessions_subagent(tmp_path: Path) -> N
                     b"unrelated conversation must not be copied"
                     not in path.read_bytes()
                 )
+
+
+def test_regular_other_session_scratch_is_not_copied(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A literal path into another session's scratch bucket does not authorize it."""
+    home, transcript = fixture_home(tmp_path)
+    with tempfile.TemporaryDirectory(prefix="claude-transfer-", dir="/tmp") as name:
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: name)
+        bucket = Path(name) / f"claude-{os.getuid()}" / "-old-project"
+        selected = bucket / SID / "scratchpad/selected.txt"
+        selected.parent.mkdir(parents=True)
+        selected.write_text("owned scratch")
+        unrelated = bucket / "another-session" / "scratchpad/private.txt"
+        unrelated.parent.mkdir(parents=True)
+        unrelated.write_text("unrelated private scratch")
+        linked_directory = selected.parent / "linked"
+        linked_directory.symlink_to(unrelated.parent, target_is_directory=True)
+        traversed = linked_directory / unrelated.name
+        with transcript.open("a") as stream:
+            stream.write(
+                json.dumps(
+                    {"message": {"content": f"Read {unrelated} and {traversed}"}}
+                )
+                + "\n"
+            )
+        result = export_session(
+            home,
+            SID,
+            Path("/remote/profile"),
+            Path("/new/project"),
+            tmp_path / "bundle",
+        )
+        assert str(selected.resolve()) in result["path_mappings"]
+        assert str(unrelated) not in result["path_mappings"]
+        assert str(traversed) not in result["path_mappings"]
+        for path in (tmp_path / "bundle/files").rglob("*"):
+            if path.is_file():
+                assert b"unrelated private scratch" not in path.read_bytes()
