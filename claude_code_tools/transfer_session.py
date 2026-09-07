@@ -401,6 +401,8 @@ def transfer(
                     f"  {database['name']}:{table['name']} "
                     f"({len(table['rows'])} records)"
                 )
+        for gap in manifest.get("missing_at_source", []):
+            click.echo(f"Missing at source (not copied): {gap['path']}")
         for warning in manifest["warnings"]:
             click.echo(f"Note: {warning}")
         comparison = report.get("environment_comparison", {})

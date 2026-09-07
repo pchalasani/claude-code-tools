@@ -419,3 +419,20 @@ def test_public_report_omits_private_record_contents() -> None:
     assert rendered["plan"]["databases"][0]["tables"][0]["row_count"] == 1
     assert rendered["plan"]["metadata_updates"][0]["row_count"] == 1
     assert report["plan"]["databases"][0]["tables"][0]["rows"]
+
+
+def test_default_report_displays_missing_source_artifacts(
+    workspace: dict[str, Path],
+) -> None:
+    """A normal dry run exposes source gaps without requiring JSON output."""
+    transcript = workspace["transcript"]
+    record = json.loads(transcript.read_text())
+    record["slug"] = "missing-fixture-plan"
+    transcript.write_text(json.dumps(record) + "\n")
+    args = [arg for arg in arguments(workspace) if arg not in ("--apply", "--json")]
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    assert "Transfer plan verified." in result.output
+    missing = workspace["home"] / "plans/missing-fixture-plan.md"
+    assert f"Missing at source (not copied): {missing}" in result.output
+    assert not workspace["destination"].exists()
