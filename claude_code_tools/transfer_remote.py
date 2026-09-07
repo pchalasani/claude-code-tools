@@ -51,6 +51,19 @@ def safe_target(home: Path, relative: str) -> Path:
 def validate_files(home: Path, manifest: dict[str, Any]) -> list[str]:
     """Identify exact existing copies and reject conflicting destination files."""
     identical = []
+    if manifest.get("agent") == "claude":
+        filename = f"{manifest['session_id']}.jsonl"
+        planned = {
+            home / relative
+            for relative in manifest["artifacts"]
+            if PurePosixPath(relative).name == filename
+        }
+        for existing in (home / "projects").glob(f"*/{filename}"):
+            if existing not in planned:
+                raise ValueError(
+                    f"Claude session ID already exists in another project: {existing}. "
+                    "Use its existing project or a separate destination account home."
+                )
     for relative, metadata in manifest["artifacts"].items():
         target = safe_target(home, relative)
         if target.exists():

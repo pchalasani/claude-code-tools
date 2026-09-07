@@ -194,6 +194,7 @@ def request_with_files(workspace: dict[str, Path]) -> dict[str, Any]:
         "destination_project": str(workspace["target"]),
         "manifest": {
             "agent": "claude",
+            "session_id": SID,
             "project_state": project_state(workspace["source"]),
             "artifacts": {"projects/a/one": metadata, "projects/a/two": metadata},
         },
@@ -491,3 +492,24 @@ def test_codex_missing_artifact_in_normal_report(
     result = CliRunner().invoke(main, args)
     assert result.exit_code == 0, result.output
     assert f"Missing at source (not copied): {missing}" in result.output
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_duplicate_claude_uuid_in_other_project_is_refused(
+    workspace: dict[str, Path], apply: bool
+) -> None:
+    """An account cannot gain a second transcript for the same Claude UUID."""
+    destination = workspace["destination"]
+    existing = destination / "projects/other-project" / f"{SID}.jsonl"
+    existing.parent.mkdir(parents=True)
+    content = workspace["transcript"].read_bytes()
+    existing.write_bytes(content)
+    args = arguments(workspace)
+    if not apply:
+        args.remove("--apply")
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code == 1, result.output
+    assert "already exists in another project" in json.loads(result.output)["error"]
+    assert existing.read_bytes() == content
+    assert list((destination / "projects").glob("*/*.jsonl")) == [existing]
+    assert not (destination / ".aichat-transfer.lock").exists()
