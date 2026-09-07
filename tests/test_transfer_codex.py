@@ -446,3 +446,25 @@ def test_explicit_descendant_mapping(tmp_path: Path) -> None:
     )
     rows = manifest["databases"][0]["tables"][0]["rows"]
     assert next(row for row in rows if row["id"] == "child")["cwd"] == "/new/linked"
+
+
+def test_index_rename_exports_only_latest(tmp_path: Path) -> None:
+    """Append-only native rename history must not become a transfer conflict."""
+    from claude_code_tools.transfer_codex_artifacts import latest_session_index
+
+    source = tmp_path / "source"
+    profile(source)
+    thread(source, "root")
+    (source / "session_index.jsonl").write_text(
+        json.dumps({"id": "root", "thread_name": "old name"})
+        + "\n"
+        + json.dumps({"id": "root", "thread_name": "current name"})
+        + "\n"
+    )
+    assert latest_session_index(source)["root"]["thread_name"] == "current name"
+    manifest = export_session(
+        source, "root", tmp_path / "target", Path("/new/project"), tmp_path / "stage"
+    )
+    assert manifest["metadata_updates"][0]["rows"] == [
+        {"id": "root", "thread_name": "current name"}
+    ]

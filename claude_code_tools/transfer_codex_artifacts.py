@@ -10,6 +10,23 @@ from pathlib import Path
 from typing import Any
 
 
+def latest_session_index(home: Path) -> dict[str, dict[str, Any]]:
+    """Read the last appended index row per ID, as native rename history does."""
+    path = home / "session_index.jsonl"
+    if not path.is_file():
+        return {}
+    latest = {}
+    with path.open() as stream:
+        for line in stream:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+                raise ValueError("Malformed Codex session index row")
+            latest[row["id"]] = row
+    return latest
+
+
 class CodexArtifacts:
     """Collect selected references without copying account configuration or auth."""
 
@@ -131,7 +148,7 @@ class CodexArtifacts:
             rows = (
                 json.loads(data).get(container, [])
                 if container
-                else [json.loads(line) for line in data.splitlines() if line]
+                else list(latest_session_index(self.source_home).values())
             )
             selected = [row for row in rows if row.get(key) in ids]
             if selected:
