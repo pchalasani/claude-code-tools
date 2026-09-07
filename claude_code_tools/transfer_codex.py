@@ -205,6 +205,21 @@ def _rows(
     return [dict(row) for row in connection.execute(query, ids)]
 
 
+def _destination_rows(
+    connection: sqlite3.Connection, table: str, ids: list[str], key: str
+) -> list[dict[str, Any]]:
+    """Include both endpoints when checking destination graph relationships."""
+    if table != "thread_spawn_edges":
+        return _rows(connection, table, ids, key)
+    placeholders = ",".join("?" for _ in ids)
+    query = (
+        "SELECT * FROM thread_spawn_edges "
+        f"WHERE parent_thread_id IN ({placeholders}) "
+        f"OR child_thread_id IN ({placeholders})"
+    )
+    return [dict(row) for row in connection.execute(query, ids + ids)]
+
+
 def _mapped_cwd(cwd: str, source: Path, destination: Path) -> str:
     """Map working directories within the selected project only."""
     try:
@@ -533,7 +548,9 @@ def validate_databases(manifest: dict[str, Any], destination_home: Path) -> None
                         else "thread_id"
                     )
                 )
-                if selected_ids and _rows(connection, table, selected_ids, key):
+                if selected_ids and _destination_rows(
+                    connection, table, selected_ids, key
+                ):
                     raise ValueError(
                         f"Destination-only session state exists and differs: {name}/{table}. "
                         "Use a separate account home; conversations are never merged."
@@ -566,7 +583,7 @@ def validate_databases(manifest: dict[str, Any], destination_home: Path) -> None
                 )
                 selected_ids = manifest.get("session_ids", [])
                 if selected_ids:
-                    existing_rows = _rows(
+                    existing_rows = _destination_rows(
                         connection, table_name, selected_ids, selection_key
                     )
                     expected_rows = {

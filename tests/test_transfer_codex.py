@@ -578,3 +578,67 @@ def test_second_transfer_preserves_external_scratch(tmp_path: Path) -> None:
         "path_mappings"
     ]
     assert not manifest["missing_at_source"]
+
+
+@pytest.mark.parametrize("exported_edges", [False, True])
+def test_destination_inbound_spawn_edge_conflict(
+    tmp_path: Path, exported_edges: bool
+) -> None:
+    """An unrelated parent cannot silently acquire a transferred root child."""
+    source, destination = tmp_path / "source", tmp_path / "destination"
+    profile(source)
+    profile(destination)
+    thread(source, "root")
+    if exported_edges:
+        thread(source, "child")
+        insert(
+            source,
+            "state_5.sqlite",
+            "thread_spawn_edges",
+            {
+                "parent_thread_id": "root",
+                "child_thread_id": "child",
+                "status": "completed",
+            },
+        )
+    manifest = export_session(
+        source, "root", destination, Path("/new/project"), tmp_path / "stage"
+    )
+    thread(destination, "unrelated")
+    edge = {
+        "parent_thread_id": "unrelated",
+        "child_thread_id": "root",
+        "status": "completed",
+    }
+    insert(destination, "state_5.sqlite", "thread_spawn_edges", edge)
+    with pytest.raises(ValueError, match="exists and differs"):
+        import_databases(manifest, destination)
+    with sqlite3.connect(destination / "state_5.sqlite") as db:
+        assert db.execute("SELECT id FROM threads").fetchall() == [("unrelated",)]
+        assert db.execute(
+            "SELECT parent_thread_id, child_thread_id FROM thread_spawn_edges"
+        ).fetchall() == [("unrelated", "root")]
+
+
+def test_exact_destination_spawn_edges_are_idempotent(tmp_path: Path) -> None:
+    """Exact selected graph relationships are accepted on repeat import."""
+    source, destination = tmp_path / "source", tmp_path / "destination"
+    profile(source)
+    profile(destination)
+    thread(source, "root")
+    thread(source, "child")
+    insert(
+        source,
+        "state_5.sqlite",
+        "thread_spawn_edges",
+        {"parent_thread_id": "root", "child_thread_id": "child", "status": "completed"},
+    )
+    manifest = export_session(
+        source, "root", destination, Path("/new/project"), tmp_path / "stage"
+    )
+    assert import_databases(manifest, destination)["ok"]
+    assert import_databases(manifest, destination)["ok"]
+    with sqlite3.connect(destination / "state_5.sqlite") as db:
+        assert db.execute(
+            "SELECT parent_thread_id, child_thread_id FROM thread_spawn_edges"
+        ).fetchall() == [("root", "child")]
