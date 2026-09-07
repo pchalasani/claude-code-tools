@@ -88,8 +88,17 @@ def inspect_environment(agent: str, home: Path) -> dict[str, Any]:
         "path": executable,
     }
     if executable:
-        checks["native_version"] = _version([executable, "--version"], environment)
-        native = _run([executable, "plugin", "list", "--json"], environment)
+        version_environment = dict(environment)
+        version_environment.pop("CLAUDE_CONFIG_DIR", None)
+        version_environment.pop("CODEX_HOME", None)
+        checks["native_version"] = _version(
+            [executable, "--version"], version_environment
+        )
+        native = (
+            _run([executable, "plugin", "list", "--json"], environment)
+            if home.is_dir()
+            else {"ran": False, "ok": False, "error": "Account not initialized"}
+        )
         raw = native.pop("output", "")
         registrations: list[dict[str, Any]] = []
         if native["ok"]:
@@ -152,6 +161,18 @@ def inspect_environment(agent: str, home: Path) -> dict[str, Any]:
         for item in skills
         if isinstance(item, str) and re.fullmatch(r"Skill\([\w:.*@/-]+\)", item)
     ]
+    overrides = settings.get("skillOverrides", {})
+    checks["skill_registration_overrides"] = (
+        {
+            key: value
+            for key, value in overrides.items()
+            if isinstance(key, str)
+            and isinstance(value, (bool, str))
+            and (isinstance(value, bool) or value in {"off", "on"})
+        }
+        if isinstance(overrides, dict)
+        else {}
+    )
     skill_root = home / "skills"
     checks["skill_files"] = {
         "ran": True,

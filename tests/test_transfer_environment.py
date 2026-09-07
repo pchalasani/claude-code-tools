@@ -63,3 +63,19 @@ def test_missing_cli_and_bad_settings(tmp_path: Path, monkeypatch) -> None:
     assert not result["checks"]["native_cli"]["ok"]
     assert not result["checks"]["configuration"]["ok"]
     assert result["remediation"]
+
+
+def test_missing_account_never_runs_plugin_listing(tmp_path: Path, monkeypatch) -> None:
+    """A listing that would create its account must not run for a dry-run target."""
+    executable = tmp_path / "claude"
+    executable.write_text("""#!/bin/sh
+if [ "$1" = --version ]; then echo 2.1.263; exit 0; fi
+/bin/mkdir -p "$CLAUDE_CONFIG_DIR"
+echo '[]'
+""")
+    executable.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    home = tmp_path / "absent"
+    result = inspect_environment("claude", home)
+    assert not home.exists()
+    assert result["checks"]["native_plugins"]["ran"] is False
