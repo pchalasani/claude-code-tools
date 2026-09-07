@@ -325,7 +325,7 @@ def export_session(
             previous = json.loads(old_guide.read_text())
             for old, current in previous.get("path_mappings", {}).items():
                 if not isinstance(old, str) or not isinstance(current, str):
-                    raise ValueError("Invalid prior path mapping")
+                    raise ValueError("Invalid prior path mapping")  # noqa: TRY004
                 for source_prefix in sorted(mappings, key=len, reverse=True):
                     if current == source_prefix or current.startswith(
                         source_prefix + "/"
