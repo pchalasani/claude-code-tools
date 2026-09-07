@@ -144,6 +144,7 @@ def test_environment_comparison_distinguishes_unknown_from_match() -> None:
     assert compare_environments(environment(True), environment(True))["ok"]
     difference = compare_environments(environment(True), environment(False))
     assert difference["ran"] and not difference["ok"]
+    assert difference["runtime_parity_verified"] is False
     assert difference["missing_or_disabled_plugins"] == ["example@market"]
     unknown = compare_environments(environment(True), {})
     assert not unknown["ran"] and not unknown["ok"]

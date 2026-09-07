@@ -404,7 +404,7 @@ def compare_environments(
             set(source_plugins.get("cached_registrations", []))
             - set(target_plugins.get("cached_registrations", []))
         ),
-        "runtime_parity_verified": ran,
+        "runtime_parity_verified": ran and not missing and not disabled,
         "static_cache_note": "Cache differences are advisory, not proof of effective availability.",
         "remediation": (
             ["Plugin availability could not be compared; complete both native checks."]
