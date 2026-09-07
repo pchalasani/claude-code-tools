@@ -295,6 +295,17 @@ def export_session(
 
         mappings = normalize_path_mappings(path_mappings).items()
         for old, new in mappings:
+            if Path(old).is_relative_to(source_home):
+                expected_home_path = Path(destination_home) / Path(old).relative_to(
+                    source_home
+                )
+                if posixpath.normpath(new) != posixpath.normpath(
+                    str(expected_home_path)
+                ):
+                    raise ValueError(
+                        "Account home mapping conflicts with destination_home; "
+                        "profile paths must retain their location within the selected account."
+                    )
             if posixpath.normpath(old) == posixpath.normpath(str(source_project)) and (
                 posixpath.normpath(new) != posixpath.normpath(str(destination_project))
             ):
@@ -306,6 +317,7 @@ def export_session(
             (old, new)
             for old, new in mappings
             if posixpath.normpath(old) != posixpath.normpath(str(source_project))
+            and old != str(source_home)
         ]
         artifacts = CodexArtifacts(
             source_home,

@@ -86,3 +86,53 @@ def test_cli_refuses_semantic_duplicate_before_access(tmp_path: Path) -> None:
     assert result.exit_code == 2
     assert "Conflicting destinations" in result.output
     assert not (tmp_path / "target").exists()
+
+
+@pytest.mark.parametrize("suffix", ["", "/", "/.", "/attachments"])
+@pytest.mark.parametrize("conflict", [False, True])
+def test_codex_home_mapping_cannot_override_profile_destination(
+    tmp_path: Path, suffix: str, conflict: bool
+) -> None:
+    """Operational profile paths agree with where transfer installs profile files."""
+    import json
+
+    from claude_code_tools.transfer_codex import export_session
+    from tests.test_transfer_codex import profile, thread
+
+    home, destination = tmp_path / "source", tmp_path / "destination"
+    profile(home)
+    thread(home, "root", mode="legacy")
+    rollout = home / "sessions/2026/root.jsonl"
+    rollout.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {
+                    "cwd": "/old/project",
+                    "sandbox_policy": {
+                        "type": "workspace-write",
+                        "writable_roots": [str(home / "attachments")],
+                    },
+                },
+            }
+        )
+        + "\n"
+    )
+    expected = str(destination) + suffix
+    mappings = [(str(home) + suffix, "/wrong/profile" if conflict else expected)]
+    args = (home, "root", destination, Path("/new/project"), tmp_path / "stage")
+    if conflict:
+        with pytest.raises(ValueError, match="Account home mapping conflicts"):
+            export_session(*args, path_mappings=mappings)
+        assert not (tmp_path / "stage").exists()
+    else:
+        manifest = export_session(*args, path_mappings=mappings)
+        copied = json.loads(
+            (tmp_path / "stage/files/sessions/2026/root.jsonl").read_text()
+        )
+        assert copied["payload"]["sandbox_policy"]["writable_roots"] == [
+            str(destination / "attachments")
+        ]
+        assert [
+            item for item in manifest["path_mappings"] if item["source"] == str(home)
+        ] == [{"source": str(home), "destination": str(destination)}]
