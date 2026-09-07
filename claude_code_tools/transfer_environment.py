@@ -223,7 +223,14 @@ def _inspect_environment(agent: str, home: Path, runtime_home: Path) -> dict[str
     hooks_file = home / "hooks.json"
     if hooks_file.is_file():
         try:
-            hook_sources.append(json.loads(hooks_file.read_text()))
+            content = json.loads(hooks_file.read_text())
+            if isinstance(content, dict):
+                hook_sources.append(content)
+            else:
+                warnings.append(
+                    "The account hooks.json must contain an object; "
+                    "its hook declarations were not inspected."
+                )
         except (OSError, ValueError):
             warnings.append("The account hooks.json cannot be parsed.")
     installed = home / "plugins" / "installed_plugins.json"
@@ -352,13 +359,50 @@ def _inspect_environment(agent: str, home: Path, runtime_home: Path) -> dict[str
                         )
                         remediation.append(instruction)
                         continue
+                    launcher_name = Path(words[0]).name if words else ""
+                    interpreter = bool(
+                        re.fullmatch(
+                            r"(?:python(?:[0-9]+(?:\.[0-9]+)?)?|node|nodejs|bash|sh|zsh)",
+                            launcher_name,
+                        )
+                    )
+                    script_operand = (
+                        words[1]
+                        if interpreter
+                        and len(words) > 1
+                        and not words[1].startswith("-")
+                        else None
+                    )
+                    shell_inline = (
+                        launcher_name in {"bash", "sh", "zsh"}
+                        and len(words) > 2
+                        and words[1] == "-c"
+                    )
+                    if interpreter and script_operand is None and not shell_inline:
+                        instruction = (
+                            "Inspect interpreter options to identify the actual hook "
+                            "script or inline program, then use a safe runtime check."
+                        )
+                        hook_checks.append(
+                            {
+                                "ran": False,
+                                "ok": False,
+                                "reason": "Interpreter hook operand is unverified",
+                                "runtime_executed": False,
+                                "remediation": instruction,
+                            }
+                        )
+                        remediation.append(instruction)
+                        continue
                     relative_scripts = [
                         word
                         for word in words
                         if not word.startswith(("/", "-"))
                         and word.endswith((".py", ".sh", ".js", ".mjs", ".cjs"))
                     ]
-                    if relative_scripts:
+                    if relative_scripts or (
+                        script_operand and not Path(script_operand).is_absolute()
+                    ):
                         instruction = (
                             "Resolve relative hook script paths against the agent's "
                             "actual working directory, or use explicit absolute paths; "
@@ -387,6 +431,9 @@ def _inspect_environment(agent: str, home: Path, runtime_home: Path) -> dict[str
                             )
                         )
                     ]
+                    if script_operand is not None:
+                        paths.append(script_operand)
+                    paths = sorted(set(paths))
                     missing_paths = sum(not Path(path).is_file() for path in paths)
                     launcher = words[0] if words else ""
                     found = bool(shutil.which(launcher)) if launcher else False

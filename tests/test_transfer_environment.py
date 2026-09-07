@@ -568,3 +568,60 @@ def test_skill_override_disabled_representations_are_equivalent() -> None:
             )
             assert result["ok"] is (not newly_disabled)
             assert result["runtime_parity_verified"] is (not newly_disabled)
+
+
+def test_nonobject_account_hooks_report_malformed(tmp_path: Path, monkeypatch) -> None:
+    """An account JSON array is not an empty successfully inspected hook object."""
+    monkeypatch.setenv("PATH", str(tmp_path / "no-native-cli"))
+    for index, content in enumerate(("[]", "null", '"not an object"')):
+        home = tmp_path / f"profile-{index}"
+        home.mkdir()
+        (home / "hooks.json").write_text(content)
+        report = inspect_environment("claude", home)
+        assert report["ran"]
+        assert any(
+            "account hooks.json must contain an object" in warning
+            for warning in report["warnings"]
+        )
+        assert report["checks"]["configured_hooks"] == []
+
+
+def test_extensionless_interpreter_scripts(tmp_path: Path, monkeypatch) -> None:
+    """Direct script operands are validated regardless of filename extension."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    launcher = bindir / "bash"
+    launcher.write_text("#!/bin/sh\nexit 73\n")
+    launcher.chmod(0o700)
+    script = tmp_path / "real hook"
+    script.write_text("exit 89\n")
+    home = tmp_path / "profile"
+    home.mkdir()
+    commands = [
+        f'bash "{script}"',
+        f'bash "{tmp_path}/missing"',
+        "bash relative-script",
+        f'bash -u "{script}"',
+    ]
+    (home / "settings.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {"hooks": [{"command": command} for command in commands]}
+                    ]
+                }
+            }
+        )
+    )
+    monkeypatch.setenv("PATH", str(bindir))
+    checks = inspect_environment("claude", home)["checks"]["configured_hooks"]
+    assert checks[0]["ran"] and checks[0]["ok"]
+    assert checks[0]["script_paths_checked"] == 1
+    assert checks[1]["ran"] and not checks[1]["ok"]
+    assert checks[1]["missing_script_paths"] == 1
+    assert not checks[2]["ran"] and not checks[2]["ok"]
+    assert "Relative hook script" in checks[2]["reason"]
+    assert not checks[3]["ran"] and not checks[3]["ok"]
+    assert "Interpreter hook operand" in checks[3]["reason"]
+    assert all(not check["runtime_executed"] for check in checks)
