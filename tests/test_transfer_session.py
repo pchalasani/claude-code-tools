@@ -390,3 +390,32 @@ def test_remote_source_bootstrap_exports_without_installed_package(
     assert report["manifest"]["session_id"] == SID
     assert report["data"]
     assert not workspace["destination"].exists()
+
+
+def test_public_report_omits_private_record_contents() -> None:
+    """CLI inspection must not print message/goal/token material from payload rows."""
+    from claude_code_tools.transfer_session import public_report
+
+    report = {
+        "ok": True,
+        "plan": {
+            "databases": [
+                {
+                    "tables": [
+                        {
+                            "name": "goals",
+                            "rows": [
+                                {"objective": "PRIVATE_CONVERSATION_TOKEN"},
+                            ],
+                        }
+                    ]
+                }
+            ],
+            "metadata_updates": [{"rows": [{"text": "PRIVATE_CONVERSATION_TOKEN"}]}],
+        },
+    }
+    rendered = public_report(report)
+    assert "PRIVATE_CONVERSATION_TOKEN" not in json.dumps(rendered)
+    assert rendered["plan"]["databases"][0]["tables"][0]["row_count"] == 1
+    assert rendered["plan"]["metadata_updates"][0]["row_count"] == 1
+    assert report["plan"]["databases"][0]["tables"][0]["rows"]

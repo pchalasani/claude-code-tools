@@ -199,6 +199,20 @@ def stage_path_guide(manifest: dict[str, Any], staging: Path) -> None:
     manifest["path_guide"] = str(Path(manifest["destination_home"]) / relative)
 
 
+def public_report(report: dict[str, Any]) -> dict[str, Any]:
+    """Summarize imported records without printing conversation or goal contents."""
+    import copy
+
+    result = copy.deepcopy(report)
+    plan = result.get("plan") or {}
+    for database in plan.get("databases", []):
+        for table in database.get("tables", []):
+            table["row_count"] = len(table.pop("rows", []))
+    for update in plan.get("metadata_updates", []):
+        update["row_count"] = len(update.pop("rows", []))
+    return result
+
+
 @click.command("transfer")
 @click.argument("session")
 @click.option("--agent", type=click.Choice(["claude", "codex"]), required=True)
@@ -372,7 +386,7 @@ def transfer(
     except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError) as error:
         report = {"ran": True, "ok": False, "error": str(error), "plan": manifest}
     if as_json:
-        click.echo(json.dumps(report, indent=2))
+        click.echo(json.dumps(public_report(report), indent=2))
     elif not report["ok"]:
         click.echo(f"Transfer cannot proceed: {report['error']}", err=True)
     else:
