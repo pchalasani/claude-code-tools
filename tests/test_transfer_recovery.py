@@ -1,0 +1,92 @@
+"""Real crash recovery and conservative destination metadata preservation."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from claude_code_tools.transfer_journal import (
+    TransferJournal,
+    atomic_write,
+    metadata_content,
+)
+
+
+def test_recover_killed_owner(tmp_path: Path) -> None:
+    """A killed importer leaves flushed evidence and only identical retry is allowed."""
+    home = tmp_path / "account"
+    script = tmp_path / "crash.py"
+    script.write_text("""import os, signal, sys
+from pathlib import Path
+from claude_code_tools.transfer_journal import TransferJournal, atomic_write
+home = Path(sys.argv[1])
+journal = TransferJournal(home, {"artifacts": {}}, False)
+journal.backup({})
+atomic_write(home / "session.jsonl", b"complete artifact")
+journal.save("publishing_files")
+os.kill(os.getpid(), signal.SIGKILL)
+""")
+    result = subprocess.run(
+        [sys.executable, str(script), str(home)],
+        env={**os.environ, "PYTHONPATH": str(Path.cwd())},
+        timeout=10,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == -9
+    assert (home / "session.jsonl").read_bytes() == b"complete artifact"
+    with pytest.raises(ValueError, match="identical"):
+        TransferJournal(home, {"artifacts": {"different": {}}}, True)
+    journal = TransferJournal(home, {"artifacts": {}}, True)
+    assert journal.record["backups_complete"] is True
+    retained = journal.directory
+    journal.complete()
+    assert not (home / ".aichat-transfer.lock").exists()
+    assert json.loads((retained / "journal.json").read_text())["phase"] == "complete"
+    assert (home / "session.jsonl").read_bytes() == b"complete artifact"
+
+
+def test_live_owner_refused(tmp_path: Path) -> None:
+    """Two importers cannot claim the account, even with recovery requested."""
+    journal = TransferJournal(tmp_path, {}, False)
+    try:
+        with pytest.raises(ValueError, match="still alive"):
+            TransferJournal(tmp_path, {}, True)
+    finally:
+        journal.complete()
+
+
+def test_metadata_merge_preserves_unrelated_and_rejects_newer(tmp_path: Path) -> None:
+    """Selected same-key divergence never overwrites destination metadata."""
+    path = tmp_path / "session_index.jsonl"
+    original = {"id": "other", "thread_name": "local"}
+    path.write_text(json.dumps(original) + "\n")
+    update = {
+        "format": "jsonl",
+        "key": "id",
+        "container": None,
+        "rows": [{"id": "selected", "thread_name": "copied"}],
+    }
+    data = metadata_content(path, update)
+    atomic_write(path, data, replace=True)
+    assert json.loads(path.read_text().splitlines()[0]) == original
+    assert metadata_content(path, update) == data
+    update["rows"][0]["thread_name"] = "different"
+    with pytest.raises(ValueError, match="differs"):
+        metadata_content(path, update)
+    assert path.read_bytes() == data
+
+
+def test_atomic_publication_never_overwrites(tmp_path: Path) -> None:
+    """An existing user artifact survives publication races unchanged."""
+    path = tmp_path / "artifact"
+    atomic_write(path, b"newer user work")
+    with pytest.raises(FileExistsError):
+        atomic_write(path, b"old transferred work")
+    assert path.read_bytes() == b"newer user work"
+    assert not list(tmp_path.glob(".transfer-*"))

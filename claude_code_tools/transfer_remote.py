@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import os
 import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -69,11 +68,19 @@ def validate_files(home: Path, manifest: dict[str, Any]) -> list[str]:
 
 def handle_request(request: dict[str, Any]) -> dict[str, Any]:
     """Probe, validate, or import an explicitly scoped session bundle."""
+    if request["operation"] == "export":
+        from claude_code_tools.transfer_source import export_request
+
+        return export_request(request)
     home = Path(request["destination_home"]).expanduser().resolve()
     project = Path(request["destination_project"]).expanduser().resolve()
     state = project_state(project)
-    result = {"ok": True, "destination_home": str(home), "project": state}
+    result = {"ran": True, "ok": True, "destination_home": str(home), "project": state}
     if request["operation"] == "probe":
+        if request.get("agent"):
+            from claude_code_tools.transfer_environment import inspect_environment
+
+            result["environment"] = inspect_environment(request["agent"], home)
         return result
     manifest = request["manifest"]
     expected = manifest["project_state"]
@@ -87,76 +94,98 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any]:
             "Destination revision/project subdirectory differs. Fetch and check "
             f"out {expected['head']} in the destination worktree first."
         )
+    from claude_code_tools.transfer_journal import (
+        TransferJournal,
+        atomic_write,
+        check_active_sessions,
+        metadata_content,
+    )
+
+    activity = check_active_sessions(
+        manifest.get("session_ids", [manifest.get("session_id", "")])
+    )
     identical = validate_files(home, manifest)
     if manifest["agent"] == "codex":
         from claude_code_tools.transfer_codex import validate_databases
 
         validate_databases(manifest, home)
-    result["identical_files"] = identical
+    metadata_paths = []
+    for update in manifest.get("metadata_updates", []):
+        if update["path"] not in (
+            "session_index.jsonl",
+            "external_agent_session_imports.json",
+        ):
+            raise ValueError("Unsupported shared metadata path")
+        path = safe_target(home, update["path"])
+        metadata_content(path, update)
+        metadata_paths.append((path, update))
+    result.update({"identical_files": identical, "activity_check": activity})
     if request["operation"] == "validate":
         return result
     if request["operation"] != "import":
         raise ValueError("Unknown transfer operation")
-    # A second importer must not race file creation/rollback or database commit.
-    home.mkdir(parents=True, exist_ok=True)
-    lock = home / ".aichat-transfer.lock"
+    # Validate the entire bundle before publishing any destination artifact.
+    decoded = {}
+    for relative, metadata in manifest["artifacts"].items():
+        data = base64.b64decode(request["data"][relative], validate=True)
+        if (
+            len(data) != metadata["size"]
+            or hashlib.sha256(data).hexdigest() != metadata["sha256"]
+        ):
+            raise ValueError(f"Bundle integrity check failed: {relative}")
+        decoded[relative] = data
+    journal = TransferJournal(home, manifest, bool(request.get("recover")))
+    created = 0
     try:
-        lock.mkdir()
-    except FileExistsError as error:
-        raise ValueError(
-            f"Transfer lock exists: {lock}. Check for another transfer; after a "
-            "crash inspect partial artifacts before removing this directory."
-        ) from error
-    created: list[Path] = []
-    commit_started = False
-    retain_lock = False
-
-    def mark_commit_started() -> None:
-        """Stop destructive cleanup before entering a possibly durable commit."""
-        nonlocal commit_started
-        commit_started = True
-
-    try:
+        check_active_sessions(
+            manifest.get("session_ids", [manifest.get("session_id", "")])
+        )
         validate_files(home, manifest)
-        for relative, metadata in manifest["artifacts"].items():
-            data = base64.b64decode(request["data"][relative], validate=True)
-            if len(data) != metadata["size"] or (
-                hashlib.sha256(data).hexdigest() != metadata["sha256"]
-            ):
-                raise ValueError(f"Bundle integrity check failed: {relative}")
+        journal.backup(manifest)
+        journal.save("publishing_files")
+        for relative, data in decoded.items():
             target = safe_target(home, relative)
-            if target.exists():
-                continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with target.open("xb") as stream:
-                created.append(target)
-                os.chmod(target, 0o600)
-                stream.write(data)
-                stream.flush()
-                os.fsync(stream.fileno())
-            if hashlib.sha256(target.read_bytes()).hexdigest() != metadata["sha256"]:
-                raise ValueError(f"Destination verification failed: {target}")
+            if not target.exists():
+                atomic_write(target, data)
+                created += 1
+        validate_files(home, manifest)
         if manifest["agent"] == "codex":
             from claude_code_tools.transfer_codex import import_databases
 
-            import_databases(manifest, home, before_commit=mark_commit_started)
-        result["imported_files"] = len(created)
-        result["verified_files"] = len(manifest["artifacts"])
+            import_databases(
+                manifest,
+                home,
+                before_commit=lambda: journal.save("database_commit_started"),
+            )
+        journal.save("updating_metadata")
+        for path, update in metadata_paths:
+            before = path.read_bytes() if path.exists() else None
+            data = metadata_content(path, update)
+            if before != (path.read_bytes() if path.exists() else None):
+                raise ValueError("Destination metadata changed during import")
+            if before != data:
+                atomic_write(path, data, replace=before is not None)
+            if metadata_content(path, update) != path.read_bytes():
+                raise ValueError("Metadata verification failed")
+        validate_files(home, manifest)
+        result.update(
+            {
+                "imported_files": created,
+                "verified_files": len(manifest["artifacts"]),
+                "verified_metadata": len(metadata_paths),
+                "backup_directory": str(journal.directory),
+            }
+        )
+        journal.complete()
         return result
     except BaseException as error:
-        if commit_started:
-            retain_lock = True
-            raise ValueError(
-                f"Database commit outcome may be uncertain. Verified files and "
-                f"recovery lock were retained at {lock}; inspect destination "
-                "database rows before retrying or removing the lock."
-            ) from error
-        for target in reversed(created):
-            target.unlink(missing_ok=True)
-        raise
-    finally:
-        if not retain_lock:
-            lock.rmdir()
+        journal.failed()
+        raise ValueError(
+            f"Transfer interrupted; database commit outcome may be uncertain; "
+            f"verified or partial state and backups retained at "
+            f"{journal.directory}. Use --recover with the identical plan; "
+            "never delete newer destination work."
+        ) from error
 
 
 def main() -> None:
