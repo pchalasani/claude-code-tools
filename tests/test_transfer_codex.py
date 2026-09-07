@@ -642,3 +642,84 @@ def test_exact_destination_spawn_edges_are_idempotent(tmp_path: Path) -> None:
         assert db.execute(
             "SELECT parent_thread_id, child_thread_id FROM thread_spawn_edges"
         ).fetchall() == [("root", "child")]
+
+
+@pytest.mark.parametrize("explicit_opt_in", [False, True])
+def test_external_temporary_reference_requires_opt_in(
+    tmp_path: Path, explicit_opt_in: bool
+) -> None:
+    """Mentioning an arbitrary tmp file must not include its contents by default."""
+    import tempfile
+
+    source = tmp_path / "source"
+    profile(source)
+    thread(source, "root", mode="legacy")
+    with tempfile.TemporaryDirectory(
+        prefix="codex-transfer-test-", dir="/tmp"
+    ) as directory:
+        external = Path(directory) / "customer-key.pem"
+        external.write_text("DISPOSABLE SECRET FIXTURE")
+        with (source / "sessions/2026/root.jsonl").open("a") as stream:
+            stream.write(
+                json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {"text": "A document mentions " + str(external)},
+                    }
+                )
+                + "\n"
+            )
+        mappings = (
+            [(str(external), "/new/support/key.pem")] if explicit_opt_in else None
+        )
+        manifest = export_session(
+            source,
+            "root",
+            tmp_path / "destination",
+            Path("/new/project"),
+            tmp_path / "stage",
+            mappings,
+        )
+        copied_support = [path for path in manifest["files"] if path.endswith(".pem")]
+        assert bool(copied_support) is explicit_opt_in
+        assert bool(manifest["excluded_artifacts"]) is not explicit_opt_in
+        if not explicit_opt_in:
+            assert manifest["excluded_artifacts"][0]["path"] == str(external)
+
+
+def test_session_owned_temporary_reference_is_copied(tmp_path: Path) -> None:
+    """Selected-session directories remain automatically portable."""
+    import tempfile
+
+    source = tmp_path / "source"
+    profile(source)
+    thread(source, "root", mode="legacy")
+    with tempfile.TemporaryDirectory(
+        prefix="codex-transfer-test-", dir="/tmp"
+    ) as directory:
+        scratch = Path(directory) / "root" / "scratch.txt"
+        scratch.parent.mkdir()
+        scratch.write_text("SESSION SCRATCH FIXTURE")
+        with (source / "sessions/2026/root.jsonl").open("a") as stream:
+            stream.write(
+                json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {"text": "Read " + str(scratch)},
+                    }
+                )
+                + "\n"
+            )
+        manifest = export_session(
+            source,
+            "root",
+            tmp_path / "destination",
+            Path("/new/project"),
+            tmp_path / "stage",
+        )
+        copied = [path for path in manifest["files"] if path.endswith("scratch.txt")]
+        assert len(copied) == 1
+        assert (
+            tmp_path / "stage/files" / copied[0]
+        ).read_text() == "SESSION SCRATCH FIXTURE"
+        assert not manifest["excluded_artifacts"]

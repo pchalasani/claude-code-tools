@@ -49,7 +49,8 @@ class CodexArtifacts:
             if isinstance(path_mappings, dict)
             else path_mappings or []
         )
-        self.mappings = list(additional) + [
+        self.explicit_mappings = list(additional)
+        self.mappings = self.explicit_mappings + [
             (str(source_project), str(destination_project)),
             (str(source_home), str(destination_home)),
         ]
@@ -62,6 +63,7 @@ class CodexArtifacts:
         self.references: set[str] = set()
         self.files: list[str] = []
         self.missing: list[str] = []
+        self.excluded: set[str] = set()
         self.reference_mappings: list[dict[str, str]] = []
 
     def map_path(self, value: str) -> str:
@@ -110,7 +112,19 @@ class CodexArtifacts:
                 relative = path.relative_to(self.source_home)
             except ValueError:
                 if value.startswith(("/tmp/", "/private/tmp/")):
-                    self.references.add(value)
+                    normalized = Path(posixpath.normpath(value))
+                    explicit = any(
+                        normalized.is_relative_to(Path(posixpath.normpath(old)))
+                        for old, _ in self.explicit_mappings
+                    )
+                    owned = (
+                        self.session_id in normalized.parts
+                        and self.session_id in normalized.resolve().parts
+                    )
+                    if explicit or owned:
+                        self.references.add(value)
+                    else:
+                        self.excluded.add(value)
                 continue
             if len(relative.parts) > 2 and relative.parts[:2] == (
                 "transfer-support",
@@ -225,11 +239,22 @@ class CodexArtifacts:
                     "destination": str(self.destination_home / relative),
                 }
             )
+        materialized_sources = {item["source"] for item in self.reference_mappings}
         return {
+            "excluded_artifacts": [
+                {
+                    "path": value,
+                    "reason": "External temporary reference is not session-owned; "
+                    "use an explicit --map opt-in or copy it manually.",
+                }
+                for value in sorted(self.excluded)
+            ],
             "files": self.files,
             "missing_at_source": self.missing,
             "path_mappings": [
-                {"source": old, "destination": new} for old, new in self.mappings
+                {"source": old, "destination": new}
+                for old, new in self.mappings
+                if old not in materialized_sources
             ]
             + self.reference_mappings
             + [
