@@ -137,7 +137,7 @@ def export_session(
     destination_home: Path,
     destination_project: Path,
     staging: Path,
-    path_mappings: dict[str, str] | None = None,
+    path_mappings: dict[str, str] | list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Stage one conversation and its supported persistent companion files.
 
@@ -155,6 +155,8 @@ def export_session(
     Raises:
         ValueError: Session is ambiguous, malformed, or uses unsupported artifacts.
     """
+    if isinstance(path_mappings, list):
+        path_mappings = {item["source"]: item["destination"] for item in path_mappings}
     if str(UUID(session_id)) != session_id:
         raise ValueError("Expected canonical full session UUID")
     if not destination_home.is_absolute() or not destination_project.is_absolute():

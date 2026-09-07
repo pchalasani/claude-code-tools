@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +30,7 @@ def discover_scratch(
         project = encode_claude_project_path(source_project)
         # Native Unix Claude scratch convention. Probe exact session paths only;
         # never inventory another session or recursively search temporary roots.
-        for base in (Path("/tmp"), Path("/private/tmp")):
+        for base in (Path(tempfile.gettempdir()), Path("/tmp"), Path("/private/tmp")):
             root = base / f"claude-{os.getuid()}" / project / session_id
             if root.is_dir() and not root.is_symlink():
                 references.add(str(root.resolve()))

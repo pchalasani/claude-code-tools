@@ -102,3 +102,29 @@ def test_multiple_explicit_projects(tmp_path: Path) -> None:
     )
     assert record["cwd"] == "/new/tree"
     assert record["message"]["content"] == "Historical /other/tree"
+
+
+def test_unreferenced_native_scratch(tmp_path: Path, monkeypatch) -> None:
+    """Exact native session scratch survives even when used via shell variables."""
+    import os
+
+    from claude_code_tools import transfer_claude_artifacts
+
+    home, _ = fixture_home(tmp_path)
+    monkeypatch.setattr(
+        transfer_claude_artifacts.tempfile, "gettempdir", lambda: str(tmp_path)
+    )
+    scratch = tmp_path / f"claude-{os.getuid()}" / "-old-project" / SID / "scratchpad"
+    scratch.mkdir(parents=True)
+    (scratch / "goal.txt").write_text("Native scratch without literal reference")
+    result = export_session(
+        home,
+        SID,
+        Path("/remote/profile"),
+        Path("/new/project"),
+        tmp_path / "bundle",
+        path_mappings=[{"source": "/other", "destination": "/remote/other"}],
+    )
+    mapped = Path(result["path_mappings"][str(scratch / "goal.txt")])
+    copied = tmp_path / "bundle/files" / mapped.relative_to("/remote/profile")
+    assert copied.read_text() == "Native scratch without literal reference"
