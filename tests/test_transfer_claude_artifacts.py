@@ -5,6 +5,8 @@ import os
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from claude_code_tools.transfer_claude import export_session
 from tests.test_transfer_claude import SID, fixture_home
 
@@ -259,3 +261,37 @@ def test_regular_other_session_scratch_is_not_copied(
         for path in (tmp_path / "bundle/files").rglob("*"):
             if path.is_file():
                 assert b"unrelated private scratch" not in path.read_bytes()
+
+
+@pytest.mark.parametrize("linked_component", ["bucket", "project"])
+def test_native_scratch_rejects_symlinked_ancestor(
+    tmp_path: Path, monkeypatch, linked_component: str
+) -> None:
+    """A computed native path cannot designate unrelated files through an ancestor."""
+    home, _ = fixture_home(tmp_path)
+    temporary_base = tmp_path / "temporary"
+    temporary_base.mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(temporary_base))
+    bucket = temporary_base / f"claude-{os.getuid()}"
+    external = tmp_path / "unrelated"
+    if linked_component == "bucket":
+        secret = external / "-old-project" / SID / "scratchpad/secret.txt"
+        secret.parent.mkdir(parents=True)
+        bucket.symlink_to(external, target_is_directory=True)
+    else:
+        secret = external / SID / "scratchpad/secret.txt"
+        secret.parent.mkdir(parents=True)
+        bucket.mkdir()
+        (bucket / "-old-project").symlink_to(external, target_is_directory=True)
+    secret.write_text("unrelated data must not enter selected session export")
+    with pytest.raises(ValueError, match="scratch root uses a symlinked ancestor"):
+        export_session(
+            home,
+            SID,
+            Path("/remote/profile"),
+            Path("/new/project"),
+            tmp_path / "bundle",
+        )
+    for path in (tmp_path / "bundle/files").rglob("*"):
+        if path.is_file():
+            assert secret.read_bytes() not in path.read_bytes()

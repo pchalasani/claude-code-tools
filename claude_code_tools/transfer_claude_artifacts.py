@@ -34,7 +34,14 @@ def discover_scratch(
         # never inventory another session or recursively search temporary roots.
         for base in (Path(tempfile.gettempdir()), Path("/tmp"), Path("/private/tmp")):
             root = base / f"claude-{os.getuid()}" / project / session_id
-            if root.is_dir() and not root.is_symlink():
+            # Trust the temp base itself (including macOS /tmp), but never a
+            # redirected UID bucket, encoded project, or selected session root.
+            if any(
+                component.is_symlink()
+                for component in (root, root.parent, root.parent.parent)
+            ):
+                raise ValueError("Native Claude scratch root uses a symlinked ancestor")
+            if root.is_dir():
                 references.add(str(root.resolve()))
                 allowed_roots.append(root.resolve())
     files: dict[Path, Path] = {}
