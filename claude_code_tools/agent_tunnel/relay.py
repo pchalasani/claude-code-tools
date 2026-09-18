@@ -38,6 +38,9 @@ from .store import TunnelStore
 logger = logging.getLogger("agent_tunnel")
 
 REAP_INTERVAL_S = 300
+# Inline preview posted above an answer that is sent as a file. Kept short so
+# a platform with a large message limit doesn't post the whole answer twice.
+PREVIEW_CHARS = 1500
 CLOSE_COMMANDS = {"!done", "!close", "!end"}
 LIST_COMMANDS = {"!list", "!handles"}
 
@@ -372,7 +375,7 @@ class Relay:
         self._log_answer(thread_key, handle, answer, start)
         text = answer.text
         if len(text) > self.cfg.limits.max_inline_chars:
-            preview = split_chunks(text, dest.max_len)[0]
+            preview = split_chunks(text, min(dest.max_len, PREVIEW_CHARS))[0]
             await dest.send_text_file(preview, "answer.md", text.encode("utf-8"))
         else:
             for chunk in split_chunks(text, dest.max_len):

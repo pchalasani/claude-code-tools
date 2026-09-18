@@ -121,7 +121,9 @@ def build_recap(history: list[dict[str, str]], max_chars: int) -> str:
         if used + len(text) > budget:
             if not kept:
                 marker = " …[cut]\n\n"
-                kept.append(text[: budget - len(marker)] + marker)
+                room = budget - len(marker)
+                if room > 0:
+                    kept.append(text[:room] + marker)
             break
         kept.append(text)
         used += len(text)
@@ -553,6 +555,7 @@ class TmuxBackend(_BaseBackend):
         initial_prompt: Optional[str] = None,
         add_dirs: tuple[str, ...] = (),
         extra_system: str = "",
+        platform: str = "",
     ) -> None:
         """Launch an interactive fork in `window`.
 
@@ -574,7 +577,13 @@ class TmuxBackend(_BaseBackend):
         argv = [
             self.cfg.claude.binary,
             *build_claude_flags(
-                self.cfg, resume_id, fork, access, add_dirs, extra_system
+                self.cfg,
+                resume_id,
+                fork,
+                access,
+                add_dirs,
+                extra_system,
+                platform=platform,
             ),
             *self.cfg.claude.tmux_extra_args,
         ]
@@ -690,6 +699,7 @@ class TmuxBackend(_BaseBackend):
                 initial_prompt=prompt,
                 add_dirs=add_dirs,
                 extra_system=extra_system,
+                platform=rec.platform,
             )
             fork_file = wait_for_new_session_file(
                 project_dir,
@@ -729,6 +739,7 @@ class TmuxBackend(_BaseBackend):
                     initial_prompt=prompt,
                     add_dirs=add_dirs,
                     extra_system=extra_system,
+                    platform=rec.platform,
                 )
 
         deadline = time.time() + self.cfg.limits.answer_timeout_s

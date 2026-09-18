@@ -290,14 +290,23 @@ class MattermostAPI:
         out = await self._json("POST", "/files", data=form)
         return out["file_infos"][0]["id"]
 
-    async def download(self, file_id: str) -> bytes:
-        """Fetch a file's bytes."""
+    async def file_info(self, file_id: str) -> dict[str, Any]:
+        """A file's metadata (name, size)."""
+        return await self._json("GET", f"/files/{file_id}/info")
+
+    async def download(self, file_id: str, max_bytes: int) -> bytes:
+        """Fetch a file's bytes, refusing more than ``max_bytes``."""
         async with self.session.get(
             f"{self.base}/api/v4/files/{file_id}"
         ) as resp:
             if resp.status >= 400:
                 raise RuntimeError(f"download {file_id} → {resp.status}")
-            return await resp.read()
+            data = bytearray()
+            async for chunk in resp.content.iter_chunked(1 << 16):
+                data += chunk
+                if len(data) > max_bytes:
+                    raise RuntimeError(f"download {file_id} exceeds size cap")
+            return bytes(data)
 
     async def react(self, user_id: str, post_id: str, emoji: str) -> None:
         """Add an emoji reaction to a post."""
@@ -327,16 +336,18 @@ class MattermostAPI:
 class MMUpload:
     """A Mattermost attachment as a relay :class:`~.relay.Upload`."""
 
-    def __init__(self, api: MattermostAPI, file: MMFile) -> None:
-        """Wrap one attached file."""
+    def __init__(self, api: MattermostAPI, file: MMFile, max_bytes: int) -> None:
+        """Wrap one attached file (``size`` must already be known)."""
         self.api = api
         self.file_id = file.id
         self.filename = file.name
         self.size = file.size
+        self.max_bytes = max_bytes
 
     async def save(self, path: str) -> None:
-        """Download to ``path``."""
-        Path(path).write_bytes(await self.api.download(self.file_id))
+        """Download to ``path`` (the download itself stops at the cap)."""
+        data = await self.api.download(self.file_id, self.max_bytes)
+        await asyncio.to_thread(Path(path).write_bytes, data)
 
 
 class MMDest:
@@ -393,9 +404,11 @@ class MMDest:
 async def run_mattermost(cfg: TunnelConfig, relay: Relay) -> None:
     """Run the Mattermost bot until cancelled, reconnecting on drops.
 
+    Login and websocket failures (server down, 5xx, a rejected token) are
+    retried with backoff, never raised, so they can't stop other front-ends.
+
     Raises:
-        RuntimeError: Not configured (see ``mattermost_ready``), or the
-            token is rejected at startup.
+        RuntimeError: Not configured (see ``mattermost_ready``).
     """
     import aiohttp
 
@@ -406,17 +419,19 @@ async def run_mattermost(cfg: TunnelConfig, relay: Relay) -> None:
     api = MattermostAPI(mm.url, resolve_mm_token(cfg), mm.verify_tls)
     await api.start()
     tasks: set[asyncio.Task[None]] = set()
+    bot: Optional[_Router] = None
     try:
-        me = await api.me()
-        bot = _Router(cfg, relay, api, me["id"], me.get("username", ""))
-        logger.info(
-            "Mattermost: logged in as @%s; watching channels %s",
-            me.get("username"),
-            mm.channel_ids,
-        )
         backoff = 1.0
         while True:
             try:
+                if bot is None:
+                    me = await api.me()
+                    bot = _Router(cfg, relay, api, me["id"], me.get("username", ""))
+                    logger.info(
+                        "Mattermost: logged in as @%s; watching channels %s",
+                        me.get("username"),
+                        mm.channel_ids,
+                    )
                 ws = await api.connect_ws()
                 logger.info("Mattermost: websocket connected")
                 backoff = 1.0
@@ -434,7 +449,14 @@ async def run_mattermost(cfg: TunnelConfig, relay: Relay) -> None:
                     tasks.add(task)
                     task.add_done_callback(tasks.discard)
                 logger.warning("Mattermost: websocket closed; reconnecting")
-            except (aiohttp.ClientError, OSError, asyncio.TimeoutError) as exc:
+            except (
+                aiohttp.ClientError,
+                OSError,
+                asyncio.TimeoutError,
+                RuntimeError,
+            ) as exc:
+                # Includes a rejected token or a 5xx at login: keep retrying
+                # (with backoff) rather than take the other front-ends down.
                 logger.warning(
                     "Mattermost: connection error (%s); retrying in %.0fs",
                     exc,
@@ -466,6 +488,29 @@ class _Router:
         self.bot_username = bot_username
         self.registry: Registry = relay.registry
 
+    def _cap(self) -> int:
+        return int(self.cfg.limits.max_attachment_mb * 1024 * 1024)
+
+    async def _sized(self, files: list[MMFile]) -> list[MMFile]:
+        """Fill in sizes the event omitted, so the relay's cap applies.
+
+        A file whose size can't be learned is treated as over the cap.
+        """
+        out: list[MMFile] = []
+        for f in files:
+            if f.size <= 0:
+                try:
+                    info = await self.api.file_info(f.id)
+                    f = MMFile(
+                        f.id, info.get("name") or f.name, info.get("size") or 0
+                    )
+                except Exception:
+                    logger.warning("Mattermost: no info for file %s", f.id)
+                if f.size <= 0:
+                    f = MMFile(f.id, f.name, self._cap() + 1)
+            out.append(f)
+        return out
+
     async def handle(self, post: MMPost) -> None:
         """Route one post; errors are logged, never raised."""
         try:
@@ -488,7 +533,9 @@ class _Router:
             return
         dest = MMDest(self.api, post.channel_id, route.root_id)
         sender = post.sender or "A teammate"
-        uploads = [MMUpload(self.api, f) for f in post.files]
+        uploads = [
+            MMUpload(self.api, f, self._cap()) for f in await self._sized(post.files)
+        ]
         if route.action == "list":
             await dest.send(relay.handles_text())
         elif route.action == "unknown_handle":

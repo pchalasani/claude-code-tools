@@ -237,3 +237,14 @@ def test_store_roundtrips_new_fields(tmp_path: Path) -> None:
     assert isinstance(again, ThreadRecord)
     assert again.fork_base_size == 42
     assert again.history == [{"q": "a", "a": "b"}]
+
+
+def test_build_recap_never_exceeds_tiny_budget() -> None:
+    from claude_code_tools.agent_tunnel.backends import (
+        RECAP_FOOTER,
+        RECAP_HEADER,
+    )
+
+    tiny = len(RECAP_HEADER) + len(RECAP_FOOTER) + 5
+    recap = build_recap([{"q": "q", "a": "z" * 5000}], max_chars=tiny)
+    assert len(recap) <= tiny

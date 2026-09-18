@@ -315,3 +315,14 @@ def test_relay_close_forgets_thread(relay) -> None:
     asyncio.run(rly.close(dest, "mm:root3"))
     assert rly.store.get("mm:root3") is None
     assert "Closed" in dest.sent[0]
+
+
+def test_relay_preview_is_short_on_large_limit_platforms(relay) -> None:
+    rly, rec = relay
+    rly.cfg.limits.max_inline_chars = 50
+    rly.bind("mm:root4", rec, "bob", "Mattermost")
+    dest = FakeDest()
+    dest.max_len = 16000  # Mattermost-sized limit
+    asyncio.run(rly.answer(dest, "mm:root4", "q" * 4000, sender="bob"))
+    ((preview, _, data),) = dest.files
+    assert len(preview) <= 1500 and len(preview) < len(data)
