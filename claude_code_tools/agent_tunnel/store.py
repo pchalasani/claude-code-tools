@@ -103,7 +103,8 @@ class TunnelStore:
         tmp = self.path.with_suffix(".tmp")
         # Owner-only: the state holds each thread's recent Q&A (recaps).
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        os.fchmod(fd, 0o600)  # before writing: a stale tmp may be wider
+        if hasattr(os, "fchmod"):  # POSIX only; before writing, since a
+            os.fchmod(fd, 0o600)  # stale tmp may have wider bits
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(json.dumps(payload, indent=2) + "\n")
         os.replace(tmp, self.path)
