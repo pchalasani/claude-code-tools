@@ -27,7 +27,7 @@ This repo provides plugins for Codex and for the
 | `safety-hooks` | Prevent destructive operations |
 | `langroid` | Design patterns for the [Langroid](https://github.com/langroid/langroid) framework |
 | `voice` | Spoken audio summaries |
-| `agent-tunnel` | `>share` a live session so teammates can ask it questions over Discord |
+| `agent-tunnel` | `>share` a live session so teammates can ask it questions over Discord or Mattermost |
 | `dynamic-workflow` | Durable JavaScript orchestration for headless Codex agents |
 | `writing` | Prose-quality skills: agent-style rules and remove-ai-patterns de-AI-ing |
 
@@ -239,7 +239,8 @@ companions.
 ## agent-tunnel Plugin
 
 Publishes the **current** Claude Code session so teammates can ask it
-questions over Discord — each answered against a private, read-only **fork**.
+questions over Discord or Mattermost — each answered against a private,
+read-only **fork**.
 
 | Type | Name | What it does |
 |------|------|--------------|
@@ -249,7 +250,8 @@ This plugin provides only the `>share` hook. The daemon that answers the
 questions — `agent-tunnel serve` and the rest of the CLI — ships with the
 `claude-code-tools` package (`uv tool install claude-code-tools`). See the
 [agent-tunnel tool page](/claude-code-tools/tools/agent-tunnel/) for the full
-setup: creating the Discord bot, configuration, and running the daemon.
+setup: creating the Discord or Mattermost bot, configuration, and running the
+daemon.
 
 ---
 
