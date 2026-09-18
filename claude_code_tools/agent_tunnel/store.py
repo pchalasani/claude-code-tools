@@ -37,6 +37,16 @@ class ThreadRecord:
     backend: str = ""
     asker: str = ""
     tmux_window: str = ""
+    # Byte size of the expert transcript when the current fork was taken; a
+    # larger size later means the expert moved on (headless re-fork check).
+    # 0 = unknown (a thread forked before this was recorded).
+    fork_base_size: int = 0
+    # Recent turns of this thread as {"q": ..., "a": ...}, carried into a
+    # fresh fork as a recap when the thread re-forks.
+    history: list[dict[str, str]] = field(default_factory=list)
+    # Chat platform the thread lives on ("Discord", "Mattermost"); blank =
+    # the config default.
+    platform: str = ""
     created_at: float = field(default_factory=time.time)
     last_used: float = field(default_factory=time.time)
 
@@ -117,6 +127,7 @@ class TunnelStore:
         config_dir: str = "",
         access: str = "read",
         asker: str = "",
+        platform: str = "",
     ) -> ThreadRecord:
         """Create a pending binding for a thread if not already present.
 
@@ -137,6 +148,7 @@ class TunnelStore:
                 access=access,
                 backend=backend,
                 asker=asker,
+                platform=platform,
             )
             self._records[thread_key] = rec
             self._save_locked()
@@ -146,9 +158,10 @@ class TunnelStore:
         """Merge caller-owned fields into the latest on-disk record.
 
         Re-reads under the lock, then copies only the fields the caller owns
-        (fork id, tmux window, ``last_used``) onto the freshly reloaded
-        record. A concurrent CLI ``rename``/``forget`` during a long backend
-        call is therefore not clobbered by this now-stale ``record``: a
+        (fork id, tmux window, fork base size, history, ``last_used``) onto
+        the freshly reloaded record. A concurrent CLI ``rename``/``forget``
+        during a long backend call is therefore not clobbered by this
+        now-stale ``record``: a
         renamed handle survives and a removed thread is not resurrected. The
         fork id is always kept in the exclusion set so it is never reused,
         even for a thread forgotten mid-call.
@@ -170,6 +183,8 @@ class TunnelStore:
                 return
             current.fork_session_id = record.fork_session_id
             current.tmux_window = record.tmux_window
+            current.fork_base_size = record.fork_base_size
+            current.history = list(record.history)
             current.last_used = time.time()
             self._save_locked()
 

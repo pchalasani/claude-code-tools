@@ -82,7 +82,7 @@ def serve(
     channels: tuple[int, ...],
     token_env: Optional[str],
 ) -> None:
-    """Run the Discord daemon (blocking).
+    """Run the chat daemon: Discord and/or Mattermost (blocking).
 
     Two server modes, set with --backend or [tunnel] backend (default
     headless):
@@ -102,17 +102,23 @@ def serve(
     store = TunnelStore(cfg.state_path)
     registry = Registry(cfg.registry_path)
     try:
-        from .discord_bot import run_bot
+        from .serve import plan_frontends, run_serve
     except ImportError as exc:
         raise click.ClickException(
             f"discord.py is required for serve: {exc}"
         ) from exc
+    try:
+        frontends = plan_frontends(cfg)
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
     click.echo(
         f"agent-tunnel: backend={cfg.backend} "
-        f"registry={cfg.registry_path} channels={cfg.discord.channel_ids}"
+        f"registry={cfg.registry_path} frontends={','.join(frontends)} "
+        f"discord_channels={cfg.discord.channel_ids} "
+        f"mattermost_channels={cfg.mattermost.channel_ids}"
     )
     try:
-        run_bot(cfg, store, registry)
+        run_serve(cfg, store, registry)
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -192,11 +198,11 @@ def ask(
     except BackendError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(answer.text)
-    click.echo(
-        f"\n[fork={answer.fork_session_id} "
-        f"{'new' if answer.new_thread else 'follow-up'}]",
-        err=True,
-    )
+    if answer.refreshed:
+        kind = "follow-up, re-forked from latest session"
+    else:
+        kind = "new" if answer.new_thread else "follow-up"
+    click.echo(f"\n[fork={answer.fork_session_id} {kind}]", err=True)
 
 
 def _resolve_target(
@@ -648,22 +654,43 @@ def doctor(config: Optional[str]) -> None:
 
     from .convert import detect_converter
     from .discord_bot import resolve_token
+    from .mattermost_bot import resolve_mm_token
 
     cfg = _build(config)
-    checks: list[tuple[bool, str]] = [
-        (
-            bool(resolve_token(cfg)),
-            f"Discord token ({cfg.discord.token_env} or token_file)",
-        ),
-        (
-            bool(cfg.discord.channel_ids),
-            f"Watched channel(s): {cfg.discord.channel_ids or 'none set'}",
-        ),
+    checks: list[tuple[bool, str]] = []
+    discord_token = bool(resolve_token(cfg))
+    mm = cfg.mattermost
+    # Discord is optional once Mattermost is configured; check it only when
+    # it is (or is the only front-end) in use.
+    if discord_token or not mm.url:
+        checks += [
+            (
+                discord_token,
+                f"Discord token ({cfg.discord.token_env} or token_file)",
+            ),
+            (
+                bool(cfg.discord.channel_ids),
+                f"Watched channel(s): {cfg.discord.channel_ids or 'none set'}",
+            ),
+        ]
+    if mm.url:
+        checks += [
+            (
+                bool(resolve_mm_token(cfg)),
+                f"Mattermost token ({mm.token_env} or token_file)",
+            ),
+            (
+                bool(mm.channel_ids),
+                "Mattermost channel(s): "
+                f"{mm.channel_ids or 'none set'} @ {mm.url}",
+            ),
+        ]
+    checks.append(
         (
             shutil.which(cfg.claude.binary) is not None,
             f"claude binary on PATH ({cfg.claude.binary})",
-        ),
-    ]
+        )
+    )
     if cfg.backend == "tmux":
         checks.append(
             (shutil.which("tmux") is not None, "tmux on PATH (tmux backend)")
