@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import re
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,6 +39,7 @@ PLATFORM = "Mattermost"
 MM_MSG_LIMIT = 16000
 MM_MAX_FILES = 5
 TYPING_EVERY_S = 4.0
+STABLE_CONNECTION_S = 30.0
 BROADCAST_MENTIONS = {"all", "channel", "here"}
 _MENTION_RE = re.compile(r"^@([A-Za-z0-9._-]+)")
 
@@ -435,11 +437,9 @@ async def run_mattermost(cfg: TunnelConfig, relay: Relay) -> None:
                         mm.channel_ids,
                     )
                 ws = await api.connect_ws()
+                connected_at = time.monotonic()
                 logger.info("Mattermost: websocket connected")
                 async for msg in ws:
-                    # Reset only once the server is actually talking to us, so
-                    # a socket closed right after connect still backs off.
-                    backoff = 1.0
                     if msg.type != aiohttp.WSMsgType.TEXT:
                         continue
                     try:
@@ -453,6 +453,10 @@ async def run_mattermost(cfg: TunnelConfig, relay: Relay) -> None:
                     tasks.add(task)
                     task.add_done_callback(tasks.discard)
                 logger.warning("Mattermost: websocket closed; reconnecting")
+                # Only a connection that stayed up resets the backoff, so a
+                # server that accepts and then drops us at once still backs off.
+                if time.monotonic() - connected_at >= STABLE_CONNECTION_S:
+                    backoff = 1.0
             except (
                 aiohttp.ClientError,
                 OSError,
@@ -468,7 +472,10 @@ async def run_mattermost(cfg: TunnelConfig, relay: Relay) -> None:
                 )
             finally:
                 if api.ws is not None and not api.ws.closed:
-                    await api.ws.close()
+                    try:
+                        await api.ws.close()
+                    except Exception:
+                        logger.debug("Mattermost: ws close failed", exc_info=True)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60.0)
     finally:
