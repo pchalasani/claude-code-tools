@@ -426,6 +426,8 @@ async def run_mattermost(cfg: TunnelConfig, relay: Relay) -> None:
             try:
                 if bot is None:
                     me = await api.me()
+                    if not me.get("id"):
+                        raise RuntimeError("Mattermost /users/me returned no id")
                     bot = _Router(cfg, relay, api, me["id"], me.get("username", ""))
                     logger.info(
                         "Mattermost: logged in as @%s; watching channels %s",
@@ -434,8 +436,10 @@ async def run_mattermost(cfg: TunnelConfig, relay: Relay) -> None:
                     )
                 ws = await api.connect_ws()
                 logger.info("Mattermost: websocket connected")
-                backoff = 1.0
                 async for msg in ws:
+                    # Reset only once the server is actually talking to us, so
+                    # a socket closed right after connect still backs off.
+                    backoff = 1.0
                     if msg.type != aiohttp.WSMsgType.TEXT:
                         continue
                     try:
@@ -462,6 +466,9 @@ async def run_mattermost(cfg: TunnelConfig, relay: Relay) -> None:
                     exc,
                     backoff,
                 )
+            finally:
+                if api.ws is not None and not api.ws.closed:
+                    await api.ws.close()
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60.0)
     finally:
@@ -511,6 +518,14 @@ class _Router:
             out.append(f)
         return out
 
+    async def _uploads(self, post: MMPost) -> list[MMUpload]:
+        """The post's files as relay uploads (only the first max_attachments
+        are sized; the relay reports the rest as skipped)."""
+        limit = self.cfg.limits.max_attachments
+        head = await self._sized(post.files[:limit])
+        files = head + post.files[limit:]
+        return [MMUpload(self.api, f, self._cap()) for f in files]
+
     async def handle(self, post: MMPost) -> None:
         """Route one post; errors are logged, never raised."""
         try:
@@ -533,9 +548,6 @@ class _Router:
             return
         dest = MMDest(self.api, post.channel_id, route.root_id)
         sender = post.sender or "A teammate"
-        uploads = [
-            MMUpload(self.api, f, self._cap()) for f in await self._sized(post.files)
-        ]
         if route.action == "list":
             await dest.send(relay.handles_text())
         elif route.action == "unknown_handle":
@@ -556,6 +568,7 @@ class _Router:
                 sender,
             )
             relay.bind(route.thread_key, rec, sender, PLATFORM)
+            uploads = await self._uploads(post)
             if route.text or uploads:
                 await relay.answer(
                     dest, route.thread_key, route.text, uploads, sender=sender
@@ -574,6 +587,7 @@ class _Router:
                 except Exception:
                     logger.debug("Mattermost: reaction failed", exc_info=True)
                 return
+            uploads = await self._uploads(post)
             await relay.answer(
                 dest, route.thread_key, route.text, uploads, sender=sender
             )

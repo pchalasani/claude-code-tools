@@ -127,6 +127,8 @@ def build_recap(history: list[dict[str, str]], max_chars: int) -> str:
             break
         kept.append(text)
         used += len(text)
+    if not kept:
+        return ""
     return RECAP_HEADER + "".join(reversed(kept)) + RECAP_FOOTER
 
 

@@ -247,4 +247,4 @@ def test_build_recap_never_exceeds_tiny_budget() -> None:
 
     tiny = len(RECAP_HEADER) + len(RECAP_FOOTER) + 5
     recap = build_recap([{"q": "q", "a": "z" * 5000}], max_chars=tiny)
-    assert len(recap) <= tiny
+    assert recap == ""  # no room for any turn: no empty shell
