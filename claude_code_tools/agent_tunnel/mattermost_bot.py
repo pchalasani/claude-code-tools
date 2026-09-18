@@ -106,14 +106,16 @@ def parse_posted(event: dict[str, Any]) -> Optional[MMPost]:
 
     Returns None for any other event or a payload that can't be parsed.
     """
-    if event.get("event") != "posted":
+    if not isinstance(event, dict) or event.get("event") != "posted":
         return None
-    data = event.get("data") or {}
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return None
     try:
         post = json.loads(data.get("post") or "{}")
     except (TypeError, json.JSONDecodeError):
         return None
-    if not post.get("id"):
+    if not isinstance(post, dict) or not post.get("id"):
         return None
     props = post.get("props") or {}
     meta_files = (post.get("metadata") or {}).get("files") or []
@@ -446,7 +448,12 @@ async def run_mattermost(cfg: TunnelConfig, relay: Relay) -> None:
                         event = json.loads(msg.data)
                     except json.JSONDecodeError:
                         continue
-                    post = parse_posted(event)
+                    try:
+                        post = parse_posted(event)
+                    except Exception:
+                        # A malformed event must never end the front-end.
+                        logger.warning("Mattermost: unparseable event skipped")
+                        continue
                     if post is None:
                         continue
                     task = asyncio.create_task(bot.handle(post))

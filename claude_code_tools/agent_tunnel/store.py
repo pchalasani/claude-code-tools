@@ -101,9 +101,11 @@ class TunnelStore:
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(
-            json.dumps(payload, indent=2) + "\n", encoding="utf-8"
-        )
+        # Owner-only: the state holds each thread's recent Q&A (recaps).
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(payload, indent=2) + "\n")
+        os.chmod(tmp, 0o600)  # an older tmp file may have wider bits
         os.replace(tmp, self.path)
 
     def get(self, thread_key: str) -> Optional[ThreadRecord]:

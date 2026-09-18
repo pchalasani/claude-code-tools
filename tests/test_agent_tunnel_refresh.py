@@ -248,3 +248,9 @@ def test_build_recap_never_exceeds_tiny_budget() -> None:
     tiny = len(RECAP_HEADER) + len(RECAP_FOOTER) + 5
     recap = build_recap([{"q": "q", "a": "z" * 5000}], max_chars=tiny)
     assert recap == ""  # no room for any turn: no empty shell
+
+
+def test_state_file_is_owner_only(tmp_path: Path) -> None:
+    path = tmp_path / "s.json"
+    TunnelStore(path).bind("k", "h", EXPERT, "/p", "headless")
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600

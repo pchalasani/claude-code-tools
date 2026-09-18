@@ -326,3 +326,9 @@ def test_relay_preview_is_short_on_large_limit_platforms(relay) -> None:
     asyncio.run(rly.answer(dest, "mm:root4", "q" * 4000, sender="bob"))
     ((preview, _, data),) = dest.files
     assert len(preview) <= 1500 and len(preview) < len(data)
+
+
+def test_parse_posted_rejects_non_dict_payloads() -> None:
+    assert parse_posted({"event": "posted", "data": {"post": "[]"}}) is None
+    assert parse_posted({"event": "posted", "data": "x"}) is None
+    assert parse_posted(["not", "a", "dict"]) is None  # type: ignore[arg-type]
