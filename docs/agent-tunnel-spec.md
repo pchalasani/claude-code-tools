@@ -148,8 +148,9 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
   decision, ~16000-char messages, `allowed_user_ids`. No DM support.
 - `serve.py` — `plan_frontends` picks what runs (Discord when its token
   resolves and it has channels or DMs enabled, Mattermost when
-  `[mattermost] url` is set; errors if neither can run, or Mattermost is set
-  but incomplete); `serve_all` runs them on one loop with one shared `Relay`
+  `[mattermost] url` is set; an incomplete Mattermost is skipped with a
+  warning, and it errors only if nothing can run); `serve_all` runs them on
+  one loop with one shared `Relay`
   and reaper.
 - `cli.py` — `serve | ask | published | forks | resume | rename | status | watch |
   doctor | forget | init | help`. `forks` lists fork sessions (handle, asker,

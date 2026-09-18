@@ -25,21 +25,27 @@ logger = logging.getLogger("agent_tunnel")
 def plan_frontends(cfg: TunnelConfig) -> list[str]:
     """Names of the front-ends ``serve`` will run.
 
+    A configured-but-incomplete Mattermost is skipped with a warning while
+    Discord runs; it is an error only when nothing else can run.
+
     Raises:
-        RuntimeError: Mattermost is configured but incomplete, or no
-            front-end can run at all.
+        RuntimeError: No front-end can run at all.
     """
     names: list[str] = []
     discord_problem = discord_ready(cfg)
     if discord_problem is None:
         names.append("discord")
-    if cfg.mattermost.url:
-        mm_problem = mattermost_ready(cfg)
-        if mm_problem:
-            raise RuntimeError(mm_problem)
+    mm_problem = mattermost_ready(cfg) if cfg.mattermost.url else None
+    if cfg.mattermost.url and mm_problem is None:
         names.append("mattermost")
     if not names:
-        raise RuntimeError(discord_problem or "No chat front-end configured")
+        raise RuntimeError(
+            mm_problem or discord_problem or "No chat front-end configured"
+        )
+    if mm_problem:
+        # Configured but incomplete (e.g. token not issued yet): keep the
+        # working front-end up rather than refuse to serve, but say so loudly.
+        logger.warning("Mattermost NOT started: %s", mm_problem)
     return names
 
 

@@ -197,7 +197,14 @@ def test_plan_frontends_both_and_none(tmp_path: Path, monkeypatch) -> None:
     cfg.mattermost.url = "http://x"
     cfg.mattermost.channel_ids = [CHAN]
     assert plan_frontends(cfg) == ["discord", "mattermost"]
+    # Mattermost configured but its token not issued yet: Discord keeps
+    # running rather than serve refusing to start.
+    monkeypatch.delenv("AGENT_TUNNEL_MATTERMOST_TOKEN")
+    assert plan_frontends(cfg) == ["discord"]
+    # ...but with nothing else able to run, the Mattermost problem is fatal.
     monkeypatch.delenv("AGENT_TUNNEL_DISCORD_TOKEN")
+    with pytest.raises(RuntimeError, match="Mattermost token"):
+        plan_frontends(cfg)
     cfg.mattermost.url = ""
     with pytest.raises(RuntimeError, match="Discord token"):
         plan_frontends(cfg)

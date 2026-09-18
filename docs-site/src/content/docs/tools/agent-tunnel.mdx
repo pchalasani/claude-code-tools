@@ -357,9 +357,9 @@ agent-tunnel serve
 
 Keep it alive (a dedicated tmux pane is convenient). With `token_file` set you
 don't export anything. It starts Discord when a Discord token resolves (and
-channels or DMs are set) and Mattermost when `[mattermost] url` is set, and
-exits with an error if neither can run (or if Mattermost is set but lacks a
-token or channels). All
+channels or DMs are set) and Mattermost when `[mattermost] url` is set. If
+Mattermost is set but lacks a token or channels, `serve` logs a warning and
+runs Discord alone; it exits with an error only when nothing can run. All
 front-ends share one concurrency cap. Your Mac must be awake and online; both
 front-ends reconnect after sleep.
 
