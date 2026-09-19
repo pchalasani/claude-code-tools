@@ -491,3 +491,18 @@ def test_relay_answers_queued_messages_in_arrival_order(relay) -> None:
     text = "".join(dest.sent)
     order = [text.index(f"MSG{i}") for i in range(3)]
     assert order == sorted(order)
+
+
+class FailingLookupUpload(NamelessUpload):
+    async def prepare(self) -> None:
+        raise RuntimeError("file_info 500")
+
+
+def test_relay_skips_upload_whose_lookup_fails(relay) -> None:
+    rly, rec = relay
+    rly.bind("mm:root8", rec, "bob", "Mattermost")
+    dest = FakeDest()
+    asyncio.run(
+        rly.answer(dest, "mm:root8", "q", [FailingLookupUpload()], sender="bob")
+    )
+    assert any("Skipped" in m and "lookup failed" in m for m in dest.sent)

@@ -311,7 +311,7 @@ class Relay:
                 )
             )
             self._notices.add(notice)
-            notice.add_done_callback(self._notices.discard)
+            notice.add_done_callback(self._notice_done)
         async with lock, self.sem:
             # The thread may have been rebound (even to the same session,
             # which resets the fork) or closed while this turn waited for the
@@ -389,6 +389,11 @@ class Relay:
                 await dest.send(chunk)
         await self._post_deliverables(dest, answer)
 
+    def _notice_done(self, task: "asyncio.Task[None]") -> None:
+        self._notices.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            logger.warning("Queue notice failed: %s", task.exception())
+
     @staticmethod
     def _log_answer(
         thread_key: str, handle: str, answer: Answer, start: float
@@ -453,7 +458,11 @@ class Relay:
                 try:
                     await prepare()
                 except Exception:
+                    # Fail closed: without its real name the file could skip
+                    # Office conversion and reach the fork unreadable.
                     logger.warning("Could not look up %s", att.filename)
+                    skipped.append(f"{att.filename} (lookup failed)")
+                    continue
             size = getattr(att, "size", 0) or 0
             if size > cap:
                 skipped.append(f"{att.filename} ({size / 1048576:.1f} MB)")

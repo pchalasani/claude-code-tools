@@ -357,7 +357,9 @@ class MMUpload:
         if self.size > 0 and self.filename != "file":
             return
         info = await self.api.file_info(self.file_id)
-        self.filename = info.get("name") or self.filename
+        if not info.get("name"):
+            raise RuntimeError(f"no name for file {self.file_id}")
+        self.filename = info["name"]
         self.size = info.get("size") or self.size
 
     async def save(self, path: str) -> None:
