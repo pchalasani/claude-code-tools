@@ -1,10 +1,10 @@
 # agent-tunnel: let teammates talk to your local Claude sessions
 
 `agent-tunnel` exposes long-lived, context-rich local Claude Code sessions
-("experts") to teammates over Discord, so they can ask questions directly
-instead of relaying through you. You publish *a specific session* at runtime
-with `>share`; colleagues address it by its **handle**; each conversation is
-answered against a read-only **fork** of that session.
+("experts") to teammates over Discord or Mattermost, so they can ask questions
+directly instead of relaying through you. You publish *a specific session* at
+runtime with `>share`; colleagues address it by its **handle**; each
+conversation is answered against a read-only **fork** of that session.
 
 ## Motivation
 
@@ -26,15 +26,26 @@ safe.
   address it in the channel. Many sessions can be live at once, each its own
   handle.
 - **Handle-opens-a-thread.** The first message `\<handle\> [question]` in the
-  watched channel opens a Discord thread bound to that session; follow-ups
-  stay in the thread (no handle needed). Different teammates / sessions never
-  collide.
+  watched channel opens a thread bound to that session (a Discord thread, or
+  on Mattermost the reply thread under that root post); follow-ups stay in the
+  thread (no handle needed). Different teammates / sessions never collide.
 - **Forked, read-only.** Each thread answers against `--resume <session>
   --fork-session`: the fork copies context, the original is untouched.
   Remote turns run with `--allowedTools Read,Grep,Glob`, an explicit deny
   list, and `--permission-mode dontAsk`.
-- **No tunnel.** The Discord Gateway is an outbound websocket; nothing on the
-  machine is internet-reachable.
+- **Follow-ups see the latest session (headless).** A thread's fork is a
+  snapshot from when the thread opened. With `[tunnel] refresh_forks = true`
+  (default), a follow-up checks whether the published session's transcript
+  has grown since that fork was taken; if so it forks the published session
+  afresh and prepends a bounded recap of the thread's earlier Q&A
+  (`[limits] recap_max_chars`, default 8000). A new top-level
+  `\<handle\> question` already starts from the latest state. The tmux
+  backend is unchanged (it keeps resuming the thread's own fork).
+- **No tunnel.** The Discord Gateway and the Mattermost event websocket are
+  outbound connections; nothing on the machine is internet-reachable.
+- **One daemon, many front-ends.** A single `agent-tunnel serve` runs Discord
+  and/or Mattermost on one asyncio loop, sharing one relay (so the
+  concurrency cap is global across platforms).
 - **Swappable backends (default `headless`):** `headless` (`claude -p`, clean
   JSON I/O, more reliable, no tmux) and `tmux` (interactive forks you can watch
   live with `agent-tunnel watch`).
@@ -46,8 +57,8 @@ safe.
                                               writes registry.json
                                               { handle -> session_id, cwd }
                                                         │
-Discord channel/threads (teammates)                     │ reads
-        │  outbound websocket (Discord Gateway)          ▼
+Discord / Mattermost channel+threads (teammates)        │ reads
+        │  outbound websocket (Gateway / MM websocket)   ▼
         ▼                                       agent-tunnel serve (daemon)
   handle opens a thread ──► bind thread→handle ──► fork that session
                                                    (read-only) ──► answer
@@ -74,19 +85,21 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
   Defines the JSON schema duplicated in the hook; `Registry` + helpers
   (`derive_handle`, `sanitize_label`). Records carry `config_dir`; old records
   backfill it from `transcript_path` on read.
-- `config.py` — TOML config (Discord + limits + backend). No project/session
-  here. `discord.token_file` reads the bot token from a file (no export);
-  `claude.auto_trust` / `trust_config_path` control folder pre-trust;
-  `AGENT_TUNNEL_REGISTRY` env overrides the registry path (hook + daemon
-  honor it). Use an absolute path or `~/...`: a relative value is anchored
-  differently by the standalone hook (its own cwd) and the daemon (the
-  config-file dir), so the two would point at different files.
+- `config.py` — TOML config (Discord, Mattermost, limits, backend). No
+  project/session here. `discord.token_file` / `mattermost.token_file` read
+  the bot token from a file (no export); `claude.auto_trust` /
+  `trust_config_path` control folder pre-trust; `AGENT_TUNNEL_REGISTRY` env
+  overrides the registry path (hook + daemon honor it). Use an absolute path
+  or `~/...`: a relative value is anchored differently by the standalone hook
+  (its own cwd) and the daemon (the config-file dir), so the two would point
+  at different files.
 - `store.py` — daemon state: `thread_key → ThreadRecord` (handle, expert
-  session id, project dir, **config dir**, fork id, tmux window). `bind()`
-  records a pending thread before the first answer; fork id filled on
-  completion. Each mutation re-reads the file under a cross-process lock and
-  merges, so a CLI command (`forget`/`rename`) and the live daemon don't
-  clobber each other's writes.
+  session id, project dir, **config dir**, fork id, tmux window, platform,
+  the expert transcript size the fork was taken from, and a trimmed Q&A
+  history for the re-fork recap). `bind()` records a pending thread before
+  the first answer; fork id filled on completion. Each mutation re-reads the
+  file under a cross-process lock and merges, so a CLI command
+  (`forget`/`rename`) and the live daemon don't clobber each other's writes.
 - `locking.py` — best-effort `fcntl` advisory file lock (`<path>.lock`) shared
   by the store, the registry, and the standalone `>share` hook (same
   `registry.json.lock`), serializing concurrent read-modify-write across
@@ -113,23 +126,40 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
   session's config dir via `CLAUDE_CONFIG_DIR`. Per turn they expose the
   upload dir via `--add-dir`, append the outbox instruction to the persona for
   write/bash handles, and diff the outbox to collect deliverables onto
-  `Answer.attachments`.
-- `discord_bot.py` — handle→thread routing, `!list`/`!handles` discovery,
-  `!done`/`!close`/`!end` teardown, `<handle>: <question>` thread names,
-  allowlists, cooldown, concurrency, 2000-char chunking, long answers as
-  `answer.md`; `token_file` resolution. Downloads inbound attachments and posts
-  outbound deliverables (`discord.File`), within size/count caps. Prefixes each
-  relayed message with its sender (`<name> (via {platform}) says: …`) so the
-  fork knows who is asking; the persona (`DEFAULT_PERSONA`, with a `{platform}`
-  placeholder filled from `[tunnel] platform`, default `Discord`) tells the
-  fork it is in bot mode relaying to teammates.
+  `Answer.attachments`. `HeadlessBackend.ask` decides per follow-up whether to
+  re-fork (see Key design decisions); `build_recap` keeps the newest turns
+  that fit `recap_max_chars`, cutting a single oversize turn.
+- `relay.py` — the platform-neutral turn logic shared by both bots: `Relay`
+  (per-thread locks, the global concurrency cap, cooldowns, attachment
+  ingest, the backend call, chunking, long answers as `answer.md`,
+  deliverables, `!done` teardown, idle reaping, `!list` text) driven through
+  small `Destination` (where replies go) and `Upload` (a file to fetch)
+  protocols. Prefixes each relayed message with its sender
+  (`<name> (via <platform>) says: …`) so the fork knows who is asking; the
+  persona (`DEFAULT_PERSONA`, with a `{platform}` placeholder) tells the fork
+  it is in bot mode. The platform is recorded per thread by the front-end
+  that opened it; `[tunnel] platform` (default `Discord`) is the fallback.
+- `discord_bot.py` — Discord event routing only: handle→thread,
+  `!list`/`!handles`, `!done`/`!close`/`!end`, `<handle>: <question>` thread
+  names, user/role allowlists, optional DMs, 2000-char messages;
+  `token_file` resolution.
+- `mattermost_bot.py` — Mattermost event routing only, at parity with
+  Discord: a small REST + WebSocket client on `aiohttp`, a pure `route_post`
+  decision, ~16000-char messages, `allowed_user_ids`. No DM support.
+- `serve.py` — `plan_frontends` picks what runs (Discord when its token
+  resolves and it has channels or DMs enabled, Mattermost when
+  `[mattermost] url` is set; an incomplete Mattermost is skipped with a
+  warning, and it errors only if nothing can run); `serve_all` runs them on
+  one loop with one shared `Relay`
+  and reaper.
 - `cli.py` — `serve | ask | published | forks | resume | rename | status | watch |
   doctor | forget | init | help`. `forks` lists fork sessions (handle, asker,
   last active, turn count, fork id) from the store; `resume <handle>` execs
   `claude --resume <fork-id>` in the fork's project + config dir (most recent
   by default, `--fork <id>` to pick another) — using recorded fork ids to
   dodge the duplicate-name problem in `/resume`. `watch` attaches to the
-  private tmux server; `doctor` runs a readiness checklist; `published` tags
+  private tmux server; `doctor` runs a readiness checklist (Mattermost token
+  and channels too, when `[mattermost] url` is set); `published` tags
   each handle with its config dir; `help` prints extensive per-command help.
 
 ## `>share` semantics
@@ -177,8 +207,16 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
   A leading `@bot` is fine (stripped, then answered).
 - `!done` / `!close` / `!end` in a thread (or DM): tear down that fork
   immediately (kill window, drop binding, confirm).
-- DMs (optional, off by default): `\<handle\> …` (re)binds the DM; bare text
-  follows up.
+- DMs (Discord only; optional, off by default): `\<handle\> …` (re)binds the
+  DM; bare text follows up.
+
+Mattermost routes the same way, with Mattermost's thread model: a root post
+`\<handle\> [question]` in a watched channel (26-char `channel_ids`) opens a
+thread keyed `mm:<root post id>`, and the bot answers as replies under it.
+Replies in a bound thread are follow-ups; a reply opening with
+`@someone-else`, `@all`, `@channel` or `@here` is side-chat and ignored, and
+a leading `@bot` is stripped. `!list`/`!handles` and `!done`/`!close`/`!end`
+work as on Discord. Direct and group messages are ignored.
 
 ## File attachments (round-trip)
 
@@ -208,7 +246,7 @@ escape hatch). See `convert.py`.
 per-thread line appended to the persona — to save anything it wants to deliver
 into its outbox: `<project>/.agent-tunnel-out/<thread>/`. The bot snapshots
 that dir before the turn and diffs it after, posting whatever was created or
-modified as Discord attachments. Diffing the directory (rather than parsing the
+modified as chat attachments. Diffing the directory (rather than parsing the
 transcript for `Write` tool calls) means a **Bash-generated** PDF is delivered
 just like a `Write`-tool markdown file. A `.gitignore` holding `*` is dropped
 at `.agent-tunnel-out/` so deliverables never dirty the owner's `git status`.
@@ -264,10 +302,10 @@ dir is propagated end to end:
   `>share --write` adds file edits (still no Bash); `>share
   --dangerously-allow-bash` additionally permits command execution and so
   drops the sandbox — reserve it for fully trusted colleagues.
-- Access = Discord channel membership + optional user/role allowlists. Anyone
-  who can ask can surface anything in the session context or readable project
-  tree — publish accordingly; the persona discourages leaking secrets but is a
-  soft layer only.
+- Access = channel membership + optional allowlists (Discord user/role ids,
+  Mattermost user ids). Anyone who can ask can surface anything in the session
+  context or readable project tree — publish accordingly; the persona
+  discourages leaking secrets but is a soft layer only.
 - Inbound attachments land in a contained per-thread dir exposed via
   `--add-dir`; uploaded filenames are sanitized to a basename (no path
   traversal). Outbound delivery is limited to files the fork places in its
@@ -283,7 +321,13 @@ dir is propagated end to end:
   status/off, write + bash access), store bind+follow-up, session discovery &
   answer extraction, chunking, flag building (incl. bash tools, `--add-dir`,
   persona append), config, attachment layout/diff/preamble + the backend's
-  upload/outbox setup and cleanup, filename sanitization.
+  upload/outbox setup and cleanup, filename sanitization; the re-fork
+  decision (unchanged expert resumes, grown expert re-forks with a recap,
+  `refresh_forks = false`, legacy records, recap budget, bounded history);
+  Mattermost post parsing, `route_post` (open/list/unknown handle,
+  follow-ups, side-chat, allowlist, ignored DMs/bots/other channels),
+  readiness + `plan_frontends`, and a relay turn (chunking, `answer.md`,
+  `!done`).
 - Live end-to-end (headless): `>share` → registry → `ask --handle` forked the
   exact published session, inherited context, and follow-ups continued the
   same fork.

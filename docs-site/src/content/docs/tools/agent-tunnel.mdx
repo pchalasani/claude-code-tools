@@ -2,7 +2,7 @@
 title: "agent-tunnel — Share Your Expert Sessions"
 description: >
   Publish any local Claude Code session with >share and let teammates ask it
-  questions over Discord, answered against safe read-only forks.
+  questions over Discord or Mattermost, answered against safe read-only forks.
 ---
 
 import { Steps, Aside } from "@astrojs/starlight/components";
@@ -10,8 +10,8 @@ import { Steps, Aside } from "@astrojs/starlight/components";
 A local Claude Code session accumulates large, valuable context over time —
 effectively a custom expert agent. `agent-tunnel` lets you **publish a
 specific session** with `>share`, hand the resulting **handle** to teammates,
-and have them ask it questions over Discord — each answered against a private,
-read-only **fork** of that session.
+and have them ask it questions over Discord or Mattermost — each answered
+against a private, read-only **fork** of that session.
 
 In short, it lets colleagues talk to a Claude Code session running on your Mac
 — answered either by an interactive session driven through tmux or a headless
@@ -37,25 +37,30 @@ session from inside Claude Code. Full setup is below.
   and folder and mints a short **handle** (e.g. `pay-7Q2`). A folder can hold
   many sessions, so the handle is pinned to the exact session you ran it in —
   not the folder.
-- You give the handle to colleagues. In the Discord channel, a message that
-  **starts with the handle** opens a thread bound to that session; follow-ups
-  stay in the thread.
+- You give the handle to colleagues. In the watched Discord or Mattermost
+  channel, a message that **starts with the handle** opens a thread bound to
+  that session; follow-ups stay in the thread.
 - Each thread is answered against `--resume <session> --fork-session`: the
   fork copies the context, your original session is untouched, and remote
   turns are **hard-restricted to read-only tools** (`Read`/`Grep`/`Glob`).
-- The Discord Gateway is an *outbound* websocket — **no tunnel, no open port,
-  no cloud**. Everything runs on your Mac.
+- Follow-ups track your session (headless mode): if you keep working in the
+  published session after a thread opened, the thread's next follow-up is
+  answered from your **latest** session state, with a short recap of the
+  thread's earlier Q&A carried over.
+- The Discord Gateway and the Mattermost event stream are *outbound*
+  websockets — **no tunnel, no open port, no cloud**. Everything runs on your
+  Mac.
 - The fork knows it's in **bot mode**: its persona says it's answering
   teammates relayed over chat, and each incoming message is prefixed with who
   sent it and how — e.g. `Alice (via Discord) says: …` — so it can address
-  people by name. The platform label is the `[tunnel] platform` config value
-  (defaults to `Discord`), ready for other chat front-ends.
+  people by name. The label is the front-end the thread came in on
+  (`Discord` or `Mattermost`).
 
 ```text
    inside any session:  >share  ─►  hook writes registry  { handle → session }
                                                   │
-   colleague's Discord  ─►  Discord  ◄─ ws ─  agent-tunnel serve  ─►  fork that
-        (handle → thread)                       (reads registry)       session
+   colleague's chat  ─►  Discord /   ◄─ ws ─  agent-tunnel serve  ─►  fork that
+   (handle → thread)     Mattermost              (reads registry)       session
 ```
 
 ## For your colleagues (the simple part)
@@ -82,8 +87,11 @@ discover, **`<handle> <question>`** to ask, **`!done`** to close. They can also
 **attach a file** to a question (a PDF, CSV, image…) and the agent will read
 it; on write-enabled handles the agent can hand a generated file back into the
 thread. Inside a thread the bot answers every message — *except* one that
-starts with **@someone-else** (a teammate, role, or `@everyone`), so you can
-side-chat with a human without the bot chiming in.
+starts with **@someone-else** (a teammate or role, `@everyone` on Discord,
+`@all` / `@channel` / `@here` on Mattermost), so you can side-chat with a human
+without the bot chiming in. On Mattermost the "thread" is the reply thread
+under the post that named the handle; the bot answers there. Direct messages
+to the bot work only on Discord (and only if the owner enables them).
 
 ## The `agent-tunnel` command group
 
@@ -92,22 +100,22 @@ command group (like `aichat`) whose subcommands are:
 
 | Subcommand | What it does |
 | --- | --- |
-| `agent-tunnel serve` | Run the Discord daemon — the long-lived bridge that answers questions |
+| `agent-tunnel serve` | Run the chat daemon (Discord and/or Mattermost) — the long-lived bridge that answers questions |
 | `agent-tunnel published` | List the sessions you've shared (handles in the registry) |
 | `agent-tunnel status` | Show active conversation threads and their forks |
 | `agent-tunnel forks [<handle>]` | Table of fork sessions (handle, access, asker, last active, turns, live/idle, fork id); `--json` to script, `--manage` to select-and-clear |
 | `agent-tunnel resume <handle>` | Resume a colleague-accumulated fork in Claude Code (most recent, or `--fork <id>`) |
 | `agent-tunnel rename <old> <new>` | Rename a shared handle (registry + bound forks + live tmux windows) |
 | `agent-tunnel watch` | Attach to the private tmux server to watch live forks |
-| `agent-tunnel doctor` | Readiness check (token found, channel set, `claude`/`tmux` on PATH) |
-| `agent-tunnel ask "Q" --handle H` | Ask one question through the full pipeline, no Discord (local test) |
+| `agent-tunnel doctor` | Readiness check (tokens found, channels set, `claude`/`tmux` on PATH; Mattermost when configured) |
+| `agent-tunnel ask "Q" --handle H` | Ask one question through the full pipeline, no chat (local test) |
 | `agent-tunnel forget --thread T \| --all` | Drop thread bindings and kill their tmux windows |
 | `agent-tunnel init` | Write a commented sample config |
 | `agent-tunnel help` | Extensive help — overview, where-to-run, and every command's details |
 
 The one piece that is **not** a subcommand is **`>share`** (and `!list` /
 `!done`): `>share` runs *inside* a Claude session as a hook, and `!list` /
-`!done` are typed by colleagues in Discord.
+`!done` are typed by colleagues in chat.
 
 ## Where to run each command
 
@@ -157,7 +165,7 @@ with no need to close the thread (`!done`) and reopen it. Upgrading to **all**
 still honors the gate: without `allow_skip_permissions` the next turn is refused
 rather than silently granted.
 
-A labeled handle also makes the Discord thread and the tmux window readable
+A labeled handle also makes the chat thread and the tmux window readable
 (`payments-…` instead of a cryptic id). Colleagues end a conversation with
 `!done` in their thread; that tears the fork down immediately.
 
@@ -215,6 +223,9 @@ folder?" dialog (which would otherwise block the fork). Disable with
 
 ## Setup — for developers / self-hosters
 
+One `agent-tunnel serve` can run **Discord, Mattermost, or both**. Do Part A
+for Discord and/or Part A′ for Mattermost.
+
 ### Part A: create the Discord bot (one-time)
 
 <Steps>
@@ -263,6 +274,30 @@ in every other channel regardless of what it can technically see.
 
 </Aside>
 
+### Part A′: create the Mattermost bot (one-time)
+
+These steps need a Mattermost system admin.
+
+<Steps>
+
+1. **System Console → Integrations → Bot Accounts**: enable bot account
+   creation.
+
+2. **System Console → Integrations → Integration Management**: enable
+   **Personal Access Tokens**.
+
+3. **Integrations → Bot Accounts → Add Bot Account**; copy the access token it
+   shows and save it to a file (e.g.
+   `~/.config/agent-tunnel/mattermost-token.txt`).
+
+4. Invite the bot to the **team** and then to the **channel** it should
+   watch. Copy the channel's 26-character ID (channel name → **View Info**).
+
+</Steps>
+
+The bot answers only in the configured channels. Direct messages are not
+supported on Mattermost.
+
 ### Part B: install the plugin + configure
 
 <Steps>
@@ -291,6 +326,15 @@ in every other channel regardless of what it can technically see.
    token_file = "~/Documents/tokens/discord-token.txt"
    channel_ids = [123456789012345678]
 
+   # Optional: Mattermost runs too whenever url is set.
+   [mattermost]
+   url = "https://chat.example.com"        # no trailing /api
+   token_file = "~/.config/agent-tunnel/mattermost-token.txt"
+   # token_env = "AGENT_TUNNEL_MATTERMOST_TOKEN"   # checked before token_file
+   channel_ids = ["abcdefghijklmnopqrstuvwxyz"]    # 26-char ids
+   allowed_user_ids = []   # empty = anyone in the watched channels
+   verify_tls = true       # false only for a self-signed test server
+
    # Optional — Office attachments (.docx/.pptx/.xlsx) are auto-converted to a
    # readable format when a converter (LibreOffice/pandoc) is on PATH:
    # [attachments]
@@ -312,8 +356,12 @@ agent-tunnel serve
 ```
 
 Keep it alive (a dedicated tmux pane is convenient). With `token_file` set you
-don't export anything. Your Mac must be awake and online; discord.py
-auto-reconnects after sleep.
+don't export anything. It starts Discord when a Discord token resolves (and
+channels or DMs are set) and Mattermost when `[mattermost] url` is set. If
+Mattermost is set but lacks a token or channels, `serve` logs a warning and
+runs Discord alone; it exits with an error only when nothing can run. All
+front-ends share one concurrency cap. Your Mac must be awake and online; both
+front-ends reconnect after sleep.
 
 ## Watching live (tmux mode only)
 
@@ -396,6 +444,25 @@ Both run on your logged-in `claude` (no API key needed). Do **not** put
 breaks subscription auth. Each **new** thread replays the published session's
 full context (~its token count per cold question), which is fine for Q&A.
 
+**Follow-ups after you keep working (headless only).** A thread's fork is a
+snapshot from when the thread opened. If the published session's transcript
+has grown since then, the next follow-up forks your **latest** session afresh
+and prepends a recap of the thread's earlier Q&A, so the colleague gets your
+newest context without losing the conversation. The daemon log marks these
+turns `follow-up (re-forked from latest session)`. Tune or disable it:
+
+```toml
+[tunnel]
+refresh_forks = true     # false = always resume the thread's original fork
+
+[limits]
+recap_max_chars = 8000   # size budget of the earlier-Q&A recap
+```
+
+The tmux backend always resumes the thread's own fork. A new
+`<handle> <question>` post always starts from your latest state in either
+mode.
+
 The daemon logs **one line per question** — `Q [thread] handle ← asker: "…"` on
 arrival and `A [thread] handle: … in Ns, N chars, fork …` on completion (plus
 errors) — so tailing the `serve` output is a live activity feed and a
@@ -406,9 +473,10 @@ table.
 ## Security notes
 
 <Aside type="caution">
-**Access equals Discord channel membership** plus knowing a live handle. Use a
-private channel and/or `allowed_user_ids` / `allowed_role_ids`, and `>share
-off` when done.
+**Access equals channel membership** plus knowing a live handle. Use a
+private channel and/or allowlists (`[discord] allowed_user_ids` /
+`allowed_role_ids`, `[mattermost] allowed_user_ids`), and `>share off` when
+done.
 </Aside>
 
 <Aside type="caution">

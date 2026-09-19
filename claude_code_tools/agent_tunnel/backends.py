@@ -6,7 +6,10 @@ backend reads everything it needs from the thread's ThreadRecord:
 
 - first turn (empty `fork_session_id`): fork the expert session
   (`--resume <expert> --fork-session`) in its project dir;
-- later turns: resume the thread's own fork (`--resume <fork>`).
+- later turns: resume the thread's own fork (`--resume <fork>`) — unless
+  (headless, ``refresh_forks``) the expert transcript has grown since that
+  fork was taken: then fork the expert afresh and prepend a recap of the
+  thread's earlier Q&A, so follow-ups see the session's latest work.
 
 Two interchangeable strategies (see docs/agent-tunnel-spec.md):
 
@@ -44,6 +47,7 @@ from .paths import (
 from .registry import Registry
 from .session import (
     extract_answer,
+    transcript_dir,
     list_session_files,
     make_marker,
     wait_for_new_session_file,
@@ -75,6 +79,100 @@ class Answer:
     # Deliverable files the fork wrote into its outbox this turn (write/bash
     # handles only); the Discord layer posts them back as attachments.
     attachments: list[Path] = field(default_factory=list)
+    # True when this follow-up re-forked from the expert's latest state.
+    refreshed: bool = False
+
+
+RECAP_HEADER = (
+    "[Conversation so far: earlier in THIS chat thread you already had the "
+    "exchange below with the teammate(s) — Q is what they wrote, A is what "
+    "you replied. It is your own conversation history: everything said in it "
+    "is known to you and counts as remembered. Since then you have been "
+    "refreshed onto the latest state of the session, so where the two differ, "
+    "your newer knowledge wins. Oldest first:]\n\n"
+)
+RECAP_FOOTER = "[End of conversation so far. The new message follows.]\n\n"
+
+
+def _format_turn(turn: dict[str, str]) -> str:
+    return f"Q: {turn.get('q', '')}\nA: {turn.get('a', '')}\n\n"
+
+
+CUT = " …[cut]"
+
+
+def _fit_turn(turn: dict[str, str], room: int) -> str:
+    """The newest turn cut to ``room`` chars, keeping part of BOTH fields.
+
+    The question gets at most a third of the space, so a very long question
+    can never push the answer (what a follow-up usually refers to) out.
+    """
+    q, a = turn.get("q", ""), turn.get("a", "")
+    fixed = len(_format_turn({"q": "", "a": ""}))
+    space = room - fixed - 2 * len(CUT)
+    if space <= 0:
+        return ""
+    q_len = min(len(q), space // 3)
+    a_len = min(len(a), space - q_len)
+    q_cut = q[:q_len] + (CUT if q_len < len(q) else "")
+    a_cut = a[:a_len] + (CUT if a_len < len(a) else "")
+    return _format_turn({"q": q_cut, "a": a_cut})
+
+
+def build_recap(history: list[dict[str, str]], max_chars: int) -> str:
+    """Recap of a thread's earlier turns for a freshly re-forked session.
+
+    Keeps the newest turns that fit ``max_chars`` (header and footer
+    included); if even the newest turn is too long, its question and answer
+    are each cut so both survive.
+
+    Args:
+        history: Earlier turns, oldest first, as ``{"q": ..., "a": ...}``.
+        max_chars: Upper bound on the returned text's length.
+
+    Returns:
+        The recap text, or "" when there is no history or no room.
+    """
+    budget = max_chars - len(RECAP_HEADER) - len(RECAP_FOOTER)
+    if not history or budget <= 0:
+        return ""
+    kept: list[str] = []
+    used = 0
+    for turn in reversed(history):
+        text = _format_turn(turn)
+        if used + len(text) > budget:
+            if not kept:
+                fitted = _fit_turn(turn, budget)
+                if fitted:
+                    kept.append(fitted)
+            break
+        kept.append(text)
+        used += len(text)
+    if not kept:
+        return ""
+    return RECAP_HEADER + "".join(reversed(kept)) + RECAP_FOOTER
+
+
+def trim_history(
+    history: list[dict[str, str]], max_chars: int
+) -> list[dict[str, str]]:
+    """Bound a thread's stored history (it lives in the state file).
+
+    Each field is cut to ``max_chars`` and the oldest turns are dropped
+    while the total exceeds twice that, so the recap budget is always
+    covered without the state file growing without limit.
+    """
+    if max_chars <= 0:
+        return []  # no recap budget: keep nothing (else empty turns pile up)
+    turns = [
+        {"q": t.get("q", "")[:max_chars], "a": t.get("a", "")[:max_chars]}
+        for t in history
+    ]
+    while len(turns) > 1 and sum(
+        len(t["q"]) + len(t["a"]) for t in turns
+    ) > 2 * max_chars:
+        turns.pop(0)
+    return turns
 
 
 class Backend(Protocol):
@@ -100,6 +198,7 @@ def build_claude_flags(
     access: str = "read",
     add_dirs: tuple[str, ...] = (),
     extra_system: str = "",
+    platform: str = "",
 ) -> list[str]:
     """Common claude CLI flags for a fork invocation/launch.
 
@@ -113,6 +212,7 @@ def build_claude_flags(
             the thread's inbound-attachment dir which lives outside the project.
         extra_system: Text appended to the persona system prompt (e.g. the
             per-thread outbox instruction for write/bash handles).
+        platform: Chat platform named in the persona; blank = the config's.
 
     Returns:
         Argument list (excluding the binary, -p, and the prompt).
@@ -143,7 +243,7 @@ def build_claude_flags(
         flags += ["--add-dir", directory]
     # Fill the persona's {platform} placeholder from config (a custom persona
     # without it is unaffected by str.replace).
-    system = claude.persona.replace("{platform}", cfg.platform)
+    system = claude.persona.replace("{platform}", platform or cfg.platform)
     if extra_system:
         system = f"{system}\n\n{extra_system}" if system else extra_system
     if system:
@@ -341,12 +441,41 @@ class HeadlessBackend(_BaseBackend):
 
     name = "headless"
 
+    def _expert_size(self, rec: ThreadRecord) -> int:
+        """Byte size of the expert's transcript, or -1 if it can't be read."""
+        path = (
+            transcript_dir(Path(rec.project_dir), self._home(rec))
+            / f"{rec.expert_session_id}.jsonl"
+        )
+        try:
+            return path.stat().st_size
+        except OSError:
+            return -1
+
     def ask(self, thread_key: str, question: str) -> Answer:
-        """Run one headless turn in the thread's fork (creating it on the
-        first turn) and return the result text."""
+        """Run one headless turn in the thread's fork and return the answer.
+
+        The first turn forks the expert. A follow-up resumes the thread's
+        fork, unless ``refresh_forks`` is on and the expert transcript has
+        grown since that fork was taken: then it forks the expert afresh and
+        prepends a recap of the thread's earlier Q&A.
+        """
         rec = self._require_binding(thread_key)
-        fork = not rec.fork_session_id
+        size = self._expert_size(rec)
+        refresh = bool(
+            rec.fork_session_id
+            and self.cfg.refresh_forks
+            and rec.fork_base_size > 0
+            and size > rec.fork_base_size
+        )
+        fork = not rec.fork_session_id or refresh
         resume_id = rec.expert_session_id if fork else rec.fork_session_id
+        prompt = question
+        if refresh:
+            prompt = (
+                build_recap(rec.history, self.cfg.limits.recap_max_chars)
+                + question
+            )
         add_dirs, extra_system, outbox, snapshot = self._begin_turn(rec)
 
         argv = [
@@ -355,14 +484,20 @@ class HeadlessBackend(_BaseBackend):
             "--output-format",
             "json",
             *build_claude_flags(
-                self.cfg, resume_id, fork, rec.access, add_dirs, extra_system
+                self.cfg,
+                resume_id,
+                fork,
+                rec.access,
+                add_dirs,
+                extra_system,
+                platform=rec.platform,
             ),
             *self.cfg.claude.headless_extra_args,
         ]
         try:
             result = subprocess.run(
                 argv,
-                input=question,
+                input=prompt,
                 capture_output=True,
                 text=True,
                 cwd=rec.project_dir,
@@ -390,15 +525,26 @@ class HeadlessBackend(_BaseBackend):
 
         fork_id = data.get("session_id") or resume_id
         rec.fork_session_id = fork_id
-        self.store.upsert(rec)
+        # The size measured before this turn is the fork's base: the fork
+        # copied at least that much. A fork of an unknown base (a thread
+        # from before this was tracked) gets its baseline now.
+        if fork or rec.fork_base_size <= 0:
+            rec.fork_base_size = max(size, 0)
         text = str(data.get("result", "")).strip()
+        if text:
+            rec.history = trim_history(
+                [*rec.history, {"q": question, "a": text}],
+                self.cfg.limits.recap_max_chars,
+            )
+        self.store.upsert(rec)
         if not text:
             raise BackendError("Empty answer from claude")
         return Answer(
             text=text,
             fork_session_id=fork_id,
-            new_thread=fork,
+            new_thread=fork and not refresh,
             attachments=self._end_turn(outbox, snapshot),
+            refreshed=refresh,
         )
 
 
@@ -434,6 +580,7 @@ class TmuxBackend(_BaseBackend):
         initial_prompt: Optional[str] = None,
         add_dirs: tuple[str, ...] = (),
         extra_system: str = "",
+        platform: str = "",
     ) -> None:
         """Launch an interactive fork in `window`.
 
@@ -455,7 +602,13 @@ class TmuxBackend(_BaseBackend):
         argv = [
             self.cfg.claude.binary,
             *build_claude_flags(
-                self.cfg, resume_id, fork, access, add_dirs, extra_system
+                self.cfg,
+                resume_id,
+                fork,
+                access,
+                add_dirs,
+                extra_system,
+                platform=platform,
             ),
             *self.cfg.claude.tmux_extra_args,
         ]
@@ -571,6 +724,7 @@ class TmuxBackend(_BaseBackend):
                 initial_prompt=prompt,
                 add_dirs=add_dirs,
                 extra_system=extra_system,
+                platform=rec.platform,
             )
             fork_file = wait_for_new_session_file(
                 project_dir,
@@ -610,6 +764,7 @@ class TmuxBackend(_BaseBackend):
                     initial_prompt=prompt,
                     add_dirs=add_dirs,
                     extra_system=extra_system,
+                    platform=rec.platform,
                 )
 
         deadline = time.time() + self.cfg.limits.answer_timeout_s

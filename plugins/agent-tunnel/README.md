@@ -2,7 +2,7 @@
 
 Provides the `>share` control command — a `UserPromptSubmit` hook that
 publishes the **current** Claude Code session so teammates can ask it
-questions through the `agent-tunnel` Discord bot.
+questions through the `agent-tunnel` Discord or Mattermost bot.
 
 ## What it does
 
@@ -20,9 +20,9 @@ payload and records `handle → {session_id, cwd}` in the shared registry at
 printed, exactly like `>allow-git`.
 
 Give the handle to colleagues; they post `<handle> <question>` in the
-agent-tunnel Discord channel, and the `agent-tunnel serve` daemon answers
-from a read-only fork of that session. See the `agent-tunnel` tool docs for
-the daemon side and Discord setup.
+agent-tunnel Discord or Mattermost channel, and the `agent-tunnel serve`
+daemon answers from a read-only fork of that session. See the `agent-tunnel`
+tool docs for the daemon side and the Discord / Mattermost setup.
 
 ## Why a hook (not a CLI command)
 
