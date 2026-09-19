@@ -294,10 +294,6 @@ class MattermostAPI:
         out = await self._json("POST", "/files", data=form)
         return out["file_infos"][0]["id"]
 
-    async def file_info(self, file_id: str) -> dict[str, Any]:
-        """A file's metadata (name, size)."""
-        return await self._json("GET", f"/files/{file_id}/info")
-
     async def download(self, file_id: str, max_bytes: int) -> bytes:
         """Fetch a file's bytes, refusing more than ``max_bytes``."""
         async with self.session.get(
@@ -512,33 +508,15 @@ class _Router:
     def _cap(self) -> int:
         return int(self.cfg.limits.max_attachment_mb * 1024 * 1024)
 
-    async def _sized(self, files: list[MMFile]) -> list[MMFile]:
-        """Fill in sizes the event omitted, so the relay's cap applies.
+    def _uploads(self, post: MMPost) -> list[MMUpload]:
+        """The post's files as relay uploads.
 
-        A file whose size can't be learned is treated as over the cap.
+        No I/O here, so nothing awaits before the relay takes the thread lock
+        (an await here could let a later reply overtake this post). A file
+        whose size the event omits reports 0; the download itself stops at
+        the size cap, and the relay then lists the file as skipped.
         """
-        out: list[MMFile] = []
-        for f in files:
-            if f.size <= 0:
-                try:
-                    info = await self.api.file_info(f.id)
-                    f = MMFile(
-                        f.id, info.get("name") or f.name, info.get("size") or 0
-                    )
-                except Exception:
-                    logger.warning("Mattermost: no info for file %s", f.id)
-                if f.size <= 0:
-                    f = MMFile(f.id, f.name, self._cap() + 1)
-            out.append(f)
-        return out
-
-    async def _uploads(self, post: MMPost) -> list[MMUpload]:
-        """The post's files as relay uploads (only the first max_attachments
-        are sized; the relay reports the rest as skipped)."""
-        limit = self.cfg.limits.max_attachments
-        head = await self._sized(post.files[:limit])
-        files = head + post.files[limit:]
-        return [MMUpload(self.api, f, self._cap()) for f in files]
+        return [MMUpload(self.api, f, self._cap()) for f in post.files]
 
     async def handle(self, post: MMPost) -> None:
         """Route one post; errors are logged, never raised."""
@@ -582,7 +560,7 @@ class _Router:
                 sender,
             )
             relay.bind(route.thread_key, rec, sender, PLATFORM)
-            uploads = await self._uploads(post)
+            uploads = self._uploads(post)
             if route.text or uploads:
                 await relay.answer(
                     dest, route.thread_key, route.text, uploads, sender=sender
@@ -601,7 +579,7 @@ class _Router:
                 except Exception:
                     logger.debug("Mattermost: reaction failed", exc_info=True)
                 return
-            uploads = await self._uploads(post)
+            uploads = self._uploads(post)
             await relay.answer(
                 dest, route.thread_key, route.text, uploads, sender=sender
             )

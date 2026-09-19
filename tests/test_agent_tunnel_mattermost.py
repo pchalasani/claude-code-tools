@@ -424,3 +424,23 @@ respond_to_dms = true
     monkeypatch.setenv("AGENT_TUNNEL_DISCORD_TOKEN", "d")
     result = CliRunner().invoke(cli, ["doctor", "--config", str(cfg_file)])
     assert result.exit_code == 0, result.output
+
+
+class OverCapUpload:
+    """Size unknown up front (0); the capped download refuses it."""
+
+    filename = "huge.bin"
+    size = 0
+
+    async def save(self, path: str) -> None:
+        raise RuntimeError("download exceeds size cap")
+
+
+def test_relay_unknown_size_over_cap_is_skipped(relay) -> None:
+    rly, rec = relay
+    rly.bind("mm:root5", rec, "bob", "Mattermost")
+    dest = FakeDest()
+    asyncio.run(
+        rly.answer(dest, "mm:root5", "q", [OverCapUpload()], sender="bob")
+    )
+    assert any("Skipped" in m and "huge.bin" in m for m in dest.sent)
