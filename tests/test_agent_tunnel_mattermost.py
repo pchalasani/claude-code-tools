@@ -366,3 +366,38 @@ channel_ids = ["{CHAN}"]
     assert result.exit_code == 0, result.output
     assert "Mattermost token" in result.output
     assert "Watched channel(s)" not in result.output
+
+
+def test_doctor_incomplete_mattermost_warns_when_discord_runs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from click.testing import CliRunner
+
+    from claude_code_tools.agent_tunnel.cli import cli
+
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(
+        f"""
+[tunnel]
+registry_path = "{tmp_path / 'registry.json'}"
+state_path = "{tmp_path / 'state.json'}"
+[claude]
+binary = "{sys.executable}"
+[discord]
+channel_ids = [1]
+[mattermost]
+url = "http://localhost:8065"
+token_file = "{tmp_path / 'missing.txt'}"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AGENT_TUNNEL_DISCORD_TOKEN", "d")
+    monkeypatch.delenv("AGENT_TUNNEL_MATTERMOST_TOKEN", raising=False)
+    result = CliRunner().invoke(cli, ["doctor", "--config", str(cfg_file)])
+    # serve would run Discord and skip Mattermost: doctor passes, but says so.
+    assert result.exit_code == 0, result.output
+    assert "serve skips Mattermost" in result.output
+    # With Discord unusable too, the Mattermost problem fails doctor.
+    monkeypatch.delenv("AGENT_TUNNEL_DISCORD_TOKEN")
+    result = CliRunner().invoke(cli, ["doctor", "--config", str(cfg_file)])
+    assert result.exit_code != 0

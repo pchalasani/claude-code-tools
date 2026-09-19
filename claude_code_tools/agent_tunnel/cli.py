@@ -654,10 +654,13 @@ def doctor(config: Optional[str]) -> None:
 
     from .convert import detect_converter
     from .discord_bot import discord_ready, resolve_token
-    from .mattermost_bot import resolve_mm_token
+    from .mattermost_bot import mattermost_ready, resolve_mm_token
 
     cfg = _build(config)
     checks: list[tuple[bool, str]] = []
+    # Checks shown but not failing: an incomplete Mattermost while Discord
+    # runs (serve skips it with a warning; doctor mirrors that).
+    warn_only: list[tuple[bool, str]] = []
     discord_token = bool(resolve_token(cfg))
     mm = cfg.mattermost
     # Discord is optional once Mattermost is configured: check it only when
@@ -674,7 +677,10 @@ def doctor(config: Optional[str]) -> None:
             ),
         ]
     if mm.url:
-        checks += [
+        mm_warn_only = (
+            mattermost_ready(cfg) is not None and discord_ready(cfg) is None
+        )
+        (warn_only if mm_warn_only else checks).extend([
             (
                 bool(resolve_mm_token(cfg)),
                 f"Mattermost token ({mm.token_env} or token_file)",
@@ -684,7 +690,7 @@ def doctor(config: Optional[str]) -> None:
                 "Mattermost channel(s): "
                 f"{mm.channel_ids or 'none set'} @ {mm.url}",
             ),
-        ]
+        ])
     checks.append(
         (
             shutil.which(cfg.claude.binary) is not None,
@@ -699,6 +705,9 @@ def doctor(config: Optional[str]) -> None:
     for ok, label in checks:
         click.echo(f"  {'✓' if ok else '✗'} {label}")
         ok_all = ok_all and ok
+    for ok, label in warn_only:
+        suffix = "" if ok else "  (serve skips Mattermost until fixed)"
+        click.echo(f"  {'✓' if ok else '!'} {label}{suffix}")
     n = len(Registry(cfg.registry_path).active())
     click.echo(f"  • {n} published session(s) live")
     if cfg.attachments.convert == "off":
