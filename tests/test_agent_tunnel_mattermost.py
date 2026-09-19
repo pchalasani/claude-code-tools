@@ -526,14 +526,12 @@ def test_close_waits_for_answer_delivery(relay) -> None:
             rly.answer(dest, "mm:root9", "Z" * 1000, sender="bob")
         )
         # Close while the answer's (slow, chunked) delivery is under way.
-        for _ in range(500):  # bounded: fail, never hang
-            if ans.done() or any("LINE" in m for m in dest.sent):
-                break
+        while not (ans.done() or any("LINE" in m for m in dest.sent)):
             await asyncio.sleep(0.01)
         assert not ans.done(), "answer finished before delivery was observed"
         await rly.close(dest, "mm:root9")
         await ans
 
-    asyncio.run(run())
+    asyncio.run(asyncio.wait_for(run(), timeout=30))  # fail, never hang
     # The long answer takes several slow posts; the close must wait for all.
     assert "Closed" in dest.sent[-1], dest.sent[-3:]
