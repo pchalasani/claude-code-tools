@@ -333,3 +333,36 @@ def test_parse_posted_rejects_non_dict_payloads() -> None:
     assert parse_posted({"event": "posted", "data": {"post": "[]"}}) is None
     assert parse_posted({"event": "posted", "data": "x"}) is None
     assert parse_posted(["not", "a", "dict"]) is None  # type: ignore[arg-type]
+
+
+def test_doctor_mattermost_only_ignores_stray_discord_token(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from click.testing import CliRunner
+
+    from claude_code_tools.agent_tunnel.cli import cli
+
+    tok = tmp_path / "mm.txt"
+    tok.write_text("secret\n", encoding="utf-8")
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(
+        f"""
+[tunnel]
+registry_path = "{tmp_path / 'registry.json'}"
+state_path = "{tmp_path / 'state.json'}"
+[claude]
+binary = "{sys.executable}"
+[mattermost]
+url = "http://localhost:8065"
+token_file = "{tok}"
+channel_ids = ["{CHAN}"]
+""",
+        encoding="utf-8",
+    )
+    # A leftover Discord token but no Discord channels: serve runs only
+    # Mattermost, so doctor must not fail on Discord.
+    monkeypatch.setenv("AGENT_TUNNEL_DISCORD_TOKEN", "stray")
+    result = CliRunner().invoke(cli, ["doctor", "--config", str(cfg_file)])
+    assert result.exit_code == 0, result.output
+    assert "Mattermost token" in result.output
+    assert "Watched channel(s)" not in result.output

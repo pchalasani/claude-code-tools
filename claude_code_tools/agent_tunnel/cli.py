@@ -653,16 +653,16 @@ def doctor(config: Optional[str]) -> None:
     import shutil
 
     from .convert import detect_converter
-    from .discord_bot import resolve_token
+    from .discord_bot import discord_ready, resolve_token
     from .mattermost_bot import resolve_mm_token
 
     cfg = _build(config)
     checks: list[tuple[bool, str]] = []
     discord_token = bool(resolve_token(cfg))
     mm = cfg.mattermost
-    # Discord is optional once Mattermost is configured; check it only when
-    # it is (or is the only front-end) in use.
-    if discord_token or not mm.url:
+    # Discord is optional once Mattermost is configured: check it only when
+    # serve would run it, or when it is the only front-end.
+    if discord_ready(cfg) is None or not mm.url:
         checks += [
             (
                 discord_token,
