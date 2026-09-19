@@ -672,8 +672,9 @@ def doctor(config: Optional[str]) -> None:
                 f"Discord token ({cfg.discord.token_env} or token_file)",
             ),
             (
-                bool(cfg.discord.channel_ids),
-                f"Watched channel(s): {cfg.discord.channel_ids or 'none set'}",
+                bool(cfg.discord.channel_ids or cfg.discord.respond_to_dms),
+                f"Watched channel(s): {cfg.discord.channel_ids or 'none set'}"
+                + (" (+ DMs)" if cfg.discord.respond_to_dms else ""),
             ),
         ]
     if mm.url:
