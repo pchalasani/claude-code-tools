@@ -312,7 +312,10 @@ class Relay:
             )
             self._notices.add(notice)
             notice.add_done_callback(self._notice_done)
-        async with lock, self.sem:
+        # The thread lock spans the whole turn, delivery included, so a
+        # `!done` (close) can't clean up before the answer and its files are
+        # posted. The global semaphore covers only the backend call.
+        async with lock:
             # The thread may have been rebound (even to the same session,
             # which resets the fork) or closed while this turn waited for the
             # lock. A fresh bind stamps a new created_at, so compare the full
@@ -354,11 +357,12 @@ class Relay:
                         current.platform if current.platform else self.cfg.platform
                     )
                     question = format_relayed_message(sender, question, platform)
-                    answer = await asyncio.to_thread(
-                        backend_for_record(self.cfg, self.store, rec).ask,
-                        thread_key,
-                        question,
-                    )
+                    async with self.sem:
+                        answer = await asyncio.to_thread(
+                            backend_for_record(self.cfg, self.store, rec).ask,
+                            thread_key,
+                            question,
+                        )
             except BackendError as exc:
                 logger.warning(
                     "A [%s] %s: error after %.1fs — %s",
@@ -379,15 +383,17 @@ class Relay:
                 )
                 return
 
-        self._log_answer(thread_key, handle, answer, start)
-        text = answer.text
-        if len(text) > self.cfg.limits.max_inline_chars:
-            preview = split_chunks(text, min(dest.max_len, PREVIEW_CHARS))[0]
-            await dest.send_text_file(preview, "answer.md", text.encode("utf-8"))
-        else:
-            for chunk in split_chunks(text, dest.max_len):
-                await dest.send(chunk)
-        await self._post_deliverables(dest, answer)
+            self._log_answer(thread_key, handle, answer, start)
+            text = answer.text
+            if len(text) > self.cfg.limits.max_inline_chars:
+                preview = split_chunks(text, min(dest.max_len, PREVIEW_CHARS))[0]
+                await dest.send_text_file(
+                    preview, "answer.md", text.encode("utf-8")
+                )
+            else:
+                for chunk in split_chunks(text, dest.max_len):
+                    await dest.send(chunk)
+            await self._post_deliverables(dest, answer)
 
     def _notice_done(self, task: "asyncio.Task[None]") -> None:
         self._notices.discard(task)

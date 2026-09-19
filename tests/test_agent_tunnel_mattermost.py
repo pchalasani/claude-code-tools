@@ -506,3 +506,31 @@ def test_relay_skips_upload_whose_lookup_fails(relay) -> None:
         rly.answer(dest, "mm:root8", "q", [FailingLookupUpload()], sender="bob")
     )
     assert any("Skipped" in m and "lookup failed" in m for m in dest.sent)
+
+
+class SlowDest(FakeDest):
+    """Each post takes a moment, as a real chat API call does."""
+
+    async def send(self, text: str) -> None:
+        await asyncio.sleep(0.05)
+        self.sent.append(text)
+
+
+def test_close_waits_for_answer_delivery(relay) -> None:
+    rly, rec = relay
+    rly.bind("mm:root9", rec, "bob", "Mattermost")
+    dest = SlowDest()
+
+    async def run() -> None:
+        ans = asyncio.create_task(
+            rly.answer(dest, "mm:root9", "Z" * 1000, sender="bob")
+        )
+        # Close while the answer's (slow, chunked) delivery is under way.
+        while not any("ECHO" in m or "LINE" in m for m in dest.sent):
+            await asyncio.sleep(0.01)
+        await rly.close(dest, "mm:root9")
+        await ans
+
+    asyncio.run(run())
+    # The long answer takes several slow posts; the close must wait for all.
+    assert "Closed" in dest.sent[-1], dest.sent[-3:]
