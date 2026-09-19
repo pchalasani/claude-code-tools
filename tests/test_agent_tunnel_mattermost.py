@@ -444,3 +444,50 @@ def test_relay_unknown_size_over_cap_is_skipped(relay) -> None:
         rly.answer(dest, "mm:root5", "q", [OverCapUpload()], sender="bob")
     )
     assert any("Skipped" in m and "huge.bin" in m for m in dest.sent)
+
+
+class NamelessUpload:
+    """Event gave only an id: prepare() learns the real name and size."""
+
+    def __init__(self) -> None:
+        self.filename = "file"
+        self.size = 0
+        self.prepared = False
+
+    async def prepare(self) -> None:
+        self.prepared = True
+        self.filename = "notes.md"
+        self.size = 5
+
+    async def save(self, path: str) -> None:
+        Path(path).write_text("hello")
+
+
+def test_relay_prepares_uploads_to_learn_real_names(relay) -> None:
+    rly, rec = relay
+    rly.bind("mm:root6", rec, "bob", "Mattermost")
+    up = NamelessUpload()
+    dest = FakeDest()
+    asyncio.run(rly.answer(dest, "mm:root6", "q", [up], sender="bob"))
+    assert up.prepared
+    assert "notes.md" in "".join(dest.sent)
+
+
+def test_relay_answers_queued_messages_in_arrival_order(relay) -> None:
+    rly, rec = relay
+    rly.bind("mm:root7", rec, "bob", "Mattermost")
+    dest = FakeDest()
+
+    async def run() -> None:
+        tasks = [
+            asyncio.create_task(
+                rly.answer(dest, "mm:root7", f"MSG{i}", sender="bob")
+            )
+            for i in range(3)
+        ]
+        await asyncio.gather(*tasks)
+
+    asyncio.run(run())
+    text = "".join(dest.sent)
+    order = [text.index(f"MSG{i}") for i in range(3)]
+    assert order == sorted(order)

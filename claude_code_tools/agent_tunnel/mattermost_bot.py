@@ -294,6 +294,10 @@ class MattermostAPI:
         out = await self._json("POST", "/files", data=form)
         return out["file_infos"][0]["id"]
 
+    async def file_info(self, file_id: str) -> dict[str, Any]:
+        """A file's metadata (name, size)."""
+        return await self._json("GET", f"/files/{file_id}/info")
+
     async def download(self, file_id: str, max_bytes: int) -> bytes:
         """Fetch a file's bytes, refusing more than ``max_bytes``."""
         async with self.session.get(
@@ -337,12 +341,24 @@ class MMUpload:
     """A Mattermost attachment as a relay :class:`~.relay.Upload`."""
 
     def __init__(self, api: MattermostAPI, file: MMFile, max_bytes: int) -> None:
-        """Wrap one attached file (``size`` must already be known)."""
+        """Wrap one attached file (name/size may be filled in by prepare)."""
         self.api = api
         self.file_id = file.id
         self.filename = file.name
         self.size = file.size
         self.max_bytes = max_bytes
+
+    async def prepare(self) -> None:
+        """Fetch the real name and size when the event omitted them.
+
+        Called by the relay under the thread lock. The name matters: its
+        extension decides Office conversion.
+        """
+        if self.size > 0 and self.filename != "file":
+            return
+        info = await self.api.file_info(self.file_id)
+        self.filename = info.get("name") or self.filename
+        self.size = info.get("size") or self.size
 
     async def save(self, path: str) -> None:
         """Download to ``path`` (the download itself stops at the cap)."""

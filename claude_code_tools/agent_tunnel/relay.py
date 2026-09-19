@@ -173,6 +173,7 @@ class Relay:
         self.locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._sem: Optional[asyncio.Semaphore] = None
         self._last_ask: dict[Any, float] = {}
+        self._notices: set[asyncio.Task[None]] = set()
 
     @property
     def sem(self) -> asyncio.Semaphore:
@@ -301,10 +302,16 @@ class Relay:
         )
         lock = self.locks[thread_key]
         if lock.locked():
-            await dest.send(
-                "⏳ Still working on the previous question here — "
-                "I'll take this one next."
+            # Fire-and-forget: awaiting here would let a later message queue
+            # on the lock ahead of this one and be answered out of order.
+            notice = asyncio.create_task(
+                dest.send(
+                    "⏳ Still working on the previous question here — "
+                    "I'll take this one next."
+                )
             )
+            self._notices.add(notice)
+            notice.add_done_callback(self._notices.discard)
         async with lock, self.sem:
             # The thread may have been rebound (even to the same session,
             # which resets the fork) or closed while this turn waited for the
@@ -438,6 +445,15 @@ class Relay:
         unreadable: list[str] = []
         used: set[str] = set()
         for att in list(uploads)[:limit]:
+            # Optional hook, run under the thread lock: an upload may learn
+            # its real name/size here (a network call) without letting a
+            # later message overtake this one.
+            prepare = getattr(att, "prepare", None)
+            if prepare is not None:
+                try:
+                    await prepare()
+                except Exception:
+                    logger.warning("Could not look up %s", att.filename)
             size = getattr(att, "size", 0) or 0
             if size > cap:
                 skipped.append(f"{att.filename} ({size / 1048576:.1f} MB)")
