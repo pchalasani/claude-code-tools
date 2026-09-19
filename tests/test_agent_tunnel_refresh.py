@@ -263,3 +263,10 @@ def test_zero_recap_budget_keeps_no_history(env) -> None:
     for i in range(5):
         backend.ask("th:1", f"Q{i}")
     assert store.get("th:1").history == []
+
+
+def test_build_recap_long_question_keeps_the_answer() -> None:
+    turn = {"q": "Q" * 50_000, "a": "ANSWER-TAIL " + "a" * 100}
+    recap = build_recap([turn], max_chars=2000)
+    assert len(recap) <= 2000
+    assert "A: ANSWER-TAIL" in recap

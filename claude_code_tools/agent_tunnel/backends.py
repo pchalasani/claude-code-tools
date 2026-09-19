@@ -98,11 +98,33 @@ def _format_turn(turn: dict[str, str]) -> str:
     return f"Q: {turn.get('q', '')}\nA: {turn.get('a', '')}\n\n"
 
 
+CUT = " …[cut]"
+
+
+def _fit_turn(turn: dict[str, str], room: int) -> str:
+    """The newest turn cut to ``room`` chars, keeping part of BOTH fields.
+
+    The question gets at most a third of the space, so a very long question
+    can never push the answer (what a follow-up usually refers to) out.
+    """
+    q, a = turn.get("q", ""), turn.get("a", "")
+    fixed = len(_format_turn({"q": "", "a": ""}))
+    space = room - fixed - 2 * len(CUT)
+    if space <= 0:
+        return ""
+    q_len = min(len(q), space // 3)
+    a_len = min(len(a), space - q_len)
+    q_cut = q[:q_len] + (CUT if q_len < len(q) else "")
+    a_cut = a[:a_len] + (CUT if a_len < len(a) else "")
+    return _format_turn({"q": q_cut, "a": a_cut})
+
+
 def build_recap(history: list[dict[str, str]], max_chars: int) -> str:
     """Recap of a thread's earlier turns for a freshly re-forked session.
 
     Keeps the newest turns that fit ``max_chars`` (header and footer
-    included); if even the newest turn is too long, its text is cut to fit.
+    included); if even the newest turn is too long, its question and answer
+    are each cut so both survive.
 
     Args:
         history: Earlier turns, oldest first, as ``{"q": ..., "a": ...}``.
@@ -120,10 +142,9 @@ def build_recap(history: list[dict[str, str]], max_chars: int) -> str:
         text = _format_turn(turn)
         if used + len(text) > budget:
             if not kept:
-                marker = " …[cut]\n\n"
-                room = budget - len(marker)
-                if room > 0:
-                    kept.append(text[:room] + marker)
+                fitted = _fit_turn(turn, budget)
+                if fitted:
+                    kept.append(fitted)
             break
         kept.append(text)
         used += len(text)
