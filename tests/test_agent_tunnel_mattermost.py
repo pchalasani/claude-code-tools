@@ -287,7 +287,8 @@ def test_relay_turn_chunks_and_names_platform(relay) -> None:
     asyncio.run(
         rly.answer(dest, "mm:root1", "what's new?", uploads, sender="alice")
     )
-    text = "\n".join(dest.sent)
+    # Chunks may split mid-line, so rejoin without adding separators.
+    text = "".join(dest.sent)
     assert all(len(chunk) <= FakeDest.max_len for chunk in dest.sent)
     assert len(dest.sent) > 1  # long answer was chunked to the platform limit
     # The fork was told who asked, on which platform, and where the file is.

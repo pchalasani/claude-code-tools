@@ -141,6 +141,8 @@ def trim_history(
     while the total exceeds twice that, so the recap budget is always
     covered without the state file growing without limit.
     """
+    if max_chars <= 0:
+        return []  # no recap budget: keep nothing (else empty turns pile up)
     turns = [
         {"q": t.get("q", "")[:max_chars], "a": t.get("a", "")[:max_chars]}
         for t in history

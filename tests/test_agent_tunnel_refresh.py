@@ -254,3 +254,12 @@ def test_state_file_is_owner_only(tmp_path: Path) -> None:
     path = tmp_path / "s.json"
     TunnelStore(path).bind("k", "h", EXPERT, "/p", "headless")
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_zero_recap_budget_keeps_no_history(env) -> None:
+    cfg, store, _, _ = env
+    cfg.limits.recap_max_chars = 0
+    backend = HeadlessBackend(cfg, store)
+    for i in range(5):
+        backend.ask("th:1", f"Q{i}")
+    assert store.get("th:1").history == []
