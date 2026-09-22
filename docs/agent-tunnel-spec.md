@@ -54,7 +54,9 @@ safe.
   id; same handle and thread share one fork, so follow-ups remember earlier
   turns, and an existing thread outlives its handle's revocation as chat
   threads do. Every route carries a shared secret (`X-Ask-Token`, read from
-  `http.token_file`). It binds to loopback; a tunnel in front adds TLS.
+  `http.token_file`). It binds to loopback; a tunnel in front adds TLS. Its
+  forks are read-only whatever the handle's access, since the caller picks
+  the handle.
   Fields must be strings within their limits (over-limit is a 413); the
   per-user cooldown applies per `sender` (a 429 inside it). The
   response separates whether a turn ran from what it produced: a failed

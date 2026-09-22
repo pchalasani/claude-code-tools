@@ -64,6 +64,10 @@ from .trust import (
 # forks run under the session owner's subscription (see claude.unset_api_key).
 AUTH_OVERRIDE_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 
+# Thread keys of the HTTP front-end. Its callers are programs that pick any
+# published handle, so their forks stay read-only whatever the handle grants.
+HTTP_THREAD_PREFIX = "http:"
+
 
 class BackendError(RuntimeError):
     """Answering a question failed; message is user-presentable."""
@@ -319,6 +323,8 @@ class _BaseBackend:
         # already-running thread (same fork, context kept). Persisting it means
         # the change fires `_on_access_changed` once, not on every later turn.
         cur = self._current_access(rec)
+        if thread_key.startswith(HTTP_THREAD_PREFIX):
+            cur = "read"  # program callers never inherit write/bash/all
         if cur != rec.access:
             old = rec.access
             rec.access = cur

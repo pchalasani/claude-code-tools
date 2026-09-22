@@ -401,6 +401,9 @@ curl -s -X POST localhost:8766/ask \
   thread that already exists keeps working after `>share off`, like a chat
   thread; only a new thread needs a live handle.
 - `sender` (optional) is shown to the fork as who is asking.
+- Forks made over HTTP are **read-only whatever the handle's access** (a
+  `>share --write` or `--bash` handle answers with read tools here), because
+  the caller picks the handle.
 - Fields must be strings within their limits (a question over 8,000 characters
   is a 413). The `[limits] per_user_cooldown_s` applies per `sender`
   (a second question inside it is a 429). A failed turn is a 502 with the

@@ -204,15 +204,21 @@ class Relay:
         rec: PublishRecord,
         asker: str,
         platform: str,
+        access: Optional[str] = None,
     ) -> None:
-        """Bind a new chat thread to a published session."""
+        """Bind a new thread to a published session.
+
+        ``access`` overrides the handle's level for this thread; the HTTP
+        front-end passes ``"read"`` so a program caller never inherits
+        write/bash/all access.
+        """
         self.store.bind(
             thread_key,
             handle=rec.handle,
             expert_session_id=rec.session_id,
             project_dir=rec.cwd,
             config_dir=rec.config_dir,
-            access=rec.access,
+            access=access or rec.access,
             backend=self.cfg.backend,
             asker=asker,
             platform=platform,

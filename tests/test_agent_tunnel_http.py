@@ -377,3 +377,38 @@ async def _cooldown(cfg: TunnelConfig, relay: Relay) -> None:
     finally:
         await client.close()
 
+
+
+def test_http_forks_stay_read_only(stack) -> None:
+    """A handle shared with write access answers over HTTP with read access.
+
+    The bind stores ``read``, and the per-turn sync that lets a chat thread
+    follow a live ``>share --write`` must not lift an HTTP thread.
+    """
+    cfg, relay, rec = stack
+    relay.registry.upsert(
+        PublishRecord(
+            handle=rec.handle, session_id=rec.session_id, cwd=rec.cwd, access="write"
+        )
+    )
+    asyncio.run(_read_only(cfg, relay))
+
+
+async def _read_only(cfg: TunnelConfig, relay: Relay) -> None:
+    client = await _client(cfg, relay)
+    hdr = {"X-Ask-Token": "s3cret"}
+    body = {"handle": "jev-expert", "question": "q", "thread": "t6"}
+    try:
+        res = await client.post("/ask", json=body, headers=hdr)
+        assert res.status == 200
+        rec = relay.store.get("http:jev-expert:t6")
+        assert rec is not None and rec.access == "read"
+        # A second turn runs the live access sync again; still read.
+        res = await client.post("/ask", json=body, headers=hdr)
+        assert res.status == 200
+        assert relay.store.get("http:jev-expert:t6").access == "read"
+        # The same handle on a chat thread does get the write level.
+        relay.bind("mattermost:x", relay.registry.get("jev-expert"), "a", "Mm")
+        assert relay.store.get("mattermost:x").access == "write"
+    finally:
+        await client.close()

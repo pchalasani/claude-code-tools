@@ -15,9 +15,11 @@ Every route requires ``X-Ask-Token: <contents of http.token_file>``.
 ``thread`` is any caller-chosen id; questions with the same handle and
 thread share one fork, so follow-ups remember earlier turns. A thread that
 already exists keeps working after its handle is revoked, as chat threads
-do; only a new thread needs a live handle. The response says whether a
-turn ran (``ran``) separately from what it produced, and a failed turn is
-an HTTP 502 carrying the relay's own error text, never an empty answer.
+do; only a new thread needs a live handle. Forks made here are read-only
+whatever access the handle was shared with, because the caller picks the
+handle. The response says whether a turn ran (``ran``) separately from what
+it produced, and a failed turn is an HTTP 502 carrying the relay's own
+error text, never an empty answer.
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ from typing import Any, Optional, Sequence
 
 from aiohttp import web
 
+from .backends import HTTP_THREAD_PREFIX
 from .config import TunnelConfig
 from .relay import QUEUE_NOTICE, Relay
 
@@ -155,7 +158,8 @@ async def _turn(
         rec = relay.registry.get(handle)
         if rec is None or rec.revoked:
             return _json(404, {"ran": False, "error": f"no live handle {handle!r}"})
-        relay.bind(thread_key, rec, sender or "http", cfg.http.platform)
+        # Read-only whatever the handle grants: the caller chose the handle.
+        relay.bind(thread_key, rec, sender or "http", cfg.http.platform, "read")
     dest = CollectDest()
     problem = await relay.answer(dest, thread_key, question, sender=sender)
     if problem is not None or not dest.text:
@@ -230,7 +234,7 @@ def make_app(cfg: TunnelConfig, relay: Relay) -> web.Application:
                 429,
                 {"ran": False, "error": f"cooldown: one question per {wait:g} s"},
             )
-        thread_key = f"{PLATFORM}:{handle}:{thread}"
+        thread_key = f"{HTTP_THREAD_PREFIX}{handle}:{thread}"
         try:
             return await _turn(cfg, relay, thread_key, handle, thread, question, sender)
         except Exception:  # noqa: BLE001 - keep the JSON contract on any failure
