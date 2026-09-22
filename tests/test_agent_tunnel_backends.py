@@ -22,6 +22,7 @@ from claude_code_tools.agent_tunnel.backends import (
     backend_for_record,
     build_claude_flags,
 )
+from claude_code_tools.agent_tunnel.readonly import strip_permission_args
 from claude_code_tools.agent_tunnel.config import TunnelConfig
 from claude_code_tools.agent_tunnel.paths import uploads_dir_for
 from claude_code_tools.agent_tunnel.registry import PublishRecord, Registry
@@ -304,3 +305,123 @@ def test_tmux_backend_overrides_access_changed_hook() -> None:
     # live/manual tmux tier — from being silently dropped. No mock, no live tmux.
     assert TmuxBackend._on_access_changed is not _BaseBackend._on_access_changed
     assert HeadlessBackend._on_access_changed is _BaseBackend._on_access_changed
+
+
+class _KillRecorder:
+    """Stand-in for the tmux session that records the windows it killed.
+
+    ``survives`` keeps the window alive after the kill, the case where the
+    tmux command fails silently.
+    """
+
+    def __init__(self, survives: bool = False) -> None:
+        """Start with nothing killed."""
+        self.killed: list[str] = []
+        self.survives = survives
+
+    def kill_window(self, window: str) -> None:
+        """Record the kill."""
+        self.killed.append(window)
+
+    def window_alive(self, window: str) -> bool:
+        """Whether the window is still there after the kill."""
+        return self.survives
+
+
+def test_strip_permission_args_keeps_only_harmless_extras() -> None:
+    # [claude] headless_extra_args / tmux_extra_args are appended after the
+    # pinned flags, so a permission flag there would undo an HTTP fork's
+    # read-only pin. A flag's values go with it, however many it takes, so
+    # nothing is left behind for claude to read as a positional argument.
+    kept = strip_permission_args(
+        [
+            "--allowedTools",
+            "Bash",
+            "Write",
+            "--disallowed-tools=Write",
+            "--dangerously-skip-permissions",
+            "--permission-mode",
+            "acceptEdits",
+            "--add-dir",
+            "/tmp",
+            "/var/tmp",
+            "--mcp-config",
+            "servers.json",
+            "--settings=loose.json",
+            "--model",
+            "opus",
+            "--verbose",
+        ]
+    )
+    assert kept == ["--model", "opus", "--verbose"]
+    # A valueless flag keeps the argument that follows it.
+    assert strip_permission_args(["--strict-mcp-config", "--model", "opus"]) == [
+        "--model",
+        "opus",
+    ]
+
+
+def test_pinned_windows_are_shared_across_backend_instances(tmp_path: Path) -> None:
+    # The relay builds a fresh backend for every turn, so per-instance
+    # bookkeeping would kill and relaunch every warm HTTP window.
+    cfg = TunnelConfig(state_path=tmp_path / "s.json")
+    first = TmuxBackend(cfg, None)
+    first._pinned_windows.add("w-shared")
+    try:
+        second = TmuxBackend(cfg, None)
+        second.tmux = _KillRecorder()
+        rec = ThreadRecord(thread_key="http:jev-expert:t9", handle="jev-expert")
+        assert second._drop_unpinned_http_window(rec, "w-shared") is False
+        assert second.tmux.killed == []
+    finally:
+        TmuxBackend._pinned_windows.discard("w-shared")
+
+
+def test_surviving_http_window_is_an_error_not_a_reuse(tmp_path: Path) -> None:
+    # tmux kill-window reports nothing, so a failed kill would otherwise fall
+    # through to the warm-reuse branch and answer with the window's own tools.
+    backend = TmuxBackend(TunnelConfig(state_path=tmp_path / "s.json"), None)
+    backend.tmux = _KillRecorder(survives=True)
+    rec = ThreadRecord(thread_key="http:jev-expert:t2", handle="jev-expert")
+    with pytest.raises(BackendError):
+        backend._drop_unpinned_http_window(rec, "w-stuck")
+
+
+def test_window_named_by_an_older_scheme_is_killed_not_orphaned(
+    tmp_path: Path,
+) -> None:
+    # The turn overwrites the stored window name, so a window created under
+    # an older naming scheme would keep its fork running with nothing left
+    # to address it.
+    backend = TmuxBackend(TunnelConfig(state_path=tmp_path / "s.json"), None)
+    backend.tmux = _KillRecorder()
+    rec = ThreadRecord(
+        thread_key="mattermost:c2", handle="h", tmux_window="h-1234"
+    )
+    assert backend._kill_stale_window(rec, "h-deadbeefdeadbeef") is True
+    assert backend.tmux.killed == ["h-1234"]
+    # The same name, or none stored yet, kills nothing.
+    assert backend._kill_stale_window(rec, "h-1234") is False
+    assert backend._kill_stale_window(ThreadRecord(thread_key="x"), "w") is False
+    assert backend.tmux.killed == ["h-1234"]
+
+
+def test_warm_http_window_is_dropped_unless_this_process_pinned_it(
+    tmp_path: Path,
+) -> None:
+    # An HTTP fork must be read-only, but a warm tmux window keeps the flags it
+    # launched with. A window left by an older build holds wider tools while
+    # the thread already reads "read", so no access change fires — reuse it
+    # only when this process launched it under the pin.
+    backend = TmuxBackend(TunnelConfig(state_path=tmp_path / "s.json"), None)
+    backend.tmux = _KillRecorder()
+    http_rec = ThreadRecord(thread_key="http:jev-expert:t1", handle="jev-expert")
+    chat_rec = ThreadRecord(thread_key="mattermost:c1", handle="jev-expert")
+    assert backend._drop_unpinned_http_window(http_rec, "w-http") is True
+    backend._pinned_windows.add("w-http")
+    try:
+        assert backend._drop_unpinned_http_window(http_rec, "w-http") is False
+        assert backend._drop_unpinned_http_window(chat_rec, "w-chat") is False
+        assert backend.tmux.killed == ["w-http"]
+    finally:
+        TmuxBackend._pinned_windows.discard("w-http")

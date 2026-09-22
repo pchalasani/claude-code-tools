@@ -473,6 +473,21 @@ def test_window_name() -> None:
     assert _window_name("payments-auth", "th:99").startswith("payments-auth-")
     # unique per thread even with the same handle.
     assert _window_name("h", "th:1111") != _window_name("h", "th:2222")
+    # Keys that differ only before their last characters must not collide:
+    # HTTP callers choose their own thread ids, so "alice-1234" and
+    # "bob-1234" would otherwise share one fork.
+    assert _window_name("h", "http:h:alice-1234") != _window_name(
+        "h", "http:h:bob-1234"
+    )
+    # The digest is wide enough that a caller cannot search for a colliding
+    # id; this pair collides at eight hex characters.
+    assert _window_name("valid", "http:valid:chosen-32422") != _window_name(
+        "valid", "http:valid:chosen-52563"
+    )
+    # Same key, same name, so a follow-up finds its own window.
+    assert _window_name("h", "http:h:alice-1234") == _window_name(
+        "h", "http:h:alice-1234"
+    )
 
 
 def test_resolve_token(tmp_path: Path, monkeypatch) -> None:

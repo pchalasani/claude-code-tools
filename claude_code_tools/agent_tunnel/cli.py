@@ -82,7 +82,7 @@ def serve(
     channels: tuple[int, ...],
     token_env: Optional[str],
 ) -> None:
-    """Run the Discord daemon (blocking).
+    """Run the chat daemon: Discord and/or Mattermost (blocking).
 
     Two server modes, set with --backend or [tunnel] backend (default
     headless):
@@ -102,17 +102,23 @@ def serve(
     store = TunnelStore(cfg.state_path)
     registry = Registry(cfg.registry_path)
     try:
-        from .discord_bot import run_bot
+        from .serve import plan_frontends, run_serve
     except ImportError as exc:
         raise click.ClickException(
             f"discord.py is required for serve: {exc}"
         ) from exc
+    try:
+        frontends = plan_frontends(cfg)
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
     click.echo(
         f"agent-tunnel: backend={cfg.backend} "
-        f"registry={cfg.registry_path} channels={cfg.discord.channel_ids}"
+        f"registry={cfg.registry_path} frontends={','.join(frontends)} "
+        f"discord_channels={cfg.discord.channel_ids} "
+        f"mattermost_channels={cfg.mattermost.channel_ids}"
     )
     try:
-        run_bot(cfg, store, registry)
+        run_serve(cfg, store, registry)
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -192,11 +198,11 @@ def ask(
     except BackendError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(answer.text)
-    click.echo(
-        f"\n[fork={answer.fork_session_id} "
-        f"{'new' if answer.new_thread else 'follow-up'}]",
-        err=True,
-    )
+    if answer.refreshed:
+        kind = "follow-up, re-forked from latest session"
+    else:
+        kind = "new" if answer.new_thread else "follow-up"
+    click.echo(f"\n[fork={answer.fork_session_id} {kind}]", err=True)
 
 
 def _resolve_target(
@@ -647,23 +653,65 @@ def doctor(config: Optional[str]) -> None:
     import shutil
 
     from .convert import detect_converter
-    from .discord_bot import resolve_token
+    from .discord_bot import discord_ready, resolve_token
+    from .mattermost_bot import mattermost_ready, resolve_mm_token
 
     cfg = _build(config)
-    checks: list[tuple[bool, str]] = [
-        (
-            bool(resolve_token(cfg)),
-            f"Discord token ({cfg.discord.token_env} or token_file)",
-        ),
-        (
-            bool(cfg.discord.channel_ids),
-            f"Watched channel(s): {cfg.discord.channel_ids or 'none set'}",
-        ),
+    checks: list[tuple[bool, str]] = []
+    # Checks shown but not failing: an incomplete Mattermost while Discord
+    # runs (serve skips it with a warning; doctor mirrors that).
+    warn_only: list[tuple[bool, str]] = []
+    from .http_frontend import http_ready
+
+    discord_token = bool(resolve_token(cfg))
+    mm = cfg.mattermost
+    http_runnable = bool(cfg.http.port) and http_ready(cfg) is None
+    # Discord is optional once another front-end is configured: check it only
+    # when serve would run it, or when it is the only front-end.
+    if discord_ready(cfg) is None or not (mm.url or cfg.http.port):
+        checks += [
+            (
+                discord_token,
+                f"Discord token ({cfg.discord.token_env} or token_file)",
+            ),
+            (
+                bool(cfg.discord.channel_ids or cfg.discord.respond_to_dms),
+                f"Watched channel(s): {cfg.discord.channel_ids or 'none set'}"
+                + (" (+ DMs)" if cfg.discord.respond_to_dms else ""),
+            ),
+        ]
+    if mm.url:
+        mm_warn_only = mattermost_ready(cfg) is not None and (
+            discord_ready(cfg) is None or http_runnable
+        )
+        (warn_only if mm_warn_only else checks).extend([
+            (
+                bool(resolve_mm_token(cfg)),
+                f"Mattermost token ({mm.token_env} or token_file)",
+            ),
+            (
+                bool(mm.channel_ids),
+                "Mattermost channel(s): "
+                f"{mm.channel_ids or 'none set'} @ {mm.url}",
+            ),
+        ])
+    if cfg.http.port:
+        other_runs = discord_ready(cfg) is None or (
+            bool(mm.url) and mattermost_ready(cfg) is None
+        )
+        (warn_only if not http_runnable and other_runs else checks).append(
+            (
+                http_runnable,
+                f"HTTP front-end: {cfg.http.bind}:{cfg.http.port}, token in "
+                f"{cfg.http.token_file or 'unset'}",
+            )
+        )
+    checks.append(
         (
             shutil.which(cfg.claude.binary) is not None,
             f"claude binary on PATH ({cfg.claude.binary})",
-        ),
-    ]
+        )
+    )
     if cfg.backend == "tmux":
         checks.append(
             (shutil.which("tmux") is not None, "tmux on PATH (tmux backend)")
@@ -672,6 +720,9 @@ def doctor(config: Optional[str]) -> None:
     for ok, label in checks:
         click.echo(f"  {'✓' if ok else '✗'} {label}")
         ok_all = ok_all and ok
+    for ok, label in warn_only:
+        suffix = "" if ok else "  (serve skips this front-end until fixed)"
+        click.echo(f"  {'✓' if ok else '!'} {label}{suffix}")
     n = len(Registry(cfg.registry_path).active())
     click.echo(f"  • {n} published session(s) live")
     if cfg.attachments.convert == "off":

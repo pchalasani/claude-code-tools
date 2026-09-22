@@ -85,6 +85,28 @@ class DiscordConfig:
 
 
 @dataclass
+class MattermostConfig:
+    """Mattermost bot settings (a second front-end beside Discord).
+
+    The Mattermost front-end runs only when ``url`` is set. Ids are
+    Mattermost's 26-character strings (channel: "View Info"; user: profile
+    or the API), not Discord's integers.
+    """
+
+    # Server base URL, e.g. "https://chat.example.com" (no trailing /api).
+    url: str = ""
+    token_env: str = "AGENT_TUNNEL_MATTERMOST_TOKEN"
+    # Optional file holding the bot's access token; used when the env var is
+    # unset, so `serve` needs no export.
+    token_file: str = ""
+    channel_ids: list[str] = field(default_factory=list)
+    # Empty = anyone in the watched channels may ask.
+    allowed_user_ids: list[str] = field(default_factory=list)
+    # false only for a self-signed test server.
+    verify_tls: bool = True
+
+
+@dataclass
 class ClaudeConfig:
     """How forked Claude Code invocations are constructed."""
 
@@ -120,15 +142,40 @@ class ClaudeConfig:
 
 
 def resolve_tools(
-    claude: "ClaudeConfig", access: str = "read"
+    claude: "ClaudeConfig", access: str = "read", force_read: bool = False
 ) -> tuple[list[str], list[str]]:
     """(allowed, disallowed) tools for a fork at the given per-handle access
-    level ('read'/'write'); explicit config lists override the preset."""
+    level ('read'/'write'); explicit config lists override the preset.
+
+    With ``force_read`` the read preset wins over both the access level and
+    the configured lists, for a caller that cannot be trusted with either
+    (the HTTP front-end, whose caller picks the handle) even when
+    ``[claude] allowed_tools`` names Write, Edit or Bash.
+    """
+    if force_read:
+        allowed_p, disallowed_p = ACCESS_PRESETS["read"]
+        return list(allowed_p), list(disallowed_p)
     allowed_p, disallowed_p = ACCESS_PRESETS.get(access, ACCESS_PRESETS["read"])
     return (
         claude.allowed_tools or list(allowed_p),
         claude.disallowed_tools or list(disallowed_p),
     )
+
+
+@dataclass
+class HttpConfig:
+    """An HTTP front-end for programs (a docs site's Ask button, a script).
+
+    Off unless ``port`` is set. It binds to ``bind`` (loopback by default;
+    put a tunnel or reverse proxy in front for TLS) and requires the shared
+    secret in ``token_file`` as an ``X-Ask-Token`` header on every call.
+    """
+
+    bind: str = "127.0.0.1"
+    port: int = 0
+    token_file: str = ""
+    # Name used in the fork's persona for questions arriving this way.
+    platform: str = "the web"
 
 
 @dataclass
@@ -149,6 +196,9 @@ class LimitsConfig:
     max_attachment_mb: float = 24.0
     # Most attachments accepted from a single colleague message.
     max_attachments: int = 10
+    # Size budget (chars) of the recap of a thread's earlier Q&A that is
+    # handed to a fresh fork when a follow-up re-forks (see refresh_forks).
+    recap_max_chars: int = 8000
 
 
 @dataclass
@@ -177,6 +227,9 @@ class TunnelConfig:
     # "<name> (via X) says:" message prefix. The Discord bot uses "Discord";
     # a future Slack bot sets "Slack".
     platform: str = "Discord"
+    # Headless follow-ups re-fork from the LATEST expert session when it has
+    # moved on since the thread's fork, carrying the thread's Q&A as a recap.
+    refresh_forks: bool = True
     state_path: Path = DEFAULT_STATE_PATH
     registry_path: Path = DEFAULT_REGISTRY_PATH
     claude_home: Optional[Path] = None
@@ -184,6 +237,8 @@ class TunnelConfig:
     # given (auto = newest session in this dir); never needed by `serve`.
     project_dir: Optional[Path] = None
     discord: DiscordConfig = field(default_factory=DiscordConfig)
+    mattermost: MattermostConfig = field(default_factory=MattermostConfig)
+    http: HttpConfig = field(default_factory=HttpConfig)
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     attachments: AttachmentsConfig = field(default_factory=AttachmentsConfig)
@@ -230,7 +285,7 @@ def load_config(
 
     cfg = TunnelConfig()
     tunnel_tbl = data.get("tunnel", {})
-    for key in ("backend", "tmux_session", "platform"):
+    for key in ("backend", "tmux_session", "platform", "refresh_forks"):
         if key in tunnel_tbl:
             setattr(cfg, key, tunnel_tbl[key])
     for key in ("state_path", "registry_path", "claude_home", "project_dir"):
@@ -238,6 +293,8 @@ def load_config(
             setattr(cfg, key, Path(tunnel_tbl[key]).expanduser())
 
     _apply(cfg.discord, data.get("discord", {}))
+    _apply(cfg.mattermost, data.get("mattermost", {}))
+    _apply(cfg.http, data.get("http", {}))
     _apply(cfg.claude, data.get("claude", {}))
     _apply(cfg.limits, data.get("limits", {}))
     _apply(cfg.attachments, data.get("attachments", {}))
@@ -296,6 +353,10 @@ tmux_session = "agent-tunnel"
 # Chat-platform name shown in the persona and the "<name> (via X) says:"
 # message prefix. Defaults to "Discord".
 # platform = "Discord"
+# Follow-ups in an existing thread re-fork from the LATEST state of the shared
+# session when it has moved on since the thread started (headless backend),
+# carrying the thread's earlier Q&A as a recap. false = keep the old fork.
+refresh_forks = true
 
 [discord]
 # Env var that holds the bot token (never put the token itself here).
@@ -309,6 +370,17 @@ channel_ids = []
 allowed_user_ids = []
 allowed_role_ids = []
 respond_to_dms = false
+
+# Optional second front-end: Mattermost. Runs alongside Discord in the same
+# `agent-tunnel serve` whenever url is set. Create a bot account (System
+# Console > Integrations > Bot Accounts), add it to the team and channel.
+# [mattermost]
+# url = "https://chat.example.com"
+# token_env = "AGENT_TUNNEL_MATTERMOST_TOKEN"
+# token_file = "~/.config/agent-tunnel/mattermost-token.txt"
+# channel_ids = []        # 26-char channel ids
+# allowed_user_ids = []   # empty = anyone in the watched channels
+# verify_tls = true
 
 [claude]
 binary = "claude"
@@ -343,6 +415,15 @@ unset_api_key = true
 # unless you fully trust everyone who can reach that handle.
 # allow_skip_permissions = false
 
+# [http]
+# An HTTP front-end for programs, e.g. a docs site's "Ask" button. Off
+# unless port is set. Loopback only; put a tunnel in front for TLS. Every
+# call must carry the shared secret from token_file as X-Ask-Token.
+# bind = "127.0.0.1"
+# port = 8766
+# token_file = "~/.config/agent-tunnel/http-token"
+# platform = "the web"
+
 [limits]
 max_concurrent = 2
 per_user_cooldown_s = 15.0
@@ -358,6 +439,8 @@ max_inline_chars = 5500
 max_attachment_mb = 24.0
 # Most attachments accepted from a single colleague message.
 max_attachments = 10
+# Size budget (chars) of the earlier-Q&A recap handed to a re-forked thread.
+recap_max_chars = 8000
 
 [attachments]
 # The Read tool can't open Office files (.docx/.pptx/.xlsx). When a colleague
