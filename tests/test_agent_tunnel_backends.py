@@ -387,6 +387,25 @@ def test_surviving_http_window_is_an_error_not_a_reuse(tmp_path: Path) -> None:
         backend._drop_unpinned_http_window(rec, "w-stuck")
 
 
+def test_window_named_by_an_older_scheme_is_killed_not_orphaned(
+    tmp_path: Path,
+) -> None:
+    # The turn overwrites the stored window name, so a window created under
+    # an older naming scheme would keep its fork running with nothing left
+    # to address it.
+    backend = TmuxBackend(TunnelConfig(state_path=tmp_path / "s.json"), None)
+    backend.tmux = _KillRecorder()
+    rec = ThreadRecord(
+        thread_key="mattermost:c2", handle="h", tmux_window="h-1234"
+    )
+    assert backend._kill_stale_window(rec, "h-deadbeefdeadbeef") is True
+    assert backend.tmux.killed == ["h-1234"]
+    # The same name, or none stored yet, kills nothing.
+    assert backend._kill_stale_window(rec, "h-1234") is False
+    assert backend._kill_stale_window(ThreadRecord(thread_key="x"), "w") is False
+    assert backend.tmux.killed == ["h-1234"]
+
+
 def test_warm_http_window_is_dropped_unless_this_process_pinned_it(
     tmp_path: Path,
 ) -> None:

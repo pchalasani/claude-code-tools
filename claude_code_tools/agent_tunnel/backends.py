@@ -24,6 +24,7 @@ Both apply the same hard read-only tool restrictions per turn.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -267,11 +268,15 @@ def build_claude_flags(
 def _window_name(handle: str, thread_key: str) -> str:
     """Readable, unique tmux window name: ``<handle>-<short>``.
 
-    The handle makes it recognizable when attached; the thread-key suffix
-    keeps it unique when the same handle opens more than one thread.
+    The handle makes it recognizable when attached; the suffix is a digest
+    of the whole thread key, so two threads of one handle never share a
+    window. Taking the key's last characters instead would collide, and
+    HTTP callers choose their own thread ids ("alice-1234", "bob-1234"),
+    which would put two conversations in one fork. The digest is wide
+    enough that a caller cannot search for a colliding id.
     """
     base = (re.sub(r"[^A-Za-z0-9-]", "", handle) or "s")[:24]
-    suffix = re.sub(r"[^A-Za-z0-9]", "", thread_key)[-4:] or "0"
+    suffix = hashlib.sha256(thread_key.encode("utf-8")).hexdigest()[:16]
     return f"{base}-{suffix}"
 
 
@@ -587,6 +592,20 @@ class TmuxBackend(_BaseBackend):
         super().__init__(cfg, store)
         self.tmux = TmuxSession(cfg.tmux_session)
 
+    def _kill_stale_window(self, rec: ThreadRecord, window: str) -> bool:
+        """Kill a window this thread launched under an older naming scheme.
+
+        The turn overwrites ``rec.tmux_window``, so nothing would address
+        the old window afterwards and its fork would keep running.
+
+        Returns:
+            Whether a window was killed.
+        """
+        if not rec.tmux_window or rec.tmux_window == window:
+            return False
+        self.tmux.kill_window(rec.tmux_window)
+        return True
+
     def _drop_unpinned_http_window(self, rec: ThreadRecord, window: str) -> bool:
         """Kill a warm HTTP window this process did not launch read-only.
 
@@ -621,7 +640,9 @@ class TmuxBackend(_BaseBackend):
         forces the next turn down the relaunch path, so the fork comes back
         with the new tools, same fork id, full context retained.
         """
-        self.tmux.kill_window(_window_name(rec.handle, rec.thread_key))
+        self.tmux.kill_window(
+            rec.tmux_window or _window_name(rec.handle, rec.thread_key)
+        )
 
     def _launch(
         self,
@@ -755,6 +776,7 @@ class TmuxBackend(_BaseBackend):
         """
         rec = self._require_binding(thread_key)
         window = _window_name(rec.handle, thread_key)
+        self._kill_stale_window(rec, window)
         # Resolve to the canonical path so the three things keyed on it agree
         # with the directory Claude actually runs in (its process.cwd() is
         # canonical): the launch cwd, the trust-config entry, and the
