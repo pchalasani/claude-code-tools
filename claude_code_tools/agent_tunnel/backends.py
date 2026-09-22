@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Optional, Protocol
 
 from .config import TunnelConfig, resolve_tools
+from .readonly import is_http_thread, strip_permission_args
 from .paths import (
     changed_files,
     ensure_outbox,
@@ -63,10 +64,6 @@ from .trust import (
 # Auth env vars that override the claude.ai login; stripped from fork envs so
 # forks run under the session owner's subscription (see claude.unset_api_key).
 AUTH_OVERRIDE_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
-
-# Thread keys of the HTTP front-end. Its callers are programs that pick any
-# published handle, so their forks stay read-only whatever the handle grants.
-HTTP_THREAD_PREFIX = "http:"
 
 
 class BackendError(RuntimeError):
@@ -203,6 +200,7 @@ def build_claude_flags(
     add_dirs: tuple[str, ...] = (),
     extra_system: str = "",
     platform: str = "",
+    force_read: bool = False,
 ) -> list[str]:
     """Common claude CLI flags for a fork invocation/launch.
 
@@ -212,6 +210,9 @@ def build_claude_flags(
             fork's own id).
         fork: Whether to create a new fork of `resume_id`.
         access: Per-handle access level ("read"/"write"/"bash") set via >share.
+        force_read: Use the read preset whatever ``access`` and the
+            operator's tool lists say (set for HTTP threads, which stay
+            read-only because their caller picks the handle).
         add_dirs: Extra directories the fork may access (``--add-dir``), e.g.
             the thread's inbound-attachment dir which lives outside the project.
         extra_system: Text appended to the persona system prompt (e.g. the
@@ -225,7 +226,12 @@ def build_claude_flags(
     flags = ["--resume", resume_id]
     if fork:
         flags.append("--fork-session")
-    if access == "all" and claude.allow_skip_permissions:
+    if force_read:
+        # Only the MCP servers this invocation names, so a server configured
+        # in the project's or the user's settings cannot hand the fork a tool
+        # the read preset's deny list never names.
+        flags.append("--strict-mcp-config")
+    if access == "all" and claude.allow_skip_permissions and not force_read:
         # Full access: skip every permission prompt so the fork can use any
         # tool or MCP server the session has (web, browser, shell, edits). No
         # allow/deny lists — they would only restrict. The answer path refuses
@@ -234,13 +240,16 @@ def build_claude_flags(
         # would fall back to the restrictive read tools, never to "no limits".
         flags.append("--dangerously-skip-permissions")
     else:
-        allowed, disallowed = resolve_tools(claude, access)
+        allowed, disallowed = resolve_tools(claude, access, force_read)
         if allowed:
             flags += ["--allowedTools", ",".join(allowed)]
         if disallowed:
             flags += ["--disallowedTools", ",".join(disallowed)]
-        if claude.permission_mode:
-            flags += ["--permission-mode", claude.permission_mode]
+        mode = "dontAsk" if force_read else claude.permission_mode
+        if mode:
+            # A pinned fork never takes the configured mode, which could be
+            # bypassPermissions.
+            flags += ["--permission-mode", mode]
     if claude.model:
         flags += ["--model", claude.model]
     for directory in add_dirs:
@@ -323,7 +332,7 @@ class _BaseBackend:
         # already-running thread (same fork, context kept). Persisting it means
         # the change fires `_on_access_changed` once, not on every later turn.
         cur = self._current_access(rec)
-        if thread_key.startswith(HTTP_THREAD_PREFIX):
+        if is_http_thread(thread_key):
             cur = "read"  # program callers never inherit write/bash/all
         if cur != rec.access:
             old = rec.access
@@ -483,6 +492,7 @@ class HeadlessBackend(_BaseBackend):
                 + question
             )
         add_dirs, extra_system, outbox, snapshot = self._begin_turn(rec)
+        pinned = is_http_thread(rec.thread_key)
 
         argv = [
             self.cfg.claude.binary,
@@ -497,8 +507,13 @@ class HeadlessBackend(_BaseBackend):
                 add_dirs,
                 extra_system,
                 platform=rec.platform,
+                force_read=pinned,
             ),
-            *self.cfg.claude.headless_extra_args,
+            *(
+                strip_permission_args(self.cfg.claude.headless_extra_args)
+                if pinned
+                else self.cfg.claude.headless_extra_args
+            ),
         ]
         try:
             result = subprocess.run(
@@ -559,10 +574,43 @@ class TmuxBackend(_BaseBackend):
 
     name = "tmux"
 
+    # Windows this process launched under the HTTP read-only pin, shared by
+    # every instance because the relay builds a fresh backend for each turn.
+    # A warm window keeps the flags it launched with, and one left by an
+    # older build can hold wider tools while the thread's stored access
+    # already reads "read", so no access change fires to kill it. An HTTP
+    # window is reused only when it is in here.
+    _pinned_windows: set[str] = set()
+
     def __init__(self, cfg: TunnelConfig, store: TunnelStore) -> None:
         """Bind to the dedicated tmux session named in the config."""
         super().__init__(cfg, store)
         self.tmux = TmuxSession(cfg.tmux_session)
+
+    def _drop_unpinned_http_window(self, rec: ThreadRecord, window: str) -> bool:
+        """Kill a warm HTTP window this process did not launch read-only.
+
+        A warm window keeps the flags it launched with, and a window left by
+        an older build can hold wider tools while the thread's stored access
+        already reads ``read``, so no access change fires to kill it. Dropping
+        it sends the turn down the cold-relaunch path, which applies the pin.
+
+        Returns:
+            Whether a window was killed.
+
+        Raises:
+            BackendError: The window survived the kill, so reusing it would
+                answer with whatever tools it launched with.
+        """
+        if not is_http_thread(rec.thread_key) or window in self._pinned_windows:
+            return False
+        self.tmux.kill_window(window)
+        if self.tmux.window_alive(window):
+            raise BackendError(
+                f"Window {window} holds a fork this process did not launch "
+                "read-only, and it survived the kill. Close it by hand."
+            )
+        return True
 
     def _on_access_changed(self, rec: ThreadRecord, old: str, new: str) -> None:
         """Kill the warm window so the next turn cold-relaunches the fork.
@@ -587,6 +635,7 @@ class TmuxBackend(_BaseBackend):
         add_dirs: tuple[str, ...] = (),
         extra_system: str = "",
         platform: str = "",
+        force_read: bool = False,
     ) -> None:
         """Launch an interactive fork in `window`.
 
@@ -615,9 +664,18 @@ class TmuxBackend(_BaseBackend):
                 add_dirs,
                 extra_system,
                 platform=platform,
+                force_read=force_read,
             ),
-            *self.cfg.claude.tmux_extra_args,
+            *(
+                strip_permission_args(self.cfg.claude.tmux_extra_args)
+                if force_read
+                else self.cfg.claude.tmux_extra_args
+            ),
         ]
+        if force_read:
+            self._pinned_windows.add(window)
+        else:
+            self._pinned_windows.discard(window)
         if initial_prompt is not None:
             # `--` ends option parsing so a prompt beginning with "-" (e.g.
             # "- how are you?") is taken as the positional prompt, not a CLI
@@ -727,6 +785,7 @@ class TmuxBackend(_BaseBackend):
                 fork=True,
                 config_dir=rec.config_dir,
                 access=rec.access,
+                force_read=is_http_thread(rec.thread_key),
                 initial_prompt=prompt,
                 add_dirs=add_dirs,
                 extra_system=extra_system,
@@ -749,6 +808,7 @@ class TmuxBackend(_BaseBackend):
                 raise BackendError(
                     f"Fork transcript {rec.fork_session_id} not found"
                 )
+            self._drop_unpinned_http_window(rec, window)
             if self.tmux.window_alive(window) and not self.tmux.pane_dead(
                 window
             ):
@@ -767,6 +827,7 @@ class TmuxBackend(_BaseBackend):
                     fork=False,
                     config_dir=rec.config_dir,
                     access=rec.access,
+                    force_read=is_http_thread(rec.thread_key),
                     initial_prompt=prompt,
                     add_dirs=add_dirs,
                     extra_system=extra_system,

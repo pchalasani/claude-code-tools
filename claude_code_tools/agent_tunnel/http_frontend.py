@@ -34,7 +34,7 @@ from typing import Any, Optional, Sequence
 
 from aiohttp import web
 
-from .backends import HTTP_THREAD_PREFIX
+from .readonly import HTTP_THREAD_PREFIX
 from .config import TunnelConfig
 from .relay import QUEUE_NOTICE, Relay
 

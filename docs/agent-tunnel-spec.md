@@ -55,7 +55,9 @@ safe.
   turns, and an existing thread outlives its handle's revocation as chat
   threads do. Every route carries a shared secret (`X-Ask-Token`, read from
   `http.token_file`). It binds to loopback; a tunnel in front adds TLS. Its
-  forks are read-only whatever the handle's access, since the caller picks
+  forks are read-only whatever the handle's access, the configured tool
+  lists, the backends' extra args, the configured permission mode, the
+  settings' MCP servers, or `allow_skip_permissions`, since the caller picks
   the handle.
   Fields must be strings within their limits (over-limit is a 413); the
   per-user cooldown applies per `sender` (a 429 inside it). The

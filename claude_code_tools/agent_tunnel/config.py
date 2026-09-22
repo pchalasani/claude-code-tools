@@ -142,10 +142,19 @@ class ClaudeConfig:
 
 
 def resolve_tools(
-    claude: "ClaudeConfig", access: str = "read"
+    claude: "ClaudeConfig", access: str = "read", force_read: bool = False
 ) -> tuple[list[str], list[str]]:
     """(allowed, disallowed) tools for a fork at the given per-handle access
-    level ('read'/'write'); explicit config lists override the preset."""
+    level ('read'/'write'); explicit config lists override the preset.
+
+    With ``force_read`` the read preset wins over both the access level and
+    the configured lists, for a caller that cannot be trusted with either
+    (the HTTP front-end, whose caller picks the handle) even when
+    ``[claude] allowed_tools`` names Write, Edit or Bash.
+    """
+    if force_read:
+        allowed_p, disallowed_p = ACCESS_PRESETS["read"]
+        return list(allowed_p), list(disallowed_p)
     allowed_p, disallowed_p = ACCESS_PRESETS.get(access, ACCESS_PRESETS["read"])
     return (
         claude.allowed_tools or list(allowed_p),

@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
+from claude_code_tools.agent_tunnel.backends import build_claude_flags
 from claude_code_tools.agent_tunnel.config import TunnelConfig, load_config
 from claude_code_tools.agent_tunnel.http_frontend import (
     CollectDest,
@@ -412,3 +413,45 @@ async def _read_only(cfg: TunnelConfig, relay: Relay) -> None:
         assert relay.store.get("mattermost:x").access == "write"
     finally:
         await client.close()
+
+
+def test_http_flags_ignore_custom_tool_lists(stack) -> None:
+    """Configured tool lists do not widen an HTTP fork.
+
+    `[claude] allowed_tools` overrides the access preset for chat threads,
+    by design. An HTTP caller picks the handle, so its flags come from the
+    read preset whatever the operator configured or the handle grants, and
+    an "all" handle never reaches --dangerously-skip-permissions.
+    """
+    cfg, _relay, _rec = stack
+    cfg.claude.allowed_tools = ["Read", "Write", "Edit", "Bash"]
+    cfg.claude.disallowed_tools = []
+    cfg.claude.allow_skip_permissions = True
+    loose = build_claude_flags(cfg, "sid", fork=True, access="write")
+    assert "Write" in ",".join(loose)
+    for level in ("read", "write", "bash"):
+        flags = build_claude_flags(
+            cfg, "sid", fork=True, access=level, force_read=True
+        )
+        allowed = flags[flags.index("--allowedTools") + 1]
+        assert "Read" in allowed
+        assert "Write" not in allowed and "Bash" not in allowed
+    full = build_claude_flags(cfg, "sid", fork=True, access="all", force_read=True)
+    assert "--dangerously-skip-permissions" not in full
+
+
+def test_http_flags_pin_permission_mode_and_mcp(stack) -> None:
+    """A pinned fork ignores a permissive mode and project MCP servers.
+
+    `[claude] permission_mode` could be `bypassPermissions`, and an MCP
+    server configured in the project's settings would offer tools the read
+    preset's deny list never names.
+    """
+    cfg, _relay, _rec = stack
+    cfg.claude.permission_mode = "bypassPermissions"
+    loose = build_claude_flags(cfg, "sid", fork=True, access="read")
+    assert loose[loose.index("--permission-mode") + 1] == "bypassPermissions"
+    assert "--strict-mcp-config" not in loose
+    pinned = build_claude_flags(cfg, "sid", fork=True, access="read", force_read=True)
+    assert pinned[pinned.index("--permission-mode") + 1] == "dontAsk"
+    assert "--strict-mcp-config" in pinned
