@@ -142,15 +142,40 @@ class ClaudeConfig:
 
 
 def resolve_tools(
-    claude: "ClaudeConfig", access: str = "read"
+    claude: "ClaudeConfig", access: str = "read", force_read: bool = False
 ) -> tuple[list[str], list[str]]:
     """(allowed, disallowed) tools for a fork at the given per-handle access
-    level ('read'/'write'); explicit config lists override the preset."""
+    level ('read'/'write'); explicit config lists override the preset.
+
+    With ``force_read`` the read preset wins over both the access level and
+    the configured lists, for a caller that cannot be trusted with either
+    (the HTTP front-end, whose caller picks the handle) even when
+    ``[claude] allowed_tools`` names Write, Edit or Bash.
+    """
+    if force_read:
+        allowed_p, disallowed_p = ACCESS_PRESETS["read"]
+        return list(allowed_p), list(disallowed_p)
     allowed_p, disallowed_p = ACCESS_PRESETS.get(access, ACCESS_PRESETS["read"])
     return (
         claude.allowed_tools or list(allowed_p),
         claude.disallowed_tools or list(disallowed_p),
     )
+
+
+@dataclass
+class HttpConfig:
+    """An HTTP front-end for programs (a docs site's Ask button, a script).
+
+    Off unless ``port`` is set. It binds to ``bind`` (loopback by default;
+    put a tunnel or reverse proxy in front for TLS) and requires the shared
+    secret in ``token_file`` as an ``X-Ask-Token`` header on every call.
+    """
+
+    bind: str = "127.0.0.1"
+    port: int = 0
+    token_file: str = ""
+    # Name used in the fork's persona for questions arriving this way.
+    platform: str = "the web"
 
 
 @dataclass
@@ -213,6 +238,7 @@ class TunnelConfig:
     project_dir: Optional[Path] = None
     discord: DiscordConfig = field(default_factory=DiscordConfig)
     mattermost: MattermostConfig = field(default_factory=MattermostConfig)
+    http: HttpConfig = field(default_factory=HttpConfig)
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     attachments: AttachmentsConfig = field(default_factory=AttachmentsConfig)
@@ -268,6 +294,7 @@ def load_config(
 
     _apply(cfg.discord, data.get("discord", {}))
     _apply(cfg.mattermost, data.get("mattermost", {}))
+    _apply(cfg.http, data.get("http", {}))
     _apply(cfg.claude, data.get("claude", {}))
     _apply(cfg.limits, data.get("limits", {}))
     _apply(cfg.attachments, data.get("attachments", {}))
@@ -387,6 +414,15 @@ unset_api_key = true
 # or MCP server (web, your browser, shell, file edits) with no prompts. Off
 # unless you fully trust everyone who can reach that handle.
 # allow_skip_permissions = false
+
+# [http]
+# An HTTP front-end for programs, e.g. a docs site's "Ask" button. Off
+# unless port is set. Loopback only; put a tunnel in front for TLS. Every
+# call must carry the shared secret from token_file as X-Ask-Token.
+# bind = "127.0.0.1"
+# port = 8766
+# token_file = "~/.config/agent-tunnel/http-token"
+# platform = "the web"
 
 [limits]
 max_concurrent = 2

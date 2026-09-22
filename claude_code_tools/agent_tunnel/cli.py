@@ -661,11 +661,14 @@ def doctor(config: Optional[str]) -> None:
     # Checks shown but not failing: an incomplete Mattermost while Discord
     # runs (serve skips it with a warning; doctor mirrors that).
     warn_only: list[tuple[bool, str]] = []
+    from .http_frontend import http_ready
+
     discord_token = bool(resolve_token(cfg))
     mm = cfg.mattermost
-    # Discord is optional once Mattermost is configured: check it only when
-    # serve would run it, or when it is the only front-end.
-    if discord_ready(cfg) is None or not mm.url:
+    http_runnable = bool(cfg.http.port) and http_ready(cfg) is None
+    # Discord is optional once another front-end is configured: check it only
+    # when serve would run it, or when it is the only front-end.
+    if discord_ready(cfg) is None or not (mm.url or cfg.http.port):
         checks += [
             (
                 discord_token,
@@ -678,8 +681,8 @@ def doctor(config: Optional[str]) -> None:
             ),
         ]
     if mm.url:
-        mm_warn_only = (
-            mattermost_ready(cfg) is not None and discord_ready(cfg) is None
+        mm_warn_only = mattermost_ready(cfg) is not None and (
+            discord_ready(cfg) is None or http_runnable
         )
         (warn_only if mm_warn_only else checks).extend([
             (
@@ -692,6 +695,17 @@ def doctor(config: Optional[str]) -> None:
                 f"{mm.channel_ids or 'none set'} @ {mm.url}",
             ),
         ])
+    if cfg.http.port:
+        other_runs = discord_ready(cfg) is None or (
+            bool(mm.url) and mattermost_ready(cfg) is None
+        )
+        (warn_only if not http_runnable and other_runs else checks).append(
+            (
+                http_runnable,
+                f"HTTP front-end: {cfg.http.bind}:{cfg.http.port}, token in "
+                f"{cfg.http.token_file or 'unset'}",
+            )
+        )
     checks.append(
         (
             shutil.which(cfg.claude.binary) is not None,
@@ -707,7 +721,7 @@ def doctor(config: Optional[str]) -> None:
         click.echo(f"  {'✓' if ok else '✗'} {label}")
         ok_all = ok_all and ok
     for ok, label in warn_only:
-        suffix = "" if ok else "  (serve skips Mattermost until fixed)"
+        suffix = "" if ok else "  (serve skips this front-end until fixed)"
         click.echo(f"  {'✓' if ok else '!'} {label}{suffix}")
     n = len(Registry(cfg.registry_path).active())
     click.echo(f"  • {n} published session(s) live")
