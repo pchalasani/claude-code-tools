@@ -160,6 +160,13 @@ class Upload(Protocol):
         ...
 
 
+#: Posted to a thread when a message arrives while its earlier turn is still
+#: running. Front-ends that collect output (HTTP) match it exactly.
+QUEUE_NOTICE = (
+    "⏳ Still working on the previous question here — I'll take this one next."
+)
+
+
 class Relay:
     """Runs chat turns against the backends; shared by every front-end."""
 
@@ -282,8 +289,15 @@ class Relay:
         question: str,
         uploads: Sequence[Upload] = (),
         sender: str = "",
-    ) -> None:
-        """Answer one message in a bound thread and post the reply."""
+    ) -> Optional[str]:
+        """Answer one message in a bound thread and post the reply.
+
+        Returns:
+            None when an answer was posted, else the problem text that was
+            posted instead (a restarted binding, nothing to act on, a backend
+            error, an unexpected failure). Chat front-ends ignore the value;
+            the HTTP front-end reports it to its caller.
+        """
         # Per-question log line so an unattended daemon shows live activity
         # plus an audit trail of who asked what.
         rec = self.store.get(thread_key)
@@ -304,12 +318,7 @@ class Relay:
         if lock.locked():
             # Fire-and-forget: awaiting here would let a later message queue
             # on the lock ahead of this one and be answered out of order.
-            notice = asyncio.create_task(
-                dest.send(
-                    "⏳ Still working on the previous question here — "
-                    "I'll take this one next."
-                )
-            )
+            notice = asyncio.create_task(dest.send(QUEUE_NOTICE))
             self._notices.add(notice)
             notice.add_done_callback(self._notice_done)
         # The thread lock spans the whole turn, delivery included, so a
@@ -329,11 +338,12 @@ class Relay:
                     or current.created_at != rec.created_at
                 )
             ):
-                await dest.send(
+                text = (
                     "↪️ This conversation was restarted before I got to "
                     "your message — please resend it."
                 )
-                return
+                await dest.send(text)
+                return text
             start = time.time()
             try:
                 async with dest.typing():
@@ -341,16 +351,17 @@ class Relay:
                         dest, thread_key, question, uploads
                     )
                     if not question.strip():
-                        await dest.send(
+                        text = (
                             "⚠️ Nothing to act on — add a question, or a "
                             "(smaller/readable) file."
                         )
+                        await dest.send(text)
                         logger.info(
                             "A [%s] %s: skipped (no usable content)",
                             thread_key,
                             handle,
                         )
-                        return
+                        return text
                     # Tell the fork who sent this (it can't see chat); the
                     # persona explains the "<name> (via X) says:" convention.
                     platform = (
@@ -371,17 +382,19 @@ class Relay:
                     time.time() - start,
                     str(exc)[:200],
                 )
-                await dest.send(f"⚠️ {str(exc)[:1500]}")
-                return
+                text = f"⚠️ {str(exc)[:1500]}"
+                await dest.send(text)
+                return text
             except Exception:
                 logger.exception(
                     "A [%s] %s: unexpected backend failure", thread_key, handle
                 )
-                await dest.send(
+                text = (
                     "⚠️ Unexpected error — the owner can check the "
                     "agent-tunnel logs."
                 )
-                return
+                await dest.send(text)
+                return text
 
             self._log_answer(thread_key, handle, answer, start)
             text = answer.text
@@ -394,6 +407,7 @@ class Relay:
                 for chunk in split_chunks(text, dest.max_len):
                     await dest.send(chunk)
             await self._post_deliverables(dest, answer)
+            return None
 
     def _notice_done(self, task: "asyncio.Task[None]") -> None:
         self._notices.discard(task)

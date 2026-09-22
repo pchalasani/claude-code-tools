@@ -14,6 +14,7 @@ from typing import Any, Coroutine
 
 from .config import TunnelConfig
 from .discord_bot import discord_ready, run_discord
+from .http_frontend import http_ready, run_http
 from .mattermost_bot import mattermost_ready, run_mattermost
 from .registry import Registry
 from .relay import Relay
@@ -38,14 +39,22 @@ def plan_frontends(cfg: TunnelConfig) -> list[str]:
     mm_problem = mattermost_ready(cfg) if cfg.mattermost.url else None
     if cfg.mattermost.url and mm_problem is None:
         names.append("mattermost")
+    http_problem = http_ready(cfg) if cfg.http.port else None
+    if cfg.http.port and http_problem is None:
+        names.append("http")
     if not names:
         raise RuntimeError(
-            mm_problem or discord_problem or "No chat front-end configured"
+            mm_problem
+            or http_problem
+            or discord_problem
+            or "No front-end configured"
         )
     if mm_problem:
         # Configured but incomplete (e.g. token not issued yet): keep the
         # working front-end up rather than refuse to serve, but say so loudly.
         logger.warning("Mattermost NOT started: %s", mm_problem)
+    if http_problem:
+        logger.warning("HTTP front-end NOT started: %s", http_problem)
     return names
 
 
@@ -62,6 +71,8 @@ async def serve_all(
         runners.append(run_discord(cfg, relay))
     if "mattermost" in names:
         runners.append(run_mattermost(cfg, relay))
+    if "http" in names:
+        runners.append(run_http(cfg, relay))
     reaper = asyncio.create_task(relay.reaper())
     try:
         await asyncio.gather(*runners)

@@ -359,9 +359,57 @@ Keep it alive (a dedicated tmux pane is convenient). With `token_file` set you
 don't export anything. It starts Discord when a Discord token resolves (and
 channels or DMs are set) and Mattermost when `[mattermost] url` is set. If
 Mattermost is set but lacks a token or channels, `serve` logs a warning and
-runs Discord alone; it exits with an error only when nothing can run. All
-front-ends share one concurrency cap. Your Mac must be awake and online; both
+runs Discord alone, and the HTTP front-end when `[http] port` is set; it
+exits with an error only when nothing can run. All front-ends share one
+concurrency cap. Your Mac must be awake and online; both
 front-ends reconnect after sleep.
+
+## The HTTP front-end (for programs)
+
+Chat is for people. When a program wants an answer from a published session
+(a docs site's "Ask" button, a script, a bot you write yourself), turn on the
+HTTP front-end. It runs inside the same `serve` daemon and goes through the
+same relay, so the concurrency cap, per-thread locks, fork refresh and logs
+are shared with the chat front-ends.
+
+```toml
+[http]
+bind = "127.0.0.1"
+port = 8766
+token_file = "~/.config/agent-tunnel/http-token"   # any secret string
+platform = "the web"                               # named in the fork's persona
+```
+
+Off unless `port` is set. Every route requires the shared secret:
+
+```bash
+curl -s localhost:8766/health -H "X-Ask-Token: $(cat ~/.config/agent-tunnel/http-token)"
+# {"ok": true, "handles": ["cyberins", "jev-expert"]}
+
+curl -s -X POST localhost:8766/ask \
+  -H "X-Ask-Token: $(cat ~/.config/agent-tunnel/http-token)" \
+  -H 'Content-Type: application/json' \
+  -d '{"handle": "jev-expert", "thread": "tab-1", "sender": "alice@example.com",
+       "question": "In one sentence, what is a Noul?"}'
+# {"ran": true, "answer": "...", "thread": "tab-1", "handle": "jev-expert",
+#  "fork_session_id": "...", "files": [], "notices": []}
+```
+
+- `handle` is any live published handle; the front-end is not tied to one.
+- `thread` is a caller-chosen id (`[A-Za-z0-9_.:-]`, up to 80 chars). The same
+  handle and thread share one fork, so follow-ups remember earlier turns. A
+  thread that already exists keeps working after `>share off`, like a chat
+  thread; only a new thread needs a live handle.
+- `sender` (optional) is shown to the fork as who is asking.
+- Fields must be strings within their limits (a question over 8,000 characters
+  is a 413). A failed turn is a 502 with the relay's own error text; `ran`
+  says whether a turn ran, separately from what it produced.
+
+It binds to loopback. To reach it from elsewhere put a tunnel in front (a
+Tailscale Funnel, a Cloudflare Tunnel) and keep the token secret; the caller
+should add its own access control for its users. The reference caller is the
+Jev wiki's `/api/ask` Pages Function, which verifies a Cloudflare Access
+identity before forwarding.
 
 ## Watching live (tmux mode only)
 

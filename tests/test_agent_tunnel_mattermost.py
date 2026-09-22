@@ -396,7 +396,7 @@ token_file = "{tmp_path / 'missing.txt'}"
     result = CliRunner().invoke(cli, ["doctor", "--config", str(cfg_file)])
     # serve would run Discord and skip Mattermost: doctor passes, but says so.
     assert result.exit_code == 0, result.output
-    assert "serve skips Mattermost" in result.output
+    assert "serve skips this front-end" in result.output
     # With Discord unusable too, the Mattermost problem fails doctor.
     monkeypatch.delenv("AGENT_TUNNEL_DISCORD_TOKEN")
     result = CliRunner().invoke(cli, ["doctor", "--config", str(cfg_file)])

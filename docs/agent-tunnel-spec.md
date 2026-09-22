@@ -42,10 +42,22 @@ safe.
   `\<handle\> question` already starts from the latest state. The tmux
   backend is unchanged (it keeps resuming the thread's own fork).
 - **No tunnel.** The Discord Gateway and the Mattermost event websocket are
-  outbound connections; nothing on the machine is internet-reachable.
+  outbound connections; nothing on the machine is internet-reachable. The
+  HTTP front-end below binds to loopback; whether and how to expose it (a
+  Tailscale Funnel, a Cloudflare Tunnel) is the deployer's call.
 - **One daemon, many front-ends.** A single `agent-tunnel serve` runs Discord
-  and/or Mattermost on one asyncio loop, sharing one relay (so the
-  concurrency cap is global across platforms).
+  and/or Mattermost and/or the HTTP front-end on one asyncio loop, sharing
+  one relay (so the concurrency cap is global across platforms).
+- **An HTTP front-end for programs.** `[http]` in the config (off unless
+  `port` is set) serves `POST /ask` for callers such as a docs site's "Ask"
+  button. The caller names a handle, a question and a caller-chosen thread
+  id; same handle and thread share one fork, so follow-ups remember earlier
+  turns, and an existing thread outlives its handle's revocation as chat
+  threads do. Every route carries a shared secret (`X-Ask-Token`, read from
+  `http.token_file`). It binds to loopback; a tunnel in front adds TLS.
+  Fields must be strings within their limits (over-limit is a 413). The
+  response separates whether a turn ran from what it produced: a failed
+  turn is a 502 carrying the relay's own error text, never an empty answer.
 - **Swappable backends (default `headless`):** `headless` (`claude -p`, clean
   JSON I/O, more reliable, no tmux) and `tmux` (interactive forks you can watch
   live with `agent-tunnel watch`).
@@ -143,6 +155,10 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
   `!list`/`!handles`, `!done`/`!close`/`!end`, `<handle>: <question>` thread
   names, user/role allowlists, optional DMs, 2000-char messages;
   `token_file` resolution.
+- `http_frontend.py` — the `[http]` front-end: an `aiohttp` app with
+  `GET /health` and `POST /ask`, a `CollectDest` that gathers a relay
+  turn's chunks (or its `answer.md`) into one string and keeps the relay's
+  problem lines apart as errors, and `http_ready` / `run_http` for `serve`.
 - `mattermost_bot.py` — Mattermost event routing only, at parity with
   Discord: a small REST + WebSocket client on `aiohttp`, a pure `route_post`
   decision, ~16000-char messages, `allowed_user_ids`. No DM support.
