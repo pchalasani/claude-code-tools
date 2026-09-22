@@ -402,8 +402,10 @@ curl -s -X POST localhost:8766/ask \
   thread; only a new thread needs a live handle.
 - `sender` (optional) is shown to the fork as who is asking.
 - Fields must be strings within their limits (a question over 8,000 characters
-  is a 413). A failed turn is a 502 with the relay's own error text; `ran`
-  says whether a turn ran, separately from what it produced.
+  is a 413). The `[limits] per_user_cooldown_s` applies per `sender`
+  (a second question inside it is a 429). A failed turn is a 502 with the
+  relay's own error text; `ran` says whether a turn ran, separately from
+  what it produced.
 
 It binds to loopback. To reach it from elsewhere put a tunnel in front (a
 Tailscale Funnel, a Cloudflare Tunnel) and keep the token secret; the caller

@@ -221,6 +221,15 @@ def make_app(cfg: TunnelConfig, relay: Relay) -> web.Application:
             return _json(
                 400, {"ran": False, "error": "thread must match [A-Za-z0-9_.:-]{1,80}"}
             )
+        # The same per-user cooldown the chat front-ends apply, keyed by the
+        # sender the caller vouches for, else by the caller's address.
+        caller = sender or (request.remote or "unknown")
+        if not relay.cooldown_ok((PLATFORM, caller)):
+            wait = cfg.limits.per_user_cooldown_s
+            return _json(
+                429,
+                {"ran": False, "error": f"cooldown: one question per {wait:g} s"},
+            )
         thread_key = f"{PLATFORM}:{handle}:{thread}"
         try:
             return await _turn(cfg, relay, thread_key, handle, thread, question, sender)

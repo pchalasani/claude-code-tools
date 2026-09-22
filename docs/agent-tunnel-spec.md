@@ -55,7 +55,8 @@ safe.
   turns, and an existing thread outlives its handle's revocation as chat
   threads do. Every route carries a shared secret (`X-Ask-Token`, read from
   `http.token_file`). It binds to loopback; a tunnel in front adds TLS.
-  Fields must be strings within their limits (over-limit is a 413). The
+  Fields must be strings within their limits (over-limit is a 413); the
+  per-user cooldown applies per `sender` (a 429 inside it). The
   response separates whether a turn ran from what it produced: a failed
   turn is a 502 carrying the relay's own error text, never an empty answer.
 - **Swappable backends (default `headless`):** `headless` (`claude -p`, clean

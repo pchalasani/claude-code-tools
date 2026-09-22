@@ -353,3 +353,27 @@ def test_doctor_accepts_http_only(tmp_path: Path, monkeypatch) -> None:
     assert "HTTP front-end" in result.output
     assert "Discord token" not in result.output
 
+
+def test_cooldown_applies_per_sender(stack) -> None:
+    """A second question inside the cooldown is a 429, like a chat follow-up."""
+    cfg, relay, _rec = stack
+    cfg.limits.per_user_cooldown_s = 60
+    asyncio.run(_cooldown(cfg, relay))
+
+
+async def _cooldown(cfg: TunnelConfig, relay: Relay) -> None:
+    client = await _client(cfg, relay)
+    hdr = {"X-Ask-Token": "s3cret"}
+    body = {"handle": "jev-expert", "question": "q", "thread": "t5", "sender": "a"}
+    try:
+        res = await client.post("/ask", json=body, headers=hdr)
+        assert res.status == 200
+        res = await client.post("/ask", json=body, headers=hdr)
+        assert res.status == 429
+        assert (await res.json())["ran"] is False
+        # Another sender is not throttled by the first one's cooldown.
+        res = await client.post("/ask", json={**body, "sender": "b"}, headers=hdr)
+        assert res.status == 200
+    finally:
+        await client.close()
+
