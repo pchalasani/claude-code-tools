@@ -9,7 +9,9 @@ refresh and logging are shared with Discord and Mattermost.
 Routes (``[http]`` in the config; off unless ``port`` is set):
 
     GET  /health
-    POST /ask   {"handle": ..., "question": ..., "thread": ..., "sender": ...}
+    POST /ask   {"handle": ..., "question": ..., "thread": ..., "sender": ...,
+                 "metadata": {...}}
+    GET  /turns ?handle=...&limit=...&meta.<key>=<value>
 
 Every route requires ``X-Ask-Token: <contents of http.token_file>``.
 ``thread`` is any caller-chosen id; questions with the same handle and
@@ -20,6 +22,11 @@ whatever access the handle was shared with, because the caller picks the
 handle. The response says whether a turn ran (``ran``) separately from what
 it produced, and a failed turn is an HTTP 502 carrying the relay's own
 error text, never an empty answer.
+
+With ``[http] turn_log`` set, each answered turn is appended to that file
+with the caller's flat ``metadata`` (a docs site sends page and heading) and
+without the sender, and ``GET /turns`` returns the matching turns newest
+first. See :mod:`.turn_log`.
 """
 
 from __future__ import annotations
@@ -37,6 +44,7 @@ from aiohttp import web
 from .readonly import HTTP_THREAD_PREFIX
 from .config import TunnelConfig
 from .relay import QUEUE_NOTICE, Relay
+from .turn_log import MAX_LIMIT, TurnLog, resolve_log_path, validate_metadata
 
 logger = logging.getLogger("agent_tunnel.http")
 
@@ -148,6 +156,8 @@ async def _turn(
     thread: str,
     question: str,
     sender: str,
+    metadata: dict[str, str],
+    turn_log: Optional[TurnLog],
 ) -> web.Response:
     """Bind if new, run one relay turn, and shape the JSON reply.
 
@@ -166,6 +176,16 @@ async def _turn(
         error = problem or "the turn produced no answer"
         return _json(502, {"ran": False, "error": error, "thread": thread})
     record = relay.store.get(thread_key)
+    logged = False
+    if turn_log is not None:
+        try:
+            await turn_log.append(handle, thread, question, dest.text, metadata)
+            logged = True
+        except (OSError, ValueError):
+            # The reader still gets the answer; the response says it was not
+            # logged, and the daemon log says why.
+            logger.exception("Could not append to turn log %s", turn_log.path)
+            dest.notices.append("this turn could not be written to the turn log")
     return _json(
         200,
         {
@@ -176,6 +196,7 @@ async def _turn(
             "fork_session_id": record.fork_session_id if record else "",
             "files": [p.name for p in dest.files],
             "notices": dest.notices,
+            "logged": logged,
         },
     )
 
@@ -183,6 +204,8 @@ async def _turn(
 def make_app(cfg: TunnelConfig, relay: Relay) -> web.Application:
     """The aiohttp application; separated from serving so tests can drive it."""
     token = resolve_http_token(cfg).encode("utf-8")
+    log_path = resolve_log_path(cfg.http.turn_log, cfg.state_path)
+    turn_log = TurnLog(log_path) if log_path else None
 
     @web.middleware
     async def require_token(request: web.Request, handler: Any) -> web.Response:
@@ -225,6 +248,10 @@ def make_app(cfg: TunnelConfig, relay: Relay) -> web.Application:
             return _json(
                 400, {"ran": False, "error": "thread must match [A-Za-z0-9_.:-]{1,80}"}
             )
+        metadata, err = validate_metadata(body.get("metadata"))
+        if err:
+            status = 413 if "longer" in err else 400
+            return _json(status, {"ran": False, "error": err})
         # The same per-user cooldown the chat front-ends apply, keyed by the
         # sender the caller vouches for, else by the caller's address.
         caller = sender or (request.remote or "unknown")
@@ -236,7 +263,17 @@ def make_app(cfg: TunnelConfig, relay: Relay) -> web.Application:
             )
         thread_key = f"{HTTP_THREAD_PREFIX}{handle}:{thread}"
         try:
-            return await _turn(cfg, relay, thread_key, handle, thread, question, sender)
+            return await _turn(
+                cfg,
+                relay,
+                thread_key,
+                handle,
+                thread,
+                question,
+                sender,
+                metadata,
+                turn_log,
+            )
         except Exception:  # noqa: BLE001 - keep the JSON contract on any failure
             logger.exception("HTTP turn failed [%s]", thread_key)
             return _json(
@@ -248,9 +285,39 @@ def make_app(cfg: TunnelConfig, relay: Relay) -> web.Application:
                 },
             )
 
+    async def turns(request: web.Request) -> web.Response:
+        if turn_log is None:
+            return _json(404, {"ran": False, "error": "no [http] turn_log configured"})
+        query = request.query
+        handle = query.get("handle", "").strip().lower()
+        if not handle:
+            return _json(400, {"ran": False, "error": "handle is required"})
+        try:
+            limit = int(query.get("limit", "50"))
+        except ValueError:
+            return _json(400, {"ran": False, "error": "limit must be an integer"})
+        if not 1 <= limit <= MAX_LIMIT:
+            return _json(
+                400, {"ran": False, "error": f"limit must be 1 to {MAX_LIMIT}"}
+            )
+        filters = {
+            key[len("meta.") :]: value
+            for key, value in query.items()
+            if key.startswith("meta.")
+        }
+        try:
+            found, skipped = await asyncio.to_thread(
+                turn_log.read, handle, filters, limit
+            )
+        except OSError:
+            logger.exception("Could not read turn log %s", turn_log.path)
+            return _json(502, {"ran": False, "error": "could not read the turn log"})
+        return _json(200, {"ran": True, "turns": found, "skipped": skipped})
+
     app = web.Application(client_max_size=256 * 1024, middlewares=[require_token])
     app.router.add_get("/health", health)
     app.router.add_post("/ask", ask)
+    app.router.add_get("/turns", turns)
     return app
 
 

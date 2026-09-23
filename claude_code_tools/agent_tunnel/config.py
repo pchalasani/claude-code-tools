@@ -176,6 +176,10 @@ class HttpConfig:
     token_file: str = ""
     # Name used in the fork's persona for questions arriving this way.
     platform: str = "the web"
+    # Append-only JSON-lines log of answered turns, readable at GET /turns.
+    # Empty = off. Relative paths sit beside the state file. The sender is
+    # never written to it.
+    turn_log: str = ""
 
 
 @dataclass
@@ -423,6 +427,7 @@ unset_api_key = true
 # port = 8766
 # token_file = "~/.config/agent-tunnel/http-token"
 # platform = "the web"
+# turn_log = "http-turns.jsonl"   # answered turns, no sender; GET /turns reads it
 
 [limits]
 max_concurrent = 2

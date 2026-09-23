@@ -58,7 +58,9 @@ safe.
   forks are read-only whatever the handle's access, the configured tool
   lists, the backends' extra args, the configured permission mode, the
   settings' MCP servers, or `allow_skip_permissions`, since the caller picks
-  the handle.
+  the handle. With `[http] turn_log` set, each answered turn is appended to
+  a JSON-lines log with the caller's flat `metadata` and never the sender;
+  `GET /turns` reads it back newest first, filtered by `meta.<key>=<value>`.
   Fields must be strings within their limits (over-limit is a 413); the
   per-user cooldown applies per `sender` (a 429 inside it). The
   response separates whether a turn ran from what it produced: a failed
