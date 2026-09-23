@@ -401,6 +401,8 @@ curl -s -X POST localhost:8766/ask \
   thread that already exists keeps working after `>share off`, like a chat
   thread; only a new thread needs a live handle.
 - `sender` (optional) is shown to the fork as who is asking.
+- `metadata` (optional) is a flat object of strings kept with the turn in the
+  turn log (below); the fork does not see it.
 - Forks made over HTTP are **read-only whatever the handle's access** (a
   `>share --write` or `--bash` handle answers with read tools here), because
   the caller picks the handle. Custom `[claude] allowed_tools` and
@@ -420,6 +422,36 @@ Tailscale Funnel, a Cloudflare Tunnel) and keep the token secret; the caller
 should add its own access control for its users. The reference caller is the
 Jev wiki's `/api/ask` Pages Function, which verifies a Cloudflare Access
 identity before forwarding.
+
+### Keeping a log of answered turns
+
+The daemon's thread store keeps only a trimmed recap of each conversation.
+To keep every answered HTTP turn, name a log file:
+
+```toml
+[http]
+turn_log = "http-turns.jsonl"   # relative paths sit beside the state file
+```
+
+Each answered turn becomes one JSON line: time, handle, thread, question,
+answer, and the caller's `metadata`. The sender is never written. The fork
+is still told who is asking and may repeat it in the answer, so a caller
+that shows the log to other people should send a pseudonym as `sender`.
+
+`POST /ask` accepts an optional `metadata` object of flat strings (up to 20
+keys, each value up to 4,000 characters); a docs site sends the page and
+heading a question came from. `GET /turns` reads the log back, newest first:
+
+```bash
+curl -s "localhost:8766/turns?handle=jev-expert&meta.page=/concepts/noul/&limit=50" \
+  -H "X-Ask-Token: $(cat ~/.config/agent-tunnel/http-token)"
+# {"ran": true, "skipped": 0, "turns": [{"ts": "...", "handle": "jev-expert",
+#   "thread": "...", "question": "...", "answer": "...", "metadata": {...}}]}
+```
+
+Every `meta.<key>=<value>` parameter must match exactly. With no `turn_log`
+the route is a 404. The `/ask` response carries `logged`, which is false
+(with a notice) when the turn was answered but could not be written.
 
 ## Watching live (tmux mode only)
 

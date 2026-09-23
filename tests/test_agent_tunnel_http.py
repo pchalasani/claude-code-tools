@@ -8,6 +8,7 @@ real model or network.
 from __future__ import annotations
 
 import asyncio
+import json
 import stat
 import sys
 from pathlib import Path
@@ -26,6 +27,7 @@ from claude_code_tools.agent_tunnel.registry import PublishRecord, Registry
 from claude_code_tools.agent_tunnel.relay import QUEUE_NOTICE, Relay
 from claude_code_tools.agent_tunnel.serve import plan_frontends
 from claude_code_tools.agent_tunnel.store import TunnelStore
+from claude_code_tools.agent_tunnel.turn_log import TurnLog, resolve_log_path
 
 FAKE_CLAUDE = """\
 import json, sys, uuid
@@ -455,3 +457,238 @@ def test_http_flags_pin_permission_mode_and_mcp(stack) -> None:
     pinned = build_claude_flags(cfg, "sid", fork=True, access="read", force_read=True)
     assert pinned[pinned.index("--permission-mode") + 1] == "dontAsk"
     assert "--strict-mcp-config" in pinned
+
+
+# ---- turn log and GET /turns ------------------------------------------------
+
+
+def _with_log(cfg: TunnelConfig, tmp_path: Path) -> Path:
+    log = tmp_path / "turns.jsonl"
+    cfg.http.turn_log = str(log)
+    return log
+
+
+def test_turn_log_records_metadata_and_never_the_sender(stack, tmp_path) -> None:
+    """An answered turn is logged with its metadata and read back by page.
+
+    The record has no sender field. The fork is still told who is asking and
+    can repeat it in the answer (the fake claude echoes its prompt), so a
+    caller that wants an anonymous log passes a pseudonym as the sender.
+    """
+    cfg, relay, _rec = stack
+    log = _with_log(cfg, tmp_path)
+
+    async def run() -> None:
+        client = await _client(cfg, relay)
+        hdr = {"X-Ask-Token": "s3cret"}
+        try:
+            for thread, page, heading in (
+                ("t1", "/a/", "Intro"),
+                ("t2", "/b/", "Budget"),
+                ("t3", "/a/", "Budget"),
+            ):
+                res = await client.post(
+                    "/ask",
+                    json={
+                        "handle": "jev-expert",
+                        "question": f"q about {heading}",
+                        "thread": thread,
+                        "sender": "reader-1a2b",
+                        "metadata": {"page": page, "heading": heading},
+                    },
+                    headers=hdr,
+                )
+                assert res.status == 200
+                assert (await res.json())["logged"] is True
+            res = await client.get(
+                "/turns", params={"handle": "jev-expert", "meta.page": "/a/"},
+                headers=hdr,
+            )
+            assert res.status == 200
+            body = await res.json()
+            assert body["ran"] is True and body["skipped"] == 0
+            turns = body["turns"]
+            # Newest first, only page /a/.
+            assert [t["metadata"]["heading"] for t in turns] == ["Budget", "Intro"]
+            assert turns[0]["question"] == "q about Budget"
+            assert turns[0]["answer"].startswith("ANSWER to:")
+            assert turns[0]["thread"] == "t3"
+            # Two filters combine.
+            res = await client.get(
+                "/turns",
+                params={
+                    "handle": "JEV-EXPERT",
+                    "meta.page": "/a/",
+                    "meta.heading": "Intro",
+                },
+                headers=hdr,
+            )
+            assert [t["thread"] for t in (await res.json())["turns"]] == ["t1"]
+        finally:
+            await client.close()
+
+    asyncio.run(run())
+    records = [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines()]
+    assert len(records) == 3
+    assert all("sender" not in r for r in records)
+
+
+def test_turns_needs_a_configured_log_and_valid_params(stack, tmp_path) -> None:
+    cfg, relay, _rec = stack
+
+    async def run(expect_log: bool) -> None:
+        client = await _client(cfg, relay)
+        hdr = {"X-Ask-Token": "s3cret"}
+        try:
+            res = await client.get("/turns", params={"handle": "h"}, headers=hdr)
+            assert res.status == (200 if expect_log else 404)
+            assert (await res.json())["ran"] is expect_log
+            if not expect_log:
+                return
+            assert (await client.get("/turns", headers=hdr)).status == 400
+            for bad in ("0", "501", "x"):
+                res = await client.get(
+                    "/turns", params={"handle": "h", "limit": bad}, headers=hdr
+                )
+                assert res.status == 400
+            assert (await client.get("/turns?handle=h")).status == 401
+        finally:
+            await client.close()
+
+    asyncio.run(run(expect_log=False))
+    _with_log(cfg, tmp_path)
+    asyncio.run(run(expect_log=True))
+
+
+def test_ask_rejects_bad_metadata(stack) -> None:
+    cfg, relay, _rec = stack
+
+    async def run() -> None:
+        client = await _client(cfg, relay)
+        hdr = {"X-Ask-Token": "s3cret"}
+        base = {"handle": "jev-expert", "question": "q", "thread": "t9"}
+        try:
+            for meta, status in (
+                (["page"], 400),
+                ({"page": 3}, 400),
+                ({"bad key": "x"}, 400),
+                ({f"k{i}": "v" for i in range(21)}, 400),
+                ({"page": "x" * 4001}, 413),
+            ):
+                res = await client.post(
+                    "/ask", json={**base, "metadata": meta}, headers=hdr
+                )
+                assert res.status == status, meta
+                assert (await res.json())["ran"] is False
+        finally:
+            await client.close()
+
+    asyncio.run(run())
+
+
+def test_unwritable_log_still_answers_and_says_so(stack, tmp_path) -> None:
+    """A log that cannot be written never costs the reader the answer."""
+    cfg, relay, _rec = stack
+    blocked = tmp_path / "is-a-directory"
+    blocked.mkdir()
+    cfg.http.turn_log = str(blocked)
+
+    async def run() -> None:
+        client = await _client(cfg, relay)
+        try:
+            res = await client.post(
+                "/ask",
+                json={"handle": "jev-expert", "question": "q", "thread": "t8"},
+                headers={"X-Ask-Token": "s3cret"},
+            )
+            assert res.status == 200
+            body = await res.json()
+            assert body["ran"] is True and body["logged"] is False
+            assert any("turn log" in n for n in body["notices"])
+        finally:
+            await client.close()
+
+    asyncio.run(run())
+
+
+def test_turn_log_read_skips_and_counts_unreadable_lines(tmp_path) -> None:
+    log = tmp_path / "t.jsonl"
+    good = {"handle": "h", "metadata": {"page": "/a/"}, "question": "q"}
+    other = json.dumps({**good, "handle": "x"})
+    log.write_text(
+        json.dumps(good) + "\nnot json\n\n" + other + "\n",
+        encoding="utf-8",
+    )
+    turns, skipped = TurnLog(log).read("h", {"page": "/a/"}, 10)
+    assert [t["question"] for t in turns] == ["q"] and skipped == 1
+    assert TurnLog(tmp_path / "missing.jsonl").read("h", {}, 10) == ([], 0)
+
+
+def test_resolve_log_path(tmp_path) -> None:
+    state = tmp_path / "state" / "state.json"
+    assert resolve_log_path("", state) is None
+    assert resolve_log_path("turns.jsonl", state) == tmp_path / "state" / "turns.jsonl"
+    assert resolve_log_path(str(tmp_path / "x.jsonl"), state) == tmp_path / "x.jsonl"
+
+
+def test_turn_log_accepts_a_lone_surrogate(stack, tmp_path) -> None:
+    """JSON can carry a lone surrogate; it must be logged, not a 502."""
+    cfg, relay, _rec = stack
+    log = _with_log(cfg, tmp_path)
+
+    async def run() -> None:
+        client = await _client(cfg, relay)
+        raw = (
+            '{"handle": "jev-expert", "question": "q", "thread": "t7",'
+            ' "metadata": {"heading": "\\ud800"}}'
+        )
+        try:
+            res = await client.post(
+                "/ask",
+                data=raw,
+                headers={"X-Ask-Token": "s3cret", "Content-Type": "application/json"},
+            )
+            assert res.status == 200
+            assert (await res.json())["logged"] is True
+        finally:
+            await client.close()
+
+    asyncio.run(run())
+    turns, skipped = TurnLog(log).read("jev-expert", {}, 10)
+    assert skipped == 0 and turns[0]["metadata"]["heading"] == "\ud800"
+
+
+def test_turn_log_recovers_from_a_torn_last_line(tmp_path) -> None:
+    """A record cut off by a failed write does not swallow the next one."""
+    log = tmp_path / "t.jsonl"
+    log.write_text('{"handle": "h", "metadata": {}, "quest', encoding="utf-8")
+
+    async def write() -> None:
+        await TurnLog(log).append("h", "t1", "q", "a", {"page": "/a/"})
+
+    asyncio.run(write())
+    turns, skipped = TurnLog(log).read("h", {}, 10)
+    assert [t["thread"] for t in turns] == ["t1"] and skipped == 1
+    # Owner-only, like the thread store; an older, wider file is narrowed.
+    assert log.stat().st_mode & 0o777 == 0o600
+
+
+def test_turn_log_read_skips_a_line_that_is_not_utf8(tmp_path) -> None:
+    """One damaged line is skipped and counted; the others still read."""
+    log = tmp_path / "t.jsonl"
+    good = json.dumps({"handle": "h", "metadata": {}, "thread": "ok"}).encode()
+    odd = b'{"handle": "h", "metadata": "x"}\n[1, 2]\n'
+    log.write_bytes(good + b"\n\xff\xfe not utf-8\n" + odd + good + b"\n")
+    turns, skipped = TurnLog(log).read("h", {"page": "/a/"}, 10)
+    assert turns == [] and skipped == 3
+    turns, skipped = TurnLog(log).read("h", {}, 10)
+    assert len(turns) == 2 and skipped == 3
+
+
+def test_turn_log_read_keeps_only_the_latest_matches(tmp_path) -> None:
+    """The limit applies during the scan and keeps the newest turns."""
+    log = tmp_path / "t.jsonl"
+    rows = [{"handle": "h", "metadata": {}, "thread": f"t{i}"} for i in range(50)]
+    log.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    turns, _ = TurnLog(log).read("h", {}, 3)
+    assert [t["thread"] for t in turns] == ["t49", "t48", "t47"]
