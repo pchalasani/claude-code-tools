@@ -683,3 +683,12 @@ def test_turn_log_read_skips_a_line_that_is_not_utf8(tmp_path) -> None:
     assert turns == [] and skipped == 3
     turns, skipped = TurnLog(log).read("h", {}, 10)
     assert len(turns) == 2 and skipped == 3
+
+
+def test_turn_log_read_keeps_only_the_latest_matches(tmp_path) -> None:
+    """The limit applies during the scan and keeps the newest turns."""
+    log = tmp_path / "t.jsonl"
+    rows = [{"handle": "h", "metadata": {}, "thread": f"t{i}"} for i in range(50)]
+    log.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    turns, _ = TurnLog(log).read("h", {}, 3)
+    assert [t["thread"] for t in turns] == ["t49", "t48", "t47"]

@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -135,7 +136,9 @@ class TurnLog:
         """
         if not self.path.exists():
             return [], 0
-        matches: list[dict[str, Any]] = []
+        # Only the latest `limit` matches are kept while scanning, so memory
+        # stays bounded however long the log grows.
+        matches: deque[dict[str, Any]] = deque(maxlen=limit)
         skipped = 0
         # Bytes, decoded line by line, so one damaged line is skipped and
         # counted rather than hiding every record after it.
@@ -158,4 +161,4 @@ class TurnLog:
                     matches.append(turn)
         if skipped:
             logger.warning("Turn log %s: %d unreadable line(s)", self.path, skipped)
-        return list(reversed(matches[-limit:])), skipped
+        return list(reversed(matches)), skipped
