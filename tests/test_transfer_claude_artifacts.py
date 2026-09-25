@@ -1,0 +1,536 @@
+"""Regression coverage for session artifacts discovered during real migrations."""
+
+import json
+import os
+import shutil
+import tempfile
+from pathlib import Path
+
+import pytest
+
+from claude_code_tools.transfer_claude import export_session
+from tests.test_transfer_claude import SID, fixture_home
+
+
+def test_goal_and_tool_jsonl_preserved(tmp_path: Path) -> None:
+    """Native goal attachments and arbitrary persisted output retain their content."""
+    home, transcript = fixture_home(tmp_path)
+    goal = {
+        "type": "attachment",
+        "attachment": {
+            "type": "goal_status",
+            "met": False,
+            "condition": "Read /old/project/report",
+            "sentinel": True,
+        },
+    }
+    with transcript.open("a") as stream:
+        stream.write(json.dumps(goal) + "\n")
+    output = transcript.with_suffix("") / "tool-results" / "output.jsonl"
+    output.parent.mkdir(parents=True)
+    content = b'{"cwd":"/unrelated/data","value": 1}\nnot JSON at all\n'
+    output.write_bytes(content)
+    export_session(
+        home, SID, Path("/remote/profile"), Path("/new/project"), tmp_path / "bundle"
+    )
+    root = tmp_path / "bundle/files/projects/-new-project"
+    assert json.loads((root / transcript.name).read_text().splitlines()[-1]) == goal
+    assert (root / SID / "tool-results/output.jsonl").read_bytes() == content
+
+
+def test_scratch_symlink_missing_and_mapping(tmp_path: Path, monkeypatch) -> None:
+    """Copy session scratch, materialize a log link, and report missing references."""
+    home, transcript = fixture_home(tmp_path)
+    with tempfile.TemporaryDirectory(prefix="claude-transfer-", dir="/tmp") as name:
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: name)
+        scratch = (
+            Path(name) / f"claude-{os.getuid()}" / "-old-project" / SID / "scratchpad"
+        )
+        scratch.mkdir(parents=True)
+        (scratch / "plan.txt").write_text("scratch goal")
+        log = transcript.with_suffix("") / "subagents/agent-child.jsonl"
+        log.parent.mkdir(parents=True)
+        log.write_text(json.dumps({"cwd": "/old/project", "type": "user"}))
+        (scratch / "child.output").symlink_to(log)
+        missing = scratch / "gone.txt"
+        with transcript.open("a") as stream:
+            stream.write(
+                json.dumps(
+                    {
+                        "message": {
+                            "content": f"Read {scratch}/plan.txt then {missing}"
+                        },
+                        "slug": "missing-plan",
+                    }
+                )
+                + "\n"
+            )
+        result = export_session(
+            home,
+            SID,
+            Path("/remote/profile"),
+            Path("/new/project"),
+            tmp_path / "bundle",
+        )
+        assert str(missing) in {item["path"] for item in result["missing_at_source"]}
+        assert str(home / "plans/missing-plan.md") in {
+            item["path"] for item in result["missing_at_source"]
+        }
+        mapping = result["path_mappings"]
+        for original in (scratch / "plan.txt", scratch / "child.output"):
+            relative = Path(mapping[str(original)]).relative_to("/remote/profile")
+            copied = tmp_path / "bundle/files" / relative
+            assert copied.is_file() and not copied.is_symlink()
+            assert copied.read_bytes() == original.read_bytes()
+
+
+def test_multiple_explicit_projects(tmp_path: Path) -> None:
+    """Explicit mappings support transcript cwd transitions into another worktree."""
+    home, transcript = fixture_home(tmp_path)
+    with transcript.open("a") as stream:
+        stream.write(
+            json.dumps(
+                {"cwd": "/other/tree", "message": {"content": "Historical /other/tree"}}
+            )
+            + "\n"
+        )
+    export_session(
+        home,
+        SID,
+        Path("/remote/profile"),
+        Path("/new/project"),
+        tmp_path / "bundle",
+        path_mappings={"/other/tree": "/new/tree"},
+    )
+    record = json.loads(
+        (tmp_path / "bundle/files/projects/-new-project" / transcript.name)
+        .read_text()
+        .splitlines()[-1]
+    )
+    assert record["cwd"] == "/new/tree"
+    assert record["message"]["content"] == "Historical /other/tree"
+
+
+def test_unreferenced_native_scratch(tmp_path: Path, monkeypatch) -> None:
+    """Exact native session scratch survives even when used via shell variables."""
+    import os
+
+    from claude_code_tools import transfer_claude_artifacts
+
+    home, _ = fixture_home(tmp_path)
+    monkeypatch.setattr(
+        transfer_claude_artifacts.tempfile, "gettempdir", lambda: str(tmp_path)
+    )
+    scratch = tmp_path / f"claude-{os.getuid()}" / "-old-project" / SID / "scratchpad"
+    scratch.mkdir(parents=True)
+    (scratch / "goal.txt").write_text("Native scratch without literal reference")
+    result = export_session(
+        home,
+        SID,
+        Path("/remote/profile"),
+        Path("/new/project"),
+        tmp_path / "bundle",
+        path_mappings=[{"source": "/other", "destination": "/remote/other"}],
+    )
+    mapped = Path(result["path_mappings"][str(scratch / "goal.txt")])
+    copied = tmp_path / "bundle/files" / mapped.relative_to("/remote/profile")
+    assert copied.read_text() == "Native scratch without literal reference"
+
+
+def test_prior_transfer_scratch_survives_return(tmp_path: Path) -> None:
+    """Previously relocated scratch and original historical aliases survive a return."""
+    home, _ = fixture_home(tmp_path)
+    support = home / "transfer-support" / SID
+    artifact = support / "scratch/hash/goal.txt"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("goal from the first machine")
+    (support / "path-map.json").write_text(
+        json.dumps(
+            {
+                "path_mappings": {"/tmp/old-original/goal.txt": str(artifact)},
+                "missing_at_source": [
+                    {"path": "/tmp/old-original/gone", "reason": "missing_at_source"}
+                ],
+            }
+        )
+    )
+    result = export_session(
+        home, SID, Path("/return/profile"), Path("/return/project"), tmp_path / "bundle"
+    )
+    target = Path("/return/profile") / artifact.relative_to(home)
+    assert result["path_mappings"]["/tmp/old-original/goal.txt"] == str(target)
+    assert (tmp_path / "bundle/files" / artifact.relative_to(home)).read_text() == (
+        "goal from the first machine"
+    )
+    assert not any(name.endswith("/path-map.json") for name in result["files"])
+    assert any(
+        item["path"] == "/tmp/old-original/gone" for item in result["missing_at_source"]
+    )
+
+
+def test_unicode_line_separators_inside_native_jsonl(tmp_path: Path) -> None:
+    """JSONL records use LF, not Unicode separators inside conversation strings."""
+    home, transcript = fixture_home(tmp_path)
+    text = "First\u2028second\u2029third\u0085fourth"
+    record = {"type": "user", "cwd": "/old/project", "message": {"content": text}}
+    with transcript.open("a") as stream:
+        stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+    subagent = transcript.with_suffix("") / "subagents/agent-child.jsonl"
+    subagent.parent.mkdir(parents=True)
+    subagent.write_text(json.dumps(record, ensure_ascii=False) + "\n")
+    export_session(
+        home, SID, Path("/remote/profile"), Path("/new/project"), tmp_path / "bundle"
+    )
+    root = tmp_path / "bundle/files/projects/-new-project"
+    for path in (root / transcript.name, root / SID / "subagents/agent-child.jsonl"):
+        records = [json.loads(line) for line in path.read_text().split("\n") if line]
+        assert records[-1]["message"]["content"] == text
+        assert records[-1]["cwd"] == "/new/project"
+
+
+def test_scratch_link_cannot_copy_another_sessions_subagent(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A .jsonl/subagents shape alone does not authorize another session's log."""
+    home, transcript = fixture_home(tmp_path)
+    unrelated = transcript.parent / "another-session/subagents/agent-private.jsonl"
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text("unrelated conversation must not be copied")
+    with tempfile.TemporaryDirectory(prefix="claude-transfer-", dir="/tmp") as name:
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: name)
+        scratch = (
+            Path(name) / f"claude-{os.getuid()}" / "-old-project" / SID / "scratchpad"
+        )
+        scratch.mkdir(parents=True)
+        link = scratch / "task.output"
+        link.symlink_to(unrelated)
+        with transcript.open("a") as stream:
+            stream.write(json.dumps({"message": {"content": f"Read {link}"}}) + "\n")
+        result = export_session(
+            home,
+            SID,
+            Path("/remote/profile"),
+            Path("/new/project"),
+            tmp_path / "bundle",
+        )
+        assert str(link) not in result["path_mappings"]
+        assert {"path": str(link), "reason": "unsupported_symlink_target"} in result[
+            "missing_at_source"
+        ]
+        for path in (tmp_path / "bundle/files").rglob("*"):
+            if path.is_file():
+                assert (
+                    b"unrelated conversation must not be copied"
+                    not in path.read_bytes()
+                )
+
+
+def test_regular_other_session_scratch_is_not_copied(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A literal path into another session's scratch bucket does not authorize it."""
+    home, transcript = fixture_home(tmp_path)
+    with tempfile.TemporaryDirectory(prefix="claude-transfer-", dir="/tmp") as name:
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: name)
+        bucket = Path(name) / f"claude-{os.getuid()}" / "-old-project"
+        selected = bucket / SID / "scratchpad/selected.txt"
+        selected.parent.mkdir(parents=True)
+        selected.write_text("owned scratch")
+        unrelated = bucket / "another-session" / "scratchpad/private.txt"
+        unrelated.parent.mkdir(parents=True)
+        unrelated.write_text("unrelated private scratch")
+        linked_directory = selected.parent / "linked"
+        linked_directory.symlink_to(unrelated.parent, target_is_directory=True)
+        traversed = linked_directory / unrelated.name
+        with transcript.open("a") as stream:
+            stream.write(
+                json.dumps(
+                    {"message": {"content": f"Read {unrelated} and {traversed}"}}
+                )
+                + "\n"
+            )
+        result = export_session(
+            home,
+            SID,
+            Path("/remote/profile"),
+            Path("/new/project"),
+            tmp_path / "bundle",
+        )
+        assert str(selected.resolve()) in result["path_mappings"]
+        assert str(unrelated) not in result["path_mappings"]
+        assert str(traversed) not in result["path_mappings"]
+        for path in (tmp_path / "bundle/files").rglob("*"):
+            if path.is_file():
+                assert b"unrelated private scratch" not in path.read_bytes()
+
+
+@pytest.mark.parametrize("linked_component", ["bucket", "project"])
+def test_native_scratch_rejects_symlinked_ancestor(
+    tmp_path: Path, monkeypatch, linked_component: str
+) -> None:
+    """A computed native path cannot designate unrelated files through an ancestor."""
+    home, _ = fixture_home(tmp_path)
+    temporary_base = tmp_path / "temporary"
+    temporary_base.mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(temporary_base))
+    bucket = temporary_base / f"claude-{os.getuid()}"
+    external = tmp_path / "unrelated"
+    if linked_component == "bucket":
+        secret = external / "-old-project" / SID / "scratchpad/secret.txt"
+        secret.parent.mkdir(parents=True)
+        bucket.symlink_to(external, target_is_directory=True)
+    else:
+        secret = external / SID / "scratchpad/secret.txt"
+        secret.parent.mkdir(parents=True)
+        bucket.mkdir()
+        (bucket / "-old-project").symlink_to(external, target_is_directory=True)
+    secret.write_text("unrelated data must not enter selected session export")
+    with pytest.raises(ValueError, match="scratch root uses a symlinked ancestor"):
+        export_session(
+            home,
+            SID,
+            Path("/remote/profile"),
+            Path("/new/project"),
+            tmp_path / "bundle",
+        )
+    for path in (tmp_path / "bundle/files").rglob("*"):
+        if path.is_file():
+            assert secret.read_bytes() not in path.read_bytes()
+
+
+def test_subagent_secondary_worktree_scratch_and_gaps(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Subagent records contribute mapped cwd roots and surviving/missing scratch."""
+    home, transcript = fixture_home(tmp_path)
+    sidecar = transcript.with_suffix("") / "subagents/agent-secondary.jsonl"
+    sidecar.parent.mkdir(parents=True)
+    with tempfile.TemporaryDirectory(prefix="claude-transfer-", dir="/tmp") as name:
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: name)
+        bucket = Path(name) / f"claude-{os.getuid()}"
+        scratch = bucket / "-secondary-worktree" / SID / "scratchpad"
+        scratch.mkdir(parents=True)
+        existing = scratch / "retained.txt"
+        existing.write_text("selected subagent scratch")
+        unreferenced = scratch / "goal.txt"
+        unreferenced.write_text("subagent scratch used through a shell variable")
+        missing = scratch / "gone.txt"
+        unrelated = bucket / "-unrelated-worktree" / SID / "scratchpad/private.txt"
+        unrelated.parent.mkdir(parents=True)
+        unrelated.write_text("unrelated worktree must not be included")
+        sidecar.write_text(
+            json.dumps(
+                {
+                    "type": "user",
+                    "cwd": "/secondary/worktree",
+                    "message": {
+                        "content": f"Read {existing}, {missing}, and {unrelated}"
+                    },
+                }
+            )
+            + "\n"
+        )
+        result = export_session(
+            home,
+            SID,
+            Path("/remote/profile"),
+            Path("/new/project"),
+            tmp_path / "bundle",
+            path_mappings={"/secondary/worktree": "/remote/secondary"},
+        )
+        for source in (existing, unreferenced):
+            destination = Path(result["path_mappings"][str(source.resolve())])
+            copied = (
+                tmp_path / "bundle/files" / destination.relative_to("/remote/profile")
+            )
+            assert copied.read_bytes() == source.read_bytes()
+        assert {"path": str(missing), "reason": "missing_at_source"} in result[
+            "missing_at_source"
+        ]
+        assert str(unrelated) not in result["path_mappings"]
+        assert {
+            "source": "/secondary/worktree",
+            "destination": "/remote/secondary",
+        } in result["operational_cwds"]
+
+
+def test_subagent_file_history_backup_gaps_are_reported(tmp_path: Path) -> None:
+    """Selected sidecar snapshots receive the same missing-backup check as main."""
+    home, transcript = fixture_home(tmp_path)
+    existing = home / "file-history" / SID / "existing@v1"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("preserved historical contents")
+    missing = existing.parent / "missing@v2"
+    sidecar = transcript.with_suffix("") / "subagents/agent-history.jsonl"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "type": "file-history-snapshot",
+                "snapshot": {
+                    "trackedFileBackups": {
+                        "existing.py": {"backupFileName": existing.name, "version": 1},
+                        "missing.py": {"backupFileName": missing.name, "version": 2},
+                    }
+                },
+            }
+        )
+        + "\n"
+    )
+    result = export_session(
+        home, SID, Path("/remote/profile"), Path("/new/project"), tmp_path / "bundle"
+    )
+    assert {"path": str(missing), "reason": "missing_at_source"} in result[
+        "missing_at_source"
+    ]
+    assert not any(
+        item["path"] == str(existing) for item in result["missing_at_source"]
+    )
+    copied = tmp_path / "bundle/files" / existing.relative_to(home)
+    assert copied.read_bytes() == existing.read_bytes()
+
+
+def test_subagent_only_plan_slugs_copy_and_report_gaps(tmp_path: Path) -> None:
+    """Plan discovery includes selected sidecar records before source snapshotting."""
+    home, transcript = fixture_home(tmp_path)
+    plans = home / "plans"
+    plans.mkdir()
+    existing = plans / "sidecar-existing-plan.md"
+    existing.write_text("the selected subagent plan")
+    missing = plans / "sidecar-missing-plan.md"
+    unrelated = plans / "unrelated-plan.md"
+    unrelated.write_text("another session plan")
+    sidecar = transcript.with_suffix("") / "subagents/agent-planning.jsonl"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        "".join(
+            json.dumps(record) + "\n"
+            for record in [
+                {"cwd": "/old/project", "slug": existing.stem, "type": "user"},
+                {"cwd": "/old/project", "slug": missing.stem, "type": "assistant"},
+            ]
+        )
+    )
+    result = export_session(
+        home, SID, Path("/remote/profile"), Path("/new/project"), tmp_path / "bundle"
+    )
+    relative = existing.relative_to(home)
+    assert str(relative) in result["files"]
+    assert str(relative) in result["shared_files"]
+    assert (tmp_path / "bundle/files" / relative).read_bytes() == existing.read_bytes()
+    assert {"path": str(missing), "reason": "missing_at_source"} in result[
+        "missing_at_source"
+    ]
+    assert str(unrelated.relative_to(home)) not in result["files"]
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        "account",
+        "subtree",
+        "alias",
+        "alias-missing-tail",
+        "encoded-project",
+        "alias-encoded-project",
+    ],
+)
+@pytest.mark.parametrize("conflicting", [True, False])
+def test_claude_account_mappings_retain_destination_layout(
+    tmp_path: Path, scope: str, conflicting: bool
+) -> None:
+    """Account mappings and aliases cannot redirect copied artifacts elsewhere."""
+    home, transcript = fixture_home(tmp_path)
+    alias = tmp_path / "account-alias"
+    alias.symlink_to(home, target_is_directory=True)
+    relative = Path(".")
+    if scope == "account":
+        old = home
+    elif scope == "subtree":
+        relative = Path("projects")
+        old = home / relative
+    elif scope == "alias":
+        old = alias
+    elif scope in {"encoded-project", "alias-encoded-project"}:
+        relative = Path("projects/-old-project")
+        old = (alias if scope == "alias-encoded-project" else home) / relative
+    else:
+        relative = Path("plans/future")
+        old = alias / relative
+    destination_home = Path("/remote/profile")
+    expected = str(
+        destination_home
+        / (Path("projects/-new-project") if "encoded-project" in scope else relative)
+    )
+    mapped = "/unrelated/destination" if conflicting else expected
+    if conflicting:
+        with pytest.raises(ValueError, match="Account home mapping conflicts"):
+            export_session(
+                home,
+                SID,
+                destination_home,
+                Path("/new/project"),
+                tmp_path / "bundle",
+                path_mappings={str(old): mapped},
+            )
+    else:
+        result = export_session(
+            home,
+            SID,
+            destination_home,
+            Path("/new/project"),
+            tmp_path / "bundle",
+            path_mappings={str(old): mapped},
+        )
+        assert result["ok"]
+        assert result["path_mappings"][str(old)] == expected
+        assert (
+            result["path_mappings"][str(transcript.parent)]
+            == "/remote/profile/projects/-new-project"
+        )
+        if scope == "alias":
+            assert (
+                result["path_mappings"][str(alias / "projects/-old-project")]
+                == "/remote/profile/projects/-new-project"
+            )
+        assert (
+            tmp_path / "bundle/files/projects/-new-project" / transcript.name
+        ).is_file()
+
+
+def test_encoded_project_path_guide_composes_on_second_copy(tmp_path: Path) -> None:
+    """Historical tool-result paths follow the actual encoded folder on both hops."""
+    home, transcript = fixture_home(tmp_path)
+    result_file = transcript.with_suffix("") / "tool-results/result.txt"
+    result_file.parent.mkdir(parents=True)
+    result_file.write_text("persisted output")
+    first_home = tmp_path / "first-destination"
+    first = export_session(
+        home, SID, first_home, Path("/new/project"), tmp_path / "first-bundle"
+    )
+    shutil.copytree(tmp_path / "first-bundle/files", first_home)
+    guide = first_home / "transfer-support" / SID / "path-map.json"
+    guide.parent.mkdir(parents=True)
+    guide.write_text(
+        json.dumps(
+            {
+                "path_mappings": first["path_mappings"],
+                "missing_at_source": first["missing_at_source"],
+            }
+        )
+    )
+    second = export_session(
+        first_home,
+        SID,
+        Path("/returned/profile"),
+        Path("/returned/project"),
+        tmp_path / "second-bundle",
+    )
+    expected_parent = Path("/returned/profile/projects/-returned-project")
+    assert second["path_mappings"][str(transcript.parent)] == str(expected_parent)
+    relative_tail = result_file.relative_to(transcript.parent)
+    destination = expected_parent / relative_tail
+    copied = (
+        tmp_path / "second-bundle/files" / destination.relative_to("/returned/profile")
+    )
+    assert copied.read_bytes() == result_file.read_bytes()

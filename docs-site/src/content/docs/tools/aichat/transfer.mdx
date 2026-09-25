@@ -1,0 +1,179 @@
+---
+title: "Transfer Between Machines"
+---
+
+`aichat transfer` copies a saved Claude or Codex conversation between account
+homes, locally or over SSH. It preserves the source and prints the destination
+resume command. The default operation is a dry run; add `--apply` to copy.
+
+## Inspect, copy, and resume
+
+Exit the source agent and prepare the destination project and authentication.
+Transfer copies conversation state, not the repository, running processes, or
+credentials. Both Git worktrees must be clean, including untracked files, at the
+same commit. This also applies to each secondary working directory actually used
+by a child session or sidecar, including those supplied through `--map`. Artifact
+locations and sandbox-only paths do not trigger Git checks. Select corresponding
+subdirectories if the conversation used one.
+
+Inspect a copy to an SSH host:
+
+```bash
+aichat transfer SESSION_UUID \
+  --agent claude \
+  --source-home ~/.claude-work \
+  --to workstation \
+  --destination-home '~/.claude-work' \
+  --destination-project '~/Git/project'
+```
+
+Read the plan, source gaps, environment checks, and any conflicts. Repeat the
+command with `--apply` to copy. The source remains intact. Run the printed resume
+command on the destination; the transfer itself never starts that conversation.
+
+Pull a session back from SSH using the same local installation:
+
+```bash
+aichat transfer SESSION_UUID \
+  --agent claude \
+  --from workstation \
+  --source-home '~/.claude-work' \
+  --to local \
+  --destination-home ~/.claude-returned \
+  --destination-project ~/Git/project \
+  --apply
+```
+
+This example uses a separate return account so an earlier local conversation
+cannot be overwritten. Prepare that account's authentication locally. If both
+copies advanced independently, transfer refuses differing destination state; it
+never merges two conversations automatically. Preserve both copies and select
+an explicit destination account rather than deleting the conflict blindly.
+
+Quote remote paths beginning with `~` so the remote machine expands them. SSH
+uses normal keys, configuration, and host verification with batch authentication.
+Each SSH peer needs Git and Python 3.11+, but does not need `aichat` installed.
+`--remote-python /path/to/python3` selects the interpreter for the bundled helper.
+
+## Options and reports
+
+- `--agent claude|codex`: required source format.
+- `--source-home PATH`: explicit account home. For local sources, defaults to
+  the configured global account option/environment; remote defaults to
+  `~/.claude` or `~/.codex` on that peer.
+- `--from HOST`: source SSH alias; defaults to `local`.
+- `--to HOST`: required destination SSH alias, or `local`.
+- `--destination-home PATH`: required destination account home.
+- `--destination-project PATH`: required prepared Git project directory.
+- `--map OLD NEW`: additional absolute source/destination path pair; repeat for
+  descendant worktrees or other operational paths outside the main project. A pair
+  cannot override the primary `--destination-project` mapping.
+- `--remote-python PATH`: SSH helper interpreter; defaults to `python3`.
+- `--apply`: perform the copy after validation.
+- `--dry-run`: explicitly request the default inspection; incompatible with apply.
+- `--recover`: with apply, retry the identical plan after an interrupted import.
+- `--json`: structured plan, checksums, sizes, database row counts, and check results.
+
+Use a full UUID for an exact reference. Unique saved names and ID prefixes also
+work within the selected account. Reports summarize database rows without printing
+conversation or goal contents. They still contain account paths and session
+identifiers; handle them as private. A completed file transfer and a successful
+environment inspection are separate results; inspect individual
+checks and remediation rather than treating a top-level inspection flag as proof
+that every dependency works.
+
+## Included artifacts and path mappings
+
+Claude copies its conversation and subagents, persisted tool results, tasks and
+todos, file-history backups, referenced plans, and shared project memory. Native
+`goal_status` attachments are preserved. Scoped native scratch directories are
+inventoried outside the account home, including surviving files no longer named
+literally in the transcript. Supported scratch links to subagent output are
+materialized as readable files and disclosed in the report.
+
+Codex supports the recognized native SQLite schemas, including selected threads
+and descendants, paginated history, memory records, and native goals. Goal status
+is preserved. Selected session-index and import-provenance records are merged
+without replacing unrelated records. Recognized referenced attachments and
+supporting files are included. Unscoped external temporary files are not copied
+merely because their paths appear in conversation text. The plan lists excluded
+paths. Use a narrow explicit `--map OLD NEW` pair to opt in, or copy them manually.
+Codex support artifacts must not use symlinked files or directories to escape
+their approved location. Opted-in artifacts use account-scoped `transfer-support`;
+consult
+the generated path guide for the actual location. Initialize a compatible Codex
+account schema on
+the destination first; unknown schemas, unfinished turns, queued input, and
+unsupported thread artifacts produce explicit errors.
+
+Structural working-directory, sandbox, and file-backup metadata are translated.
+Codex rollout rewrites also remap paginated-history byte offsets at verified
+record boundaries. Historical message text and saved tool-result contents remain
+unchanged. Additional operational directories require explicit `--map` pairs.
+
+External supporting files are stored under the destination account's
+`transfer-support/SESSION_UUID/`. The printed `path-map.json` tells a resumed
+agent how to translate old artifact references using the longest source prefix.
+Subsequent copies carry supporting files and compose earlier mappings, so a
+round trip does not lose references from the first machine. No global home
+symlink is created. If a resumed agent encounters an old path, ask it to consult
+this guide before declaring the file missing.
+
+The plan distinguishes `missing_at_source` artifacts from transfer failures.
+Files already deleted before export cannot be recovered by copying. Arbitrary
+external documents are not implicitly included just because their paths appear
+in prose. Shared memories or plans that differ at the destination are conflicts;
+the tool does not overwrite newer shared work.
+
+## Environment checks
+
+Preflight reports native CLI versions/plugin registrations, account overrides,
+the selected hook Python, configured hook launchers and script paths, and Chrome
+loopback availability. Native discovery uses temporary account configuration
+snapshots and does not copy authentication into them. An absent destination
+account is reported as uninitialized rather than created by inspection.
+
+An auth-free Codex snapshot may omit account-dependent bundled or remote plugins.
+Preflight reports that discovery as incomplete, lists cached registrations
+separately, and does not label native omissions as missing destination plugins.
+Run `codex plugin list --json` in the original account to verify its authenticated
+view. Cached manifests and enabled flags alone do not prove runtime availability.
+
+Settings, plugins, credentials, jobs, and machine services are not synchronized.
+Apply reported remedies on the destination. In particular, a copied Chrome MCP
+configuration does not carry a logged-in browser or extension connection.
+A listening port is not proof of browser authentication or a working MCP session.
+Hook scripts are not executed by preflight; path checks do not prove runtime
+imports or every hook's behavior. Shell compounds, builtin launchers, and `env`
+wrappers are
+reported as unverified rather than interpreted as missing executables. Use safe
+synthetic hook tests when diagnosing
+an actual runtime failure.
+
+## Interrupted copies and recovery
+
+Payloads are checksummed, existing differing files/records are refused, and
+new files are published atomically. Before import, a private journal and backups
+are retained under `.aichat-transfer-backups/` inside the destination account.
+Unrelated destination database rows and metadata are preserved. Codex session
+index records are appended without replacing concurrent unrelated entries.
+An existing `external_agent_session_imports.json` that needs additional selected
+records is refused because native writers offer no safe concurrent merge. Use
+a separate destination account; already-present identical records need no write.
+
+After interruption, rerun the same command with `--apply --recover`. Recovery
+requires the same plan and refuses a live competing importer. It verifies
+already-present data and completes missing work rather than deleting files that
+may now belong to a resumed session. Changed source data or conflicting newer
+destination data requires investigation; keep the recorded backups and journal.
+Do not manually remove a transfer lock to force an import past a live owner.
+
+Active-session detection is best effort and cannot prove that every agent process
+is idle. Exit the source and destination copies yourself. A transfer lock only
+coordinates transfer processes. SQLite cannot guarantee a single crash-atomic
+commit across multiple WAL databases; the retained journal and identical-plan
+recovery address partial completion without blindly restoring whole databases.
+
+Local temporary staging and the in-memory SSH payload require enough RAM and
+temporary disk space for the selected artifacts. The destination agent is never
+launched automatically, and terminal tasks are never relocated.
