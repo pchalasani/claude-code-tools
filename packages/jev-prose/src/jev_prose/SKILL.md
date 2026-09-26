@@ -52,6 +52,12 @@ For each requested sentence, paragraph, or short section:
    Stop earlier if text repeats or feedback cycles without useful improvement.
    Always check the last revision; never end on an unchecked rewrite.
 
+Preserve substantive claims as well as individual facts. If addressing a finding
+would weaken, strengthen, remove, or otherwise change a conclusion, leave the
+claim intact and report the finding unresolved unless the user has authorized
+factual or argument changes. An unsupported claim is not permission to silently
+replace the author's intended claim with a different one.
+
 Do not change thresholds to obtain a clean result. Do not add invented examples,
 anecdotes, feelings, measurements, sources, or stronger claims. Do not remove
 necessary qualifications or factual content to lower the number of flags. Check

@@ -53,18 +53,30 @@ per-question precision, recall, or calibration claim is made.
 ## Real writing loops
 
 `writing-loops.json` records an independent agent following the skill on three
-passages, using the final prompt and a fixed 0.90 threshold. Five real checks
-completed all 585 judgments:
+passages, using the final prompt and a fixed 0.90 threshold. Four real checks
+completed all 468 judgments:
 
 - Export announcement: one revision; retained the 500-row CSV limit and the
   exclusion of archived rows. Final model-clean text still contains promotional
   wording, recorded explicitly as a residual editorial problem.
 - Worker retry behavior: zero revisions; clean input remained byte-for-byte
   unchanged, preserving the 30-second interval and two-failure policy.
-- Eight-user pilot: one revision; retained eight participants and five unassisted
-  completions, and narrowed an unsupported universal conclusion. This is an
-  explicit correction of evidential overreach, not identical claim semantics.
-  If the conclusion itself must remain unchanged, disclose it instead of revising.
+- Eight-user pilot: zero revisions; retained eight participants, five unassisted
+  completions, and the substantive conclusion. The proof-overclaim finding
+  remains unresolved at 0.98 because changing that conclusion was not authorized.
+
+An earlier test narrowed the conclusion while keeping the observed counts. We
+retained that evidence in `pre-preservation-writing-loops.json` and tightened
+the skill to preserve substantive claims, then ran the final test from the
+originals. A disagreement about a claim is now reported instead of silently
+rewritten.
+
+`claude-writing-loop.json` records a separate real Claude Code CLI run using the
+globally installed skill and command from a temporary directory. Two checks
+answered 234/234 judgments; one revision removed a filler lead-in while keeping
+the 60-second refresh interval, two-snapshot limit, memory rationale, and failure
+behavior unchanged. That run began before the final claim-preservation wording
+clarification; it did not change any substantive claim.
 
 No loop exceeded three revisions. Unit tests cover transport failure, missing
 answers, malformed probabilities, model changes, and CLI exit semantics; they
