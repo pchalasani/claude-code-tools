@@ -86,7 +86,8 @@ mappings are validated before inference.
 The writing plugin's `jev-prose` skill works in Claude Code and Codex. It checks
 the current draft, asks the writer to review findings, and allows at most three
 revision attempts (initial check plus three rechecks). It preserves facts,
-qualifications, quotations, and intended voice, stopping on clean results,
+qualifications, substantive claims, quotations, and intended voice, stopping on
+clean results,
 repeated text, unhelpful feedback, errors, or the revision limit. Remaining
 findings are disclosed instead of claiming success. No automatic per-keystroke
 hook is installed; invoke the skill or ask an agent to use it while writing.
