@@ -12,6 +12,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 
@@ -53,10 +54,13 @@ def cloudflare_token() -> str:
     command = (["wrangler"] if shutil.which("wrangler")
                else ["npx", "--no-install", "wrangler"])
     try:
-        result = subprocess.run(
-            [*command, "auth", "token", "--json"], capture_output=True,
-            text=True, timeout=30, check=True,
-        )
+        # Wrangler loads .env at its working directory, even for auth token.
+        # Keep npm resolution unchanged but isolate Wrangler from repo config.
+        with TemporaryDirectory(prefix="jev-prose-auth-") as auth_dir:
+            result = subprocess.run(
+                [*command, "auth", "token", "--json", "--cwd", auth_dir],
+                capture_output=True, text=True, timeout=30, check=True,
+            )
     except (OSError, subprocess.SubprocessError) as exc:
         raise DetectorError(
             "Set CLOUDFLARE_API_TOKEN or log in with Wrangler."
@@ -109,6 +113,10 @@ class Backend:
                 value = json.loads(data)
         except urllib.error.HTTPError as exc:
             hint = " Check AI Gateway credit." if exc.code == 402 else ""
+            if exc.code == 401 and self.cloudflare:
+                hint = (" Check CLOUDFLARE_API_TOKEN in the process environment; "
+                        "it overrides the global Wrangler login. If absent, "
+                        "verify that login with wrangler whoami.")
             raise DetectorError(f"Endpoint returned HTTP {exc.code}.{hint}") from exc
         except (OSError, ValueError, urllib.error.URLError) as exc:
             if isinstance(exc, DetectorError):

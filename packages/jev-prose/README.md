@@ -23,6 +23,10 @@ repository's writing plugin; either installation method works.
 Default backend: Jev through Cloudflare Workers AI. Set
 `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`. Existing Wrangler logins
 also work (`wrangler auth token`, or an already-installed `npx wrangler`).
+The fallback uses a neutral Wrangler working directory, so repo-local `.env`
+files and Wrangler config cannot replace global credentials. An explicitly
+inherited `CLOUDFLARE_API_TOKEN` still takes precedence; if it is stale or lacks
+access, correct or unset it in the calling environment. Do not print its value.
 For existing sysone users, the account ID can come from
 `[cloudflare] account_id` in `~/.config/sysone/config.toml` or `$SYSONE_CONFIG`.
 Cloudflare third-party inference uses AI Gateway credit; HTTP 402 means check
