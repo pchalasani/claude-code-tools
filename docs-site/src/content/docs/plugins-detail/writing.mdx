@@ -4,7 +4,7 @@ description: >
   Prose-quality skills for Claude Code and Codex:
   agent-style rules for formal technical prose, and
   remove-ai-patterns for de-AI-ing text with a
-  deterministic detector.
+  deterministic detector, plus Jev-powered prose checks.
 ---
 
 import { Tabs, TabItem } from "@astrojs/starlight/components";
@@ -16,12 +16,10 @@ import { Tabs, TabItem } from "@astrojs/starlight/components";
   }
 `}</style>
 
-The `writing` plugin bundles two skills for improving prose quality, and
-works in **both Claude Code and Codex** (this repo hosts a marketplace
-for each). Both skills are **explicit-trigger only**: they never fire on
-ordinary writing or documentation tasks, so they add no noise to normal
-sessions. You invoke them by name when you want a dedicated editing
-pass.
+The `writing` plugin bundles three prose-quality skills and works in both
+Claude Code and Codex. Invoke a skill for an editing pass, or ask the agent to
+use `jev-prose` while writing each paragraph. The original `agent-style` and
+`remove-ai-patterns` skills remain explicit-trigger only.
 
 ## Skills
 
@@ -29,6 +27,8 @@ pass.
 |-------|--------------|
 | `agent-style` | 21 literature-backed rules for formal technical prose (papers, design docs, proposals, READMEs, commit messages) |
 | `remove-ai-patterns` | Remove AI-writing patterns ("AI-isms") from text at any register, with voice profiles and a deterministic detector |
+
+| `jev-prose` | Jev pattern checks and up to three guided revisions |
 
 ## Installation
 
@@ -65,10 +65,55 @@ shows up.
 </TabItem>
 </Tabs>
 
-No further setup: the skills are self-contained. The detector only
-needs a `node` binary on PATH (no `npm install`).
+The original skills are self-contained; their deterministic detector needs
+Node.js. Jev checks require the separate CLI and backend setup below.
 
-## Two lanes, not one
+## Jev feedback while writing
+
+Install the CLI from a checkout of this repository:
+
+```bash
+uv tool install ./packages/jev-prose
+jev-prose install-skill --target both
+```
+
+The second command is an alternative to installing the writing plugin: it
+places the same skill in both agents' global skill directories. New sessions
+can use it from any project.
+
+Configure `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`, or use an existing
+sysone account configuration and Wrangler login. Jev uses AI Gateway credit.
+For TypeSafe directly, use `--backend typesafe` and `TYPESAFE_API_KEY`.
+
+```bash
+jev-prose check paragraph.txt --profile general > findings.json
+jev-prose check paper.txt --profile formal --format text
+```
+
+The persistent bank has 118 narrow questions: 95 general, 117 with formal
+preferences, and 118 with the opt-in strict profile. Requests batch questions
+against the same prose. Output includes each probability and rewrite guidance
+for findings at or above the default 0.90 threshold. These are editorial flags,
+not proof of AI authorship or calibrated probabilities of bad writing.
+
+Ask: "Use jev-prose while writing each paragraph; preserve the facts and revise
+up to three times." The skill makes an initial check and at most three revisions,
+checking the last revision too. It stops on clean output, unhelpful or repeated
+feedback, errors, or the limit, and discloses remaining findings. No automatic
+per-keystroke hook is installed. The agent must not invent facts or delete
+necessary qualifications just to get a passing score.
+
+Exit 0 means a complete check with no findings; exit 1 means findings; exit 2
+means failure. Require `ran: true`, `ok: true`, and equal `answered`/`expected`
+counts before treating a result as valid. Inputs are sent to the chosen backend.
+The CLI leaves files unchanged and supports a custom bank and compatible endpoint.
+
+See the [CLI guide][jev-prose] for setup, source attribution, evaluation
+evidence, and limitations.
+
+[jev-prose]: https://github.com/pchalasani/claude-code-tools/tree/main/packages/jev-prose
+
+## Original writing skills
 
 The skills are complementary and deliberately kept apart:
 
