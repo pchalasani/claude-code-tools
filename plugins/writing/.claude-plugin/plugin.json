@@ -1,7 +1,7 @@
 {
   "name": "writing",
-  "version": "1.0.0",
-  "description": "Prose-quality skills: agent-style (21 literature-backed rules for formal technical prose) and remove-ai-patterns (de-AI text using the avoid-ai-writing catalog plus a deterministic detector)",
+  "version": "1.1.0",
+  "description": "Prose-quality skills: agent-style, remove-ai-patterns, and Jev-powered prose checks with bounded revision loops",
   "author": {
     "name": "Prasad Chalasani"
   }
