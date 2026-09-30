@@ -5,27 +5,40 @@ Automatically detects whether you're inside or outside tmux and uses the appropr
 
 ## Auto-Detection
 - **Inside tmux (Local Mode)**: Manages panes in your current tmux window
-- **Outside tmux (Remote Mode)**: Creates and manages a separate tmux session with windows
+- **Outside tmux (Remote Mode)**: Manages windows in a separate tmux session, creating it when `launch` first needs it
+
+Remote `status`, `list_panes`, and `list_windows` do not create a session.
+An explicit full pane target (such as `%12` or `myapp:1.2`) works without a
+managed session. Commands without a target require an active window from a
+successful managed `launch`; otherwise, launch a window first or pass `--pane`.
+`attach` requires the managed session to already exist.
 
 ## Prerequisites
 - tmux must be installed
 - The `tmux-cli` command must be available (installed via `uv tool install`)
 
-## Pane Identification
+## Target Identification
 
-Panes can be specified in two simple ways:
+In local mode, panes can be specified in two simple ways:
 - Just the pane number (e.g., `2`) - refers to pane 2 in the current window
 - Full format: `session:window.pane` (e.g., `myapp:1.2`) - for any pane in any session
+
+In remote mode, `launch` returns a window target such as `remote-cli-session:1`.
+Use the returned target as `--pane`. A bare number such as `1` means a managed
+window index, not a pane index; window indices can change if windows move.
+Numeric `--pane=2` examples below show local mode unless labeled as remote.
 
 ## ⚠️ IMPORTANT: Always Launch a Shell First!
 
 **Always launch zsh first** to prevent losing output when commands fail:
 ```bash
-tmux-cli launch "zsh"  # Do this FIRST
-tmux-cli send "your-command" --pane=2  # Then run commands
+tmux-cli launch "zsh"  # Do this FIRST; remote example returns remote-cli-session:1
+tmux-cli send "your-command" --pane=remote-cli-session:1  # Use the actual returned target
 ```
 
-If you launch a command directly and it errors, the pane closes immediately and you lose all output!
+If a directly launched command exits before its remote window is marked ready,
+`launch` reports that the command was launched but has no live target. It does
+not retry the command. Launch a shell first to keep output available.
 
 ## Core Commands
 
@@ -33,7 +46,8 @@ If you launch a command directly and it errors, the pane closes immediately and 
 ```bash
 tmux-cli launch "command"
 # Example: tmux-cli launch "python3"
-# Returns: pane identifier (e.g., session:window.pane format like myapp:1.2)
+# Local return: pane identifier (e.g., myapp:1.2)
+# Remote return: window target (e.g., remote-cli-session:1)
 ```
 
 ### Send input to a pane
@@ -159,23 +173,23 @@ tmux-cli help
 
 1. **ALWAYS launch a shell first** (prefer zsh) - this prevents losing output on errors:
    ```bash
-   tmux-cli launch "zsh"  # Returns pane identifier - DO THIS FIRST!
+   tmux-cli launch "zsh"  # Remote: returns a window target - DO THIS FIRST!
    ```
 
 2. Run your command in the shell:
    ```bash
-   tmux-cli send "python script.py" --pane=2
+   tmux-cli send "python script.py" --pane=remote-cli-session:1  # Use the actual returned target
    ```
 
 3. Interact with the program:
    ```bash
-   tmux-cli send "user input" --pane=2
-   tmux-cli capture --pane=2  # Check output
+   tmux-cli send "user input" --pane=remote-cli-session:1
+   tmux-cli capture --pane=remote-cli-session:1  # Check output
    ```
 
 4. Clean up when done:
    ```bash
-   tmux-cli kill --pane=2
+   tmux-cli kill --pane=remote-cli-session:1
    ```
 
 ## Remote Mode Specific Commands
@@ -205,7 +219,8 @@ tmux-cli list_windows
 - Use `capture` to check the current state before sending input
 - Use `status` to see all available panes and their current state
 - In local mode: Pane identifiers can be session:window.pane format (like `myapp:1.2`) or just pane indices like `1`, `2`
-- In remote mode: Window IDs can be indices like `0`, `1` or full form like `session:0.0`
+- In remote mode: Bare numbers like `0`, `1` are window indices; `launch` returns
+  a `session:window_index` target, such as `remote-cli-session:1`
 - If you launch a command directly (not via shell), the pane/window closes when
   the command exits
 - **IMPORTANT**: The tool prevents you from killing your own pane/window to avoid

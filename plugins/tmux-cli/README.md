@@ -35,11 +35,13 @@ The `execute` subcommand runs a shell command and returns both the output and ex
 code, making it ideal for build/test automation:
 
 ```bash
-tmux-cli execute "pytest tests/" --timeout 60
+tmux-cli execute "pytest tests/" --pane=other:2.0 --timeout 60
 ```
 
 Returns JSON with `output` and `exit_code` fields. Use this when you need to know
 if a command succeeded or failed (e.g., builds, tests, linters).
+Outside tmux, pass an existing full pane target as above, or first use `launch`
+to create a managed window before running a command without `--pane`.
 
 For interactive or long-running commands, use `send` + `capture` instead.
 
