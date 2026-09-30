@@ -4,31 +4,41 @@ title: "Command Reference"
 
 Complete reference for all `tmux-cli` commands.
 
-## Pane Identification
+## Target Identification
 
-Panes can be specified in two ways:
+In local mode, panes can be specified in two ways:
 
 - **Pane number only** -- e.g. `2` (refers to pane 2 in
   the current window).
 - **Full format** -- `session:window.pane`, e.g.
   `myapp:1.2` (for any pane in any session).
 
+In remote mode, `launch` returns a window target such as
+`remote-cli-session:1`. Pass that returned target as `--pane` for subsequent
+commands. A bare number like `1` means a window index in the managed session,
+not a pane index. An explicit full pane target such as `%12` or `myapp:1.2`
+can also address an existing pane. Window indices can change when windows move.
+Numeric `--pane=2` examples below show local mode; in remote mode, use the
+target returned by `launch`.
+
 ## Core Commands
 
 ### launch
 
-Launch a CLI application in a new tmux pane.
+Launch a CLI application in a new tmux pane (local mode) or window (remote mode).
 
 ```bash
 tmux-cli launch "command"
 # Example: tmux-cli launch "python3"
-# Returns: pane identifier (e.g. myapp:1.2)
+# Local return: pane identifier (e.g. myapp:1.2)
+# Remote return: window target (e.g. remote-cli-session:1)
 ```
 
 :::caution
 Always launch `zsh` first, then run commands via `send`.
-If you launch a command directly and it errors, the pane
-closes immediately and you lose all output.
+If a directly launched command exits before its remote window is marked ready,
+`launch` reports that it was launched but has no live target. It does not retry
+the command. Launch a shell first to keep output available.
 :::
 
 ### send
@@ -202,6 +212,12 @@ tmux-cli help
 These commands are only available when running **outside
 tmux**:
 
+The managed session is created by `launch` when needed. `status`,
+`list_panes`, and `list_windows` do not create it. You can address an
+existing pane in any session with a full target such as `%12` or
+`myapp:1.2`; without a target, an active window from a successful
+managed `launch` is required. `attach` requires that session to exist.
+
 ### attach
 
 Open the managed tmux session to view live.
@@ -228,16 +244,16 @@ tmux-cli list_windows
 
 ## Tips
 
-- Always save the pane/window identifier returned by
-  `launch`.
+- Save the pane identifier or window target returned by `launch` and use it
+  as `--pane` while it exists.
 - Use `capture` to check the current state before
   sending input.
 - Use `status` to see all available panes and their
   current state.
 - In local mode, pane identifiers can be full format
   (`myapp:1.2`) or just indices (`1`, `2`).
-- In remote mode, window IDs can be indices (`0`, `1`)
-  or full form (`session:0.0`).
+- In remote mode, bare numbers (`0`, `1`) are managed window indices; `launch`
+  returns `session:window_index` (for example, `remote-cli-session:1`).
 - The tool prevents you from killing your own
   pane/window to avoid accidentally terminating your
   session.

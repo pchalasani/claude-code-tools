@@ -914,11 +914,8 @@ class CLI:
                 print(str(e))
         else:
             # Remote mode - kill window
-            try:
-                self.controller.kill_window(window_id=pane)
-                print("Window killed")
-            except ValueError as e:
-                print(str(e))
+            self.controller.kill_window(window_id=pane)
+            print("Window killed")
     
     def wait_idle(self, pane: Optional[str] = None, idle_time: float = 2.0, 
                   timeout: Optional[int] = None):
