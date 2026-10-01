@@ -361,10 +361,17 @@ class RemoteTmuxController:
 
     def kill_window(self, window_id: Optional[str] = None):
         target = self._window_target(window_id)
+        cached_target = target
+        if self.target_window and target != self.target_window:
+            resolved, code = self._run_tmux(
+                ['display-message', '-p', '-t', target, '#{window_id}']
+            )
+            if code == 0 and resolved:
+                cached_target = resolved
         # Ensure the target refers to a window (not a %pane id)
         # If user passed a pane id like %12, tmux can still resolve to its window
         self._run_tmux(['kill-window', '-t', target])
-        if self.target_window == target:
+        if self.target_window == cached_target:
             self.target_window = None
     
     def attach_session(self):
