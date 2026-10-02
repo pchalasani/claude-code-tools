@@ -3,7 +3,7 @@
 Remote Tmux Controller
 
 Enables tmux-cli to work when run outside of tmux by:
-- Auto-creating a detached tmux session on first use
+- Creating a detached tmux session when launching a managed window
 - Managing commands in separate tmux windows (not panes)
 - Providing an API compatible with the local (pane) controller
 """
@@ -16,65 +16,141 @@ from typing import Optional, List, Dict, Tuple, Union, Any
 
 class RemoteTmuxController:
     """Remote controller that manages a dedicated tmux session and windows."""
+
+    _ready_option = '@tmux_cli_ready'
     
     def __init__(self, session_name: str = "remote-cli-session"):
-        """Initialize with session name and ensure the session exists."""
+        """Initialize with a managed session name without creating it."""
         self.session_name = session_name
-        self.target_window: Optional[str] = None  # e.g., "session:0" (active pane in that window)
+        self.target_window: Optional[str] = None  # Stable window ID, e.g., "@1"
         print(f"Note: tmux-cli is running outside tmux. Managing windows in session '{session_name}'.")
         print("For better integration, consider running from inside a tmux session.")
         print("Use 'tmux-cli attach' to view the remote session.")
-        self._ensure_session()
     
     # ----------------------------
     # Internal utilities
     # ----------------------------
-    def _run_tmux(self, args: List[str]) -> Tuple[str, int]:
-        result = subprocess.run(
-            ['tmux'] + args,
-            capture_output=True,
-            text=True
+    def _run_tmux(self, args: List[str], include_stderr: bool = False) -> Tuple[str, int]:
+        try:
+            result = subprocess.run(
+                ['tmux'] + args,
+                capture_output=True,
+                text=True
+            )
+        except OSError as exc:
+            raise RuntimeError(f"Could not run tmux {args[0]}: {exc}") from exc
+        output = result.stdout.strip()
+        if include_stderr and result.returncode != 0:
+            output = "\n".join(part for part in (output, result.stderr.strip()) if part)
+        return output, result.returncode
+
+    @staticmethod
+    def _session_is_missing(error: str) -> bool:
+        """Recognize tmux's absent-session and absent-server diagnostics only."""
+        return (
+            "can't find session:" in error
+            or error.startswith("no server running on ")
+            or (error.startswith("error connecting to ") and "(No such file or directory)" in error)
         )
-        return result.stdout.strip(), result.returncode
+
+    @staticmethod
+    def _tmux_failure(action: str, output: str, code: int) -> RuntimeError:
+        detail = f": {output}" if output else ""
+        return RuntimeError(f"tmux {action} failed (exit {code}){detail}")
+
+    @staticmethod
+    def _window_is_missing(error: str, window_id: str) -> bool:
+        """Only classify a diagnostic for this exact stable ID as a vanished window."""
+        return error.strip() in (
+            f"no such window: {window_id}",
+            f"can't find window: {window_id}",
+        )
+
+    def _managed_session_exists(self) -> bool:
+        output, code = self._run_tmux(['has-session', '-t', f'={self.session_name}'], include_stderr=True)
+        if code == 0:
+            return True
+        if self._session_is_missing(output):
+            return False
+        raise self._tmux_failure('has-session', output, code)
     
     def _ensure_session(self) -> None:
-        """Create the session if it doesn't exist (detached)."""
-        _, code = self._run_tmux(['has-session', '-t', self.session_name])
-        if code != 0:
+        """Create the managed session if needed for a new window."""
+        if not self._managed_session_exists():
             # Create a detached session using user's default shell
             # Return the session name just to force creation
-            self._run_tmux([
+            output, code = self._run_tmux([
                 'new-session', '-d', '-s', self.session_name, '-P', '-F', '#{session_name}'
-            ])
-            # Remember first window as default target
-            self.target_window = f"{self.session_name}:0"
-        else:
-            # If already exists and we don't have a target, set to active window
-            if not self.target_window:
-                win, code2 = self._run_tmux(['display-message', '-p', '-t', self.session_name, '#{session_name}:#{window_index}'])
-                if code2 == 0 and win:
-                    self.target_window = win
+            ], include_stderr=True)
+            if code != 0:
+                # Another launcher may have won the check/create race.
+                if output != f'duplicate session: {self.session_name}' or not self._managed_session_exists():
+                    raise self._tmux_failure('new-session', output, code)
+            elif not output:
+                raise self._tmux_failure('new-session', output, code)
     
     def _window_target(self, pane: Optional[str]) -> str:
         """Resolve user-provided pane/window hint to a tmux target.
         Accepts:
-        - None -> use last target window if set else active window in session
+        - None -> use last target window if set else a ready active window in session
         - digits (e.g., "1") -> session:index
         - full tmux target (e.g., "name:1" or "name:1.0" or "%12") -> pass-through
         """
-        self._ensure_session()
         if pane is None:
             if self.target_window:
-                return self.target_window
-            # Fallback to active window in session
-            win, code = self._run_tmux(['display-message', '-p', '-t', self.session_name, '#{session_name}:#{window_index}'])
-            if code == 0 and win:
-                self.target_window = win
-                return win
-            # Final fallback: session:0
-            return f"{self.session_name}:0"
+                # Window IDs can be reused after a server restart. Check both
+                # membership and readiness before trusting a cached default.
+                windows, code = self._run_tmux(
+                    ['list-windows', '-t', f'={self.session_name}',
+                     '-F', '#{window_id}|#{@tmux_cli_ready}'],
+                    include_stderr=True,
+                )
+                if code != 0 and not self._session_is_missing(windows):
+                    raise self._tmux_failure('list-windows', windows, code)
+                expected = f'{self.target_window}|{self.target_window}'
+                if code == 0 and expected in windows.splitlines():
+                    return self.target_window
+                self.target_window = None
+                if code != 0:
+                    raise ValueError(
+                        "No target pane/window specified; managed session "
+                        f"'{self.session_name}' does not exist. "
+                        "Launch a window or pass --pane."
+                    )
+            # An existing managed session may have been created by an earlier CLI call.
+            win, code = self._run_tmux(
+                ['display-message', '-p', '-t', f'={self.session_name}:',
+                 '#{window_id}|#{@tmux_cli_ready}'],
+                include_stderr=True,
+            )
+            if code == 0:
+                if not win:
+                    raise self._tmux_failure('display-message', win, code)
+                window_id, separator, ready = win.partition('|')
+                if not separator or not window_id.startswith('@'):
+                    raise self._tmux_failure('display-message', win, code)
+                if ready == window_id:
+                    self.target_window = window_id
+                    return window_id
+                raise ValueError(
+                    f"No target pane/window specified; managed session '{self.session_name}' "
+                    "has no successfully launched active window. Launch a window or pass --pane."
+                )
+            if code != 0 and not (self._session_is_missing(win) or "can't find window:" in win):
+                raise self._tmux_failure('display-message', win, code)
+            raise ValueError(
+                f"No target pane/window specified; managed session '{self.session_name}' "
+                "does not exist or has no active window. Launch a window or pass --pane."
+            )
         # If user supplied a simple index
-        if isinstance(pane, str) and pane.isdigit():
+        if isinstance(pane, bool):
+            raise ValueError("Boolean --pane is not a window index")
+        if type(pane) is int or (isinstance(pane, str) and pane.isdigit()):
+            if not self._managed_session_exists():
+                raise ValueError(
+                    f"Managed session '{self.session_name}' does not exist; "
+                    "launch a window or pass a full --pane target."
+                )
             return f"{self.session_name}:{pane}"
         # Otherwise assume user provided a pane/window target or pane id
         return pane
@@ -92,7 +168,6 @@ class RemoteTmuxController:
         Returns a list shaped similarly to local list_panes, with keys:
         id (window target), index, title (window name), active (bool), size (N/A)
         """
-        self._ensure_session()
         out, code = self._run_tmux([
             'list-windows', '-t', self.session_name,
             '-F', '#{window_index}|#{window_name}|#{window_active}|#{window_width}x#{window_height}'
@@ -117,17 +192,49 @@ class RemoteTmuxController:
         """Launch a command in a new window within the managed session.
         Returns the window target (e.g., "session:1").
         """
-        self._ensure_session()
-        args = ['new-window', '-t', self.session_name, '-P', '-F', '#{session_name}:#{window_index}']
-        if name:
-            args.extend(['-n', name])
-        if command:
-            args.append(command)
-        out, code = self._run_tmux(args)
-        if code == 0 and out:
-            self.target_window = out
-            return out
-        return None
+        previous_target = self.target_window
+        try:
+            self._ensure_session()
+            args = ['new-window', '-t', f'={self.session_name}:', '-P', '-F',
+                    '#{session_name}:#{window_index}|#{window_id}']
+            if name:
+                args.extend(['-n', name])
+            if command:
+                args.append(command)
+            out, code = self._run_tmux(args, include_stderr=True)
+            if code != 0 or not out:
+                raise self._tmux_failure('new-window', out, code)
+            target, separator, window_id = out.partition('|')
+            if not separator or not target or not window_id.startswith('@'):
+                raise self._tmux_failure('new-window', out, code)
+            try:
+                marked, mark_code = self._run_tmux(
+                    ['set-option', '-w', '-t', window_id, self._ready_option, window_id],
+                    include_stderr=True,
+                )
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    f"Ready mark for created window {window_id} could not be set; "
+                    f"command may have started. {exc}"
+                ) from exc
+            if mark_code != 0:
+                if self._window_is_missing(marked, window_id):
+                    raise RuntimeError(
+                        f"Command was launched in window {window_id}, but that window "
+                        f"disappeared before its ready mark; no live target is available "
+                        f"(tmux set-option exit {mark_code}: {marked}). "
+                        "The command may have run; do not retry automatically."
+                    )
+                raise RuntimeError(
+                    f"{self._tmux_failure('set-option', marked, mark_code)}; "
+                    f"created window {window_id}; command may have started. "
+                    "Inspect the window before retrying."
+                )
+            self.target_window = window_id
+            return target
+        except Exception:
+            self.target_window = previous_target
+            raise
     
     def send_keys(self, text: str, pane_id: Optional[str] = None, enter: bool = True,
                   delay_enter: Union[bool, float] = True, verify_enter: bool = True,
@@ -272,14 +379,25 @@ class RemoteTmuxController:
 
     def kill_window(self, window_id: Optional[str] = None):
         target = self._window_target(window_id)
+        cached_target = target
+        if self.target_window and target != self.target_window:
+            resolved, code = self._run_tmux(
+                ['display-message', '-p', '-t', target, '#{window_id}']
+            )
+            if code == 0 and resolved:
+                cached_target = resolved
         # Ensure the target refers to a window (not a %pane id)
         # If user passed a pane id like %12, tmux can still resolve to its window
         self._run_tmux(['kill-window', '-t', target])
-        if self.target_window == target:
+        if self.target_window == cached_target:
             self.target_window = None
     
     def attach_session(self):
-        self._ensure_session()
+        if not self._managed_session_exists():
+            raise ValueError(
+                f"Managed session '{self.session_name}' does not exist; "
+                "launch a window before attaching."
+            )
         # Attach will replace the current terminal view until the user detaches
         subprocess.run(['tmux', 'attach-session', '-t', self.session_name])
     
@@ -289,7 +407,6 @@ class RemoteTmuxController:
     
     def list_windows(self) -> List[Dict[str, str]]:
         """List all windows in the managed session with basic info."""
-        self._ensure_session()
         out, code = self._run_tmux(['list-windows', '-t', self.session_name, '-F', '#{window_index}|#{window_name}|#{window_active}'])
         if code != 0 or not out:
             return []

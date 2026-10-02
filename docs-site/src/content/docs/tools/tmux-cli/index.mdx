@@ -29,8 +29,12 @@ orchestrate several terminal applications simultaneously.
 
 - **Inside tmux (Local Mode)** -- Manages panes in your
   current tmux window.
-- **Outside tmux (Remote Mode)** -- Creates and manages a
-  separate tmux session with windows.
+- **Outside tmux (Remote Mode)** -- Manages windows in a
+  separate tmux session, creating it when `launch` first needs it.
+  `status` and list commands do not create a session; full tmux
+  targets can address existing panes without the managed session.
+  Commands without a target use an active window from a successful
+  managed `launch`.
 
 ## Key Features
 
@@ -48,54 +52,56 @@ orchestrate several terminal applications simultaneously.
 <Steps>
 
 1. **Always launch a shell first** to prevent losing
-   output when commands fail:
+   output when commands fail. In remote mode, `launch`
+   returns a window target such as `remote-cli-session:1`;
+   use the value it actually returns below:
 
    ```bash
-   tmux-cli launch "zsh"   # returns pane ID
+   tmux-cli launch "zsh"   # remote: window target; local: pane identifier
    ```
 
-2. **Run commands** in the shell pane:
+2. **Run commands** in the shell window (remote example):
 
    ```bash
-   tmux-cli send "pytest tests/" --pane=2
+   tmux-cli send "pytest tests/" --pane=remote-cli-session:1
    ```
 
 3. **Wait and capture** the result:
 
    ```bash
-   tmux-cli wait_idle --pane=2
-   tmux-cli capture --pane=2
+   tmux-cli wait_idle --pane=remote-cli-session:1
+   tmux-cli capture --pane=remote-cli-session:1
    ```
 
 4. **Clean up** when done:
 
    ```bash
-   tmux-cli kill --pane=2
+   tmux-cli kill --pane=remote-cli-session:1
    ```
 
 </Steps>
 
 :::caution
-If you launch a command directly (not via a shell) and
-it errors, the pane closes immediately and you lose all
-output. Always launch `zsh` first.
+If a directly launched command exits before its remote window is marked ready,
+`launch` reports that the command was launched but no live target is available.
+It does not retry the command. Launch `zsh` first to keep output available.
 :::
 
 ## Typical Workflow
 
 ```bash
-# 1. Launch a shell
-tmux-cli launch "zsh"          # => pane ID, e.g. 2
+# 1. Launch a shell (remote example; use the target actually returned)
+tmux-cli launch "zsh"          # => window target, e.g. remote-cli-session:1
 
 # 2. Run your command inside that shell
-tmux-cli send "python script.py" --pane=2
+tmux-cli send "python script.py" --pane=remote-cli-session:1
 
 # 3. Interact and inspect
-tmux-cli send "some input" --pane=2
-tmux-cli capture --pane=2
+tmux-cli send "some input" --pane=remote-cli-session:1
+tmux-cli capture --pane=remote-cli-session:1
 
 # 4. Clean up
-tmux-cli kill --pane=2
+tmux-cli kill --pane=remote-cli-session:1
 ```
 
 ## Learn More
