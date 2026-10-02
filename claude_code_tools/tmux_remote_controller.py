@@ -67,7 +67,7 @@ class RemoteTmuxController:
         )
 
     def _managed_session_exists(self) -> bool:
-        output, code = self._run_tmux(['has-session', '-t', self.session_name], include_stderr=True)
+        output, code = self._run_tmux(['has-session', '-t', f'={self.session_name}'], include_stderr=True)
         if code == 0:
             return True
         if self._session_is_missing(output):
@@ -98,10 +98,28 @@ class RemoteTmuxController:
         """
         if pane is None:
             if self.target_window:
-                return self.target_window
+                # Window IDs can be reused after a server restart. Check both
+                # membership and readiness before trusting a cached default.
+                windows, code = self._run_tmux(
+                    ['list-windows', '-t', f'={self.session_name}',
+                     '-F', '#{window_id}|#{@tmux_cli_ready}'],
+                    include_stderr=True,
+                )
+                if code != 0 and not self._session_is_missing(windows):
+                    raise self._tmux_failure('list-windows', windows, code)
+                expected = f'{self.target_window}|{self.target_window}'
+                if code == 0 and expected in windows.splitlines():
+                    return self.target_window
+                self.target_window = None
+                if code != 0:
+                    raise ValueError(
+                        "No target pane/window specified; managed session "
+                        f"'{self.session_name}' does not exist. "
+                        "Launch a window or pass --pane."
+                    )
             # An existing managed session may have been created by an earlier CLI call.
             win, code = self._run_tmux(
-                ['display-message', '-p', '-t', self.session_name,
+                ['display-message', '-p', '-t', f'={self.session_name}:',
                  '#{window_id}|#{@tmux_cli_ready}'],
                 include_stderr=True,
             )
@@ -177,7 +195,7 @@ class RemoteTmuxController:
         previous_target = self.target_window
         try:
             self._ensure_session()
-            args = ['new-window', '-t', self.session_name, '-P', '-F',
+            args = ['new-window', '-t', f'={self.session_name}:', '-P', '-F',
                     '#{session_name}:#{window_index}|#{window_id}']
             if name:
                 args.extend(['-n', name])
