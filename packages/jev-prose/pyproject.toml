@@ -1,0 +1,26 @@
+[project]
+name = "jev-prose"
+version = "0.1.0"
+description = "Batched Jev editorial checks for prose-writing agents"
+requires-python = ">=3.11"
+readme = "README.md"
+license = "MIT AND CC-BY-4.0"
+dependencies = []
+
+[project.scripts]
+jev-prose = "jev_prose.cli:main"
+
+[build-system]
+requires = ["hatchling==1.28.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jev_prose"]
+
+[dependency-groups]
+dev = ["pytest>=9"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"QUESTION-SOURCES.md" = "jev_prose/QUESTION-SOURCES.md"
+"LICENSE" = "jev_prose/LICENSE"
+"CC-BY-4.0.txt" = "jev_prose/CC-BY-4.0.txt"

@@ -1,0 +1,1290 @@
+{
+  "ran": true,
+  "ok": true,
+  "agent": "Claude Code CLI",
+  "cli_exit": 0,
+  "agent_result_subtype": "success",
+  "skill_sha256_at_start": "e86100e09cee3c77d30d4f15f252081d2358fc336bf64b57f339b676ea472689",
+  "note": "Run began before the final substantive-claim preservation clarification. Only a filler lead-in was removed; no claims changed.",
+  "revisions": 1,
+  "checks": [
+    {
+      "text": "It is important to note that the index refreshes every 60 seconds. In order to limit memory use, the worker retains only the latest two snapshots. Failed refreshes leave the previous snapshot available.\n",
+      "report": {
+        "ran": true,
+        "ok": true,
+        "status": "findings",
+        "bank_version": "1.0.0",
+        "bank_sha256": "4016262a5640221f4fe567ef06ae1d5d7eb16ca9e175501ed0d5baa1112c8d56",
+        "prompt_version": "1.0.0",
+        "prompt_sha256": "4c3986af0f1d54c9b93d8207a51c50dd915cd96f9ddba21658ac409478a0b04b",
+        "model": "jev-1.13.0",
+        "profile": "formal",
+        "threshold": 0.9,
+        "text_sha256": "e06762d94726dfadd9f2adfd980d8e934ce83ddfba502abe9afddfb1efe19916",
+        "expected": 117,
+        "answered": 117,
+        "requests": 5,
+        "findings": [
+          {
+            "id": "importance-windup",
+            "title": "Importance windup",
+            "question": "Does the prose announce that a fact is important to note or worth noting before stating it, where deleting that announcement would preserve the information?",
+            "guidance": "State the fact directly; retain any substantive reason it matters.",
+            "profiles": [
+              "general",
+              "formal"
+            ],
+            "scope": "sentence",
+            "sources": [
+              "AS-04",
+              "AA-filler",
+              "HU-23"
+            ],
+            "probability": 0.96
+          }
+        ],
+        "judgments": [
+          {
+            "id": "vague-category-nouns",
+            "probability": 0.05,
+            "flagged": false
+          },
+          {
+            "id": "unspecified-improvement",
+            "probability": 0.18,
+            "flagged": false
+          },
+          {
+            "id": "empty-intensifiers",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "real-actual-inflation",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "importance-windup",
+            "probability": 0.96,
+            "flagged": true
+          },
+          {
+            "id": "wordy-purpose",
+            "probability": 0.49,
+            "flagged": false
+          },
+          {
+            "id": "wordy-cause",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "wordy-time",
+            "probability": 0.2,
+            "flagged": false
+          },
+          {
+            "id": "wordy-condition",
+            "probability": 0.13,
+            "flagged": false
+          },
+          {
+            "id": "wordy-ability",
+            "probability": 0.09,
+            "flagged": false
+          },
+          {
+            "id": "redundant-hedges",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "reflexive-weasel",
+            "probability": 0.05,
+            "flagged": false
+          },
+          {
+            "id": "copula-avoidance",
+            "probability": 0.16,
+            "flagged": false
+          },
+          {
+            "id": "boastful-possession",
+            "probability": 0.07,
+            "flagged": false
+          },
+          {
+            "id": "inflated-use-verbs",
+            "probability": 0.46,
+            "flagged": false
+          },
+          {
+            "id": "corporate-nominalization",
+            "probability": 0.08,
+            "flagged": false
+          },
+          {
+            "id": "ornate-start-verbs",
+            "probability": 0.05,
+            "flagged": false
+          },
+          {
+            "id": "exploration-cliche",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "abstract-scenery",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "boundary-breakthrough",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "unsupported-quality-label",
+            "probability": 0.07,
+            "flagged": false
+          },
+          {
+            "id": "abstract-complexity",
+            "probability": 0.1,
+            "flagged": false
+          },
+          {
+            "id": "business-buzzword-cluster",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "generic-praise-density",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "repeated-sector-boilerplate",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "clustered-sector-boilerplate",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "step-forward-template",
+            "probability": 0.1,
+            "flagged": false
+          },
+          {
+            "id": "false-audience-breadth",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "pleasure-announcement",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "empty-additive-transitions",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "era-opener",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "reader-steering",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "summary-announcement",
+            "probability": 0.05,
+            "flagged": false
+          },
+          {
+            "id": "topic-windup",
+            "probability": 0.06,
+            "flagged": false
+          },
+          {
+            "id": "repeated-concession-transition",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "significance-inflation",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "superficial-ing",
+            "probability": 0.13,
+            "flagged": false
+          },
+          {
+            "id": "meaning-telling",
+            "probability": 0.14,
+            "flagged": false
+          },
+          {
+            "id": "aphorism-formula",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "future-narrative",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "generic-upbeat-closer",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "time-will-tell",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "negative-foil",
+            "probability": 0.11,
+            "flagged": false
+          },
+          {
+            "id": "split-negative-reveal",
+            "probability": 0.07,
+            "flagged": false
+          },
+          {
+            "id": "tailing-negation",
+            "probability": 0.1,
+            "flagged": false
+          },
+          {
+            "id": "needless-double-negative",
+            "probability": 0.05,
+            "flagged": false
+          },
+          {
+            "id": "forced-triads",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "false-range",
+            "probability": 0.05,
+            "flagged": false
+          },
+          {
+            "id": "false-concession",
+            "probability": 0.07,
+            "flagged": false
+          },
+          {
+            "id": "mirrored-contrast",
+            "probability": 0.06,
+            "flagged": false
+          },
+          {
+            "id": "moralized-technical-property",
+            "probability": 0.1,
+            "flagged": false
+          },
+          {
+            "id": "vague-universal-authority",
+            "probability": 0.09,
+            "flagged": false
+          },
+          {
+            "id": "promotional-description",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "formulaic-resilience",
+            "probability": 0.1,
+            "flagged": false
+          },
+          {
+            "id": "speculative-world-opener",
+            "probability": 0.06,
+            "flagged": false
+          },
+          {
+            "id": "notability-name-dropping",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "historical-analogy-stack",
+            "probability": 0.01,
+            "flagged": false
+          },
+          {
+            "id": "vague-attribution",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "faceless-validation",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "proof-overclaim",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "unbounded-superiority",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "novelty-scarcity-hook",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "undefined-coined-label",
+            "probability": 0.06,
+            "flagged": false
+          },
+          {
+            "id": "infomercial-hook",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "fake-candid-hook",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "social-endorsement",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "emotion-announcement",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "lingering-attention",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "rhetorical-question-windup",
+            "probability": 0.09,
+            "flagged": false
+          },
+          {
+            "id": "parenthetical-hedging",
+            "probability": 0.1,
+            "flagged": false
+          },
+          {
+            "id": "chatbot-preface",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "chatbot-signoff",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "lets-transition",
+            "probability": 0.13,
+            "flagged": false
+          },
+          {
+            "id": "reasoning-scaffold",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "sycophantic-validation",
+            "probability": 0.01,
+            "flagged": false
+          },
+          {
+            "id": "narrated-candor",
+            "probability": 0.07,
+            "flagged": false
+          },
+          {
+            "id": "acknowledgment-loop",
+            "probability": 0.08,
+            "flagged": false
+          },
+          {
+            "id": "recap-flattery",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "emphasis-stacking",
+            "probability": 0.11,
+            "flagged": false
+          },
+          {
+            "id": "persuasive-authority",
+            "probability": 0.11,
+            "flagged": false
+          },
+          {
+            "id": "self-labeling-significance",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "training-cutoff-artifact",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "speculative-gap-fill",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "unfilled-placeholder",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "citation-markup-leak",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "ai-tracking-link",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "bullet-fragmented-argument",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "bare-praise-bullets",
+            "probability": 0.01,
+            "flagged": false
+          },
+          {
+            "id": "inline-label-repetition",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "numbered-list-padding",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "excessive-bold",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "decorative-heading-emoji",
+            "probability": 0.05,
+            "flagged": false
+          },
+          {
+            "id": "prose-dash-overuse",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "formal-prose-dash",
+            "probability": 0.08,
+            "flagged": false
+          },
+          {
+            "id": "stacked-compound-modifiers",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "heading-warmup",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "fragmented-short-sections",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "diff-anchored-docs",
+            "probability": 0.14,
+            "flagged": false
+          },
+          {
+            "id": "staccato-drama",
+            "probability": 0.21,
+            "flagged": false
+          },
+          {
+            "id": "repeated-sentence-template",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "monotonous-sentence-rhythm",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "uniform-paragraph-template",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "redundant-paragraph-closer",
+            "probability": 0.11,
+            "flagged": false
+          },
+          {
+            "id": "treadmill-paragraph",
+            "probability": 0.07,
+            "flagged": false
+          },
+          {
+            "id": "missing-argument-bridge",
+            "probability": 0.07,
+            "flagged": false
+          },
+          {
+            "id": "known-actor-passive",
+            "probability": 0.28,
+            "flagged": false
+          },
+          {
+            "id": "subjectless-flowing-prose",
+            "probability": 0.13,
+            "flagged": false
+          },
+          {
+            "id": "nonparallel-coordinates",
+            "probability": 0.09,
+            "flagged": false
+          },
+          {
+            "id": "subject-verb-interruption",
+            "probability": 0.09,
+            "flagged": false
+          },
+          {
+            "id": "misplaced-modifier",
+            "probability": 0.22,
+            "flagged": false
+          },
+          {
+            "id": "buried-main-result",
+            "probability": 0.12,
+            "flagged": false
+          },
+          {
+            "id": "overloaded-long-sentence",
+            "probability": 0.19,
+            "flagged": false
+          },
+          {
+            "id": "synonym-cycling",
+            "probability": 0.1,
+            "flagged": false
+          },
+          {
+            "id": "redefined-abbreviation",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "acronym-pileup",
+            "probability": 0.09,
+            "flagged": false
+          },
+          {
+            "id": "mechanics-without-purpose",
+            "probability": 0.61,
+            "flagged": false
+          },
+          {
+            "id": "formal-contractions",
+            "probability": 0.04,
+            "flagged": false
+          }
+        ],
+        "usage": [
+          {
+            "input_tokens": 5263,
+            "output_tokens": 480
+          },
+          {
+            "input_tokens": 5280,
+            "output_tokens": 485
+          },
+          {
+            "input_tokens": 5297,
+            "output_tokens": 498
+          },
+          {
+            "input_tokens": 5324,
+            "output_tokens": 499
+          },
+          {
+            "input_tokens": 4695,
+            "output_tokens": 458
+          }
+        ]
+      }
+    },
+    {
+      "text": "The index refreshes every 60 seconds. In order to limit memory use, the worker retains only the latest two snapshots. Failed refreshes leave the previous snapshot available.\n",
+      "report": {
+        "ran": true,
+        "ok": true,
+        "status": "clean",
+        "bank_version": "1.0.0",
+        "bank_sha256": "4016262a5640221f4fe567ef06ae1d5d7eb16ca9e175501ed0d5baa1112c8d56",
+        "prompt_version": "1.0.0",
+        "prompt_sha256": "4c3986af0f1d54c9b93d8207a51c50dd915cd96f9ddba21658ac409478a0b04b",
+        "model": "jev-1.13.0",
+        "profile": "formal",
+        "threshold": 0.9,
+        "text_sha256": "a42b4c26ad8e84292702e14b91a80d3f499373d0a95d75662df8f215b6b4067e",
+        "expected": 117,
+        "answered": 117,
+        "requests": 5,
+        "findings": [],
+        "judgments": [
+          {
+            "id": "vague-category-nouns",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "unspecified-improvement",
+            "probability": 0.18,
+            "flagged": false
+          },
+          {
+            "id": "empty-intensifiers",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "real-actual-inflation",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "importance-windup",
+            "probability": 0.06,
+            "flagged": false
+          },
+          {
+            "id": "wordy-purpose",
+            "probability": 0.43,
+            "flagged": false
+          },
+          {
+            "id": "wordy-cause",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "wordy-time",
+            "probability": 0.23,
+            "flagged": false
+          },
+          {
+            "id": "wordy-condition",
+            "probability": 0.15,
+            "flagged": false
+          },
+          {
+            "id": "wordy-ability",
+            "probability": 0.09,
+            "flagged": false
+          },
+          {
+            "id": "redundant-hedges",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "reflexive-weasel",
+            "probability": 0.05,
+            "flagged": false
+          },
+          {
+            "id": "copula-avoidance",
+            "probability": 0.15,
+            "flagged": false
+          },
+          {
+            "id": "boastful-possession",
+            "probability": 0.05,
+            "flagged": false
+          },
+          {
+            "id": "inflated-use-verbs",
+            "probability": 0.3,
+            "flagged": false
+          },
+          {
+            "id": "corporate-nominalization",
+            "probability": 0.07,
+            "flagged": false
+          },
+          {
+            "id": "ornate-start-verbs",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "exploration-cliche",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "abstract-scenery",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "boundary-breakthrough",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "unsupported-quality-label",
+            "probability": 0.06,
+            "flagged": false
+          },
+          {
+            "id": "abstract-complexity",
+            "probability": 0.1,
+            "flagged": false
+          },
+          {
+            "id": "business-buzzword-cluster",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "generic-praise-density",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "repeated-sector-boilerplate",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "clustered-sector-boilerplate",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "step-forward-template",
+            "probability": 0.08,
+            "flagged": false
+          },
+          {
+            "id": "false-audience-breadth",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "pleasure-announcement",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "empty-additive-transitions",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "era-opener",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "reader-steering",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "summary-announcement",
+            "probability": 0.05,
+            "flagged": false
+          },
+          {
+            "id": "topic-windup",
+            "probability": 0.05,
+            "flagged": false
+          },
+          {
+            "id": "repeated-concession-transition",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "significance-inflation",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "superficial-ing",
+            "probability": 0.1,
+            "flagged": false
+          },
+          {
+            "id": "meaning-telling",
+            "probability": 0.11,
+            "flagged": false
+          },
+          {
+            "id": "aphorism-formula",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "future-narrative",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "generic-upbeat-closer",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "time-will-tell",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "negative-foil",
+            "probability": 0.15,
+            "flagged": false
+          },
+          {
+            "id": "split-negative-reveal",
+            "probability": 0.06,
+            "flagged": false
+          },
+          {
+            "id": "tailing-negation",
+            "probability": 0.08,
+            "flagged": false
+          },
+          {
+            "id": "needless-double-negative",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "forced-triads",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "false-range",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "false-concession",
+            "probability": 0.07,
+            "flagged": false
+          },
+          {
+            "id": "mirrored-contrast",
+            "probability": 0.05,
+            "flagged": false
+          },
+          {
+            "id": "moralized-technical-property",
+            "probability": 0.09,
+            "flagged": false
+          },
+          {
+            "id": "vague-universal-authority",
+            "probability": 0.06,
+            "flagged": false
+          },
+          {
+            "id": "promotional-description",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "formulaic-resilience",
+            "probability": 0.1,
+            "flagged": false
+          },
+          {
+            "id": "speculative-world-opener",
+            "probability": 0.07,
+            "flagged": false
+          },
+          {
+            "id": "notability-name-dropping",
+            "probability": 0.01,
+            "flagged": false
+          },
+          {
+            "id": "historical-analogy-stack",
+            "probability": 0.01,
+            "flagged": false
+          },
+          {
+            "id": "vague-attribution",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "faceless-validation",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "proof-overclaim",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "unbounded-superiority",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "novelty-scarcity-hook",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "undefined-coined-label",
+            "probability": 0.05,
+            "flagged": false
+          },
+          {
+            "id": "infomercial-hook",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "fake-candid-hook",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "social-endorsement",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "emotion-announcement",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "lingering-attention",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "rhetorical-question-windup",
+            "probability": 0.08,
+            "flagged": false
+          },
+          {
+            "id": "parenthetical-hedging",
+            "probability": 0.11,
+            "flagged": false
+          },
+          {
+            "id": "chatbot-preface",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "chatbot-signoff",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "lets-transition",
+            "probability": 0.14,
+            "flagged": false
+          },
+          {
+            "id": "reasoning-scaffold",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "sycophantic-validation",
+            "probability": 0.01,
+            "flagged": false
+          },
+          {
+            "id": "narrated-candor",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "acknowledgment-loop",
+            "probability": 0.05,
+            "flagged": false
+          },
+          {
+            "id": "recap-flattery",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "emphasis-stacking",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "persuasive-authority",
+            "probability": 0.06,
+            "flagged": false
+          },
+          {
+            "id": "self-labeling-significance",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "training-cutoff-artifact",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "speculative-gap-fill",
+            "probability": 0.01,
+            "flagged": false
+          },
+          {
+            "id": "unfilled-placeholder",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "citation-markup-leak",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "ai-tracking-link",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "bullet-fragmented-argument",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "bare-praise-bullets",
+            "probability": 0.01,
+            "flagged": false
+          },
+          {
+            "id": "inline-label-repetition",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "numbered-list-padding",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "excessive-bold",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "decorative-heading-emoji",
+            "probability": 0.05,
+            "flagged": false
+          },
+          {
+            "id": "prose-dash-overuse",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "formal-prose-dash",
+            "probability": 0.06,
+            "flagged": false
+          },
+          {
+            "id": "stacked-compound-modifiers",
+            "probability": 0.02,
+            "flagged": false
+          },
+          {
+            "id": "heading-warmup",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "fragmented-short-sections",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "diff-anchored-docs",
+            "probability": 0.15,
+            "flagged": false
+          },
+          {
+            "id": "staccato-drama",
+            "probability": 0.25,
+            "flagged": false
+          },
+          {
+            "id": "repeated-sentence-template",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "monotonous-sentence-rhythm",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "uniform-paragraph-template",
+            "probability": 0.03,
+            "flagged": false
+          },
+          {
+            "id": "redundant-paragraph-closer",
+            "probability": 0.1,
+            "flagged": false
+          },
+          {
+            "id": "treadmill-paragraph",
+            "probability": 0.06,
+            "flagged": false
+          },
+          {
+            "id": "missing-argument-bridge",
+            "probability": 0.06,
+            "flagged": false
+          },
+          {
+            "id": "known-actor-passive",
+            "probability": 0.23,
+            "flagged": false
+          },
+          {
+            "id": "subjectless-flowing-prose",
+            "probability": 0.11,
+            "flagged": false
+          },
+          {
+            "id": "nonparallel-coordinates",
+            "probability": 0.11,
+            "flagged": false
+          },
+          {
+            "id": "subject-verb-interruption",
+            "probability": 0.08,
+            "flagged": false
+          },
+          {
+            "id": "misplaced-modifier",
+            "probability": 0.19,
+            "flagged": false
+          },
+          {
+            "id": "buried-main-result",
+            "probability": 0.09,
+            "flagged": false
+          },
+          {
+            "id": "overloaded-long-sentence",
+            "probability": 0.08,
+            "flagged": false
+          },
+          {
+            "id": "synonym-cycling",
+            "probability": 0.09,
+            "flagged": false
+          },
+          {
+            "id": "redefined-abbreviation",
+            "probability": 0.04,
+            "flagged": false
+          },
+          {
+            "id": "acronym-pileup",
+            "probability": 0.08,
+            "flagged": false
+          },
+          {
+            "id": "mechanics-without-purpose",
+            "probability": 0.55,
+            "flagged": false
+          },
+          {
+            "id": "formal-contractions",
+            "probability": 0.04,
+            "flagged": false
+          }
+        ],
+        "usage": [
+          {
+            "input_tokens": 5257,
+            "output_tokens": 480
+          },
+          {
+            "input_tokens": 5274,
+            "output_tokens": 485
+          },
+          {
+            "input_tokens": 5291,
+            "output_tokens": 498
+          },
+          {
+            "input_tokens": 5318,
+            "output_tokens": 499
+          },
+          {
+            "input_tokens": 4689,
+            "output_tokens": 458
+          }
+        ]
+      }
+    }
+  ],
+  "meaning_preserved": true,
+  "meaning_assessment": "Exact remainder unchanged after deleting the initial filler phrase and capitalizing The. Refresh interval, memory-limit purpose, snapshot count, and failure behavior all preserved."
+}
