@@ -141,11 +141,23 @@ def parse_posted(event: dict[str, Any]) -> Optional[MMPost]:
     )
 
 
+def resolve_default_handle(cfg: TunnelConfig, live: Sequence[str]) -> str:
+    """Handle to answer for a bare ``@bot`` mention.
+
+    The configured ``default_handle`` wins. With none set, a single shared
+    session is unambiguous; with several, the bot asks which one.
+    """
+    if cfg.mattermost.default_handle:
+        return cfg.mattermost.default_handle
+    return live[0] if len(live) == 1 else ""
+
+
 @dataclass
 class Route:
     """What the bot should do with one post."""
 
-    action: str  # ignore | list | open | unknown_handle | followup | close
+    # ignore | list | open | unknown_handle | which_handle | followup | close
+    action: str
     thread_key: str = ""
     root_id: str = ""
     handle: str = ""
@@ -161,6 +173,7 @@ def route_post(
     allowed_user_ids: Sequence[str],
     is_bound: Callable[[str], bool],
     handle_live: Callable[[str], bool],
+    default_handle: str = "",
 ) -> Route:
     """Decide what to do with a post (pure; no I/O).
 
@@ -172,6 +185,8 @@ def route_post(
         allowed_user_ids: If non-empty, only these users are answered.
         is_bound: Whether a thread key is bound to a session.
         handle_live: Whether a handle is currently shared.
+        default_handle: Handle to use when the bot is @-mentioned without
+            one (see ``resolve_default_handle``); "" = ask which.
 
     Returns:
         The routing decision.
@@ -208,10 +223,31 @@ def route_post(
             return Route("close", thread_key=key, root_id=post.root_id)
         return Route("followup", thread_key=key, root_id=post.root_id, text=text)
 
+    # A top-level @bot mention is how a teammate naturally addresses the bot.
+    # Strip it; whatever follows is the question (a handle may still lead it).
+    mentioned = False
+    who = leading_mention(text)
+    if who is not None:
+        if who in BROADCAST_MENTIONS or who != bot_username.lower():
+            return ignore  # teammates talking to each other
+        mentioned = True
+        text = _MENTION_RE.sub("", text.lstrip(), count=1).strip()
+
     if is_list_command(text):
         return Route("list", root_id=post.id)
     token, _, remainder = text.partition(" ")
     handle = token.strip().lower()
+    if mentioned and not handle_live(handle):
+        # Addressed to the bot but no handle named: answer the default one.
+        if not default_handle:
+            return Route("which_handle", root_id=post.id)
+        return Route(
+            "open",
+            thread_key=f"mm:{post.id}",
+            root_id=post.id,
+            handle=default_handle,
+            text=text,
+        )
     if handle_live(handle):
         return Route(
             "open",
@@ -553,6 +589,9 @@ class _Router:
             allowed_user_ids=self.cfg.mattermost.allowed_user_ids,
             is_bound=lambda key: relay.store.get(key) is not None,
             handle_live=lambda h: self.registry.get(h) is not None,
+            default_handle=resolve_default_handle(
+                self.cfg, [r.handle for r in self.registry.active()]
+            ),
         )
         if route.action == "ignore":
             return
@@ -560,6 +599,13 @@ class _Router:
         sender = post.sender or "A teammate"
         if route.action == "list":
             await dest.send(relay.handles_text())
+        elif route.action == "which_handle":
+            live = self.registry.active()
+            example = live[0].handle if live else "handle"
+            await dest.send(
+                "Which session should I ask? Put its handle first, e.g. "
+                f"`{example} your question`.\n\n" + relay.handles_text()
+            )
         elif route.action == "unknown_handle":
             await dest.send(
                 f"No live session for handle `{route.handle}`. "

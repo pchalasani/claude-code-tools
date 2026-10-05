@@ -104,6 +104,10 @@ class MattermostConfig:
     allowed_user_ids: list[str] = field(default_factory=list)
     # false only for a self-signed test server.
     verify_tls: bool = True
+    # Handle answered when a teammate just @-mentions the bot without naming
+    # a handle ("@bot how does X work?"). Empty = use the only shared session
+    # when exactly one is live, else ask which.
+    default_handle: str = ""
 
 
 @dataclass
@@ -385,6 +389,10 @@ respond_to_dms = false
 # channel_ids = []        # 26-char channel ids
 # allowed_user_ids = []   # empty = anyone in the watched channels
 # verify_tls = true
+# Handle answered when someone just @-mentions the bot without naming one
+# ("@bot how does X work?"). Unset = the only shared session when exactly
+# one is live, else the bot asks which.
+# default_handle = ""
 
 [claude]
 binary = "claude"

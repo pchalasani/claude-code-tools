@@ -236,6 +236,11 @@ Daemon + core — `claude_code_tools/agent_tunnel/`:
 Mattermost routes the same way, with Mattermost's thread model: a root post
 `\<handle\> [question]` in a watched channel (26-char `channel_ids`) opens a
 thread keyed `mm:<root post id>`, and the bot answers as replies under it.
+A root post that simply **@-mentions the bot** works too — the mention is
+stripped and what follows is the question, answered against
+`[mattermost] default_handle` (unset: the only shared session when exactly
+one is live, else the bot replies asking which handle to use). A handle may
+still lead the question after the mention.
 Replies in a bound thread are follow-ups; a reply opening with
 `@someone-else`, `@all`, `@channel` or `@here` is side-chat and ignored, and
 a leading `@bot` is stripped. `!list`/`!handles` and `!done`/`!close`/`!end`
