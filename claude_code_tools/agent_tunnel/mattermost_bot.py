@@ -219,6 +219,7 @@ def route_post(
                 bot_username=bot_username,
                 handle_live=handle_live,
                 default_handle=default_handle,
+                complain_unknown=False,
             )
         # A reply that opens with @someone-else (or @all/@channel/@here) is
         # teammates talking among themselves. A leading @bot is stripped.
@@ -249,11 +250,14 @@ def _open_route(
     bot_username: str,
     handle_live: Callable[[str], bool],
     default_handle: str,
+    complain_unknown: bool = True,
 ) -> Route:
     """Route a message that may open a thread on ``post_id`` (pure).
 
     Used for a root post and for a message inside a thread the bot has not
     bound yet: both are "someone addressing the bot in the channel".
+    ``complain_unknown`` is off in the latter case, so ordinary chatter
+    there stays unanswered.
     """
     ignore = Route("ignore")
     # An @bot mention is how a teammate naturally addresses the bot. Strip
@@ -293,8 +297,10 @@ def _open_route(
             handle=default_handle,
             text=text,
         )
-    # Only complain if it clearly looks like a handle attempt.
-    if HANDLE_RE.match(handle) and not remainder:
+    # Only complain if it clearly looks like a handle attempt — and never
+    # inside someone else's thread, where a one-word reply ("thanks") would
+    # otherwise draw a "no live session" answer.
+    if complain_unknown and HANDLE_RE.match(handle) and not remainder:
         return Route("unknown_handle", root_id=post_id, handle=handle)
     return ignore
 

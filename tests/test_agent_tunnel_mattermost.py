@@ -647,3 +647,12 @@ def test_unbound_thread_accepts_handle_or_mention() -> None:
     # Teammate chatter in an unrelated thread is still none of our business.
     assert _route(_post("looks fine to me", root="root9")).action == "ignore"
     assert _route(_post("@bob thoughts?", root="root9")).action == "ignore"
+
+
+def test_one_word_chatter_in_unbound_thread_is_ignored() -> None:
+    # "thanks" looks like a handle attempt; in someone else's thread it is
+    # not, and must not draw a "no live session" reply.
+    for word in ("thanks", "ok", "yes"):
+        assert _route(_post(word, root="root9")).action == "ignore"
+    # At the top level, a lone handle-shaped word still gets the hint.
+    assert _route(_post("nosuchhandle")).action == "unknown_handle"
