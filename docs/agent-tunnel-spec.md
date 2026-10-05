@@ -241,6 +241,9 @@ stripped and what follows is the question, answered against
 `[mattermost] default_handle` (unset: the only shared session when exactly
 one is live, else the bot replies asking which handle to use). A handle may
 still lead the question after the mention.
+A message inside a thread the bot has NOT bound is routed the same way as a
+root post (so a teammate can answer the bot's "which session?" question
+in place); anything else there is left alone.
 Replies in a bound thread are follow-ups; a reply opening with
 `@someone-else`, `@all`, `@channel` or `@here` is side-chat and ignored, and
 a leading `@bot` is stripped. `!list`/`!handles` and `!done`/`!close`/`!end`

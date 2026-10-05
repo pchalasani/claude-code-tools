@@ -631,3 +631,19 @@ def test_default_handle_that_is_not_live_asks_which() -> None:
     # A revoked/renamed default must not swallow the question silently.
     r = _route(_post("@tunnelbot what changed?"), default_handle="gone")
     assert r.action == "which_handle"
+
+
+def test_unbound_thread_accepts_handle_or_mention() -> None:
+    # The bot's own "which session?" reply lives in an unbound thread, so a
+    # teammate answering there must be heard.
+    r = _route(_post("cyberins what changed?", root="root9"))
+    assert (r.action, r.handle, r.thread_key, r.text) == (
+        "open", "cyberins", "mm:root9", "what changed?"
+    )
+    r = _route(
+        _post("@tunnelbot what changed?", root="root9"), default_handle="cyberins"
+    )
+    assert (r.action, r.handle, r.thread_key) == ("open", "cyberins", "mm:root9")
+    # Teammate chatter in an unrelated thread is still none of our business.
+    assert _route(_post("looks fine to me", root="root9")).action == "ignore"
+    assert _route(_post("@bob thoughts?", root="root9")).action == "ignore"

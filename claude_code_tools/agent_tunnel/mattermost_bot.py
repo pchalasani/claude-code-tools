@@ -209,7 +209,17 @@ def route_post(
     if post.root_id:
         key = f"mm:{post.root_id}"
         if not is_bound(key):
-            return ignore
+            # Not our thread yet. Teammates still address the bot inside one
+            # (e.g. answering its "which session?" question), so an explicit
+            # handle or @bot mention opens a binding on that root; anything
+            # else stays ignored.
+            return _open_route(
+                text,
+                post_id=post.root_id,
+                bot_username=bot_username,
+                handle_live=handle_live,
+                default_handle=default_handle,
+            )
         # A reply that opens with @someone-else (or @all/@channel/@here) is
         # teammates talking among themselves. A leading @bot is stripped.
         who = leading_mention(text)
@@ -223,8 +233,31 @@ def route_post(
             return Route("close", thread_key=key, root_id=post.root_id)
         return Route("followup", thread_key=key, root_id=post.root_id, text=text)
 
-    # A top-level @bot mention is how a teammate naturally addresses the bot.
-    # Strip it; whatever follows is the question (a handle may still lead it).
+    return _open_route(
+        text,
+        post_id=post.id,
+        bot_username=bot_username,
+        handle_live=handle_live,
+        default_handle=default_handle,
+    )
+
+
+def _open_route(
+    text: str,
+    *,
+    post_id: str,
+    bot_username: str,
+    handle_live: Callable[[str], bool],
+    default_handle: str,
+) -> Route:
+    """Route a message that may open a thread on ``post_id`` (pure).
+
+    Used for a root post and for a message inside a thread the bot has not
+    bound yet: both are "someone addressing the bot in the channel".
+    """
+    ignore = Route("ignore")
+    # An @bot mention is how a teammate naturally addresses the bot. Strip
+    # it; whatever follows is the question (a handle may still lead it).
     mentioned = False
     who = leading_mention(text)
     if who is not None:
@@ -234,36 +267,35 @@ def route_post(
         text = _MENTION_RE.sub("", text.lstrip(), count=1).strip()
 
     if is_list_command(text):
-        return Route("list", root_id=post.id)
+        return Route("list", root_id=post_id)
     # Split on ANY whitespace: a handle followed by a newline is still a
     # handle, and must not fall through to the default.
     parts = text.split(None, 1)
-    token = parts[0] if parts else ""
-    remainder = parts[1] if len(parts) > 1 else ""
-    handle = token.strip().lower()
-    if mentioned and not handle_live(handle):
-        # Addressed to the bot but no handle named: answer the default one,
-        # but only while it is actually shared.
-        if not default_handle or not handle_live(default_handle):
-            return Route("which_handle", root_id=post.id)
-        return Route(
-            "open",
-            thread_key=f"mm:{post.id}",
-            root_id=post.id,
-            handle=default_handle,
-            text=text,
-        )
+    handle = parts[0].strip().lower() if parts else ""
+    remainder = parts[1].strip() if len(parts) > 1 else ""
     if handle_live(handle):
         return Route(
             "open",
-            thread_key=f"mm:{post.id}",
-            root_id=post.id,
+            thread_key=f"mm:{post_id}",
+            root_id=post_id,
             handle=handle,
-            text=remainder.strip(),
+            text=remainder,
+        )
+    if mentioned:
+        # Addressed to the bot but no handle named: answer the default one,
+        # but only while it is actually shared.
+        if not default_handle or not handle_live(default_handle):
+            return Route("which_handle", root_id=post_id)
+        return Route(
+            "open",
+            thread_key=f"mm:{post_id}",
+            root_id=post_id,
+            handle=default_handle,
+            text=text,
         )
     # Only complain if it clearly looks like a handle attempt.
     if HANDLE_RE.match(handle) and not remainder:
-        return Route("unknown_handle", root_id=post.id, handle=handle)
+        return Route("unknown_handle", root_id=post_id, handle=handle)
     return ignore
 
 
