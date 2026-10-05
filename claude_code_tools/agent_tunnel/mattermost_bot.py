@@ -235,11 +235,16 @@ def route_post(
 
     if is_list_command(text):
         return Route("list", root_id=post.id)
-    token, _, remainder = text.partition(" ")
+    # Split on ANY whitespace: a handle followed by a newline is still a
+    # handle, and must not fall through to the default.
+    parts = text.split(None, 1)
+    token = parts[0] if parts else ""
+    remainder = parts[1] if len(parts) > 1 else ""
     handle = token.strip().lower()
     if mentioned and not handle_live(handle):
-        # Addressed to the bot but no handle named: answer the default one.
-        if not default_handle:
+        # Addressed to the bot but no handle named: answer the default one,
+        # but only while it is actually shared.
+        if not default_handle or not handle_live(default_handle):
             return Route("which_handle", root_id=post.id)
         return Route(
             "open",

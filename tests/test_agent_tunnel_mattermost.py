@@ -609,3 +609,25 @@ def test_default_handle_config_and_resolution(tmp_path: Path) -> None:
     assert resolve_default_handle(cfg, ["only-one"]) == "only-one"
     assert resolve_default_handle(cfg, ["a", "b"]) == ""
     assert resolve_default_handle(cfg, []) == ""
+
+
+def test_at_mention_handle_followed_by_newline_wins() -> None:
+    # A handle separated by a newline (or tab) is still a handle: the
+    # question must not be routed to the default session instead.
+    r = _route(
+        _post("@tunnelbot cyberins\nwhat changed?"), default_handle="other"
+    )
+    assert (r.action, r.handle, r.text) == ("open", "cyberins", "what changed?")
+    r = _route(_post("@tunnelbot cyberins\twhat changed?"), default_handle="other")
+    assert (r.action, r.handle) == ("open", "cyberins")
+
+
+def test_handle_followed_by_newline_without_mention() -> None:
+    r = _route(_post("cyberins\nwhat changed?"))
+    assert (r.action, r.handle, r.text) == ("open", "cyberins", "what changed?")
+
+
+def test_default_handle_that_is_not_live_asks_which() -> None:
+    # A revoked/renamed default must not swallow the question silently.
+    r = _route(_post("@tunnelbot what changed?"), default_handle="gone")
+    assert r.action == "which_handle"
