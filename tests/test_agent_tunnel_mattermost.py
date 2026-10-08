@@ -93,7 +93,8 @@ def test_leading_mention() -> None:
 
 def _route(post: MMPost, bound: frozenset[str] | set[str] = frozenset(),
            live=("cyberins",),
-           allowed: Sequence[str] = ()):
+           allowed: Sequence[str] = (),
+           default_handle: str = ""):
     return route_post(
         post,
         bot_user_id=BOT,
@@ -102,6 +103,7 @@ def _route(post: MMPost, bound: frozenset[str] | set[str] = frozenset(),
         allowed_user_ids=allowed,
         is_bound=lambda k: k in bound,
         handle_live=lambda h: h in live,
+        default_handle=default_handle,
     )
 
 
@@ -535,3 +537,122 @@ def test_close_waits_for_answer_delivery(relay) -> None:
     asyncio.run(asyncio.wait_for(run(), timeout=30))  # fail, never hang
     # The long answer takes several slow posts; the close must wait for all.
     assert "Closed" in dest.sent[-1], dest.sent[-3:]
+
+
+# ------------------------------- @bot mention at the top level (no handle)
+
+
+def test_at_mention_without_handle_uses_default_handle() -> None:
+    # What a teammate actually types. Mattermost shows the bot's name, so
+    # "@tunnelbot <question>" must work like "<handle> <question>".
+    r = _route(
+        _post("@tunnelbot how much of detection is advisory-driven?"),
+        default_handle="cyberins",
+    )
+    assert r.action == "open"
+    assert r.handle == "cyberins"
+    assert r.text == "how much of detection is advisory-driven?"
+    assert r.thread_key == "mm:p1" and r.root_id == "p1"
+
+
+def test_at_mention_with_explicit_handle_still_works() -> None:
+    r = _route(_post("@tunnelbot cyberins what changed?"), default_handle="other")
+    assert (r.action, r.handle, r.text) == ("open", "cyberins", "what changed?")
+
+
+def test_at_mention_alone_opens_with_ready_notice() -> None:
+    r = _route(_post("@tunnelbot"), default_handle="cyberins")
+    assert (r.action, r.handle, r.text) == ("open", "cyberins", "")
+
+
+def test_at_mention_without_default_handle_asks_which() -> None:
+    r = _route(_post("@tunnelbot what changed?"))
+    assert r.action == "which_handle"
+
+
+def test_at_mention_of_someone_else_is_still_ignored() -> None:
+    assert _route(
+        _post("@bob can you look at this"), default_handle="cyberins"
+    ).action == "ignore"
+    assert _route(
+        _post("@here standup"), default_handle="cyberins"
+    ).action == "ignore"
+
+
+def test_plain_text_without_mention_is_still_ignored() -> None:
+    # The default handle must not turn every channel message into a question.
+    assert _route(
+        _post("lunch anyone?"), default_handle="cyberins"
+    ).action == "ignore"
+
+
+def test_at_mention_commands_still_work() -> None:
+    assert _route(_post("@tunnelbot !list"), default_handle="cyberins").action == (
+        "list"
+    )
+
+
+def test_default_handle_config_and_resolution(tmp_path: Path) -> None:
+    from claude_code_tools.agent_tunnel.mattermost_bot import resolve_default_handle
+
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(
+        '[mattermost]\nurl = "http://x"\ndefault_handle = "cyberins"\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(cfg_file)
+    assert cfg.mattermost.default_handle == "cyberins"
+    # Configured value wins.
+    assert resolve_default_handle(cfg, ["a", "b"]) == "cyberins"
+    # Unset: a single shared session is unambiguous, several are not.
+    cfg.mattermost.default_handle = ""
+    assert resolve_default_handle(cfg, ["only-one"]) == "only-one"
+    assert resolve_default_handle(cfg, ["a", "b"]) == ""
+    assert resolve_default_handle(cfg, []) == ""
+
+
+def test_at_mention_handle_followed_by_newline_wins() -> None:
+    # A handle separated by a newline (or tab) is still a handle: the
+    # question must not be routed to the default session instead.
+    r = _route(
+        _post("@tunnelbot cyberins\nwhat changed?"), default_handle="other"
+    )
+    assert (r.action, r.handle, r.text) == ("open", "cyberins", "what changed?")
+    r = _route(_post("@tunnelbot cyberins\twhat changed?"), default_handle="other")
+    assert (r.action, r.handle) == ("open", "cyberins")
+
+
+def test_handle_followed_by_newline_without_mention() -> None:
+    r = _route(_post("cyberins\nwhat changed?"))
+    assert (r.action, r.handle, r.text) == ("open", "cyberins", "what changed?")
+
+
+def test_default_handle_that_is_not_live_asks_which() -> None:
+    # A revoked/renamed default must not swallow the question silently.
+    r = _route(_post("@tunnelbot what changed?"), default_handle="gone")
+    assert r.action == "which_handle"
+
+
+def test_unbound_thread_accepts_handle_or_mention() -> None:
+    # The bot's own "which session?" reply lives in an unbound thread, so a
+    # teammate answering there must be heard.
+    r = _route(_post("cyberins what changed?", root="root9"))
+    assert (r.action, r.handle, r.thread_key, r.text) == (
+        "open", "cyberins", "mm:root9", "what changed?"
+    )
+    r = _route(
+        _post("@tunnelbot what changed?", root="root9"), default_handle="cyberins"
+    )
+    assert (r.action, r.handle, r.thread_key) == ("open", "cyberins", "mm:root9")
+    # Teammate chatter in an unrelated thread is still none of our business.
+    assert _route(_post("looks fine to me", root="root9")).action == "ignore"
+    assert _route(_post("@bob thoughts?", root="root9")).action == "ignore"
+
+
+def test_one_word_chatter_in_unbound_thread_is_ignored() -> None:
+    # "thanks" looks like a handle attempt; in someone else's thread it is
+    # not, and must not draw a "no live session" reply.
+    for word in ("thanks", "ok", "yes"):
+        assert _route(_post(word, root="root9")).action == "ignore"
+    # At the top level, a lone handle-shaped word still gets the hint.
+    assert _route(_post("nosuchhandle")).action == "unknown_handle"
