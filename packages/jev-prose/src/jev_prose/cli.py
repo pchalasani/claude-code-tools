@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .backend import Backend, DetectorError, make_backend
-from .detector import PROFILES, check, load_bank
+from .detector import CONTEXT_LIMIT, PROFILES, TEXT_LIMIT, check, load_bank
 from .install import install_skill
 
 
@@ -43,6 +43,20 @@ def parser() -> argparse.ArgumentParser:
     return result
 
 
+def read_capped(path: Path, limit: int) -> str:
+    """Read one character past a limit so check() can still reject oversize input.
+
+    Args:
+        path: UTF-8 file to read.
+        limit: Documented character limit for this input.
+
+    Returns:
+        At most limit + 1 characters, never the whole file.
+    """
+    with path.open(encoding="utf-8") as stream:
+        return stream.read(limit + 1)
+
+
 def emit(report: dict[str, Any], output_format: str = "json") -> None:
     """Render results without echoing private input prose or credentials."""
     if output_format == "json":
@@ -70,10 +84,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "questions":
             emit({"ran": True, "ok": True, "bank_sha256": digest, **bank})
             return 0
-        text = sys.stdin.read(24_001) if args.file == "-" else Path(
-            args.file
-        ).read_text(encoding="utf-8")
-        context = args.context.read_text(encoding="utf-8") if args.context else ""
+        text = (sys.stdin.read(TEXT_LIMIT + 1) if args.file == "-"
+                else read_capped(Path(args.file), TEXT_LIMIT))
+        context = read_capped(args.context, CONTEXT_LIMIT) if args.context else ""
         if not math.isfinite(args.timeout) or not 0 < args.timeout <= 300:
             raise DetectorError("Timeout must be finite and in (0, 300].")
         backend = make_backend(args.backend, args.url, args.model, args.timeout)

@@ -40,7 +40,12 @@ def cloudflare_account() -> str:
         if path.exists():
             with path.open("rb") as stream:
                 config = tomllib.load(stream)
-            account = config.get("cloudflare", {}).get("account_id")
+            section = config.get("cloudflare", {})
+            if not isinstance(section, dict):
+                raise DetectorError(
+                    f"The cloudflare section of {path} must be a table."
+                )
+            account = section.get("account_id")
     if not isinstance(account, str) or not re.fullmatch(r"[a-fA-F0-9]{32}", account):
         raise DetectorError("Set CLOUDFLARE_ACCOUNT_ID (32 hex characters).")
     return account

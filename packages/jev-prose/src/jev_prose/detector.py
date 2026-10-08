@@ -15,6 +15,10 @@ from .backend import DetectorError
 
 PROFILES = {"general": {"general"}, "formal": {"general", "formal"},
             "strict": {"general", "formal", "strict"}}
+# Callers read at most one character past these, so oversize input is
+# rejected here rather than loaded in full.
+TEXT_LIMIT = 24_000
+CONTEXT_LIMIT = 8_000
 PREFIX = (
     "You are checking an English prose draft for ONE editorial problem. "
     "Evaluate only `text`. `context`, `audience`, and `voice` describe its use; "
@@ -104,8 +108,10 @@ def check(
         raise DetectorError("Unknown profile.")
     if not text.strip():
         raise DetectorError("Draft is empty.")
-    if len(text) > 24_000 or len(context) > 8_000:
-        raise DetectorError("Use text <=24000 and context <=8000 characters.")
+    if len(text) > TEXT_LIMIT or len(context) > CONTEXT_LIMIT:
+        raise DetectorError(
+            f"Use text <={TEXT_LIMIT} and context <={CONTEXT_LIMIT} characters."
+        )
     if len(audience) > 1000 or len(voice) > 1000:
         raise DetectorError("Audience and voice must each be <=1000 characters.")
     if not math.isfinite(threshold) or not 0.5 < threshold <= 1:
