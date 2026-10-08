@@ -124,7 +124,10 @@ class Backend:
                         "it overrides the global Wrangler login. If absent, "
                         "verify that login with wrangler whoami.")
             raise DetectorError(f"Endpoint returned HTTP {exc.code}.{hint}") from exc
-        except (OSError, ValueError, urllib.error.URLError, HTTPException) as exc:
+        # URLError is an OSError. HTTPException covers a truncated or
+        # malformed response; RecursionError, a body nested past the parser's
+        # limit. Both would otherwise exit 1, the code that means findings.
+        except (OSError, ValueError, HTTPException, RecursionError) as exc:
             if isinstance(exc, DetectorError):
                 raise
             raise DetectorError("Endpoint failed or returned invalid JSON.") from exc

@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from http.client import HTTPException
+from http.client import IncompleteRead
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -197,8 +197,8 @@ def truncated_chunked_server() -> Iterator[str]:
             connection, _ = listener.accept()
         except OSError:
             return
-        connection.settimeout(5)
         try:
+            connection.settimeout(5)
             connection.recv(65_536)
             connection.sendall(
                 b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n'
@@ -236,9 +236,23 @@ def test_truncated_response_is_a_structured_failure() -> None:
             backend.decide({'text': 'A draft.'}, {
                 'a': {'type': 'noul', 'instructions': 'A question?'},
             })
-        # Pin the cause: a reset would raise OSError, which was always caught.
-        assert isinstance(failure.value.__cause__, HTTPException)
+        # Pin the exact cause: a reset raises OSError, which was always
+        # caught, and RemoteDisconnected is both an OSError and an
+        # HTTPException, so the broader check could pass for the wrong reason.
+        assert isinstance(failure.value.__cause__, IncompleteRead)
         # The request did reach the endpoint, so the report must say so.
+        assert backend.attempted is True
+
+
+def test_deeply_nested_response_is_a_structured_failure() -> None:
+    """A body nested past the JSON parser's limit is a failure, not a crash."""
+    body = b'[' * 200_000 + b']' * 200_000
+    with running_server(lambda request: Reply(body, raw=True)) as service:
+        backend = Backend(service.url, 'jev-fixed', timeout=10)
+        with pytest.raises(DetectorError):
+            backend.decide({'text': 'A draft.'}, {
+                'a': {'type': 'noul', 'instructions': 'A question?'},
+            })
         assert backend.attempted is True
 
 
