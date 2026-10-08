@@ -187,10 +187,16 @@ def truncated_chunked_server() -> Iterator[str]:
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(('127.0.0.1', 0))
     listener.listen(1)
+    # Never block forever: a transport that fails before connecting must not
+    # leave this helper waiting in accept().
+    listener.settimeout(5)
 
     def serve() -> None:
         """Answer one request with a chunk header promising absent bytes."""
-        connection, _ = listener.accept()
+        try:
+            connection, _ = listener.accept()
+        except OSError:
+            return
         connection.settimeout(5)
         try:
             connection.recv(65_536)
@@ -209,14 +215,17 @@ def truncated_chunked_server() -> Iterator[str]:
         finally:
             connection.close()
 
-    thread = threading.Thread(target=serve)
+    thread = threading.Thread(target=serve, daemon=True)
     thread.start()
     try:
         yield f'http://127.0.0.1:{listener.getsockname()[1]}/v1/systemone'
     finally:
-        thread.join(timeout=5)
-        assert not thread.is_alive()
+        # Release the socket and the thread before asserting on either, so a
+        # failed assertion cannot leave the interpreter unable to exit.
+        thread.join(timeout=10)
+        alive = thread.is_alive()
         listener.close()
+        assert not alive
 
 
 def test_truncated_response_is_a_structured_failure() -> None:
