@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -80,6 +81,33 @@ def test_oversize_input_is_rejected_without_reading_it_all(
     assert offered and offered[0] < ACCEPTABLE, (
         f"CLI accepted {offered} characters; a bounded read stops near its cap"
     )
+
+
+def test_custom_bank_cannot_forge_report_metadata(tmp_path: Path) -> None:
+    """A bank's own top-level keys must not override status or the digest."""
+    bank = {
+        "version": "fixture-1",
+        "ran": False, "ok": False, "status": "error",
+        "bank_sha256": "0" * 64,
+        "questions": [{
+            "id": "a", "title": "A title", "question": "A question?",
+            "guidance": "Guidance.", "scope": "sentence",
+            "profiles": ["general"], "sources": ["fixture"],
+        }],
+    }
+    path = tmp_path / "bank.json"
+    path.write_text(json.dumps(bank), encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, "-m", "jev_prose.cli", "questions", "--bank", str(path)],
+        capture_output=True, text=True, timeout=60, check=False,
+        env=cli_environment(),
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["ran"] is True and report["ok"] is True
+    assert report["bank_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert report["version"] == "fixture-1"
 
 
 def test_malformed_config_section_is_a_structured_error(tmp_path: Path) -> None:

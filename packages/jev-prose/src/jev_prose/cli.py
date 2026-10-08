@@ -82,7 +82,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         bank, digest = load_bank(args.bank)
         if args.command == "questions":
-            emit({"ran": True, "ok": True, "bank_sha256": digest, **bank})
+            # Trusted fields last: a custom bank's own keys must not forge them.
+            emit({**bank, "ran": True, "ok": True, "bank_sha256": digest})
             return 0
         text = (sys.stdin.read(TEXT_LIMIT + 1) if args.file == "-"
                 else read_capped(Path(args.file), TEXT_LIMIT))
