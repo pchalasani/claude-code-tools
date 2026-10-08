@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from jev_prose.backend import Backend, DetectorError
-from jev_prose.detector import check, load_bank
+from jev_prose.detector import CONTEXT_LIMIT, TEXT_LIMIT, check, load_bank
 from test_backend import Reply, running_server
 
 
@@ -162,8 +162,9 @@ def test_mixed_models_across_batches_fail() -> None:
 
 
 @pytest.mark.parametrize('kwargs', [
-    {'text': ''}, {'text': '   '}, {'text': 'x' * 24_001},
-    {'context': 'x' * 8001}, {'audience': 'x' * 1001}, {'voice': 'x' * 1001},
+    {'text': ''}, {'text': '   '}, {'text': 'x' * (TEXT_LIMIT + 1)},
+    {'context': 'x' * (CONTEXT_LIMIT + 1)}, {'audience': 'x' * 1001},
+    {'voice': 'x' * 1001},
     {'profile': 'unknown'}, {'threshold': 0.5}, {'threshold': 1.01},
     {'threshold': float('nan')}, {'threshold': float('inf')},
     {'batch_size': 0}, {'batch_size': 65}, {'workers': 0}, {'workers': 9},
