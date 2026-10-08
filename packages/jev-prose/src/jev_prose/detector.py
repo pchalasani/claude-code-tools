@@ -146,8 +146,11 @@ def check(
             if not isinstance(answer, dict) or answer.get("type") != "noul":
                 raise DetectorError("Expected a noul answer for every question.")
             value = answer.get("noul")
+            # Compare before converting: math.isfinite raises OverflowError on
+            # an integer too large for a float. The bound rejects infinities
+            # and NaN as well, since neither compares inside it.
             if (isinstance(value, bool) or not isinstance(value, (float, int))
-                    or not math.isfinite(value) or not 0 <= value <= 1):
+                    or not 0 <= value <= 1):
                 raise DetectorError("Invalid noul probability.")
         return result
 

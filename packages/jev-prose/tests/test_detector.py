@@ -118,6 +118,8 @@ def test_unflagged_answers_are_retained_and_findings_sorted() -> None:
     {'type': 'noul', 'noul': -0.1}, {'type': 'noul', 'noul': 1.1},
     {'type': 'noul', 'noul': float('nan')},
     {'type': 'noul', 'noul': float('inf')},
+    # Valid JSON, but too large to convert to a float.
+    {'type': 'noul', 'noul': 10 ** 400},
 ])
 def test_malformed_answer_is_not_clean(answer: Any) -> None:
     """An invalid answer invalidates the entire inference report."""

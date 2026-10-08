@@ -123,6 +123,9 @@ class Backend:
                 hint = (" Check CLOUDFLARE_API_TOKEN in the process environment; "
                         "it overrides the global Wrangler login. If absent, "
                         "verify that login with wrangler whoami.")
+            # An HTTPError is itself an open response; the raised error keeps
+            # it reachable as __cause__, so release the socket here.
+            exc.close()
             raise DetectorError(f"Endpoint returned HTTP {exc.code}.{hint}") from exc
         # URLError is an OSError. HTTPException covers a truncated or
         # malformed response; RecursionError, a body nested past the parser's
