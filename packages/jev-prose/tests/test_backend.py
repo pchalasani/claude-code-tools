@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import socket
 import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from http.client import HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -176,6 +178,59 @@ def test_connection_refused_is_failure() -> None:
         url = service.url
     with pytest.raises(DetectorError):
         Backend(url, 'jev-fixed', timeout=1).decide({}, {})
+
+
+@contextmanager
+def truncated_chunked_server() -> Iterator[str]:
+    """Serve a chunked body that stops mid-chunk, as a cut connection would."""
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(1)
+
+    def serve() -> None:
+        """Answer one request with a chunk header promising absent bytes."""
+        connection, _ = listener.accept()
+        connection.settimeout(5)
+        try:
+            connection.recv(65_536)
+            connection.sendall(
+                b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n'
+                b'Transfer-Encoding: chunked\r\n\r\n'
+                b'20\r\n{"answers": {}, "mod'
+            )
+            # End the write side cleanly and drain the rest of the request, so
+            # the client reads a mid-chunk EOF instead of a connection reset.
+            connection.shutdown(socket.SHUT_WR)
+            while connection.recv(65_536):
+                pass
+        except OSError:
+            pass
+        finally:
+            connection.close()
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    try:
+        yield f'http://127.0.0.1:{listener.getsockname()[1]}/v1/systemone'
+    finally:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        listener.close()
+
+
+def test_truncated_response_is_a_structured_failure() -> None:
+    """An interrupted body fails as a detector error, not an HTTP exception."""
+    with truncated_chunked_server() as url:
+        backend = Backend(url, 'jev-fixed', timeout=5)
+        with pytest.raises(DetectorError) as failure:
+            backend.decide({'text': 'A draft.'}, {
+                'a': {'type': 'noul', 'instructions': 'A question?'},
+            })
+        # Pin the cause: a reset would raise OSError, which was always caught.
+        assert isinstance(failure.value.__cause__, HTTPException)
+        # The request did reach the endpoint, so the report must say so.
+        assert backend.attempted is True
 
 
 def test_timeout_is_failure() -> None:

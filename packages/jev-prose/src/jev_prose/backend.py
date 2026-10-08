@@ -11,6 +11,7 @@ import tomllib
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from http.client import HTTPException
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -123,7 +124,7 @@ class Backend:
                         "it overrides the global Wrangler login. If absent, "
                         "verify that login with wrangler whoami.")
             raise DetectorError(f"Endpoint returned HTTP {exc.code}.{hint}") from exc
-        except (OSError, ValueError, urllib.error.URLError) as exc:
+        except (OSError, ValueError, urllib.error.URLError, HTTPException) as exc:
             if isinstance(exc, DetectorError):
                 raise
             raise DetectorError("Endpoint failed or returned invalid JSON.") from exc
