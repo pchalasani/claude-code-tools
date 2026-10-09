@@ -1,7 +1,6 @@
 # writing plugin
 
-Two skills for improving prose quality, both explicit-trigger only (they
-never fire on ordinary writing tasks):
+Three skills for improving prose quality:
 
 - **agent-style** — 21 literature-backed rules for FORMAL technical prose
   (papers, design docs, proposals, READMEs, commit messages). Based on
@@ -13,7 +12,13 @@ never fire on ordinary writing tasks):
   [avoid-ai-writing](https://github.com/conorbronsdon/avoid-ai-writing)
   (MIT) by Conor Bronsdon.
 
-The two lanes are complementary: agent-style is a clarity/composition
+- **jev-prose** — 118 narrow Jev checks with probabilities and actionable
+  feedback, plus a meaning-preserving loop of at most three revisions. Install
+  the CLI with `uv tool install ./packages/jev-prose` from this repository.
+  See [the CLI guide](../../packages/jev-prose/README.md) for authentication,
+  profiles, evaluation results, and global installation in either agent.
+
+The original two lanes are complementary: agent-style is a clarity/composition
 ruleset for formal prose; remove-ai-patterns de-AIs text of any voice.
 Pick one as the final gate on a given document; do not interleave them.
 
@@ -55,3 +60,10 @@ plugins/writing/scripts/update-upstream.sh
 and review the resulting diff before committing (fetched rule text is
 third-party input). Upstream licenses are included alongside the vendored
 files.
+
+## Jev feedback while writing
+
+Ask either agent: "Use jev-prose on each paragraph as you write, revising up to
+three times and preserving my meaning." The skill calls the separate CLI; it
+does not install an automatic hook. Jev requires a configured hosted account
+or compatible local endpoint. Failed checks are errors, never clean results.

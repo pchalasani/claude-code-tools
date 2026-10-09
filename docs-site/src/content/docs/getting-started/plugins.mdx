@@ -257,8 +257,8 @@ daemon.
 
 ## writing Plugin
 
-Two explicit-trigger skills for prose quality; neither fires on ordinary
-writing tasks — you invoke them by name for a dedicated editing pass.
+Three prose-quality skills, including Jev feedback during writing. The original
+two skills remain explicit-trigger only.
 Works in both Claude Code (`writing@cctools-plugins`) and Codex
 (`writing@cctools-codex-plugins`).
 
@@ -266,13 +266,15 @@ Works in both Claude Code (`writing@cctools-plugins`) and Codex
 |-------|--------------|
 | `/agent-style` | 21 literature-backed rules for formal technical prose (papers, design docs, READMEs) |
 | `/remove-ai-patterns` | Remove AI-writing patterns at any register, with voice profiles and a deterministic Node.js detector |
+| `/jev-prose` | Jev pattern checks and up to three guided revisions |
 
-Both skills vendor a pinned snapshot of their upstream source
+The original two skills vendor a pinned snapshot of their upstream source
 ([agent-style](https://github.com/yzhao062/agent-style), CC BY 4.0, and
 [avoid-ai-writing](https://github.com/conorbronsdon/avoid-ai-writing),
-MIT), so they work offline with no extra installs.
+MIT), so they work offline. Jev checks need the separate `jev-prose` CLI and
+a configured backend; see the detail page below.
 
 See the
 [Writing detail page](/claude-code-tools/plugins-detail/writing/)
-for installation in both agents, the two skills' lanes, the detector
+for installation in both agents, the skills' scope, the detector
 workflow, and how the vendored upstream snapshots are updated.
