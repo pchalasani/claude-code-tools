@@ -31,11 +31,17 @@ use `jev-prose` while writing each paragraph. The original `agent-style` and
 
 ## Installation
 
-The plugin is published in two marketplaces in the same repo: Claude
-Code reads `.claude-plugin/marketplace.json` (marketplace name
-`cctools-plugins`), Codex reads `.agents/plugins/marketplace.json`
-(marketplace name `cctools-codex-plugins`). Add the marketplace once,
-then install:
+One command installs the three skills into Claude Code, Codex, and most
+other agents (add `-g` for every project; `-s agent-style` for one skill):
+
+```bash
+npx skills add pchalasani/claude-code-tools -s agent-style -s remove-ai-patterns -s jev-prose
+```
+
+The plugin marketplaces remain available (Claude Code reads
+`.claude-plugin/marketplace.json`, marketplace `cctools-plugins`; Codex
+reads `.agents/plugins/marketplace.json`, marketplace
+`cctools-codex-plugins`):
 
 <Tabs>
 <TabItem label="Claude Code">

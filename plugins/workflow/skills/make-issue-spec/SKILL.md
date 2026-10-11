@@ -1,8 +1,9 @@
 ---
 name: make-issue-spec
-description: Create a markdown document that describes a specific task along with 
-concise implementation plan, at issues/YYYYMMDD-blah-blah.md, where YYYYMMDD is based 
-on today's date. 
+description: >-
+  Create a markdown document that describes a specific task along with concise
+  implementation plan, at issues/YYYYMMDD-blah-blah.md, where YYYYMMDD is
+  based on today's date.
 ---
 
 # make-issue-spec

@@ -1,0 +1,8 @@
+{
+  "name": "dynamic-workflow",
+  "version": "0.2.2",
+  "description": "Run durable JavaScript workflows with Codex callbacks",
+  "author": {
+    "name": "Prasad Chalasani"
+  }
+}

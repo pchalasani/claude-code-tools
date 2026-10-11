@@ -9,18 +9,22 @@ This plugin ships a single skill, `voxtype-install`. Ask your agent
 through `uv tool install voxtype` → `voxtype setup` → launch, including the
 macOS permission steps.
 
-## Installing this plugin
+## Getting the skill
 
-The quickest way is the voxtype CLI, which sets the skill up in **both**
-Claude Code and Codex (each has its own marketplace in this repo):
+One command, any agent (Claude Code, Codex, Cursor, Gemini CLI, …):
 
 ```bash
-voxtype skill
+npx skills add pchalasani/claude-code-tools -s voxtype-install
 ```
 
-Or add it manually per agent — note the marketplace name differs
-(Claude reads `.claude-plugin/marketplace.json`, Codex reads
-`.agents/plugins/marketplace.json`):
+That needs Node.js 22.20 or newer for `npx`, and installs just this skill
+(not the rest of the repo) into the current
+project; add `-g` to install it for every project. Then ask your agent:
+"install voxtype and set it up".
+
+The `voxtype skill` CLI command (once voxtype is installed) does the same
+for Claude Code and Codex via their plugin marketplaces; the marketplace
+route is still available as a fallback:
 
 ```bash
 # Claude Code
@@ -33,7 +37,3 @@ codex plugin marketplace add pchalasani/claude-code-tools
 codex plugin marketplace upgrade cctools-codex-plugins  # refresh if already added
 codex plugin add voxtype@cctools-codex-plugins
 ```
-
-If you already had the marketplace added before voxtype was published,
-the `update`/`upgrade` step is what refreshes the cached snapshot so the
-plugin shows up (`voxtype skill` does this automatically).

@@ -56,6 +56,13 @@ options; common ones:
 - `hotkey` — toggle chord, e.g. `"<ctrl>+;"` (run `voxtype hotkey` to
   record one).
 - `sounds` — set `false` to silence the start/stop chimes.
+- `overlay_opacity` — 0.1–1.0; lower it if the ghost indicator hides
+  text underneath it.
+- `double_tap_key` — a second toggle for the laptop keyboard: tap one
+  modifier twice (e.g. `"right_alt"`, the right Option key); the
+  `hotkey` chord keeps working too.
+- `keepalive_minutes` — on a memory-pressured Mac, keeps the speech
+  model from being swapped out while idle (try `5`); otherwise leave 0.
 - `wake_word` / `wake_word_aliases`, `submit_phrases`, `overlay`,
   `paste_hotkey`, `cancel_hotkey`, `copy_to_clipboard`, and more.
 

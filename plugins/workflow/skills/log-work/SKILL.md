@@ -1,12 +1,14 @@
 ---
 name: log-work
-description: Log the work segment that you did after the last work log until now in a 
-log file at WORKLOG/YYYYMMDD.md where YYYYMMDD is based on today's date. The intent of 
-this worklog is not to be exhaustive and super detailed. It is meant more as a very 
-concise description plus, importantly, REFERENCES to more detailed documents such as 
-code files or markdown documents, etc. This allows humans as well as AI agents to only 
-refer to these additional documents if they want details. This is the progressive 
-disclosure principle. 
+description: >-
+  Log the work segment that you did after the last work log until now in a log
+  file at WORKLOG/YYYYMMDD.md where YYYYMMDD is based on today's date. The
+  intent of this worklog is not to be exhaustive and super detailed. It is
+  meant more as a very concise description plus, importantly, REFERENCES to
+  more detailed documents such as code files or markdown documents, etc. This
+  allows humans as well as AI agents to only refer to these additional
+  documents if they want details. This is the progressive disclosure
+  principle.
 ---
 
 

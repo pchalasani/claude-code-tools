@@ -45,7 +45,9 @@ branches, and aggregation—while agents own reasoning and tool use.
 
 1. **Add this repository as a Codex marketplace**
 
-   Codex accepts GitHub [`owner/repo` marketplace sources][codex-marketplace]:
+   Codex accepts GitHub [`owner/repo` marketplace sources][codex-marketplace]
+   (use the plugin rather than `npx skills add`: the skill needs the
+   plugin's bundled workflow runner):
 
    ```bash
    codex plugin marketplace add pchalasani/claude-code-tools

@@ -21,7 +21,8 @@ import { Steps } from "@astrojs/starlight/components";
 ## Prerequisites
 
 - **Python 3.11+**
-- **Node.js 18+** (required for action menus)
+- **Node.js 18+** (required for action menus; 22.20+ to install skills
+  with `npx skills add`)
 
 ## Installation
 
@@ -71,16 +72,23 @@ import { Steps } from "@astrojs/starlight/components";
    rollover, etc.) still function normally.
    :::
 
-3. **Install the associated Claude Code plugins**
+3. **Install skills and plugins**
 
-   The tools above come with companion plugins that
-   add hooks, skills, agents, and slash commands to
-   Claude Code. These extend the CLI tools with
-   in-session capabilities like `>resume` triggers,
-   session search, safety guards, and more.
+   The skills in this repo install with one command
+   (`-s` picks one skill, `-g` installs for every
+   project; it needs Node.js 22.20 or newer, newer
+   than the Node 18 the tools above need). Most work in any agent; a few are
+   Claude Code and Codex only, as the
+   **[Plugins](./plugins/)** page notes:
 
-   See the **[Plugins](./plugins/)** page for
-   installation instructions.
+   ```bash
+   npx skills add pchalasani/claude-code-tools
+   ```
+
+   Plugins that also carry hooks or agents (`>resume`
+   triggers, safety guards, the session-searcher
+   agent, …) use the agent's plugin marketplace; see
+   the **[Plugins](./plugins/)** page.
 
 </Steps>
 

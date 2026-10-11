@@ -13,8 +13,63 @@ import { Steps, Badge } from "@astrojs/starlight/components";
   }
 `}</style>
 
-This repo provides plugins for Codex and for the
-[Claude Code marketplace](https://code.claude.com/docs/en/discover-plugins).
+This repo ships **skills** (instructions a coding agent follows) and
+**plugins** (skills bundled with hooks or agents). Most of what people want
+is a skill, and skills install with one command. Most work in Claude Code,
+Codex, Cursor, Gemini CLI, and some twenty other agents; a few are Claude
+Code and Codex only, as the table below notes.
+
+## Install a skill (any agent)
+
+The skills CLI runs through `npx`, so it needs Node.js 22.20 or newer.
+
+```bash
+npx skills add pchalasani/claude-code-tools -s voxtype-install   # one skill
+npx skills add pchalasani/claude-code-tools                      # choose from all
+```
+
+Add `-g` to install for every project instead of just the current one.
+The [skills CLI](https://skills.sh) puts the skill in `.agents/skills/`
+(read by Codex and most agents) and symlinks it into `.claude/skills/`
+for Claude Code; nothing else from this repo comes along. Then just ask
+your agent, e.g. "install voxtype and set it up".
+
+Skills available this way. Some drive a command-line tool that
+`npx skills add` does not install; the last column says what to install
+alongside the skill:
+
+| Skill | What it does | Also install |
+|-------|--------------|--------------|
+| `voxtype-install` | Install and configure voxtype voice dictation | nothing (it installs voxtype) |
+| `agent-style` | Formal prose rules ([writing][writing]) | nothing (optional: `uv tool install agent-style` for a deterministic audit) |
+| `remove-ai-patterns` | De-AI casual prose ([writing][writing]) | Node.js |
+| `jev-prose` | Jev prose checks ([writing][writing]) | `uv tool install ./packages/jev-prose` from a checkout of this repo |
+| `patterns`, `add-pattern` | Langroid design patterns ([langroid][langroid]) | nothing |
+| `log-work`, `make-issue-spec`, `socratic-quiz` | Workflow helpers ([workflow][workflow]) | nothing |
+| `code-walk-thru` | Walk through code in your editor ([workflow][workflow]) | your editor's CLI (`code`, `zed`, `nvim`, …) |
+| `tmux-cli` | Drive other CLI agents and scripts in tmux panes | `tmux`, `uv tool install claude-code-tools` |
+| `session-search` | Past-session search for agents without sub-agents (e.g. Codex) | `uv tool install claude-code-tools`, `cargo install aichat-search`, `jq` |
+| `msg` | Inter-agent messaging, Claude Code and Codex only (the plugin adds notification hooks) | `tmux`, `uv tool install claude-code-tools` |
+| `github-wake` | Wake a Claude Code or Codex session on a GitHub reply | `uv tool install claude-code-tools`, an authenticated `gh` |
+| `visual-brief` | Structured local HTML progress briefs, Claude Code and Codex only ([visual-brief][visual-brief]) | `uv tool install visual-brief` (plus `claude-code-tools` for Codex replies via `codex-dynamic`) |
+
+## Plugins with hooks or agents
+
+A few plugins also carry **hooks** (code that runs on tool calls or when a
+turn ends) or **agents**, which the skills CLI cannot install. Those use
+the agent's own plugin marketplace, below: `safety-hooks`, `agent-tunnel`,
+`msg`, `visual-brief`, `voice`, `workflow`, and `aichat`. Their skills
+still install with `npx skills add`; the marketplace adds the hook half.
+Two skills need their plugin outright because they run files bundled with
+it: `dynamic-workflow` (its workflow runner) and `voice-update` (its `say`
+script). A third, `recover-context`, needs the `aichat` plugin in Claude
+Code, where it calls that plugin's `session-searcher` agent; in Codex it
+falls back to the `session-search` skill.
+
+[writing]: /claude-code-tools/plugins-detail/writing/
+[langroid]: /claude-code-tools/plugins-detail/langroid/
+[workflow]: /claude-code-tools/plugins-detail/workflow/
+[dynamic-workflow]: /claude-code-tools/plugins-detail/dynamic-workflow/
 
 ## Plugin Overview
 
@@ -31,7 +86,7 @@ This repo provides plugins for Codex and for the
 | `dynamic-workflow` | Durable JavaScript orchestration for headless Codex agents |
 | `writing` | Prose-quality skills: agent-style rules and remove-ai-patterns de-AI-ing |
 
-## Codex Plugin Installation
+## Codex plugin marketplace
 
 This repo also hosts a Codex marketplace (`cctools-codex-plugins`, read
 from `.agents/plugins/marketplace.json`), currently offering the
@@ -72,7 +127,7 @@ See the
 for its JavaScript API, state model, and safety boundaries.
 
 [codex-dynamic]: /claude-code-tools/tools/codex-dynamic/
-## Claude Code Plugin Installation
+## Claude Code plugin marketplace
 
 <Steps>
 
