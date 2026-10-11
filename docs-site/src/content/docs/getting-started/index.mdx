@@ -21,7 +21,8 @@ import { Steps } from "@astrojs/starlight/components";
 ## Prerequisites
 
 - **Python 3.11+**
-- **Node.js 18+** (required for action menus)
+- **Node.js 18+** (required for action menus; 22.20+ to install skills
+  with `npx skills add`)
 
 ## Installation
 
@@ -75,7 +76,8 @@ import { Steps } from "@astrojs/starlight/components";
 
    The skills in this repo install with one command
    (`-s` picks one skill, `-g` installs for every
-   project). Most work in any agent; a few are
+   project; it needs Node.js 22.20 or newer, newer
+   than the Node 18 the tools above need). Most work in any agent; a few are
    Claude Code and Codex only, as the
    **[Plugins](./plugins/)** page notes:
 
