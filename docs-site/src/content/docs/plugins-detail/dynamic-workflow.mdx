@@ -34,8 +34,9 @@ codex plugin add dynamic-workflow@cctools-codex-plugins
 Those two commands are the complete plugin installation. Use the plugin,
 not `npx skills add`: the skill runs the plugin's bundled `bin/workflow.mjs`
 runner, which the skills CLI does not copy. (The companion `github-wake`
-skill has no such dependency and installs anywhere with
-`npx skills add pchalasani/claude-code-tools -s github-wake`.)
+skill installs on its own with
+`npx skills add pchalasani/claude-code-tools -s github-wake`; it needs the
+`claude-code-tools` Python package and works in Claude Code and Codex.)
 
 Restart Codex, then invoke `$dynamic-workflow` or ask for a durable multi-agent
 workflow.
