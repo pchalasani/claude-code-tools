@@ -13,10 +13,11 @@ import { Steps, Badge } from "@astrojs/starlight/components";
   }
 `}</style>
 
-This repo ships **skills** (instructions any coding agent can follow) and
+This repo ships **skills** (instructions a coding agent follows) and
 **plugins** (skills bundled with hooks or agents). Most of what people want
-is a skill, and skills install with one command into Claude Code, Codex,
-Cursor, Gemini CLI, and some twenty other agents.
+is a skill, and skills install with one command. Most work in Claude Code,
+Codex, Cursor, Gemini CLI, and some twenty other agents; a few are Claude
+Code and Codex only, as the table below notes.
 
 ## Install a skill (any agent)
 
@@ -60,8 +61,8 @@ still install with `npx skills add`; the marketplace adds the hook half.
 Two skills need their plugin outright because they run files bundled with
 it: `dynamic-workflow` (its workflow runner) and `voice-update` (its `say`
 script). A third, `recover-context`, needs the `aichat` plugin in Claude
-Code, where it calls that plugin's `session-searcher` agent; in agents
-without sub-agents (e.g. Codex) it falls back to the `session-search` skill.
+Code, where it calls that plugin's `session-searcher` agent; in Codex it
+falls back to the `session-search` skill.
 
 [writing]: /claude-code-tools/plugins-detail/writing/
 [langroid]: /claude-code-tools/plugins-detail/langroid/

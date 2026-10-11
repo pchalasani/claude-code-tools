@@ -21,8 +21,9 @@ Everything — installation, every tool, plugins, and guides — lives in the
 docs. Click a card below to jump to a feature, or
 **[read the full docs](https://pchalasani.github.io/claude-code-tools/)**.
 
-Skills install into Claude Code, Codex, Cursor, and most other agents with
-one command (`-s` picks one skill, `-g` installs for every project):
+Skills install with one command (`-s` picks one skill, `-g` installs for
+every project). Most work in any agent; a few are Claude Code and Codex
+only (see the [Plugins page](https://pchalasani.github.io/claude-code-tools/getting-started/plugins/)):
 
 ```bash
 npx skills add pchalasani/claude-code-tools -s voxtype-install
