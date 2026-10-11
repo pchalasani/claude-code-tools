@@ -31,19 +31,24 @@ The [skills CLI](https://skills.sh) puts the skill in `.agents/skills/`
 for Claude Code; nothing else from this repo comes along. Then just ask
 your agent, e.g. "install voxtype and set it up".
 
-Skills available this way:
+Skills available this way. Some drive a command-line tool that
+`npx skills add` does not install; the last column says what to install
+alongside the skill:
 
-| Skill | What it does |
-|-------|--------------|
-| `voxtype-install` | Install and configure voxtype voice dictation |
-| `agent-style`, `remove-ai-patterns`, `jev-prose` | Prose quality ([writing][writing]) |
-| `patterns`, `add-pattern` | Langroid design patterns ([langroid][langroid]) |
-| `tmux-cli` | Drive other CLI agents and scripts in tmux panes |
-| `code-walk-thru`, `log-work`, `make-issue-spec`, `socratic-quiz` | Workflow helpers ([workflow][workflow]) |
-| `github-wake` | Wake a Claude Code or Codex session on a GitHub reply (needs `uv tool install claude-code-tools`) |
-| `visual-brief` | Structured local HTML progress briefs ([visual-brief][visual-brief]) |
-| `session-search` | Past-session search for agents without sub-agents (e.g. Codex) |
-| `msg` | Inter-agent messaging (the plugin adds notification hooks) |
+| Skill | What it does | Also install |
+|-------|--------------|--------------|
+| `voxtype-install` | Install and configure voxtype voice dictation | nothing (it installs voxtype) |
+| `agent-style` | Formal prose rules ([writing][writing]) | nothing (optional: `uv tool install agent-style` for a deterministic audit) |
+| `remove-ai-patterns` | De-AI casual prose ([writing][writing]) | Node.js |
+| `jev-prose` | Jev prose checks ([writing][writing]) | `uv tool install ./packages/jev-prose` from a checkout of this repo |
+| `patterns`, `add-pattern` | Langroid design patterns ([langroid][langroid]) | nothing |
+| `log-work`, `make-issue-spec`, `socratic-quiz` | Workflow helpers ([workflow][workflow]) | nothing |
+| `code-walk-thru` | Walk through code in your editor ([workflow][workflow]) | your editor's CLI (`code`, `zed`, `nvim`, …) |
+| `tmux-cli` | Drive other CLI agents and scripts in tmux panes | `tmux`, `uv tool install claude-code-tools` |
+| `session-search` | Past-session search for agents without sub-agents (e.g. Codex) | `uv tool install claude-code-tools`, `cargo install aichat-search`, `jq` |
+| `msg` | Inter-agent messaging (the plugin adds notification hooks) | `tmux`, `uv tool install claude-code-tools` |
+| `github-wake` | Wake a Claude Code or Codex session on a GitHub reply | `uv tool install claude-code-tools` |
+| `visual-brief` | Structured local HTML progress briefs ([visual-brief][visual-brief]) | `uv tool install visual-brief` (plus `claude-code-tools` for Codex replies via `codex-dynamic`) |
 
 ## Plugins with hooks or agents
 
