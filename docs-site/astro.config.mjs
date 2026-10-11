@@ -175,6 +175,10 @@ export default defineConfig({
           label: "Integrations",
           items: [
             {
+              label: "Parallel Search MCP",
+              slug: "integrations/parallel-search",
+            },
+            {
               label: "Alt LLM Providers",
               slug: "integrations/alt-llm-providers",
             },
