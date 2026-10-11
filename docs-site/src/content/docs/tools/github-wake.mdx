@@ -16,7 +16,8 @@ reply. The command verifies the issue, records a durable watch, and starts one
 shared per-user watcher daemon.
 
 The `github-wake` command comes from the Python package
-(`uv tool install claude-code-tools`). The skill that tells the agent how to
+(`uv tool install claude-code-tools`) and talks to GitHub through an
+installed, authenticated GitHub CLI (`gh auth login`). The skill that tells the agent how to
 use it works in Claude Code and Codex only (those are the two delivery
 paths) and installs with
 `npx skills add pchalasani/claude-code-tools -s github-wake` (it is also part

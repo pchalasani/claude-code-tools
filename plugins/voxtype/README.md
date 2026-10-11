@@ -26,8 +26,13 @@ for Claude Code and Codex via their plugin marketplaces; the marketplace
 route is still available as a fallback:
 
 ```bash
-claude plugin marketplace add pchalasani/claude-code-tools && \
-  claude plugin install voxtype@cctools-plugins          # Claude Code
-codex plugin marketplace add pchalasani/claude-code-tools && \
-  codex plugin add voxtype@cctools-codex-plugins          # Codex
+# Claude Code
+claude plugin marketplace add pchalasani/claude-code-tools
+claude plugin marketplace update cctools-plugins   # refresh if already added
+claude plugin install voxtype@cctools-plugins
+
+# Codex
+codex plugin marketplace add pchalasani/claude-code-tools
+codex plugin marketplace upgrade cctools-codex-plugins  # refresh if already added
+codex plugin add voxtype@cctools-codex-plugins
 ```
