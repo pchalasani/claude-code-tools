@@ -25,6 +25,10 @@ Workers run through `codex exec --json`; MCP and the OpenAI API are not required
 
 Node.js 20 or newer and an authenticated Codex CLI are required.
 
+Install via the Codex plugin marketplace (not `npx skills add`: the skill
+runs this plugin's bundled `bin/workflow.mjs`, which the skills CLI does
+not copy):
+
 ```bash
 codex plugin marketplace add pchalasani/claude-code-tools
 codex plugin add dynamic-workflow@cctools-codex-plugins

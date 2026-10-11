@@ -29,6 +29,10 @@ Works in both Claude Code and Codex; note the marketplace name differs
 `.agents/plugins/marketplace.json`):
 
 ```bash
+# Any agent (Claude Code, Codex, Cursor, …): one command
+npx skills add pchalasani/claude-code-tools -s agent-style -s remove-ai-patterns -s jev-prose
+
+# Or via the plugin marketplaces:
 # Claude Code
 claude plugin marketplace add pchalasani/claude-code-tools
 claude plugin marketplace update cctools-plugins   # refresh if already added

@@ -9,31 +9,25 @@ This plugin ships a single skill, `voxtype-install`. Ask your agent
 through `uv tool install voxtype` → `voxtype setup` → launch, including the
 macOS permission steps.
 
-## Installing this plugin
+## Getting the skill
 
-The quickest way is the voxtype CLI, which sets the skill up in **both**
-Claude Code and Codex (each has its own marketplace in this repo):
-
-```bash
-voxtype skill
-```
-
-Or add it manually per agent — note the marketplace name differs
-(Claude reads `.claude-plugin/marketplace.json`, Codex reads
-`.agents/plugins/marketplace.json`):
+One command, any agent (Claude Code, Codex, Cursor, Gemini CLI, …):
 
 ```bash
-# Claude Code
-claude plugin marketplace add pchalasani/claude-code-tools
-claude plugin marketplace update cctools-plugins   # refresh if already added
-claude plugin install voxtype@cctools-plugins
-
-# Codex
-codex plugin marketplace add pchalasani/claude-code-tools
-codex plugin marketplace upgrade cctools-codex-plugins  # refresh if already added
-codex plugin add voxtype@cctools-codex-plugins
+npx skills add pchalasani/claude-code-tools -s voxtype-install
 ```
 
-If you already had the marketplace added before voxtype was published,
-the `update`/`upgrade` step is what refreshes the cached snapshot so the
-plugin shows up (`voxtype skill` does this automatically).
+That installs just this skill (not the rest of the repo) into the current
+project; add `-g` to install it for every project. Then ask your agent:
+"install voxtype and set it up".
+
+The `voxtype skill` CLI command (once voxtype is installed) does the same
+for Claude Code and Codex via their plugin marketplaces; the marketplace
+route is still available as a fallback:
+
+```bash
+claude plugin marketplace add pchalasani/claude-code-tools && \
+  claude plugin install voxtype@cctools-plugins          # Claude Code
+codex plugin marketplace add pchalasani/claude-code-tools && \
+  codex plugin add voxtype@cctools-codex-plugins          # Codex
+```

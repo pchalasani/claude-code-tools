@@ -30,6 +30,22 @@ the `parakeet` CPU engine (`moonshine` ships no
 Intel-macOS build).
 :::
 
+## Let your agent set it up
+
+Install the `voxtype-install` skill into your coding agent, then ask it
+to do the rest:
+
+```bash
+npx skills add pchalasani/claude-code-tools -s voxtype-install
+```
+
+That one command installs only this skill (not the rest of this repo)
+into Claude Code, Codex, Cursor, Gemini CLI, and most other agents, for
+the current project; add `-g` for every project. Then say "install
+voxtype and set it up" — the agent installs the CLI, explains the config
+options, and walks you through the macOS permission prompts. Prefer to do
+it by hand? Read on.
+
 ## Quick start
 
 <Steps>

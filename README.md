@@ -21,6 +21,13 @@ Everything — installation, every tool, plugins, and guides — lives in the
 docs. Click a card below to jump to a feature, or
 **[read the full docs](https://pchalasani.github.io/claude-code-tools/)**.
 
+Skills install into Claude Code, Codex, Cursor, and most other agents with
+one command (`-s` picks one skill, `-g` installs for every project):
+
+```bash
+npx skills add pchalasani/claude-code-tools -s voxtype-install
+```
+
 <div align="center">
 
 <table>

@@ -15,6 +15,10 @@ Run `github-wake` only when the current session is genuinely waiting for a
 reply. The command verifies the issue, records a durable watch, and starts one
 shared per-user watcher daemon.
 
+Install the skill into any agent with
+`npx skills add pchalasani/claude-code-tools -s github-wake` (it is also part
+of the `dynamic-workflow` plugin).
+
 Codex delivery requires a session launched through `codex-dynamic`. In Claude
 Code 2.1.98 or later, ask Claude to watch the issue with `github-wake`; the
 installed skill runs the following command through Claude's `Monitor` tool:

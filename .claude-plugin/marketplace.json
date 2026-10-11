@@ -59,6 +59,11 @@
       "name": "writing",
       "source": "./plugins/writing",
       "description": "Prose-quality skills: agent-style (21 literature-backed rules for formal technical prose) and remove-ai-patterns (de-AI text using the avoid-ai-writing catalog plus a deterministic detector)"
+    },
+    {
+      "name": "dynamic-workflow",
+      "source": "./plugins/dynamic-workflow",
+      "description": "Durable JavaScript orchestration for headless Codex agents, plus the github-wake skill"
     }
   ]
 }

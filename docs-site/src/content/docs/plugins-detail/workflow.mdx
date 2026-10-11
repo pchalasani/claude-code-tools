@@ -19,7 +19,14 @@ Part of the `claude-code-tools` package.
 See [Quick Start](../../getting-started/) for installation.
 :::
 
-Install the plugin via the Claude Code marketplace:
+The skills install into any agent with the skills CLI:
+
+```bash
+npx skills add pchalasani/claude-code-tools -s code-walk-thru -s log-work -s make-issue-spec -s socratic-quiz
+```
+
+The plugin's hook (the Codex review-loop nudge) and the `ui-tester` agent
+need the Claude Code marketplace:
 
 ```bash
 claude plugin install workflow@cctools-plugins
