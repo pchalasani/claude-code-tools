@@ -17,7 +17,8 @@ One command, any agent (Claude Code, Codex, Cursor, Gemini CLI, …):
 npx skills add pchalasani/claude-code-tools -s voxtype-install
 ```
 
-That installs just this skill (not the rest of the repo) into the current
+That needs Node.js 22.20 or newer for `npx`, and installs just this skill
+(not the rest of the repo) into the current
 project; add `-g` to install it for every project. Then ask your agent:
 "install voxtype and set it up".
 

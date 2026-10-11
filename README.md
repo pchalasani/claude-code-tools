@@ -23,7 +23,8 @@ docs. Click a card below to jump to a feature, or
 
 Skills install with one command (`-s` picks one skill, `-g` installs for
 every project). Most work in any agent; a few are Claude Code and Codex
-only (see the [Plugins page](https://pchalasani.github.io/claude-code-tools/getting-started/plugins/)):
+only (see the [Plugins page](https://pchalasani.github.io/claude-code-tools/getting-started/plugins/)).
+Needs Node.js 22.20 or newer for `npx`:
 
 ```bash
 npx skills add pchalasani/claude-code-tools -s voxtype-install
