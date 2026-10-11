@@ -42,7 +42,7 @@ Skills available this way:
 | `code-walk-thru`, `log-work`, `make-issue-spec`, `socratic-quiz` | Workflow helpers ([workflow][workflow]) |
 | `github-wake` | Wake a Claude Code or Codex session on a GitHub reply (needs `uv tool install claude-code-tools`) |
 | `visual-brief` | Structured local HTML progress briefs ([visual-brief][visual-brief]) |
-| `session-search`, `recover-context` | Past-session search for agents without sub-agents |
+| `session-search` | Past-session search for agents without sub-agents (e.g. Codex) |
 | `msg` | Inter-agent messaging (the plugin adds notification hooks) |
 
 ## Plugins with hooks or agents
@@ -54,7 +54,9 @@ the agent's own plugin marketplace, below: `safety-hooks`, `agent-tunnel`,
 still install with `npx skills add`; the marketplace adds the hook half.
 Two skills need their plugin outright because they run files bundled with
 it: `dynamic-workflow` (its workflow runner) and `voice-update` (its `say`
-script).
+script). A third, `recover-context`, needs the `aichat` plugin in Claude
+Code, where it calls that plugin's `session-searcher` agent; in agents
+without sub-agents (e.g. Codex) it falls back to the `session-search` skill.
 
 [writing]: /claude-code-tools/plugins-detail/writing/
 [langroid]: /claude-code-tools/plugins-detail/langroid/
