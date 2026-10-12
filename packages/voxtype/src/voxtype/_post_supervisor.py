@@ -19,28 +19,37 @@ import sys
 import threading
 import time
 
+# Set while the supervisor kills its own group: the SIGTERM it sends
+# itself must not end it before the SIGKILL escalation.
+_dying = threading.Event()
 
-def _kill_group() -> None:
-    """SIGTERM this process group, then SIGKILL it (ends this process)."""
+
+def _kill_group(server: subprocess.Popen[bytes]) -> None:
+    """SIGTERM the group, then SIGKILL it if the server lingers.
+
+    The final SIGKILL also ends this process.
+    """
+    _dying.set()
     group = os.getpgid(0)
     try:
         os.killpg(group, signal.SIGTERM)
     except OSError:
         return
-    time.sleep(3)
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and server.poll() is None:
+        time.sleep(0.05)
     try:
         os.killpg(group, signal.SIGKILL)
     except OSError:
         pass
 
 
-def _watch_parent() -> None:
-    """Block until voxtype's end of the pipe closes, then kill the group."""
-    try:
-        sys.stdin.buffer.read()
-    except OSError:
-        pass
-    _kill_group()
+def _on_sigterm(_sig: int, _frame: object) -> None:
+    if _dying.is_set():
+        return  # our own group kill: stay alive to escalate
+    # A normal stop from voxtype (it signals the whole group and
+    # escalates itself).
+    raise SystemExit(128 + signal.SIGTERM)
 
 
 def main() -> int:
@@ -48,12 +57,21 @@ def main() -> int:
     if len(sys.argv) < 2:
         print("usage: python -m voxtype._post_supervisor CMD...", file=sys.stderr)
         return 2
-    # Terminal signals belong to voxtype, which stops us deliberately;
-    # SIGTERM (from the group kill) ends us by default.
+    # Terminal signals belong to voxtype, which stops us deliberately.
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, _on_sigterm)
     server = subprocess.Popen(sys.argv[1:], stdin=subprocess.DEVNULL)
-    threading.Thread(target=_watch_parent, daemon=True).start()
+
+    def watch_parent() -> None:
+        # Blocks until voxtype's end of the pipe closes.
+        try:
+            sys.stdin.buffer.read()
+        except OSError:
+            pass
+        _kill_group(server)
+
+    threading.Thread(target=watch_parent, daemon=True).start()
     return server.wait()
 
 

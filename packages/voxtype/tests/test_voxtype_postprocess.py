@@ -335,6 +335,9 @@ port = int(args[args.index("--port") + 1])
 mode = open(args[args.index("-m") + 1]).read().strip()
 if mode == "slow":
     time.sleep(60)
+if mode == "stubborn":
+    import signal
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -401,12 +404,14 @@ def test_stop_kills_a_wrapped_server_child(tmp_path) -> None:
     assert not ps._pid_alive(child), "server child outlived its wrapper"
 
 
-def test_server_dies_when_voxtype_dies(tmp_path) -> None:
+@pytest.mark.parametrize("mode", ["badwarm", "stubborn"])
+def test_server_dies_when_voxtype_dies(tmp_path, mode: str) -> None:
     """voxtype killed outright (no cleanup runs): its end of the
-    supervisor pipe closes, and the server goes with it."""
+    supervisor pipe closes, and the server goes with it — escalating to
+    SIGKILL for a server that ignores SIGTERM ("stubborn")."""
     import sys
 
-    fake, model = _fake_server(tmp_path, "badwarm")  # healthy server
+    fake, model = _fake_server(tmp_path, mode)  # both serve /health
     script = tmp_path / "victim.py"
     script.write_text(
         "import os, sys, time\n"
