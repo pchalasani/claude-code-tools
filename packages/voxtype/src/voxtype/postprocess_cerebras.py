@@ -182,17 +182,18 @@ class CerebrasProcessor:
 
     def _prewarm(self) -> None:
         # Connect + TLS handshake now, so the first take doesn't pay it.
-        if not self._lock.acquire(timeout=5):
-            return
+        # Never under _lock: a stalled network must not hold up takes
+        # or stop().
+        conn = self._new_conn(5.0)
         try:
-            if self._conn is None:
-                conn = self._new_conn(5.0)
-                conn.connect()
-                self._conn = conn
-        except OSError:
-            self._drop_conn()
-        finally:
-            self._lock.release()
+            _connect_within(conn, 5.0)
+        except (OSError, http.client.HTTPException):
+            return
+        with self._lock:
+            if self._conn is None and self._ready:
+                self._conn, conn = conn, None
+        if conn is not None:
+            conn.close()
 
     def stop(self) -> None:
         """Close the connection; safe to call more than once."""
@@ -335,34 +336,6 @@ class CerebrasProcessor:
                     return 0, b'{"code": "network error"}'
         return 0, b'{"code": "network error"}'
 
-    def _resolve(self, timeout: float) -> tuple[str, int]:
-        """Resolve the API host within ``timeout``.
-
-        Raises:
-            TimeoutError: The lookup did not finish in time (it carries
-                on in a daemon thread, harmlessly).
-            OSError: The lookup failed.
-        """
-        result: dict[str, object] = {}
-
-        def lookup() -> None:
-            try:
-                info = socket.getaddrinfo(
-                    self._host, self._port, type=socket.SOCK_STREAM
-                )
-                result["addr"] = info[0][4][:2]
-            except OSError as e:
-                result["err"] = e
-
-        thread = threading.Thread(target=lookup, daemon=True)
-        thread.start()
-        thread.join(timeout)
-        if "addr" in result:
-            return result["addr"]  # type: ignore[return-value]
-        if "err" in result:
-            raise result["err"]  # type: ignore[misc]
-        raise TimeoutError("timed out")
-
     def _send(
         self, body: bytes, headers: dict[str, str], deadline: float
     ) -> tuple[int, bytes]:
@@ -378,17 +351,7 @@ class CerebrasProcessor:
             self._conn = self._new_conn(left())
         conn = self._conn
         if conn.sock is None:
-            # DNS is not bounded by socket timeouts: resolve within the
-            # deadline first, then connect to that address (TLS still
-            # verifies the real host name).
-            addr = self._resolve(left())
-            conn._create_connection = (  # noqa: SLF001
-                lambda _address, timeout=None, source_address=None: (
-                    socket.create_connection(addr, timeout, source_address)
-                )
-            )
-            conn.timeout = left()
-            conn.connect()
+            _connect_within(conn, left())
         sock = conn.sock
         expired = threading.Event()
 
@@ -422,6 +385,43 @@ class CerebrasProcessor:
             raise
         finally:
             timer.cancel()
+
+
+def _connect_within(conn: http.client.HTTPConnection, timeout: float) -> None:
+    """Connect (DNS + TCP + TLS) within ONE total ``timeout``.
+
+    DNS isn't bounded by socket timeouts, and TCP and TLS would each get
+    the full timeout, so the connect runs in a helper thread that is
+    abandoned (closing its socket once it finishes) if it overruns.
+
+    Raises:
+        TimeoutError: Not connected in time.
+        OSError: The connection failed.
+    """
+    result: dict[str, BaseException | bool] = {}
+
+    def run() -> None:
+        try:
+            conn.timeout = timeout
+            conn.connect()
+            result["ok"] = True
+        except BaseException as e:  # noqa: BLE001 - re-raised below
+            result["err"] = e
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(timeout)
+    if result.get("ok"):
+        return
+    if "err" in result:
+        raise result["err"]  # type: ignore[misc]
+
+    def close_when_done() -> None:
+        thread.join()
+        conn.close()
+
+    threading.Thread(target=close_when_done, daemon=True).start()
+    raise TimeoutError("timed out")
 
 
 def _error_code(payload: bytes) -> str:

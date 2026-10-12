@@ -419,6 +419,24 @@ def test_slow_dns_is_bounded_by_the_deadline(api, monkeypatch) -> None:
     assert "timed out" in proc.last_outcome[1]
 
 
+def test_stalled_prewarm_never_blocks_takes_or_stop(api, monkeypatch) -> None:
+    import socket
+
+    real = socket.getaddrinfo
+
+    def slow_getaddrinfo(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        time.sleep(3.0)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", slow_getaddrinfo)
+    proc = _proc(api, [], timeout=0.5)  # start() launches the prewarm
+    time.sleep(0.1)
+    t0 = time.monotonic()
+    assert proc.clean("hello there friend") == "hello there friend"
+    proc.stop()
+    assert time.monotonic() - t0 < 1.0
+
+
 class _Typist:
     def __init__(self) -> None:
         self.typed: list[str] = []

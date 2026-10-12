@@ -79,8 +79,8 @@ options; common ones:
   It needs `CEREBRAS_API_KEY` exported in their shell profile, never in
   the config file. Line breaks are typed as Shift+Enter; for dictating
   into a plain shell, set `post_process_newlines = "flatten"`.
-  `post_process_log_text = false` keeps transcript text out of the
-  logs.
+  `post_process_log_text = false` drops the full before/after text
+  from the logs (voxtype's short `typed: "…"` previews remain).
 - `wake_word` / `wake_word_aliases`, `submit_phrases`, `overlay`,
   `paste_hotkey`, `cancel_hotkey`, `copy_to_clipboard`, and more.
 
