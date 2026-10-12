@@ -580,10 +580,10 @@ class VoiceTypeApp:
             # wake phrases were already matched on the raw text.
             text = self._post.clean(text, since=arrived)
             # Only "\n" may survive as a control character: a lone "\r"
-            # would be typed as Enter and a tab as the Tab key (moving
-            # focus), so normalize them before typing.
+            # would be typed as Enter, a tab as the Tab key (moving
+            # focus), and other controls (Esc, backspace, ...) as keys.
             text = text.replace("\r\n", "\n").replace("\r", "\n")
-            text = re.sub(r"[\t\v\f]+", " ", text)
+            text = re.sub(r"[\x00-\x09\x0b-\x1f\x7f]+", " ", text).strip()
             if "\n" in text and effective_newlines(
                 self.cfg.post_process_newlines,
                 self.cfg.post_process_provider,
