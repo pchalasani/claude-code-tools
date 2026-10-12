@@ -24,6 +24,7 @@ from .logic import (
     strip_fillers,
     text_after_wake_word,
 )
+from .postprocess import flatten_lines
 
 
 class State(Enum):
@@ -82,6 +83,9 @@ class VoiceTypeApp:
         # both instead of silently dropping the second.
         self._expect_hold = 0
         self._last_toggle = 0.0
+        # When the last hold take stopped (toggle-off): its speech end,
+        # for the post-processing latency line (hold segmentation only).
+        self._last_hold_stop = 0.0
         self._engine = None
         # Optional LLM cleanup (post_process); created in run(). Tests
         # may set it directly — anything with a clean(str) -> str.
@@ -224,6 +228,7 @@ class VoiceTypeApp:
             with self._lock:
                 if hold:
                     self._expect_hold += 1
+                    self._last_hold_stop = now
                 else:
                     self._grace_until = now + self.TOGGLE_GRACE
         else:
@@ -324,6 +329,13 @@ class VoiceTypeApp:
             # (a take still in cleanup when the next session starts must
             # not land in that session's buffer).
             origin_buf = self._session_texts
+            # Speech end of a hold take = its toggle-off; with VAD the
+            # engine logs decode time itself, so it is left unknown.
+            speech_end = (
+                self._last_hold_stop
+                if self.cfg.segmentation == "hold" and self._last_hold_stop
+                else None
+            )
         if state in (State.PAUSED, State.PASSIVE):
             if self._consume_handoff():
                 # In-flight speech from just before a toggle-off:
@@ -346,7 +358,7 @@ class VoiceTypeApp:
                     self._deliver(
                         None,
                         lambda v, at, t=text, b=self._session_texts: (
-                            self._type(t, v, at, b)
+                            self._type(t, v, at, b, speech_end)
                         ),
                     )
                 return
@@ -369,7 +381,7 @@ class VoiceTypeApp:
                 self._deliver(
                     version,
                     lambda v, at, t=remainder, b=self._session_texts: (
-                        self._type(t, v, at, b)
+                        self._type(t, v, at, b, speech_end)
                     ),
                 )
             return
@@ -387,7 +399,9 @@ class VoiceTypeApp:
         self._status(f'typed: "{_preview(text)}"')
         self._deliver(
             version,
-            lambda v, at, t=text, b=origin_buf: self._type(t, v, at, b),
+            lambda v, at, t=text, b=origin_buf: (
+                self._type(t, v, at, b, speech_end)
+            ),
         )
 
     def _submit(self, version: int | None, at: float) -> None:
@@ -547,6 +561,7 @@ class VoiceTypeApp:
         version: int | None,
         arrived: float | None = None,
         session: list[str] | None = None,
+        speech_end: float | None = None,
     ) -> None:
         """Type ``text``; ``version=None`` skips the staleness check
         (used for grace-window commits, which by definition arrive
@@ -563,6 +578,8 @@ class VoiceTypeApp:
             # hold up capture, hotkeys, or the overlay. The submit/stop/
             # wake phrases were already matched on the raw text.
             text = self._post.clean(text, since=arrived)
+            if "\n" in text and self.cfg.post_process_newlines == "flatten":
+                text = flatten_lines(text)
         # Record for the paste-again hotkey / clipboard BEFORE typing:
         # even text that lands in the wrong window (or is skipped as
         # stale) stays rescuable.
@@ -593,6 +610,40 @@ class VoiceTypeApp:
             # later speech. Consume the handoff and type.
             with self._lock:
                 self.typist.type_text(text)
+        if self._post is not None:
+            self._log_latency(arrived, speech_end)
+
+    def _log_latency(
+        self, arrived: float | None, speech_end: float | None
+    ) -> None:
+        """One timing line per post-processed take — no transcript text.
+
+        Transcription (hold: toggle-off to transcript), post-processing
+        (including network for cerebras) and total time to insertion.
+        """
+        try:
+            now = time.monotonic()
+            pp_ms, problem = self._post.last_outcome
+            parts = []
+            if speech_end and arrived and arrived >= speech_end:
+                parts.append(
+                    f"transcribe {1000 * (arrived - speech_end):.0f} ms"
+                )
+            outcome = f"fallback: {problem}" if problem else "ok"
+            parts.append(
+                f"post-process {pp_ms:.0f} ms "
+                f"({self._post.name}, {outcome})"
+            )
+            start = speech_end if speech_end else arrived
+            if start:
+                origin = "speech end" if speech_end else "transcript"
+                parts.append(
+                    f"total {1000 * (now - start):.0f} ms "
+                    f"({origin} to inserted)"
+                )
+            self._status("latency: " + ", ".join(parts))
+        except Exception:
+            pass  # instrumentation must never affect delivery
 
     def paste_last(self) -> None:
         """Paste-hotkey handler: type the last session's transcript.
@@ -651,20 +702,12 @@ class VoiceTypeApp:
             if self.cfg.overlay and not use_overlay:
                 self._status("overlay unavailable; running without it")
             if self.cfg.post_process:
-                from .postprocess_server import PostProcessor
+                from .post_providers import create_post_processor
 
-                self._post = PostProcessor(
-                    style=self.cfg.post_process_style,
-                    structure=self.cfg.post_process_structure,
-                    context=self.cfg.post_process_context,
-                    timeout=self.cfg.post_process_timeout,
-                    model=self.cfg.post_process_model,
-                    server=self.cfg.post_process_server,
-                    keepalive_minutes=self.cfg.keepalive_minutes,
-                    status=self._status,
-                )
-                # Boots in the background (download, launch, warmup);
-                # takes before it is ready are typed raw.
+                self._post = create_post_processor(self.cfg, self._status)
+                # Starts in the background (S1-mini: download, launch,
+                # warmup; cerebras: TLS warmup); takes before it is
+                # ready are typed raw.
                 self._post.start()
             engine = create_engine(self.cfg, self._status)
             self._engine = engine

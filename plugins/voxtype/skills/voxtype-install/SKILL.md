@@ -71,6 +71,16 @@ options; common ones:
   `casual`, `semi-casual`, `semi-formal` (default) or `formal`.
   `post_process_timeout` (default 4 s) caps the delay. On any failure
   the raw transcript is typed. English only.
+- `post_process_provider = "cerebras"` — instead of the local model,
+  uses gpt-oss-120b on Cerebras's API, which also splits long
+  dictations into paragraphs and lists (`post_process_format` is
+  `auto`, `paragraphs` or `minimal`). This sends every transcript to an
+  external service, so mention that to the user before suggesting it.
+  It needs `CEREBRAS_API_KEY` exported in their shell profile, never in
+  the config file. Line breaks are typed as Shift+Enter; for dictating
+  into a plain shell, set `post_process_newlines = "flatten"`.
+  `post_process_log_text = false` keeps transcript text out of the
+  logs.
 - `wake_word` / `wake_word_aliases`, `submit_phrases`, `overlay`,
   `paste_hotkey`, `cancel_hotkey`, `copy_to_clipboard`, and more.
 

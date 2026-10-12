@@ -686,12 +686,13 @@ def test_clean_falls_back_on_bad_output(stub_post, reply, finish) -> None:
     assert any("fell back to raw" in m for m in messages)
 
 
-def test_multiline_output_is_typed_on_one_line(stub_post) -> None:
-    """A typed newline is the Enter key: it must never reach the typist."""
+def test_multiline_output_keeps_line_breaks(stub_post) -> None:
+    """The processor keeps line breaks; the app decides how to type them
+    (post_process_newlines) — see the app tests below."""
     post, stub, _ = stub_post
-    stub.reply = "1. Install voxtype.\n2. Run setup.\r\n\n3. Start talking."
+    stub.reply = "1. Install voxtype.\n2. Run setup.\n3. Start talking."
     out = post.clean("first install voxtype second run setup third start talking")
-    assert out == "1. Install voxtype. 2. Run setup. 3. Start talking."
+    assert out == "1. Install voxtype.\n2. Run setup.\n3. Start talking."
 
 
 def test_clean_falls_back_on_malformed_response(stub_post) -> None:

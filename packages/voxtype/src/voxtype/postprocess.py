@@ -24,6 +24,16 @@ VALID_STYLES = ("casual", "semi-casual", "semi-formal", "formal")
 VALID_STRUCTURES = ("prose", "lists")
 VALID_CONTEXTS = ("general", "email")
 
+# Provider-independent settings (see config.Config).
+VALID_PROVIDERS = ("s1-mini", "cerebras")
+# Cerebras formatting modes, conveyed through its prompt.
+VALID_FORMATS = ("auto", "paragraphs", "minimal")
+# How line breaks in cleaned text are typed: Shift+Enter, or flattened
+# to spaces (one line). A bare Enter is never typed mid-take.
+VALID_NEWLINES = ("shift_enter", "flatten")
+# Per-provider default timeouts (post_process_timeout = 0 means these).
+DEFAULT_TIMEOUTS = {"s1-mini": 4.0, "cerebras": 2.0}
+
 # Chunk size in words. The card recommends <= ~1,000 input tokens; 250
 # words (~330 tokens) leaves room for the output in a 2048-token
 # context and keeps each request well under a second.

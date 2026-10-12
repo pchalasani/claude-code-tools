@@ -24,8 +24,27 @@ class Typist:
         self._keyboard = Controller()
 
     def type_text(self, text: str) -> None:
-        """Type ``text`` at the current cursor position."""
-        self._keyboard.type(text)
+        """Type ``text`` at the current cursor position.
+
+        A line break is typed as Shift+Enter, never a bare Enter: Enter
+        would send a chat prompt or run a shell command partway through
+        the text, while Shift+Enter inserts a new line in chat inputs
+        and most editors. (Raw transcripts never contain line breaks;
+        only structured LLM cleanup output does.)
+        """
+        lines = text.replace("\r\n", "\n").split("\n")
+        for i, line in enumerate(lines):
+            if i:
+                self.press_shift_enter()
+            if line:
+                self._keyboard.type(line)
+
+    def press_shift_enter(self) -> None:
+        """Insert a line break without submitting (Shift+Enter)."""
+        from pynput.keyboard import Key
+
+        with self._keyboard.pressed(Key.shift):
+            self._keyboard.tap(Key.enter)
 
     def press_enter(self) -> None:
         """Press Enter in the focused application."""

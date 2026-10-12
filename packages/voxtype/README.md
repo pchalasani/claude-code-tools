@@ -42,7 +42,9 @@ voxtype` works too.)
   3+ word stutters collapse ("I I I think" becomes "I think") with
   on-device regex. Optionally (`post_process = true`), a small local LLM,
   "S1-mini" by "Superwhisper" run by llama.cpp, also adds punctuation and
-  drops self-corrections.
+  drops self-corrections. Or use the opt-in Cerebras provider
+  (gpt-oss-120b over its API; transcripts leave your Mac), which also
+  splits long dictations into paragraphs and lists.
 - **Visible when it matters.** A floating waveform pill appears ONLY while
   recording — red waves as you speak. Pill on screen = mic live; no pill =
   not listening.

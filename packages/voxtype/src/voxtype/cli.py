@@ -23,7 +23,7 @@ from .config import (
     load_config,
     write_sample_config,
 )
-from .postprocess import VALID_STYLES
+from .postprocess import VALID_FORMATS, VALID_PROVIDERS, VALID_STYLES
 
 _INSTALL_HINT = (
     "voxtype needs its dependencies. Install with:\n"
@@ -203,13 +203,15 @@ def _cmd_post_process(args: argparse.Namespace) -> int:
     """
     import time
 
-    from .postprocess_server import PostProcessor
+    from .post_providers import create_post_processor
 
+    overrides = {
+        "post_process_style": args.style,
+        "post_process_provider": args.provider,
+        "post_process_format": args.format,
+    }
     try:
-        cfg = load_config(
-            args.config,
-            {"post_process_style": args.style} if args.style else None,
-        )
+        cfg = load_config(args.config, overrides)
     except (OSError, ValueError) as e:
         print(f"voxtype: {e}", file=sys.stderr)
         return 1
@@ -217,16 +219,7 @@ def _cmd_post_process(args: argparse.Namespace) -> int:
     def status(msg: str) -> None:
         print(f"[voxtype] {msg}", file=sys.stderr, flush=True)
 
-    post = PostProcessor(
-        style=cfg.post_process_style,
-        structure=cfg.post_process_structure,
-        context=cfg.post_process_context,
-        timeout=cfg.post_process_timeout,
-        model=cfg.post_process_model,
-        server=cfg.post_process_server,
-        keepalive_minutes=0.0,
-        status=status,
-    )
+    post = create_post_processor(cfg, status, keepalive_minutes=0.0)
     try:
         post.start()
         # Generous: the first run may download the model.
@@ -332,8 +325,8 @@ Accessibility (to type), Input Monitoring (global hotkeys).
 
     p_post = sub.add_parser(
         "post-process",
-        help="clean one transcript with the local LLM (S1-mini) and "
-        "print it; downloads the model on first use",
+        help="clean one transcript with the configured post-processor "
+        "(S1-mini downloads its model on first use) and print it",
     )
     p_post.add_argument(
         "text", nargs="*", help="transcript (default: read stdin)"
@@ -341,7 +334,17 @@ Accessibility (to type), Input Monitoring (global hotkeys).
     p_post.add_argument(
         "--style",
         choices=VALID_STYLES,
-        help="override post_process_style for this run",
+        help="override post_process_style for this run (s1-mini)",
+    )
+    p_post.add_argument(
+        "--provider",
+        choices=VALID_PROVIDERS,
+        help="override post_process_provider for this run",
+    )
+    p_post.add_argument(
+        "--format",
+        choices=VALID_FORMATS,
+        help="override post_process_format for this run (cerebras)",
     )
 
     args = parser.parse_args()
