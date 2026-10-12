@@ -91,11 +91,14 @@ class VoiceTypeApp:
         # progress). See _deliver.
         self._cleaning = 0
         self._delivery_q: queue.Queue | None = None
-        # Bumped by cancel(): queued deliveries from an earlier epoch are
-        # discarded, so Esc also drops text still waiting for cleanup.
-        self._cancel_epoch = 0
-        # Epoch of the delivery the worker is running now (None inline).
-        self._active_epoch: int | None = None
+        # Recording-session ids: bumped on every activation. cancel()
+        # marks the CURRENT session cancelled, so Esc also drops that
+        # session's text still waiting for cleanup — but never a take
+        # from an earlier session that is still being cleaned.
+        self._session_seq = 0
+        self._cancelled_seqs: set[int] = set()
+        # Session id of the delivery the worker is running (None inline).
+        self._active_seq: int | None = None
         # Set once _start_hotkey_listener runs — in run() (no overlay) or
         # from inside the overlay loop (see _start_hotkeys_from_loop); the
         # finally block stops it. May be None if no valid hotkeys.
@@ -146,6 +149,7 @@ class VoiceTypeApp:
                 # be appended first and then erased by a later effect
                 # (which would break clipboard/paste-last recovery).
                 self._session_texts = []
+                self._session_seq += 1
         self._emit_transition_effects(version, old, new)
         return version
 
@@ -286,7 +290,7 @@ class VoiceTypeApp:
                 return
             self._grace_until = 0.0
             self._expect_hold = 0
-            self._cancel_epoch += 1
+            self._cancelled_seqs.add(self._session_seq)
         self._set_state(self._off_state)
         with self._lock:
             self._grace_until = 0.0  # _set_state must not resurrect it
@@ -465,8 +469,8 @@ class VoiceTypeApp:
                     daemon=True,
                 ).start()
             q = self._delivery_q
-            epoch = self._cancel_epoch
-        q.put((action, version, arrived, epoch))
+            seq = self._session_seq
+        q.put((action, version, arrived, seq))
 
     def _delivery_loop(self, q: queue.Queue) -> None:
         while True:
@@ -474,21 +478,21 @@ class VoiceTypeApp:
             try:
                 if item is None:
                     return
-                action, version, arrived, epoch = item
+                action, version, arrived, seq = item
                 with self._lock:
-                    cancelled = epoch != self._cancel_epoch
+                    cancelled = seq in self._cancelled_seqs
                 try:
                     if cancelled:
                         # Esc landed while this waited for cleanup: it
                         # is discarded like the rest of the recording.
                         self._status("cancelled before typing (discarded)")
                     else:
-                        self._active_epoch = epoch
+                        self._active_seq = seq
                         action(version, arrived)
                 except Exception as e:
                     self._status(f"error delivering text: {e}")
                 finally:
-                    self._active_epoch = None
+                    self._active_seq = None
                     with self._lock:
                         self._cleaning -= 1
                         # Idle time counts from when the text lands.
@@ -571,10 +575,7 @@ class VoiceTypeApp:
             # wake phrases were already matched on the raw text.
             text = self._post.clean(text, since=arrived)
             with self._lock:
-                cancelled = (
-                    self._active_epoch is not None
-                    and self._active_epoch != self._cancel_epoch
-                )
+                cancelled = self._active_seq in self._cancelled_seqs
             if cancelled:
                 # Esc landed during cleanup: discard, like the rest of
                 # the cancelled recording.

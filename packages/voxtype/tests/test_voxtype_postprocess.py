@@ -805,6 +805,27 @@ def test_cancel_discards_text_waiting_for_cleanup() -> None:
     assert app.typist.typed == []
 
 
+def test_cancel_spares_earlier_session_still_in_cleanup() -> None:
+    app = _vad_app()
+
+    class _Engine:
+        def request_flush(self) -> None:
+            pass
+
+        def request_reset(self) -> None:
+            pass
+
+    app._engine = _Engine()
+    app._post = _Slow(0.4)
+    app.handle_utterance("keep me")  # session 1, in cleanup
+    app.toggle()  # stop session 1
+    app._last_toggle = 0.0  # (bypass the toggle debounce)
+    app.toggle()  # start session 2
+    app.cancel()  # Esc cancels session 2 only
+    app.flush_deliveries()
+    assert app.typist.typed == ["KEEP ME "]
+
+
 def test_queue_wait_counts_against_timeout(stub_post) -> None:
     post, stub, messages = stub_post
     # Arrived 2 s ago with a 1 s budget: no request at all, raw at once.
