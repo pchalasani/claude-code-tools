@@ -122,14 +122,21 @@ def completion_budget(text: str) -> int:
     return 2 * approx_tokens + 512
 
 
-def clean_output(text: str) -> str:
-    """Strip debris; normalize line breaks without losing structure."""
+def clean_output(text: str, raw: str = "") -> str:
+    """Strip debris; normalize line breaks without losing structure.
+
+    Outer quotes are removed only as a response wrapper: when ``raw``
+    (the dictated transcript) was not itself quoted that way.
+    """
     text = sanitize_output(text)
+    raw = raw.strip()
     # Outer quotes and an outer <transcript> wrapper, in either order.
     for _ in range(2):
         if _WRAP_OPEN_RE.match(text) and _WRAP_CLOSE_RE.search(text):
             text = _WRAP_CLOSE_RE.sub("", _WRAP_OPEN_RE.sub("", text))
-        if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        quoted = len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'"
+        raw_quoted = len(raw) >= 2 and raw[0] == raw[-1] == text[:1]
+        if quoted and not raw_quoted:
             text = text[1:-1].strip()
     lines = [line.rstrip() for line in text.replace("\r\n", "\n").split("\n")]
     return _BLANK_RUN_RE.sub("\n\n", "\n".join(lines)).strip()
@@ -284,7 +291,7 @@ class CerebrasProcessor:
             return text, "malformed response"
         if finish == "length":
             return text, "output truncated"
-        cleaned = clean_output(content)
+        cleaned = clean_output(content, text)
         reason = rejection_reason(text, cleaned)
         if reason:
             return text, reason

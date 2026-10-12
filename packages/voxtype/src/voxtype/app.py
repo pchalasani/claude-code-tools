@@ -605,12 +605,15 @@ class VoiceTypeApp:
             copy_to_clipboard(joined)
         if self.cfg.trailing_space:
             text += " "
+        inserted = True
         if version is None:
             with self._lock:
                 self.typist.type_text(text)
-        elif not self._inject(
-            version, lambda: self.typist.type_text(text)
-        ) and version != _REJECTED and self._consume_handoff(at=arrived):
+        elif self._inject(version, lambda: self.typist.type_text(text)):
+            pass
+        elif version == _REJECTED or not self._consume_handoff(at=arrived):
+            inserted = False  # stale: kept for rescue only, never typed
+        else:
             # The utterance snapshotted ACTIVE but lost the injection
             # race to a toggle-off that armed the grace/hold handoff.
             # It IS the one in-flight delivery that handoff authorizes
@@ -619,7 +622,7 @@ class VoiceTypeApp:
             # later speech. Consume the handoff and type.
             with self._lock:
                 self.typist.type_text(text)
-        if self._post is not None:
+        if self._post is not None and inserted:
             self._log_latency(arrived, speech_end)
 
     def _log_latency(

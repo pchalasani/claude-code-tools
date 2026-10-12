@@ -82,6 +82,25 @@ def test_auto_newlines_per_provider(provider, newlines, typed) -> None:
     assert app.typist.typed == [typed]
 
 
+def test_quotes_kept_when_dictated() -> None:
+    assert clean_output('"hello there"', raw='"hello there"') == (
+        '"hello there"'
+    )
+    assert clean_output('"Hello there."', raw="hello there") == "Hello there."
+
+
+def test_stale_take_logs_no_insertion_latency() -> None:
+    from voxtype.app import _REJECTED
+
+    app = _app("shift_enter")
+    lines: list[str] = []
+    app._status = lines.append
+    app._post = _Structured("Hello there.")
+    app._type("hello there", _REJECTED, time.monotonic())
+    assert app.typist.typed == []
+    assert not any(m.startswith("latency:") for m in lines)
+
+
 def test_clean_output_keeps_structure() -> None:
     raw = '"<transcript>\nFirst para.\n\n\n\n- one  \n- two\n</transcript>"'
     assert clean_output(raw) == "First para.\n\n- one\n- two"
