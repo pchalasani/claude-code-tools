@@ -62,8 +62,8 @@ English only).
    - Ollama is excluded by policy.
 
    The user installs the binary with `brew install llama.cpp`, and the model
-   downloads on first use. This replaces the "optional extra" idea: the base
-   install stays exactly as light as it is now, and neither the binary nor the
+   downloads on first use. This replaces the "optional extra" idea, a choice the user
+   approved on 2026-10-12: the base install stays exactly as light as it is now, and neither the binary nor the
    model is fetched unless `post_process = true`.
 
 2. **Where it runs in the pipeline.** Cleanup runs in `VoiceTypeApp._type`,
