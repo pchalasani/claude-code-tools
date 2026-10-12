@@ -92,6 +92,7 @@ def test_sanitize_output_strips_template_debris() -> None:
         ("please schedule the meeting for tomorrow", "OK.", "lost most"),
         ("Tuesday no sorry Wednesday", "Wednesday.", None),
         ("one hundred twenty three", "123.", None),
+        ("one hundred and twenty three kilograms", "123 kg", None),
         (
             "let's meet on Tuesday no wait Wednesday at three",
             "Let's meet on Wednesday at 3.",

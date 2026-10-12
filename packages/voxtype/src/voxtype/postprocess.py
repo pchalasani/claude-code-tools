@@ -130,7 +130,7 @@ def rejection_reason(raw: str, cleaned: str) -> str | None:
     # Short takes too: a reply like "OK." must not replace a dictated
     # sentence. A much shorter output is only accepted if it keeps some
     # of the dictated words ("Tuesday no sorry Wednesday" -> "Wednesday.")
-    # or is purely numeric ("one hundred twenty three" -> "123.").
+    # or formats a number ("one hundred twenty three kilograms" -> "123 kg").
     raw_words = {w.casefold() for w in re.findall(r"[^\W\d_]+", raw)}
     out_words = {w.casefold() for w in re.findall(r"[^\W\d_]+", cleaned)}
     if (
@@ -138,6 +138,7 @@ def rejection_reason(raw: str, cleaned: str) -> str | None:
         and len(cleaned.split()) < 0.35 * len(raw.split())
         and out_words
         and not out_words & raw_words
+        and not re.search(r"\d", cleaned)
     ):
         return "output lost most of the input"
     return None
