@@ -375,9 +375,12 @@ Measured on an M1 Max with real Parakeet takes:
   0.6 s. A take longer than 250 words is split at sentence boundaries,
   and each piece is cleaned in turn.
 - **Memory.** The server's resident size is about 830 MB, but only
-  about 320 MB of that is its own memory. The rest is the model file
-  mapped from disk, which macOS can drop and reload when memory is
-  tight. If memory pressure makes the first take after a pause slow,
+  about 300 MB of that is its own (dirty) memory. The other ~470 MB is
+  the model file mapped from disk with no dirty pages: under memory
+  pressure macOS simply drops those pages and rereads them later,
+  without writing anything to swap. voxtype never locks the model into
+  RAM (`--mlock`) and keeps the context small (2048 tokens, one
+  request at a time). If memory pressure makes the first take after a pause slow,
   `keepalive_minutes` keeps this model warm too.
 - **Startup.** voxtype starts the server in the background at launch,
   which takes about 5–15 seconds. Takes that arrive before it is ready

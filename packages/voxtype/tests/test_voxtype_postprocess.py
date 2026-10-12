@@ -235,6 +235,17 @@ def test_dead_partials_reaped_when_model_cached(tmp_path, monkeypatch) -> None:
     assert not dead.exists()
 
 
+def test_server_launch_is_memory_pressure_friendly() -> None:
+    """Weights stay memory-mapped (clean, file-backed pages macOS can drop
+    and re-read instead of swapping), never wired with --mlock, and the
+    context/slot sizing keeps the dirty KV cache small."""
+    cmd = LlamaServer("llama-server", Path("m.gguf")).command()
+    assert "--mlock" not in cmd
+    assert "--no-mmap" not in cmd
+    assert cmd[cmd.index("-c") + 1] == "2048"
+    assert cmd[cmd.index("-np") + 1] == "1"
+
+
 def test_find_server_binary(tmp_path: Path) -> None:
     assert find_server_binary("definitely-not-a-binary-xyz") is None
     assert find_server_binary("sh") == shutil.which("sh")
