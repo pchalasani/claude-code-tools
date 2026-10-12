@@ -322,7 +322,7 @@ class VoiceTypeApp:
                     is_exact_phrase(text, p)
                     for p in self.cfg.submit_phrases
                 ):
-                    self._deliver(lambda _at: self._enter_in_flight())
+                    self._deliver(None, lambda v, at: self._enter_in_flight())
                 elif self.cfg.stop_phrase and is_exact_phrase(
                     text, self.cfg.stop_phrase
                 ):
@@ -333,7 +333,9 @@ class VoiceTypeApp:
                     self._status("stop phrase in flight (dropped)")
                 else:
                     self._status(f'typed in-flight: "{_preview(text)}"')
-                    self._deliver(lambda at, t=text: self._type(t, None, at))
+                    self._deliver(
+                        None, lambda v, at, t=text: self._type(t, v, at)
+                    )
                 return
         if state == State.PAUSED:
             self._status(f'heard while paused (dropped): "{_preview(text)}"')
@@ -352,14 +354,14 @@ class VoiceTypeApp:
             version = self._set_state(State.ACTIVE)
             if remainder:
                 self._deliver(
-                    lambda at, t=remainder, v=version: self._type(t, v, at)
+                    version, lambda v, at, t=remainder: self._type(t, v, at)
                 )
             return
         # ACTIVE
         if any(
             is_exact_phrase(text, p) for p in self.cfg.submit_phrases
         ):
-            self._deliver(lambda at, v=version: self._submit(v, at))
+            self._deliver(version, self._submit)
             return
         if self.cfg.stop_phrase and contains_phrase(
             text, self.cfg.stop_phrase
@@ -367,11 +369,20 @@ class VoiceTypeApp:
             self._set_state(self._off_state)
             return
         self._status(f'typed: "{_preview(text)}"')
-        self._deliver(lambda at, t=text, v=version: self._type(t, v, at))
+        self._deliver(
+            version, lambda v, at, t=text: self._type(t, v, at)
+        )
 
-    def _submit(self, version: int, at: float) -> None:
-        """Press Enter for a submit phrase that arrived at ``at``."""
-        if self._inject(version, self.typist.press_enter):
+    def _submit(self, version: int | None, at: float) -> None:
+        """Press Enter for a submit phrase that arrived at ``at``.
+
+        ``version=None``: already authorized (see ``_deliver``).
+        """
+        if version is None:
+            with self._lock:
+                self.typist.press_enter()
+            self._status("submitted (Enter)")
+        elif self._inject(version, self.typist.press_enter):
             self._status("submitted (Enter)")
         elif self._consume_handoff(at=at):
             # Snapshot said ACTIVE but a toggle-off landed before
@@ -384,8 +395,12 @@ class VoiceTypeApp:
             self.typist.press_enter()
         self._status("submitted (Enter, in-flight)")
 
-    def _deliver(self, action: Callable[[float], None]) -> None:
-        """Run a typing/Enter ``action(arrived)`` in utterance order.
+    def _deliver(
+        self,
+        version: int | None,
+        action: Callable[[int | None, float], None],
+    ) -> None:
+        """Run a typing/Enter ``action(version, arrived)`` in order.
 
         Without LLM cleanup it runs inline, exactly as before. With it,
         actions go through ONE FIFO worker thread: cleanup can take up
@@ -394,12 +409,25 @@ class VoiceTypeApp:
         would stall microphone reads. A single queue keeps every action
         in order — a spoken "go" can never press Enter before the text
         dictated just before it is typed. ``arrived`` is when the
-        utterance arrived, for the toggle-off handoff check.
+        utterance arrived; cleanup's deadline counts from then, so time
+        spent queued is part of post_process_timeout.
+
+        A queued action is AUTHORIZED NOW, as inline delivery would be:
+        if the state is still ``version`` (or the toggle-off handoff
+        covers it) it is passed ``version=None`` and is typed even if
+        dictation stops while it waits — exactly what inline typing
+        would have done at this moment. Otherwise it keeps ``version``
+        and its staleness check fails later, as it would have now.
         """
         arrived = time.monotonic()
         if self._post is None:
-            action(arrived)
+            action(version, arrived)
             return
+        if version is not None:
+            with self._lock:
+                current = version == self._state_version
+            if current or self._consume_handoff(at=arrived):
+                version = None
         with self._lock:
             self._cleaning += 1
             if self._delivery_q is None:
@@ -411,7 +439,7 @@ class VoiceTypeApp:
                     daemon=True,
                 ).start()
             q = self._delivery_q
-        q.put((action, arrived))
+        q.put((action, version, arrived))
 
     def _delivery_loop(self, q: queue.Queue) -> None:
         while True:
@@ -419,9 +447,9 @@ class VoiceTypeApp:
             try:
                 if item is None:
                     return
-                action, arrived = item
+                action, version, arrived = item
                 try:
-                    action(arrived)
+                    action(version, arrived)
                 except Exception as e:
                     self._status(f"error delivering text: {e}")
                 finally:
@@ -501,7 +529,7 @@ class VoiceTypeApp:
             # cleanup takes up to post_process_timeout and must never
             # hold up capture, hotkeys, or the overlay. The submit/stop/
             # wake phrases were already matched on the raw text.
-            text = self._post.clean(text)
+            text = self._post.clean(text, since=arrived)
         # Record for the paste-again hotkey / clipboard BEFORE typing:
         # even text that lands in the wrong window (or is skipped as
         # stale) stays rescuable.

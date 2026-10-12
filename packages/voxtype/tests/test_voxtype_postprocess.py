@@ -640,7 +640,7 @@ class _Upper:
     def __init__(self) -> None:
         self.seen: list[str] = []
 
-    def clean(self, text: str) -> str:
+    def clean(self, text: str, since: float | None = None) -> str:
         self.seen.append(text)
         return text.upper()
 
@@ -680,7 +680,7 @@ def test_toggle_off_during_cleanup_still_types(monkeypatch) -> None:
     monkeypatch.setattr(app, "TOGGLE_GRACE", 0.2)
 
     class _SlowToggle:
-        def clean(self, text: str) -> str:
+        def clean(self, text: str, since: float | None = None) -> str:
             app.toggle()  # user toggles off mid-cleanup
             time.sleep(0.4)  # cleanup outlasts the grace window
             return text.upper()
@@ -695,7 +695,7 @@ class _Slow:
     def __init__(self, secs: float) -> None:
         self.secs = secs
 
-    def clean(self, text: str) -> str:
+    def clean(self, text: str, since: float | None = None) -> str:
         time.sleep(self.secs)
         return text.upper()
 
@@ -724,6 +724,28 @@ def test_spoken_submit_waits_for_text_being_cleaned() -> None:
     ]
 
 
+def test_queued_text_survives_stop_phrase() -> None:
+    """Text already dictated is typed even if "stop listening" follows
+    while it is still in cleanup — as inline typing would have."""
+    app = _vad_app()
+    app._post = _Slow(0.3)
+    app.handle_utterance("first sentence")
+    app.handle_utterance("second sentence")
+    app.handle_utterance("stop listening")
+    app.flush_deliveries()
+    assert app.typist.typed == ["FIRST SENTENCE ", "SECOND SENTENCE "]
+
+
+def test_queue_wait_counts_against_timeout(stub_post) -> None:
+    post, stub, messages = stub_post
+    # Arrived 2 s ago with a 1 s budget: no request at all, raw at once.
+    t0 = time.monotonic()
+    assert post.clean("hello there", since=t0 - 2.0) == "hello there"
+    assert time.monotonic() - t0 < 0.1
+    assert stub.requests == []
+    assert any("waited too long" in m for m in messages)
+
+
 def test_without_cleanup_delivery_stays_inline() -> None:
     app = _vad_app()
     app._post = None
@@ -740,7 +762,7 @@ def test_wake_idle_expiry_waits_for_cleanup() -> None:
     app.typist = _Typist()
 
     class _SlowIdle:
-        def clean(self, text: str) -> str:
+        def clean(self, text: str, since: float | None = None) -> str:
             time.sleep(0.3)  # longer than idle_timeout
             app._check_idle_timeout()  # the idle watcher fires meanwhile
             return text.upper()

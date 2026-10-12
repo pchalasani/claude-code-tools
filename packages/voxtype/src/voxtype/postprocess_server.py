@@ -582,19 +582,25 @@ class PostProcessor:
 
     # -- cleanup ----------------------------------------------------------
 
-    def clean(self, text: str) -> str:
+    def clean(self, text: str, since: float | None = None) -> str:
         """Return ``text`` cleaned, or unchanged on any problem.
+
+        Args:
+            text: The transcript.
+            since: ``time.monotonic()`` when the take arrived; the
+                timeout counts from then (default: now), so time spent
+                queued behind earlier takes is part of the budget.
 
         Never raises: a transcript must reach the typist whatever goes
         wrong here.
         """
         try:
-            return self._clean(text)
+            return self._clean(text, since)
         except Exception as e:
             self.status(f"post-process error ({e}); typing raw")
             return text
 
-    def _clean(self, text: str) -> str:
+    def _clean(self, text: str, since: float | None) -> str:
         if not text.strip():
             return text
         if not self._ready.is_set():
@@ -607,10 +613,13 @@ class PostProcessor:
             self.status("post-process skipped (non-English); typing raw")
             return text
         t0 = time.monotonic()
-        deadline = t0 + self.timeout
+        deadline = (t0 if since is None else min(since, t0)) + self.timeout
+        if deadline <= t0:
+            self.status("post-process skipped (take waited too long); typing raw")
+            return text
         out: list[str] = []
         problems: list[str] = []
-        if not self._req_lock.acquire(timeout=self.timeout):
+        if not self._req_lock.acquire(timeout=deadline - t0):
             self.status("post-process busy; typing raw")
             return text
         try:
