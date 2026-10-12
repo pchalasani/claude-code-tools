@@ -106,6 +106,9 @@ class VoiceTypeApp:
         # Text of the current/most recent dictation session, for the
         # clipboard option and the paste-again hotkey.
         self._session_texts: list[str] = []
+        # The previous session's buffer: a hold take that finishes
+        # decoding after the next session began belongs there.
+        self._prev_session_texts: list[str] = []
         self._stop = threading.Event()
         # Cleared while the engine loads (run() clears then sets it),
         # so the toggle hotkey is a no-op — with feedback — until audio
@@ -148,6 +151,7 @@ class VoiceTypeApp:
                 # transcript delivered right after activation can never
                 # be appended first and then erased by a later effect
                 # (which would break clipboard/paste-last recovery).
+                self._prev_session_texts = self._session_texts
                 self._session_texts = []
                 self._session_seq += 1
         self._emit_transition_effects(version, old, new)
@@ -330,6 +334,17 @@ class VoiceTypeApp:
             state = self._state
             version = self._state_version
             self._last_activity = time.monotonic()
+            # In hold mode the CURRENT session's take is only delivered
+            # after its toggle-off, so a take arriving while ACTIVE is
+            # a late decode from the previous session: bind it there
+            # (rescue buffer, and immunity to this session's Esc).
+            late_hold = (
+                self.cfg.segmentation == "hold" and state == State.ACTIVE
+            )
+            origin_seq = self._session_seq - 1 if late_hold else None
+            origin_buf = (
+                self._prev_session_texts if late_hold else self._session_texts
+            )
         if state in (State.PAUSED, State.PASSIVE):
             if self._consume_handoff():
                 # In-flight speech from just before a toggle-off:
@@ -383,7 +398,7 @@ class VoiceTypeApp:
         if any(
             is_exact_phrase(text, p) for p in self.cfg.submit_phrases
         ):
-            self._deliver(version, self._submit)
+            self._deliver(version, self._submit, origin_seq)
             return
         if self.cfg.stop_phrase and contains_phrase(
             text, self.cfg.stop_phrase
@@ -393,9 +408,8 @@ class VoiceTypeApp:
         self._status(f'typed: "{_preview(text)}"')
         self._deliver(
             version,
-            lambda v, at, t=text, b=self._session_texts: (
-                self._type(t, v, at, b)
-            ),
+            lambda v, at, t=text, b=origin_buf: self._type(t, v, at, b),
+            origin_seq,
         )
 
     def _submit(self, version: int | None, at: float) -> None:
@@ -405,6 +419,8 @@ class VoiceTypeApp:
         """
         if version is None:
             with self._lock:
+                if self._cancelled_locked():
+                    return
                 self.typist.press_enter()
             self._status("submitted (Enter)")
         elif self._inject(version, self.typist.press_enter):
@@ -415,8 +431,18 @@ class VoiceTypeApp:
             # toggle's grace/hold handoff authorizes.
             self._enter_in_flight()
 
+    def _cancelled_locked(self) -> bool:
+        """True if the running delivery's session was cancelled.
+
+        Call with ``_lock`` held, in the same critical section as the
+        keystrokes, so an Esc can never slip in between check and type.
+        """
+        return self._active_seq in self._cancelled_seqs
+
     def _enter_in_flight(self) -> None:
         with self._lock:
+            if self._cancelled_locked():
+                return
             self.typist.press_enter()
         self._status("submitted (Enter, in-flight)")
 
@@ -424,6 +450,7 @@ class VoiceTypeApp:
         self,
         version: int | None,
         action: Callable[[int | None, float], None],
+        seq: int | None = None,
     ) -> None:
         """Run a typing/Enter ``action(version, arrived)`` in order.
 
@@ -469,7 +496,8 @@ class VoiceTypeApp:
                     daemon=True,
                 ).start()
             q = self._delivery_q
-            seq = self._session_seq
+            if seq is None:
+                seq = self._session_seq
         q.put((action, version, arrived, seq))
 
     def _delivery_loop(self, q: queue.Queue) -> None:
@@ -599,7 +627,8 @@ class VoiceTypeApp:
             text += " "
         if version is None:
             with self._lock:
-                self.typist.type_text(text)
+                if not self._cancelled_locked():
+                    self.typist.type_text(text)
         elif not self._inject(
             version, lambda: self.typist.type_text(text)
         ) and version != _REJECTED and self._consume_handoff(at=arrived):
@@ -610,7 +639,8 @@ class VoiceTypeApp:
             # commit while leaving the grace window armed for stray
             # later speech. Consume the handoff and type.
             with self._lock:
-                self.typist.type_text(text)
+                if not self._cancelled_locked():
+                    self.typist.type_text(text)
 
     def paste_last(self) -> None:
         """Paste-hotkey handler: type the last session's transcript.

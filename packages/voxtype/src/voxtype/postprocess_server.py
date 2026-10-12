@@ -308,8 +308,11 @@ def kill_stale_servers(run_dir: Path | None = None) -> int:
             continue
         if owner == os.getpid() or _pid_alive(owner):
             continue
+        # Identify our server by its unique --alias, not the binary's
+        # name: post_process_server may name a wrapper or a renamed
+        # build.
         command = _command_of(pid)
-        if "llama-server" in command and SERVER_ALIAS in command:
+        if f"--alias {SERVER_ALIAS}" in command:
             try:
                 os.kill(pid, signal.SIGTERM)
                 killed += 1
