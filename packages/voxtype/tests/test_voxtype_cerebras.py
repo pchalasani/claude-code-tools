@@ -82,6 +82,16 @@ def test_auto_newlines_per_provider(provider, newlines, typed) -> None:
     assert app.typist.typed == [typed]
 
 
+def test_markdown_markup_is_unwrapped() -> None:
+    out = clean_output(
+        "Use the `create_post_processor` function and **never** guess.",
+        raw="use the create post processor function and never guess",
+    )
+    assert out == "Use the create_post_processor function and never guess."
+    kept = clean_output("Run `ls`.", raw="run `ls`")
+    assert kept == "Run `ls`."  # the speaker's own backticks stay
+
+
 def test_quotes_kept_when_dictated() -> None:
     assert clean_output('"hello there"', raw='"hello there"') == (
         '"hello there"'
@@ -639,6 +649,8 @@ def test_live_cleanup_and_structure(live) -> None:
     assert "pytest -x" in out
     assert "https://example.com/docs/setup" in out
     assert "oauth" in low and "csv" in low
+    assert "`" not in out and "**" not in out  # plain text, no Markdown
+    assert "nobody reads it" in low  # asides kept, not condensed away
 
 
 def test_live_short_utterance_stays_short(live) -> None:

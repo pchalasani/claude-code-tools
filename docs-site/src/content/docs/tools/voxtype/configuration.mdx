@@ -538,30 +538,70 @@ full text; set `post_process_log_text = false` to turn them off.
 voxtype's usual one-line previews (`typed: "…"`) still show the start of
 each take, as they always have.
 
-### Measured so far
+### Measured results
 
-On an M1 Max, using `say`-synthesized takes of 64–76 seconds (138–238
+On an M1 Max, using `say`-synthesized takes of 64–76 seconds (182–238
 words: several requirements, a correction, a topic change, file names,
-commands and URLs) through Parakeet and voxtype's real delivery path:
+commands and URLs) through Parakeet, voxtype's real delivery path and
+the live Cerebras API, with gpt-oss-120b in `auto` format:
 
-- Transcription took 1.2–1.5 s at the median and about 1.7 s at the
-  95th percentile, across two runs of six takes each.
-- The Cerebras account used for testing had no paid quota, so every
-  request returned `HTTP 402 payment_required`. Those takes fell back to
-  the raw transcript within 70–90 ms, and nothing was lost.
+| Stage | Median | 95th percentile |
+|---|---|---|
+| Transcription (Parakeet) | 1.0 s | 1.2 s |
+| Cerebras cleanup, including network | 0.39 s | 1.5 s |
+| Total, end of speech to text typed | 1.4 s | 2.5 s |
 
-**Cleanup quality and Cerebras latency are therefore not measured
-yet.** The live tests (`pytest tests/test_voxtype_cerebras.py`, with
+The table is from the final run: 12 takes, spaced 3 s apart, all
+cleaned. Across all spaced runs, Cerebras usually answered in
+0.2–0.5 s but had a long tail. About 1 take in 10 took more than 2 s:
+with the default `post_process_timeout` it timed out and was typed raw.
+The slowest call took 4.2 s. Takes sent back-to-back sometimes got
+`HTTP 429 queue_exceeded` from Cerebras; those were typed raw within
+about 70 ms.
+
+Example (one 64-second take), Parakeet's transcript:
+
+> Okay, so um, for the new dashboard, we need a few things first a
+> login page with OAuth second or settings page, where users can change
+> their email address and their notification preferences, and third an
+> export button that dumps everything to CSV, and maybe also JSON if it
+> is easy. Oh, and the deadline for all of this is Friday, no sorry,
+> Thursday. … And then the last thing is the onboarding email. It is
+> way too long, and honestly, nobody reads it, so we should make it
+> shorter and friendlier.
+
+What voxtype typed (line breaks typed as Shift+Enter):
+
+```
+Okay, so for the new dashboard we need a few things:
+
+- A login page with OAuth. I want the login page done first because the other two depend on it.
+- A settings page where users can change their email address and their notification preferences.
+- An export button that dumps everything to CSV, and maybe also JSON if it is easy.
+- The deadline for all of this is Thursday.
+
+…
+
+Finally, the onboarding email is way too long and nobody reads it. We should make it shorter and friendlier, …
+```
+
+The live tests (`pytest tests/test_voxtype_cerebras.py`, with
 `CEREBRAS_API_KEY` set) check filler removal, self-corrections,
 paragraphs and lists, short utterances, exact technical terms and URLs,
-ignored instructions, and all three formats. They skip with the 402
-reason until the account has quota.
+ignored instructions, and all three formats. All of them pass.
 
 **Limitations.**
 
 - Transcripts leave your Mac.
-- 2 s is a starting timeout, not a measured target, so long takes may
-  hit it.
+- The model mostly restructures faithfully, but it sometimes drops a
+  short aside or an emphasis word ("we really need to move fast",
+  "honestly"). It also occasionally nests a list or rewords a phrase. It
+  does not fix words Parakeet misheard ("pydesk" for pytest).
+- Latency has a long tail, so about 1 long take in 10 exceeds the 2 s
+  default timeout and is typed raw. Raise `post_process_timeout` (for
+  example to 4) if you'd rather wait than lose the cleanup.
+- Dictating several takes in quick succession can hit Cerebras's
+  request-queue limit (`HTTP 429`); those takes are typed raw.
 - Shift+Enter is unsafe in plain shells (see above).
 - Corporate HTTP proxies are not used; voxtype connects to
   `api.cerebras.ai` directly.
