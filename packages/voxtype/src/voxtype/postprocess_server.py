@@ -738,7 +738,15 @@ class PostProcessor:
             )
         else:
             self.status(f"post-processed in {ms:.0f} ms")
-        return " ".join(out)
+        result = " ".join(out)
+        # Full texts, so a bad change can be pinned on the transcriber
+        # (already wrong "before") or on the cleanup (wrong only "after").
+        if result != text:
+            self.status(f'  before: "{text}"')
+            self.status(f'  after:  "{result}"')
+        elif not problems:
+            self.status("  (no change)")
+        return result
 
     def _clean_chunk(
         self, server: LlamaServer, chunk: str, timeout: float

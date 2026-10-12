@@ -618,6 +618,16 @@ def test_clean_uses_model_output(stub_post) -> None:
     assert req["messages"][0]["content"] == SYSTEM_PROMPT
     assert req["messages"][1]["content"].endswith("\nso i think we should go")
     assert any("post-processed in" in m for m in messages)
+    assert '  before: "so i think we should go"' in messages
+    assert '  after:  "So I think we should go."' in messages
+
+
+def test_unchanged_take_logs_no_change(stub_post) -> None:
+    post, stub, messages = stub_post
+    stub.reply = "Already clean."
+    assert post.clean("Already clean.") == "Already clean."
+    assert "  (no change)" in messages
+    assert not any("before:" in m for m in messages)
 
 
 @pytest.mark.parametrize(
