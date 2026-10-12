@@ -867,6 +867,7 @@ def test_late_take_stays_in_its_own_session() -> None:
     app._last_toggle = 0.0  # (bypass the toggle debounce)
     app.toggle()  # and starts a new session
     app.flush_deliveries()
+    app.note_activity()  # the engine hears the new speech first
     app.handle_utterance("new session")
     app.flush_deliveries()
     assert app.typist.typed[0] == "OLD SESSION "
@@ -999,6 +1000,54 @@ def test_late_hold_take_survives_cancelled_middle_session() -> None:
     app.handle_utterance("take one")  # take 1 arrives now
     app.flush_deliveries()
     assert app.typist.typed == ["TAKE ONE "]
+
+
+def test_late_vad_flush_belongs_to_previous_session() -> None:
+    """VAD: toggle off, quickly back on; the flushed segment lands in the
+    new session. It must survive that session's Esc."""
+    app = _vad_app()
+
+    class _Engine:
+        def request_flush(self) -> None:
+            pass
+
+        def request_reset(self) -> None:
+            pass
+
+    app._engine = _Engine()
+    app._post = _Slow(0.2)
+    app.toggle()  # off: arms the in-flight handoff
+    app._last_toggle = 0.0
+    app.toggle()  # quickly back on
+    app.handle_utterance("flushed segment")  # the old session's flush
+    app.cancel()  # Esc in the new session
+    app.flush_deliveries()
+    assert app.typist.typed == ["FLUSHED SEGMENT "]
+    assert app._session_texts == []
+
+
+def test_new_speech_after_quick_retoggle_stays_cancellable() -> None:
+    """Speech the engine HEARD in the new session is that session's, even
+    inside the old toggle-off's handoff window: Esc discards it."""
+    app = _vad_app()
+
+    class _Engine:
+        def request_flush(self) -> None:
+            pass
+
+        def request_reset(self) -> None:
+            pass
+
+    app._engine = _Engine()
+    app._post = _Slow(0.2)
+    app.toggle()  # off
+    app._last_toggle = 0.0
+    app.toggle()  # quickly back on
+    app.note_activity()  # new speech heard
+    app.handle_utterance("new words")
+    app.cancel()  # Esc in the new session
+    app.flush_deliveries()
+    assert app.typist.typed == []
 
 
 def test_queue_wait_counts_against_timeout(stub_post) -> None:

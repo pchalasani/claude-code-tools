@@ -39,11 +39,12 @@ def _preview(text: str, limit: int = 60) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-# Session id for a late hold take (see handle_utterance): it belongs to
-# SOME earlier, normally-stopped session — never a cancelled one, since
-# Esc drops a session's audio before any toggle-off can queue it — so it
-# must match no cancellation. Session ids are never negative.
-_LATE_HOLD_SEQ = -1
+# Session id for a late delivery from an earlier session (see
+# handle_utterance): it belongs to SOME earlier, normally-stopped
+# session — never a cancelled one, since Esc drops a session's audio and
+# disarms its handoff before anything can be queued — so it must match
+# no cancellation. Session ids are never negative.
+_EARLIER_SESSION_SEQ = -1
 
 # A queued delivery that failed authorization at arrival (see
 # VoiceTypeApp._deliver). State versions are never negative, so it can
@@ -105,6 +106,10 @@ class VoiceTypeApp:
         self._cancelled_seqs: set[int] = set()
         # Session id of the delivery the worker is running (None inline).
         self._active_seq: int | None = None
+        # Whether the engine has heard speech since the last activation
+        # (note_activity); tells a toggle-off's late flushed segment
+        # from new-session speech (see handle_utterance).
+        self._heard_since_activation = False
         # Set once _start_hotkey_listener runs — in run() (no overlay) or
         # from inside the overlay loop (see _start_hotkeys_from_loop); the
         # finally block stops it. May be None if no valid hotkeys.
@@ -160,6 +165,7 @@ class VoiceTypeApp:
                 self._prev_session_texts = self._session_texts
                 self._session_texts = []
                 self._session_seq += 1
+                self._heard_since_activation = False
         self._emit_transition_effects(version, old, new)
         return version
 
@@ -324,6 +330,8 @@ class VoiceTypeApp:
         """
         with self._lock:
             self._last_activity = time.monotonic()
+            if self._state == State.ACTIVE:
+                self._heard_since_activation = True
 
     def handle_utterance(self, text: str) -> None:
         """Process one VAD-completed utterance from the transcriber.
@@ -340,16 +348,29 @@ class VoiceTypeApp:
             state = self._state
             version = self._state_version
             self._last_activity = time.monotonic()
-            # In hold mode the CURRENT session's take is only delivered
-            # after its toggle-off, so a take arriving while ACTIVE is
-            # a late decode from an earlier session: keep it out of
-            # this session's rescue buffer and immune to its Esc.
-            late_hold = (
-                self.cfg.segmentation == "hold" and state == State.ACTIVE
-            )
-            origin_seq = _LATE_HOLD_SEQ if late_hold else None
+            # A delivery from an EARLIER session can arrive while ACTIVE:
+            # in hold mode the current session's take only comes after
+            # its toggle-off, so any take now is a late decode; with
+            # VAD, a toggle-off's flushed segment can land after a quick
+            # re-toggle — it is the one in-flight segment that toggle's
+            # still-armed handoff exists for, so consume that handoff.
+            # New-session speech is told apart by the engine having
+            # reported speech (note_activity) since activation.
+            # Either way keep it out of this session's rescue buffer and
+            # immune to its Esc.
+            late = False
+            if state == State.ACTIVE:
+                if self.cfg.segmentation == "hold":
+                    late = True
+                elif (
+                    time.monotonic() < self._grace_until
+                    and not self._heard_since_activation
+                ):
+                    late = True
+                    self._grace_until = 0.0
+            origin_seq = _EARLIER_SESSION_SEQ if late else None
             origin_buf = (
-                self._prev_session_texts if late_hold else self._session_texts
+                self._prev_session_texts if late else self._session_texts
             )
         if state in (State.PAUSED, State.PASSIVE):
             if self._consume_handoff():
