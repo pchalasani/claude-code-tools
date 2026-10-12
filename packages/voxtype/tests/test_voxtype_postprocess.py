@@ -736,6 +736,29 @@ def test_queued_text_survives_stop_phrase() -> None:
     assert app.typist.typed == ["FIRST SENTENCE ", "SECOND SENTENCE "]
 
 
+def test_late_take_stays_in_its_own_session() -> None:
+    app = _vad_app()
+
+    class _Engine:
+        def request_flush(self) -> None:
+            pass
+
+        def request_reset(self) -> None:
+            pass
+
+    app._engine = _Engine()
+    app._post = _Slow(0.3)
+    app.handle_utterance("old session")  # still in cleanup ...
+    app.toggle()  # ... when the user stops
+    app._last_toggle = 0.0  # (bypass the toggle debounce)
+    app.toggle()  # and starts a new session
+    app.flush_deliveries()
+    app.handle_utterance("new session")
+    app.flush_deliveries()
+    assert app.typist.typed[0] == "OLD SESSION "
+    assert app._session_texts == ["NEW SESSION"]
+
+
 def test_queue_wait_counts_against_timeout(stub_post) -> None:
     post, stub, messages = stub_post
     # Arrived 2 s ago with a 1 s budget: no request at all, raw at once.

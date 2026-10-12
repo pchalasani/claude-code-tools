@@ -334,7 +334,10 @@ class VoiceTypeApp:
                 else:
                     self._status(f'typed in-flight: "{_preview(text)}"')
                     self._deliver(
-                        None, lambda v, at, t=text: self._type(t, v, at)
+                        None,
+                        lambda v, at, t=text, b=self._session_texts: (
+                            self._type(t, v, at, b)
+                        ),
                     )
                 return
         if state == State.PAUSED:
@@ -354,7 +357,10 @@ class VoiceTypeApp:
             version = self._set_state(State.ACTIVE)
             if remainder:
                 self._deliver(
-                    version, lambda v, at, t=remainder: self._type(t, v, at)
+                    version,
+                    lambda v, at, t=remainder, b=self._session_texts: (
+                        self._type(t, v, at, b)
+                    ),
                 )
             return
         # ACTIVE
@@ -370,7 +376,10 @@ class VoiceTypeApp:
             return
         self._status(f'typed: "{_preview(text)}"')
         self._deliver(
-            version, lambda v, at, t=text: self._type(t, v, at)
+            version,
+            lambda v, at, t=text, b=self._session_texts: (
+                self._type(t, v, at, b)
+            ),
         )
 
     def _submit(self, version: int | None, at: float) -> None:
@@ -513,7 +522,11 @@ class VoiceTypeApp:
             return True
 
     def _type(
-        self, text: str, version: int | None, arrived: float | None = None
+        self,
+        text: str,
+        version: int | None,
+        arrived: float | None = None,
+        session: list[str] | None = None,
     ) -> None:
         """Type ``text``; ``version=None`` skips the staleness check
         (used for grace-window commits, which by definition arrive
@@ -533,11 +546,17 @@ class VoiceTypeApp:
         # Record for the paste-again hotkey / clipboard BEFORE typing:
         # even text that lands in the wrong window (or is skipped as
         # stale) stays rescuable.
+        # ``session`` is the buffer of the session the utterance ARRIVED
+        # in (captured at arrival): a take still in cleanup when a new
+        # session starts must not leak into the new session's rescue
+        # text, nor overwrite its clipboard copy.
         with self._lock:
-            self._session_texts.append(text)
-            session = " ".join(self._session_texts)
-        if self.cfg.copy_to_clipboard:
-            copy_to_clipboard(session)
+            buf = self._session_texts if session is None else session
+            buf.append(text)
+            current = buf is self._session_texts
+            joined = " ".join(buf)
+        if self.cfg.copy_to_clipboard and current:
+            copy_to_clipboard(joined)
         if self.cfg.trailing_space:
             text += " "
         if version is None:
