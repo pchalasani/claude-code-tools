@@ -29,7 +29,7 @@ from .postprocess import (
     build_messages,
     flatten_lines,
     max_output_tokens,
-    mostly_non_ascii,
+    likely_english,
     rejection_reason,
     sanitize_output,
     split_chunks,
@@ -703,7 +703,7 @@ class PostProcessor:
                 self._warned_not_ready = True
                 self.status("post-process not ready yet; typing raw")
             return text
-        if mostly_non_ascii(text):
+        if not likely_english(text):
             self.status("post-process skipped (non-English); typing raw")
             return text
         t0 = time.monotonic()

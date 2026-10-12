@@ -24,6 +24,7 @@ from voxtype.postprocess import (
     build_messages,
     control_line,
     max_output_tokens,
+    likely_english,
     mostly_non_ascii,
     rejection_reason,
     sanitize_output,
@@ -101,6 +102,36 @@ def test_rejection_reason(raw: str, cleaned: str, expected: str | None) -> None:
 def test_marker_already_in_raw_is_not_chatter() -> None:
     raw = "write the analysis: revenue grew"
     assert rejection_reason(raw, "Write the analysis: revenue grew.") is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Hola, cómo estás? Quiero mover la reunión al jueves por la tarde.",
+        "Ich glaube wir sollten das Treffen auf Donnerstag verschieben.",
+        "Saya pikir kita harus memindahkan rapat ke hari Kamis.",
+        "Привет, как дела у тебя сегодня?",
+    ],
+)
+def test_likely_english_rejects_other_languages(text: str) -> None:
+    assert not likely_english(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "so I think we should move the meeting to Thursday",
+        "okay so the bug is in the config loader it crashes",
+        "can you look at the pull request and tell me if it is right",
+        "go",  # too short to judge: treated as English
+        # terse imperative English with no function words at all
+        "first install voxtype second run setup third start talking",
+        "refactor app module typing logic tests docs",
+        "send the report to Alice and Bob by end of day",
+    ],
+)
+def test_likely_english_accepts_english(text: str) -> None:
+    assert likely_english(text)
 
 
 def test_mostly_non_ascii() -> None:
@@ -751,6 +782,8 @@ def test_clean_not_ready_types_raw() -> None:
 def test_clean_skips_non_english(stub_post) -> None:
     post, stub, _ = stub_post
     assert post.clean("Привет, как дела") == "Привет, как дела"
+    spanish = "Hola, quiero mover la reunión al jueves por la tarde."
+    assert post.clean(spanish) == spanish
     assert stub.requests == []
 
 

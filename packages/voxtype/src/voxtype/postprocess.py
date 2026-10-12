@@ -139,6 +139,73 @@ def mostly_non_ascii(text: str) -> bool:
     return non_ascii > len(letters) / 2
 
 
+# Common function words, for a cheap "is this English?" check: S1-mini
+# is English-only, and Parakeet transcribes many languages. A take is
+# judged non-English only on POSITIVE evidence — another language's
+# function words — because terse English dictation ("first install
+# voxtype second run setup") can have almost no English ones.
+_ENGLISH_COMMON = frozenset("""
+a about after all also am an and any are as at be because been but by
+can could did do does don't for from had has have he her him his how i
+i'm if in into is it it's its just let's like me more my no not now of
+on one or our out so some than that that's the their them then there
+these they this to up us was we were what when where which who why will
+with would you your
+""".split())
+_FOREIGN_COMMON = {
+    "es": "de la que el en y los se del las un por con una su para es al "
+    "lo como cómo más pero sus le ya este sí porque esta entre cuando muy "
+    "sin sobre también hasta hay donde desde todo nos ni ese eso esto "
+    "qué yo él ella estar estás quiero tú tu",
+    "fr": "le la les de des du un une et est en que qui dans pour pas sur "
+    "au avec ce il je ne se son sa ses nous vous mais ou où plus par "
+    "c'est j'ai",
+    "de": "der die und den von zu das mit sich des auf für ist im dem "
+    "nicht ein eine als auch es werden aus er hat dass sie nach wird bei "
+    "einer um sind noch wie einem über einen zum haben nur oder aber vor "
+    "zur bis mehr durch man ich wir sollten",
+    "it": "il di che è e la per un non una sono mi ho lo ma ha le si con "
+    "cosa come io questo della nel",
+    "pt": "o os as de do da em um uma que não para com por mais mas eu "
+    "ele ela você isso está",
+    "nl": "de het een en van ik te dat die niet op aan met voor zijn er "
+    "maar om ook als dan wat",
+    "id": "yang dan di ini itu dengan untuk tidak dari dalam akan pada "
+    "juga saya ke karena ada bisa kita harus",
+}
+# Each language's set minus words English also uses ("a", "in", ...).
+_FOREIGN_SETS = [
+    frozenset(words.split()) - _ENGLISH_COMMON
+    for words in _FOREIGN_COMMON.values()
+]
+# A take this share (or more) of one other language's function words,
+# and more of them than English ones, is not English.
+_FOREIGN_MIN_SHARE = 0.25
+# Shorter takes are too small to judge; they are treated as English.
+_LANG_MIN_WORDS = 4
+_WORD_RE = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)*")
+
+
+def likely_english(text: str) -> bool:
+    """Cheap check that ``text`` is English (S1-mini is English-only).
+
+    False for mostly non-ASCII text, and for text whose words are
+    largely another language's function words ("quiero mover la reunión
+    al jueves"). Terse English without function words stays English.
+    """
+    if mostly_non_ascii(text):
+        return False
+    words = [
+        w.replace("’", "'") for w in _WORD_RE.findall(text.casefold())
+    ]
+    if len(words) < _LANG_MIN_WORDS:
+        return True
+    n = len(words)
+    english = sum(w in _ENGLISH_COMMON for w in words) / n
+    foreign = max(sum(w in fs for w in words) / n for fs in _FOREIGN_SETS)
+    return not (foreign >= _FOREIGN_MIN_SHARE and foreign > english)
+
+
 def split_chunks(text: str, max_words: int = CHUNK_WORDS) -> list[str]:
     """Split ``text`` at sentence ends into chunks of <= ``max_words``.
 
