@@ -580,8 +580,8 @@ keepalive_minutes = 0.0
 post_process = false
 # Styling: casual | semi-casual | semi-formal | formal
 post_process_style = "semi-formal"
-# Structure: prose | lists ("lists" turns "first..., second..." into
-# a numbered list)
+# Structure: prose | lists ("lists" numbers "first..., second..."
+# items; typed on one line, since a typed newline would press Enter)
 post_process_structure = "prose"
 # Context: general | email
 post_process_context = "general"

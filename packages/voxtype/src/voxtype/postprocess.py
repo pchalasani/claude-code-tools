@@ -89,6 +89,17 @@ def sanitize_output(text: str) -> str:
     return text
 
 
+def flatten_lines(text: str) -> str:
+    """Collapse all whitespace, newlines included, to single spaces.
+
+    The typist sends a newline as the Enter key, which would submit a
+    chat prompt or run a shell command partway through a take, so
+    multi-line model output ("lists" structure, "email" context, and
+    occasionally casual styling) is typed as one line.
+    """
+    return " ".join(text.split())
+
+
 def rejection_reason(raw: str, cleaned: str) -> str | None:
     """Return why ``cleaned`` must not replace ``raw``, or None if it may.
 

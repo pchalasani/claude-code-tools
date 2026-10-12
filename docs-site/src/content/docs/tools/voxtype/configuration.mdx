@@ -350,7 +350,7 @@ Everything runs on your Mac; nothing leaves the machine.
 |---|---|---|
 | `post_process` | `false` | Turn LLM cleanup on. |
 | `post_process_style` | `"semi-formal"` | `casual` (lowercase, little punctuation), `semi-casual`, `semi-formal` (sentences, capitals, full stops), or `formal` (also expands contractions). |
-| `post_process_structure` | `"prose"` | `lists` turns "first..., second..." into a numbered list. |
+| `post_process_structure` | `"prose"` | `lists` numbers "first..., second..." items. |
 | `post_process_context` | `"general"` | `email` formats the text as an email. |
 | `post_process_timeout` | `4.0` | Seconds a take may spend in cleanup before voxtype types it raw (0.5–60). |
 | `post_process_model` | `""` | Path to your own `.gguf` file. Empty means the pinned S1-mini download. |
@@ -358,6 +358,12 @@ Everything runs on your Mac; nothing leaves the machine.
 
 The style, structure and context values are the only ones the model
 was trained on, so voxtype rejects anything else.
+
+Cleaned text is always typed as a single line. voxtype types a newline
+by pressing Enter, so a line break in the model's output would submit a
+chat prompt or run a shell command partway through your take. With
+`lists` you therefore get "1. Install voxtype. 2. Run setup." on one
+line.
 
 ### What it costs
 

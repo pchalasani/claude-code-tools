@@ -26,6 +26,7 @@ from pathlib import Path
 
 from .postprocess import (
     build_messages,
+    flatten_lines,
     max_output_tokens,
     mostly_non_ascii,
     rejection_reason,
@@ -631,7 +632,7 @@ class PostProcessor:
         reason = rejection_reason(chunk, cleaned)
         if reason:
             return chunk, reason
-        return cleaned, ""
+        return flatten_lines(cleaned), ""
 
     def _mark_dead(self) -> None:
         self._ready.clear()
