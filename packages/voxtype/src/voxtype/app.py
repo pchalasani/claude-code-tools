@@ -39,6 +39,12 @@ def _preview(text: str, limit: int = 60) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+# Session id for a late hold take (see handle_utterance): it belongs to
+# SOME earlier, normally-stopped session — never a cancelled one, since
+# Esc drops a session's audio before any toggle-off can queue it — so it
+# must match no cancellation. Session ids are never negative.
+_LATE_HOLD_SEQ = -1
+
 # A queued delivery that failed authorization at arrival (see
 # VoiceTypeApp._deliver). State versions are never negative, so it can
 # never pass _inject, and it must never consume a LATER handoff.
@@ -336,12 +342,12 @@ class VoiceTypeApp:
             self._last_activity = time.monotonic()
             # In hold mode the CURRENT session's take is only delivered
             # after its toggle-off, so a take arriving while ACTIVE is
-            # a late decode from the previous session: bind it there
-            # (rescue buffer, and immunity to this session's Esc).
+            # a late decode from an earlier session: keep it out of
+            # this session's rescue buffer and immune to its Esc.
             late_hold = (
                 self.cfg.segmentation == "hold" and state == State.ACTIVE
             )
-            origin_seq = self._session_seq - 1 if late_hold else None
+            origin_seq = _LATE_HOLD_SEQ if late_hold else None
             origin_buf = (
                 self._prev_session_texts if late_hold else self._session_texts
             )

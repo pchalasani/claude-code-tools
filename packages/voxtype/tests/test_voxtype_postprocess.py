@@ -860,6 +860,42 @@ def test_late_hold_take_belongs_to_previous_session() -> None:
     assert app._prev_session_texts == ["TAKE ONE"]
 
 
+def test_late_hold_take_survives_cancelled_middle_session() -> None:
+    """Take 1 decodes late; session 2 is cancelled; it arrives during
+    session 3. It must still be typed (as on main)."""
+    pytest.importorskip("pynput")
+    from voxtype.app import VoiceTypeApp
+
+    app = VoiceTypeApp(
+        Config(mode="toggle", segmentation="hold", sounds=False)
+    )
+    app.typist = _Typist()
+
+    class _Engine:
+        def request_hold_start(self) -> None:
+            pass
+
+        def request_hold_stop(self) -> None:
+            pass
+
+        def request_reset(self) -> None:
+            pass
+
+    app._engine = _Engine()
+    app._post = _Slow(0.1)
+    for _ in range(2):  # session 1 on, off
+        app._last_toggle = 0.0
+        app.toggle()
+    app._last_toggle = 0.0
+    app.toggle()  # session 2 on
+    app.cancel()  # session 2 cancelled
+    app._last_toggle = 0.0
+    app.toggle()  # session 3 on
+    app.handle_utterance("take one")  # take 1 arrives now
+    app.flush_deliveries()
+    assert app.typist.typed == ["TAKE ONE "]
+
+
 def test_queue_wait_counts_against_timeout(stub_post) -> None:
     post, stub, messages = stub_post
     # Arrived 2 s ago with a 1 s budget: no request at all, raw at once.
