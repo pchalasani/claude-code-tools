@@ -250,7 +250,8 @@ def _ask_cerebras(q, ans: dict) -> None:  # noqa: ANN001
     ))
     print(
         "  note: each transcript is sent to api.cerebras.ai. Set "
-        "CEREBRAS_API_KEY in your shell profile (until then takes are "
+        "CEREBRAS_API_KEY=... in ~/.config/voxtype/.env, chmod 600 "
+        "(until then takes are "
         "typed raw). Line breaks are typed as Shift+Enter; set "
         'post_process_newlines = "flatten" if you dictate into a shell.'
     )
