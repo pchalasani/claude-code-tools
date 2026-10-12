@@ -540,11 +540,11 @@ On an M1 Max, using `say`-synthesized takes of 64–76 seconds (138–238
 words: several requirements, a correction, a topic change, file names,
 commands and URLs) through Parakeet and voxtype's real delivery path:
 
-- Transcription took 1.2 s at the median and 1.7 s at the 95th
-  percentile.
+- Transcription took 1.2–1.5 s at the median and about 1.7 s at the
+  95th percentile, across two runs of six takes each.
 - The Cerebras account used for testing had no paid quota, so every
   request returned `HTTP 402 payment_required`. Those takes fell back to
-  the raw transcript within about 70 ms, and nothing was lost.
+  the raw transcript within 70–90 ms, and nothing was lost.
 
 **Cleanup quality and Cerebras latency are therefore not measured
 yet.** The live tests (`pytest tests/test_voxtype_cerebras.py`, with
