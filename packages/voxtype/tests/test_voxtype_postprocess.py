@@ -293,6 +293,24 @@ def test_kill_stale_escalates_past_ignored_sigterm(tmp_path: Path) -> None:
         proc.wait()
 
 
+def test_command_line_not_truncated_in_narrow_terminal(monkeypatch) -> None:
+    """The --alias sits at the END of a long command line; a narrow
+    COLUMNS must not cut it off."""
+    import sys
+
+    monkeypatch.setenv("COLUMNS", "40")
+    proc = subprocess.Popen([
+        sys.executable, "-c", "import time; time.sleep(30)",
+        *(["--padding-arg"] * 20), "--alias", ps.SERVER_ALIAS,
+    ])
+    try:
+        time.sleep(0.2)
+        assert f"--alias {ps.SERVER_ALIAS}" in ps._command_of(proc.pid)
+    finally:
+        proc.kill()
+        proc.wait()
+
+
 def test_kill_stale_servers_spares_live_owner(tmp_path: Path) -> None:
     owner = subprocess.Popen(["sleep", "30"])
     try:

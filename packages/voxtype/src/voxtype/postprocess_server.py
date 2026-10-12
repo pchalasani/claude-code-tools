@@ -261,7 +261,9 @@ def local_request(
 def _command_of(pid: int) -> str:
     try:
         return subprocess.run(
-            ["ps", "-o", "command=", "-p", str(pid)],
+            # -ww: never truncate to the terminal width, which would
+            # cut off the trailing --alias we identify servers by.
+            ["ps", "-ww", "-o", "command=", "-p", str(pid)],
             capture_output=True,
             text=True,
             timeout=5,

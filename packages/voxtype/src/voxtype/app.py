@@ -608,13 +608,6 @@ class VoiceTypeApp:
             # hold up capture, hotkeys, or the overlay. The submit/stop/
             # wake phrases were already matched on the raw text.
             text = self._post.clean(text, since=arrived)
-            with self._lock:
-                cancelled = self._active_seq in self._cancelled_seqs
-            if cancelled:
-                # Esc landed during cleanup: discard, like the rest of
-                # the cancelled recording.
-                self._status("cancelled during cleanup (discarded)")
-                return
         # Record for the paste-again hotkey / clipboard BEFORE typing:
         # even text that lands in the wrong window (or is skipped as
         # stale) stays rescuable.
@@ -622,13 +615,21 @@ class VoiceTypeApp:
         # in (captured at arrival): a take still in cleanup when a new
         # session starts must not leak into the new session's rescue
         # text, nor overwrite its clipboard copy.
+        # The cancel check shares this critical section with the rescue
+        # buffer and clipboard updates: a take cancelled (Esc) while it
+        # waited for or ran through cleanup leaves no trace anywhere.
         with self._lock:
-            buf = self._session_texts if session is None else session
-            buf.append(text)
-            current = buf is self._session_texts
-            joined = " ".join(buf)
-        if self.cfg.copy_to_clipboard and current:
-            copy_to_clipboard(joined)
+            if self._cancelled_locked():
+                cancelled = True
+            else:
+                cancelled = False
+                buf = self._session_texts if session is None else session
+                buf.append(text)
+                if self.cfg.copy_to_clipboard and buf is self._session_texts:
+                    copy_to_clipboard(" ".join(buf))
+        if cancelled:
+            self._status("cancelled before typing (discarded)")
+            return
         if self.cfg.trailing_space:
             text += " "
         if version is None:
