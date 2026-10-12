@@ -39,6 +39,12 @@ def _preview(text: str, limit: int = 60) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+# A queued delivery that failed authorization at arrival (see
+# VoiceTypeApp._deliver). State versions are never negative, so it can
+# never pass _inject, and it must never consume a LATER handoff.
+_REJECTED = -1
+
+
 class VoiceTypeApp:
     """Runs the mic transcriber and types utterances per the config."""
 
@@ -393,7 +399,7 @@ class VoiceTypeApp:
             self._status("submitted (Enter)")
         elif self._inject(version, self.typist.press_enter):
             self._status("submitted (Enter)")
-        elif self._consume_handoff(at=at):
+        elif version != _REJECTED and self._consume_handoff(at=at):
             # Snapshot said ACTIVE but a toggle-off landed before
             # injection: this utterance IS the in-flight one that
             # toggle's grace/hold handoff authorizes.
@@ -435,8 +441,13 @@ class VoiceTypeApp:
         if version is not None:
             with self._lock:
                 current = version == self._state_version
+            # The handoff check happens HERE, once, as it would inline;
+            # a rejected take is still recorded for rescue by _type but
+            # can never be typed or claim a later session's handoff.
             if current or self._consume_handoff(at=arrived):
                 version = None
+            else:
+                version = _REJECTED
         with self._lock:
             self._cleaning += 1
             if self._delivery_q is None:
@@ -564,7 +575,7 @@ class VoiceTypeApp:
                 self.typist.type_text(text)
         elif not self._inject(
             version, lambda: self.typist.type_text(text)
-        ) and self._consume_handoff(at=arrived):
+        ) and version != _REJECTED and self._consume_handoff(at=arrived):
             # The utterance snapshotted ACTIVE but lost the injection
             # race to a toggle-off that armed the grace/hold handoff.
             # It IS the one in-flight delivery that handoff authorizes

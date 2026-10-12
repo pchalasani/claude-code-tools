@@ -759,6 +759,24 @@ def test_late_take_stays_in_its_own_session() -> None:
     assert app._session_texts == ["NEW SESSION"]
 
 
+def test_rejected_take_never_claims_a_later_handoff() -> None:
+    """A take whose state went stale before it was queued stays
+    rejected: it must not type via a LATER toggle-off's grace window."""
+    app = _vad_app()
+    app._post = _Slow(0.3)
+    app.handle_utterance("blocker")  # occupies the delivery thread
+    with app._lock:
+        stale = app._state_version
+        app._state_version += 1  # e.g. a cancel landed after the snapshot
+        app._grace_until = 0.0
+    app._deliver(stale, lambda v, at: app._type("cancelled", v, at))
+    with app._lock:
+        app._grace_until = time.monotonic() + 5  # a later toggle-off
+    app.flush_deliveries()
+    assert "CANCELLED " not in app.typist.typed
+    assert app._consume_handoff()  # the later handoff is still armed
+
+
 def test_queue_wait_counts_against_timeout(stub_post) -> None:
     post, stub, messages = stub_post
     # Arrived 2 s ago with a 1 s budget: no request at all, raw at once.
