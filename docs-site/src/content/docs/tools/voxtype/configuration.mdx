@@ -303,12 +303,23 @@ One trade-off worth knowing:
 
 ## Post-processing (LLM cleanup)
 
-Off by default. With `post_process = true`, every transcript goes
-through a language model before voxtype types it. There are two
-providers. The default, `s1-mini`, is a small local model, described
-first below. The [Cerebras provider](#cerebras-provider-external-api)
-sends transcripts to an external API and can also split long
-dictations into paragraphs and lists.
+Optionally, voxtype can pass each transcript through a language model
+before typing it, to clean it up. Pick one of three setups in
+`~/.config/voxtype/config.toml`:
+
+| You want | Put in your config | Also needed |
+|---|---|---|
+| **No cleanup** (the default) | nothing | nothing |
+| **Local cleanup** (on-device, English only) | `post_process = true` | `brew install llama.cpp` ([details](#set-up-the-local-model)) |
+| **Cerebras cleanup** (also paragraphs and lists; **sends transcripts to Cerebras**) | `post_process = true`<br/>`post_process_provider = "cerebras"` | `CEREBRAS_API_KEY` in your shell profile ([details](#cerebras-provider-external-api)) |
+
+With no cleanup, plain `voxtype` types Parakeet's transcript exactly as
+it always has, after the regex filler removal. With either kind of
+cleanup, any failure or timeout types the raw transcript, so a take is
+never lost. To turn cleanup off again, delete `post_process = true` or
+set it to `false`.
+
+### The local model (s1-mini)
 
 The local model adds punctuation and capitals, drops self-corrections,
 and removes verbal clutter like "you know". These are real takes from
@@ -327,7 +338,7 @@ licensed, with one added condition: anything that uses it must keep
 calling it "S1-mini" by "Superwhisper". It handles English only.
 Everything runs on your Mac; nothing leaves the machine.
 
-### Set it up
+### Set up the local model
 
 1. Install llama.cpp, which provides the `llama-server` that runs the
    model. voxtype adds no Python dependencies for this, so the base
