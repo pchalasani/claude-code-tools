@@ -300,24 +300,55 @@ def _pid_alive(pid: int) -> bool:
     return bool(stat) and not stat.startswith("Z")
 
 
+def _group_alive(pgid: int) -> bool:
+    """True if any non-zombie process remains in process group ``pgid``."""
+    try:
+        out = subprocess.run(
+            ["ps", "-A", "-o", "pgid=,stat="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return True
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0] == str(pgid):
+            if not parts[1].startswith("Z"):
+                return True
+    return False
+
+
 def _terminate(pid: int, grace: float = 3.0) -> bool:
     """SIGTERM ``pid``, escalating to SIGKILL; True once it has exited.
 
-    The same bounded escalation as ``LlamaServer.stop``.
+    Servers are launched as process-group leaders, so when ``pid`` leads
+    its own group the whole group is signalled: a ``post_process_server``
+    wrapper that runs llama-server as a child (rather than exec-ing it)
+    must not leave that child behind.
     """
+    try:
+        group = os.getpgid(pid) == pid
+    except ProcessLookupError:
+        return True
+    except OSError:
+        group = False
     for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 2.0)):
         try:
-            os.kill(pid, sig)
+            if group:
+                os.killpg(pid, sig)
+            else:
+                os.kill(pid, sig)
         except ProcessLookupError:
             return True
         except OSError:
             return False
         deadline = time.monotonic() + wait
         while time.monotonic() < deadline:
-            if not _pid_alive(pid):
+            if not (_group_alive(pid) if group else _pid_alive(pid)):
                 return True
             time.sleep(0.05)
-    return not _pid_alive(pid)
+    return not (_group_alive(pid) if group else _pid_alive(pid))
 
 
 def kill_stale_servers(run_dir: Path | None = None) -> int:
@@ -402,6 +433,9 @@ class LlamaServer:
                     stdin=subprocess.DEVNULL,
                     stdout=log,
                     stderr=subprocess.STDOUT,
+                    # Own process group, so stop() and stale reaping can
+                    # signal a wrapper's server child too (_terminate).
+                    start_new_session=True,
                 )
             self.proc = proc
             self.pidfile.write_text(str(proc.pid))
@@ -473,13 +507,11 @@ class LlamaServer:
             proc, self.proc = self.proc, None
         if proc is None:
             return
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=3)
+        _terminate(proc.pid)
+        try:
+            proc.wait(timeout=3)  # reap the leader
+        except subprocess.TimeoutExpired:
+            pass
         self.pidfile.unlink(missing_ok=True)
         if not keep_log:
             self.log.unlink(missing_ok=True)

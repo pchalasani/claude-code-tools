@@ -362,6 +362,27 @@ def test_stop_during_start_leaves_no_server(tmp_path, monkeypatch) -> None:
     assert not list((tmp_path / "run").glob("*.pid"))
 
 
+def test_stop_kills_a_wrapped_server_child(tmp_path) -> None:
+    """A non-exec wrapper's llama-server child dies with the wrapper."""
+    fake, model = _fake_server(tmp_path, "badwarm")  # healthy server
+    wrapper = tmp_path / "wrapper.sh"
+    wrapper.write_text(f'#!/bin/sh\n"{fake}" "$@"\n')  # no exec
+    wrapper.chmod(0o755)
+    server = LlamaServer(str(wrapper), Path(model), tmp_path / "run")
+    server.start(timeout=20)
+    shell_pid = server.proc.pid
+    children = subprocess.run(
+        ["pgrep", "-P", str(shell_pid)], capture_output=True, text=True
+    ).stdout.split()
+    assert children, "wrapper did not spawn the server child"
+    child = int(children[0])
+    server.stop()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and ps._pid_alive(child):
+        time.sleep(0.05)
+    assert not ps._pid_alive(child), "server child outlived its wrapper"
+
+
 def test_warmup_failure_tears_down_for_retry(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(ps, "RUN_DIR", tmp_path / "run")
     exe, model = _fake_server(tmp_path, "badwarm")
