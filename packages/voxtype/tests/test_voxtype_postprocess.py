@@ -336,6 +336,7 @@ class _Stub:
         self.truncate = False
         self.body_delay = 0.0
         self.close_conn = False
+        self.trickle_headers = 0.0
         self.requests: list[dict] = []
         stub = self
 
@@ -359,6 +360,18 @@ class _Stub:
                 }).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
+                if stub.trickle_headers:
+                    # Raw response, one header line at a time.
+                    self.wfile.write(b"HTTP/1.1 200 OK\r\n")
+                    for i in range(10):
+                        self.wfile.write(f"X-Slow-{i}: 1\r\n".encode())
+                        self.wfile.flush()
+                        time.sleep(stub.trickle_headers)
+                    self.wfile.write(
+                        f"Content-Length: {len(payload)}\r\n\r\n".encode()
+                    )
+                    self.wfile.write(payload)
+                    return
                 if stub.close_conn:
                     self.send_header("Content-Length", str(len(payload)))
                     self.send_header("Connection", "close")
@@ -466,6 +479,15 @@ def test_timeout_is_a_total_deadline(stub_post) -> None:
     t0 = time.monotonic()
     assert post.clean("hello there friend") == "hello there friend"
     assert time.monotonic() - t0 < 1.3
+    assert any("timed out" in m for m in messages)
+
+
+def test_deadline_holds_against_trickled_headers(stub_post) -> None:
+    post, stub, messages = stub_post
+    stub.trickle_headers = 0.2  # 10 headers, each well within the timeout
+    t0 = time.monotonic()
+    assert post.clean("hello there friend") == "hello there friend"
+    assert time.monotonic() - t0 < 1.3  # timeout is 1.0 s, trickle 2.0 s
     assert any("timed out" in m for m in messages)
 
 

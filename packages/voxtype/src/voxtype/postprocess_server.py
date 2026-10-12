@@ -176,9 +176,26 @@ def local_request(
         return remaining
 
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=left())
+    expired = threading.Event()
+    timer: threading.Timer | None = None
     try:
         conn.connect()
         sock = conn.sock
+
+        def expire() -> None:
+            # Hard backstop: http.client's header parsing makes several
+            # blocking reads per settimeout, so a server trickling bytes
+            # could outlast the deadline. Shutting the socket down wakes
+            # any blocked read at once.
+            expired.set()
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+        timer = threading.Timer(left(), expire)
+        timer.daemon = True
+        timer.start()
         headers = {"Content-Type": "application/json"} if body else {}
         conn.request(method, path, body=body, headers=headers)
         sock.settimeout(left())
@@ -196,7 +213,13 @@ def local_request(
         if resp.length:  # bytes still owed per Content-Length
             raise http.client.IncompleteRead(b"".join(chunks), resp.length)
         return resp.status, b"".join(chunks)
+    except (OSError, http.client.HTTPException) as e:
+        if expired.is_set():
+            raise TimeoutError("timed out") from e
+        raise
     finally:
+        if timer is not None:
+            timer.cancel()
         conn.close()
 
 
