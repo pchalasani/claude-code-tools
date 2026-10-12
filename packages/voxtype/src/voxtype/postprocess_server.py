@@ -184,7 +184,10 @@ def local_request(
         sock.settimeout(left())
         resp = conn.getresponse()
         chunks: list[bytes] = []
-        while True:
+        # read1 closes the response (and, with "Connection: close",
+        # the socket) once the body is complete, so check before every
+        # settimeout rather than touching a closed socket.
+        while not resp.isclosed():
             sock.settimeout(left())
             data = resp.read1(1 << 16)
             if not data:

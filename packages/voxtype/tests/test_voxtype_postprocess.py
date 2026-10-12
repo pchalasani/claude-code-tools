@@ -335,6 +335,7 @@ class _Stub:
         self.raw_body: bytes | None = None
         self.truncate = False
         self.body_delay = 0.0
+        self.close_conn = False
         self.requests: list[dict] = []
         stub = self
 
@@ -358,6 +359,10 @@ class _Stub:
                 }).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
+                if stub.close_conn:
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.send_header("Connection", "close")
+                    self.close_connection = True
                 if stub.truncate:
                     # Promise the full body, send half, then hang up.
                     self.send_header("Content-Length", str(len(payload)))
@@ -437,6 +442,14 @@ def test_clean_falls_back_on_malformed_response(stub_post) -> None:
     post, stub, _ = stub_post
     stub.raw_body = b'{"nope": 1}'
     assert post.clean("hello there") == "hello there"
+
+
+def test_connection_close_response_is_accepted(stub_post) -> None:
+    post, stub, _ = stub_post
+    stub.close_conn = True
+    stub.reply = "Hello there."
+    assert post.clean("hello there") == "Hello there."
+    assert ps.local_request(stub.port, "POST", "/", b"{}", 2.0)[0] == 200
 
 
 def test_clean_falls_back_on_truncated_response(stub_post) -> None:
