@@ -578,6 +578,7 @@ class VoiceTypeApp:
             # hold up capture, hotkeys, or the overlay. The submit/stop/
             # wake phrases were already matched on the raw text.
             text = self._post.clean(text, since=arrived)
+            text = text.replace("\r\n", "\n").replace("\r", "\n")
             if "\n" in text and self.cfg.post_process_newlines == "flatten":
                 text = flatten_lines(text)
         # Record for the paste-again hotkey / clipboard BEFORE typing:

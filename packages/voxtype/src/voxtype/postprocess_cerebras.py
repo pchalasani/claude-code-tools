@@ -335,6 +335,34 @@ class CerebrasProcessor:
                     return 0, b'{"code": "network error"}'
         return 0, b'{"code": "network error"}'
 
+    def _resolve(self, timeout: float) -> tuple[str, int]:
+        """Resolve the API host within ``timeout``.
+
+        Raises:
+            TimeoutError: The lookup did not finish in time (it carries
+                on in a daemon thread, harmlessly).
+            OSError: The lookup failed.
+        """
+        result: dict[str, object] = {}
+
+        def lookup() -> None:
+            try:
+                info = socket.getaddrinfo(
+                    self._host, self._port, type=socket.SOCK_STREAM
+                )
+                result["addr"] = info[0][4][:2]
+            except OSError as e:
+                result["err"] = e
+
+        thread = threading.Thread(target=lookup, daemon=True)
+        thread.start()
+        thread.join(timeout)
+        if "addr" in result:
+            return result["addr"]  # type: ignore[return-value]
+        if "err" in result:
+            raise result["err"]  # type: ignore[misc]
+        raise TimeoutError("timed out")
+
     def _send(
         self, body: bytes, headers: dict[str, str], deadline: float
     ) -> tuple[int, bytes]:
@@ -350,6 +378,15 @@ class CerebrasProcessor:
             self._conn = self._new_conn(left())
         conn = self._conn
         if conn.sock is None:
+            # DNS is not bounded by socket timeouts: resolve within the
+            # deadline first, then connect to that address (TLS still
+            # verifies the real host name).
+            addr = self._resolve(left())
+            conn._create_connection = (  # noqa: SLF001
+                lambda _address, timeout=None, source_address=None: (
+                    socket.create_connection(addr, timeout, source_address)
+                )
+            )
             conn.timeout = left()
             conn.connect()
         sock = conn.sock

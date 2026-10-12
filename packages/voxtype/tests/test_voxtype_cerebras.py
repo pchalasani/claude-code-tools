@@ -393,6 +393,30 @@ def test_typist_types_line_breaks_as_shift_enter() -> None:
         "type:- one", shift_enter, "type:- two",
     ]
     assert f"tap:{Key.enter}" not in keys.events  # never a bare Enter
+    keys.events.clear()
+    typist.type_text("one\rtwo\r\nthree")  # lone CR too
+    assert keys.events == [
+        "type:one", shift_enter, "type:two", shift_enter, "type:three",
+    ]
+
+
+def test_slow_dns_is_bounded_by_the_deadline(api, monkeypatch) -> None:
+    import socket
+
+    real = socket.getaddrinfo
+
+    def slow_getaddrinfo(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        time.sleep(2.0)
+        return real(*args, **kwargs)
+
+    proc = _proc(api, [], timeout=0.5)
+    proc.stop()  # drop any prewarmed connection
+    proc._ready = True
+    monkeypatch.setattr(socket, "getaddrinfo", slow_getaddrinfo)
+    t0 = time.monotonic()
+    assert proc.clean("hello there friend") == "hello there friend"
+    assert time.monotonic() - t0 < 1.0
+    assert "timed out" in proc.last_outcome[1]
 
 
 class _Typist:

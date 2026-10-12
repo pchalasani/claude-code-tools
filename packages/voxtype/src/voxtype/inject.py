@@ -32,7 +32,9 @@ class Typist:
         and most editors. (Raw transcripts never contain line breaks;
         only structured LLM cleanup output does.)
         """
-        lines = text.replace("\r\n", "\n").split("\n")
+        # Every line-break form, including a lone "\r" (which pynput
+        # would also type as a bare Enter).
+        lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
         for i, line in enumerate(lines):
             if i:
                 self.press_shift_enter()

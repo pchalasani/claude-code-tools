@@ -528,9 +528,11 @@ never transcript text or the key. For example (illustrative numbers):
 - **`total`** runs from the end of your speech to the text being typed.
   With VAD segmentation it starts when the transcript arrives instead.
 
-The before/after lines (`before: "…"`, `after: "…"`) are the only lines
-that contain your words. Set `post_process_log_text = false` to turn
-them off.
+The latency and fallback lines never contain your words. The
+before/after lines (`before: "…"`, `after: "…"`) contain each take's
+full text; set `post_process_log_text = false` to turn them off.
+voxtype's usual one-line previews (`typed: "…"`) still show the start of
+each take, as they always have.
 
 ### Measured so far
 
