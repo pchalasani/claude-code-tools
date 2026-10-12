@@ -241,6 +241,10 @@ def local_request(
             if not data:
                 break
             chunks.append(data)
+        if expired.is_set():
+            # The watchdog's shutdown can surface as a clean EOF on a
+            # close-delimited body; never accept that as a response.
+            raise TimeoutError("timed out")
         if resp.length:  # bytes still owed per Content-Length
             raise http.client.IncompleteRead(b"".join(chunks), resp.length)
         return resp.status, b"".join(chunks)

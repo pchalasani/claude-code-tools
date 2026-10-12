@@ -91,6 +91,11 @@ class VoiceTypeApp:
         # progress). See _deliver.
         self._cleaning = 0
         self._delivery_q: queue.Queue | None = None
+        # Bumped by cancel(): queued deliveries from an earlier epoch are
+        # discarded, so Esc also drops text still waiting for cleanup.
+        self._cancel_epoch = 0
+        # Epoch of the delivery the worker is running now (None inline).
+        self._active_epoch: int | None = None
         # Set once _start_hotkey_listener runs — in run() (no overlay) or
         # from inside the overlay loop (see _start_hotkeys_from_loop); the
         # finally block stops it. May be None if no valid hotkeys.
@@ -281,6 +286,7 @@ class VoiceTypeApp:
                 return
             self._grace_until = 0.0
             self._expect_hold = 0
+            self._cancel_epoch += 1
         self._set_state(self._off_state)
         with self._lock:
             self._grace_until = 0.0  # _set_state must not resurrect it
@@ -459,7 +465,8 @@ class VoiceTypeApp:
                     daemon=True,
                 ).start()
             q = self._delivery_q
-        q.put((action, version, arrived))
+            epoch = self._cancel_epoch
+        q.put((action, version, arrived, epoch))
 
     def _delivery_loop(self, q: queue.Queue) -> None:
         while True:
@@ -467,12 +474,21 @@ class VoiceTypeApp:
             try:
                 if item is None:
                     return
-                action, version, arrived = item
+                action, version, arrived, epoch = item
+                with self._lock:
+                    cancelled = epoch != self._cancel_epoch
                 try:
-                    action(version, arrived)
+                    if cancelled:
+                        # Esc landed while this waited for cleanup: it
+                        # is discarded like the rest of the recording.
+                        self._status("cancelled before typing (discarded)")
+                    else:
+                        self._active_epoch = epoch
+                        action(version, arrived)
                 except Exception as e:
                     self._status(f"error delivering text: {e}")
                 finally:
+                    self._active_epoch = None
                     with self._lock:
                         self._cleaning -= 1
                         # Idle time counts from when the text lands.
@@ -554,6 +570,16 @@ class VoiceTypeApp:
             # hold up capture, hotkeys, or the overlay. The submit/stop/
             # wake phrases were already matched on the raw text.
             text = self._post.clean(text, since=arrived)
+            with self._lock:
+                cancelled = (
+                    self._active_epoch is not None
+                    and self._active_epoch != self._cancel_epoch
+                )
+            if cancelled:
+                # Esc landed during cleanup: discard, like the rest of
+                # the cancelled recording.
+                self._status("cancelled during cleanup (discarded)")
+                return
         # Record for the paste-again hotkey / clipboard BEFORE typing:
         # even text that lands in the wrong window (or is skipped as
         # stale) stays rescuable.
