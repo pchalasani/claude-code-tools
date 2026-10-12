@@ -470,3 +470,52 @@ def test_start_replaces_old_watcher_that_wins_the_lock_race(
     finally:
         old.kill()
         CliRunner().invoke(cli, ["--stop"])
+
+
+_BUSY_OLD_WATCHER = """
+import os, signal, sys, time, uuid
+from pathlib import Path
+from claude_code_tools.codex_server_process import process_identity
+from claude_code_tools.github_watch_store import WatchStore
+
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+store = WatchStore(Path(sys.argv[1]))
+instance, pid = str(uuid.uuid4()), os.getpid()
+identity = process_identity(pid)
+while True:
+    store.heartbeat(instance, pid, identity, "2026-01-01T00:00:00+00:00", "0.0.0")
+    time.sleep(0.1)
+"""
+
+
+def test_start_forces_out_old_watcher_stuck_in_a_poll(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """An old watcher that outlives SIGTERM is killed, then replaced."""
+    state = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state))
+    monkeypatch.setattr("claude_code_tools.github_wake._DAEMON_REPLACE_SECONDS", 0.5)
+    store = WatchStore(state / "claude-code-tools/github-watch")
+    busy = subprocess.Popen(
+        [sys.executable, "-c", _BUSY_OLD_WATCHER, str(store.state_dir)],
+        stdin=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            status = store.watcher_status()
+            if status is not None and status.pid == busy.pid:
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("busy watcher did not publish a heartbeat")
+
+        assert _ensure_watcher(store) is True
+        assert busy.wait(timeout=5) == -9
+        new = store.watcher_status()
+        assert new is not None
+        assert new.code_version == claude_code_tools.__version__
+    finally:
+        busy.kill()
+        CliRunner().invoke(cli, ["--stop"])

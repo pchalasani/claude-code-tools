@@ -36,6 +36,7 @@ from claude_code_tools.issue_reply_delivery import (
 
 _DAEMON_START_SECONDS = 5.0
 _DAEMON_STOP_SECONDS = 5.0
+_DAEMON_REPLACE_SECONDS = 30.0
 _MAX_GH_OUTPUT_BYTES = 1024 * 1024
 
 
@@ -334,23 +335,43 @@ def _show_status(as_json: bool) -> None:
         )
 
 
-def _stop_watcher(store: WatchStore, announce: bool = True) -> None:
+def _stop_watcher(store: WatchStore) -> None:
     """Stop the exact watcher process recorded in durable state."""
     status = store.watcher_status()
     if not _watcher_is_healthy(status):
-        if announce:
-            click.echo("Watcher is not running.")
+        click.echo("Watcher is not running.")
         return
     assert status is not None
     os.kill(status.pid, signal.SIGTERM)
-    deadline = time.monotonic() + _DAEMON_STOP_SECONDS
+    if not _wait_for_exit(status, _DAEMON_STOP_SECONDS):
+        raise click.ClickException("watcher did not stop after SIGTERM")
+    click.echo("Watcher stopped.")
+
+
+def _replace_watcher(status: WatcherStatus) -> None:
+    """End a watcher of another version, forcing it if a poll keeps it busy.
+
+    Its state is durable, so a forced stop can at most repeat a delivery.
+    """
+    if process_identity(status.pid) != status.process_identity:
+        return
+    os.kill(status.pid, signal.SIGTERM)
+    if _wait_for_exit(status, _DAEMON_REPLACE_SECONDS):
+        return
+    if process_identity(status.pid) == status.process_identity:
+        os.kill(status.pid, signal.SIGKILL)
+    if not _wait_for_exit(status, _DAEMON_STOP_SECONDS):
+        raise RuntimeError("watcher of another version did not exit")
+
+
+def _wait_for_exit(status: WatcherStatus, seconds: float) -> bool:
+    """Wait until the exact recorded watcher process is gone."""
+    deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         if process_identity(status.pid) != status.process_identity:
-            if announce:
-                click.echo("Watcher stopped.")
-            return
+            return True
         time.sleep(0.05)
-    raise click.ClickException("watcher did not stop after SIGTERM")
+    return False
 
 
 def _ensure_watcher(store: WatchStore, replace_other_version: bool = True) -> bool:
@@ -404,11 +425,11 @@ def _adopt_watcher(
     """Reuse a healthy watcher of this version, or replace it once."""
     if status is not None and status.code_version == __version__:
         return False
-    if not replace_other_version:
+    if status is None or not replace_other_version:
         raise RuntimeError(
             "a watcher from another claude-code-tools version is still running"
         )
-    _stop_watcher(store, announce=False)
+    _replace_watcher(status)
     return _ensure_watcher(store, replace_other_version=False)
 
 
