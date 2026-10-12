@@ -89,6 +89,12 @@ def test_sanitize_output_strips_template_debris() -> None:
         ),
         ("fix it", "x" * 81, "much longer"),
         ("a" * 60, "a" * 15, "lost most"),
+        ("please schedule the meeting for tomorrow", "OK.", "lost most"),
+        (
+            "let's meet on Tuesday no wait Wednesday at three",
+            "Let's meet on Wednesday at 3.",
+            None,
+        ),
     ],
 )
 def test_rejection_reason(raw: str, cleaned: str, expected: str | None) -> None:

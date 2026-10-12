@@ -127,6 +127,12 @@ def rejection_reason(raw: str, cleaned: str) -> str | None:
         return "output much longer than input"
     if n_raw > 40 and n_out < 0.35 * n_raw:
         return "output lost most of the input"
+    # Short takes too: a reply like "OK." must not replace a dictated
+    # sentence. Self-corrections drop words, but never two thirds of a
+    # take of four or more words.
+    raw_words, out_words = len(raw.split()), len(cleaned.split())
+    if raw_words >= 4 and out_words < 0.35 * raw_words:
+        return "output lost most of the input"
     return None
 
 
