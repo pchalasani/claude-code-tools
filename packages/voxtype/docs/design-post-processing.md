@@ -87,7 +87,10 @@ English only).
      the text dictated just before it is typed. With cleanup off, delivery
      stays inline, exactly as before.
    - A toggle-off during cleanup still lets that take through, because the
-     take arrived before the toggle. Wake-mode idle expiry waits for queued
+     take arrived before the toggle. Esc, as on main, discards only audio the
+     engine has not transcribed yet. Text that is already delivered and
+     waiting for cleanup is typed, because inline delivery would already have
+     typed it. Wake-mode idle expiry waits for queued
      takes. Cleaned text is typed on one line, because a typed newline presses
      Enter.
    - The raw text is typed whenever any of these happen: a connection error, an

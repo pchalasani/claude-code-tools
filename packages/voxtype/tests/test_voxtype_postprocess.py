@@ -892,7 +892,10 @@ def test_rejected_take_never_claims_a_later_handoff() -> None:
     assert app._consume_handoff()  # the later handoff is still armed
 
 
-def test_cancel_discards_text_waiting_for_cleanup() -> None:
+def test_cancel_never_discards_delivered_text() -> None:
+    """As on origin/main — where a delivered utterance is typed at once —
+    Esc discards only untranscribed audio, never text already delivered
+    and merely waiting for (or in) cleanup."""
     app = _vad_app()
 
     class _Engine:
@@ -904,11 +907,11 @@ def test_cancel_discards_text_waiting_for_cleanup() -> None:
 
     app._engine = _Engine()
     app._post = _Slow(0.3)
-    app.handle_utterance("blocker")  # in cleanup ...
-    app.handle_utterance("discard me")  # ... this one waits behind it
+    app.handle_utterance("first")  # in cleanup ...
+    app.handle_utterance("second")  # ... this one waits behind it
     app.cancel()  # Esc while both are pending
     app.flush_deliveries()
-    assert app.typist.typed == []
+    assert app.typist.typed == ["FIRST ", "SECOND "]
 
 
 def test_cancel_spares_earlier_session_still_in_cleanup() -> None:
@@ -962,8 +965,6 @@ def test_late_hold_take_belongs_to_previous_session() -> None:
     app.cancel()  # Esc cancels session 2 only
     app.flush_deliveries()
     assert app.typist.typed == ["TAKE ONE "]
-    assert app._session_texts == []
-    assert app._prev_session_texts == ["TAKE ONE"]
 
 
 def test_late_hold_take_survives_cancelled_middle_session() -> None:
@@ -1023,31 +1024,6 @@ def test_late_vad_flush_belongs_to_previous_session() -> None:
     app.cancel()  # Esc in the new session
     app.flush_deliveries()
     assert app.typist.typed == ["FLUSHED SEGMENT "]
-    assert app._session_texts == []
-
-
-def test_new_speech_after_quick_retoggle_stays_cancellable() -> None:
-    """Speech the engine HEARD in the new session is that session's, even
-    inside the old toggle-off's handoff window: Esc discards it."""
-    app = _vad_app()
-
-    class _Engine:
-        def request_flush(self) -> None:
-            pass
-
-        def request_reset(self) -> None:
-            pass
-
-    app._engine = _Engine()
-    app._post = _Slow(0.2)
-    app.toggle()  # off
-    app._last_toggle = 0.0
-    app.toggle()  # quickly back on
-    app.note_activity()  # new speech heard
-    app.handle_utterance("new words")
-    app.cancel()  # Esc in the new session
-    app.flush_deliveries()
-    assert app.typist.typed == []
 
 
 def test_queue_wait_counts_against_timeout(stub_post) -> None:

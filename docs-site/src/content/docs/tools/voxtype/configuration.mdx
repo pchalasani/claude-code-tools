@@ -403,7 +403,9 @@ to raw (reason)`, for every take.
 Spoken commands are matched on the raw transcript, before cleanup. That
 covers the submit phrases ("go"), the stop phrase and the wake word, so
 cleanup cannot break them. Filler-word removal (`strip_fillers`) also
-still runs first.
+still runs first. `Esc` behaves as it does without cleanup: it
+discards the recording in progress, but text already transcribed and
+waiting for cleanup is still typed.
 
 The server never outlives voxtype. It runs under a tiny supervisor
 process (about 20 MB) that stops it as soon as voxtype exits for any

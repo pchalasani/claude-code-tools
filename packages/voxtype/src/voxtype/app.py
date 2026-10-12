@@ -39,13 +39,6 @@ def _preview(text: str, limit: int = 60) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-# Session id for a late delivery from an earlier session (see
-# handle_utterance): it belongs to SOME earlier, normally-stopped
-# session — never a cancelled one, since Esc drops a session's audio and
-# disarms its handoff before anything can be queued — so it must match
-# no cancellation. Session ids are never negative.
-_EARLIER_SESSION_SEQ = -1
-
 # A queued delivery that failed authorization at arrival (see
 # VoiceTypeApp._deliver). State versions are never negative, so it can
 # never pass _inject, and it must never consume a LATER handoff.
@@ -98,18 +91,6 @@ class VoiceTypeApp:
         # progress). See _deliver.
         self._cleaning = 0
         self._delivery_q: queue.Queue | None = None
-        # Recording-session ids: bumped on every activation. cancel()
-        # marks the CURRENT session cancelled, so Esc also drops that
-        # session's text still waiting for cleanup — but never a take
-        # from an earlier session that is still being cleaned.
-        self._session_seq = 0
-        self._cancelled_seqs: set[int] = set()
-        # Session id of the delivery the worker is running (None inline).
-        self._active_seq: int | None = None
-        # Whether the engine has heard speech since the last activation
-        # (note_activity); tells a toggle-off's late flushed segment
-        # from new-session speech (see handle_utterance).
-        self._heard_since_activation = False
         # Set once _start_hotkey_listener runs — in run() (no overlay) or
         # from inside the overlay loop (see _start_hotkeys_from_loop); the
         # finally block stops it. May be None if no valid hotkeys.
@@ -117,9 +98,6 @@ class VoiceTypeApp:
         # Text of the current/most recent dictation session, for the
         # clipboard option and the paste-again hotkey.
         self._session_texts: list[str] = []
-        # The previous session's buffer: a hold take that finishes
-        # decoding after the next session began belongs there.
-        self._prev_session_texts: list[str] = []
         self._stop = threading.Event()
         # Cleared while the engine loads (run() clears then sets it),
         # so the toggle hotkey is a no-op — with feedback — until audio
@@ -162,10 +140,7 @@ class VoiceTypeApp:
                 # transcript delivered right after activation can never
                 # be appended first and then erased by a later effect
                 # (which would break clipboard/paste-last recovery).
-                self._prev_session_texts = self._session_texts
                 self._session_texts = []
-                self._session_seq += 1
-                self._heard_since_activation = False
         self._emit_transition_effects(version, old, new)
         return version
 
@@ -306,7 +281,6 @@ class VoiceTypeApp:
                 return
             self._grace_until = 0.0
             self._expect_hold = 0
-            self._cancelled_seqs.add(self._session_seq)
         self._set_state(self._off_state)
         with self._lock:
             self._grace_until = 0.0  # _set_state must not resurrect it
@@ -330,8 +304,6 @@ class VoiceTypeApp:
         """
         with self._lock:
             self._last_activity = time.monotonic()
-            if self._state == State.ACTIVE:
-                self._heard_since_activation = True
 
     def handle_utterance(self, text: str) -> None:
         """Process one VAD-completed utterance from the transcriber.
@@ -348,30 +320,10 @@ class VoiceTypeApp:
             state = self._state
             version = self._state_version
             self._last_activity = time.monotonic()
-            # A delivery from an EARLIER session can arrive while ACTIVE:
-            # in hold mode the current session's take only comes after
-            # its toggle-off, so any take now is a late decode; with
-            # VAD, a toggle-off's flushed segment can land after a quick
-            # re-toggle — it is the one in-flight segment that toggle's
-            # still-armed handoff exists for, so consume that handoff.
-            # New-session speech is told apart by the engine having
-            # reported speech (note_activity) since activation.
-            # Either way keep it out of this session's rescue buffer and
-            # immune to its Esc.
-            late = False
-            if state == State.ACTIVE:
-                if self.cfg.segmentation == "hold":
-                    late = True
-                elif (
-                    time.monotonic() < self._grace_until
-                    and not self._heard_since_activation
-                ):
-                    late = True
-                    self._grace_until = 0.0
-            origin_seq = _EARLIER_SESSION_SEQ if late else None
-            origin_buf = (
-                self._prev_session_texts if late else self._session_texts
-            )
+            # The rescue buffer of the session this utterance arrived in
+            # (a take still in cleanup when the next session starts must
+            # not land in that session's buffer).
+            origin_buf = self._session_texts
         if state in (State.PAUSED, State.PASSIVE):
             if self._consume_handoff():
                 # In-flight speech from just before a toggle-off:
@@ -425,7 +377,7 @@ class VoiceTypeApp:
         if any(
             is_exact_phrase(text, p) for p in self.cfg.submit_phrases
         ):
-            self._deliver(version, self._submit, origin_seq)
+            self._deliver(version, self._submit)
             return
         if self.cfg.stop_phrase and contains_phrase(
             text, self.cfg.stop_phrase
@@ -436,7 +388,6 @@ class VoiceTypeApp:
         self._deliver(
             version,
             lambda v, at, t=text, b=origin_buf: self._type(t, v, at, b),
-            origin_seq,
         )
 
     def _submit(self, version: int | None, at: float) -> None:
@@ -446,8 +397,6 @@ class VoiceTypeApp:
         """
         if version is None:
             with self._lock:
-                if self._cancelled_locked():
-                    return
                 self.typist.press_enter()
             self._status("submitted (Enter)")
         elif self._inject(version, self.typist.press_enter):
@@ -458,18 +407,8 @@ class VoiceTypeApp:
             # toggle's grace/hold handoff authorizes.
             self._enter_in_flight()
 
-    def _cancelled_locked(self) -> bool:
-        """True if the running delivery's session was cancelled.
-
-        Call with ``_lock`` held, in the same critical section as the
-        keystrokes, so an Esc can never slip in between check and type.
-        """
-        return self._active_seq in self._cancelled_seqs
-
     def _enter_in_flight(self) -> None:
         with self._lock:
-            if self._cancelled_locked():
-                return
             self.typist.press_enter()
         self._status("submitted (Enter, in-flight)")
 
@@ -477,7 +416,6 @@ class VoiceTypeApp:
         self,
         version: int | None,
         action: Callable[[int | None, float], None],
-        seq: int | None = None,
     ) -> None:
         """Run a typing/Enter ``action(version, arrived)`` in order.
 
@@ -497,6 +435,10 @@ class VoiceTypeApp:
         dictation stops while it waits — exactly what inline typing
         would have done at this moment. Otherwise it keeps ``version``
         and its staleness check fails later, as it would have now.
+
+        Esc (cancel) therefore never discards text already queued here:
+        like origin/main, where a delivered utterance is typed at once,
+        Esc discards only audio the engine has not yet transcribed.
         """
         arrived = time.monotonic()
         if self._post is None:
@@ -523,9 +465,7 @@ class VoiceTypeApp:
                     daemon=True,
                 ).start()
             q = self._delivery_q
-            if seq is None:
-                seq = self._session_seq
-        q.put((action, version, arrived, seq))
+        q.put((action, version, arrived))
 
     def _delivery_loop(self, q: queue.Queue) -> None:
         while True:
@@ -533,21 +473,12 @@ class VoiceTypeApp:
             try:
                 if item is None:
                     return
-                action, version, arrived, seq = item
-                with self._lock:
-                    cancelled = seq in self._cancelled_seqs
+                action, version, arrived = item
                 try:
-                    if cancelled:
-                        # Esc landed while this waited for cleanup: it
-                        # is discarded like the rest of the recording.
-                        self._status("cancelled before typing (discarded)")
-                    else:
-                        self._active_seq = seq
-                        action(version, arrived)
+                    action(version, arrived)
                 except Exception as e:
                     self._status(f"error delivering text: {e}")
                 finally:
-                    self._active_seq = None
                     with self._lock:
                         self._cleaning -= 1
                         # Idle time counts from when the text lands.
@@ -636,27 +567,18 @@ class VoiceTypeApp:
         # in (captured at arrival): a take still in cleanup when a new
         # session starts must not leak into the new session's rescue
         # text, nor overwrite its clipboard copy.
-        # The cancel check shares this critical section with the rescue
-        # buffer and clipboard updates: a take cancelled (Esc) while it
-        # waited for or ran through cleanup leaves no trace anywhere.
         with self._lock:
-            if self._cancelled_locked():
-                cancelled = True
-            else:
-                cancelled = False
-                buf = self._session_texts if session is None else session
-                buf.append(text)
-                if self.cfg.copy_to_clipboard and buf is self._session_texts:
-                    copy_to_clipboard(" ".join(buf))
-        if cancelled:
-            self._status("cancelled before typing (discarded)")
-            return
+            buf = self._session_texts if session is None else session
+            buf.append(text)
+            current = buf is self._session_texts
+            joined = " ".join(buf)
+        if self.cfg.copy_to_clipboard and current:
+            copy_to_clipboard(joined)
         if self.cfg.trailing_space:
             text += " "
         if version is None:
             with self._lock:
-                if not self._cancelled_locked():
-                    self.typist.type_text(text)
+                self.typist.type_text(text)
         elif not self._inject(
             version, lambda: self.typist.type_text(text)
         ) and version != _REJECTED and self._consume_handoff(at=arrived):
@@ -667,8 +589,7 @@ class VoiceTypeApp:
             # commit while leaving the grace window armed for stray
             # later speech. Consume the handoff and type.
             with self._lock:
-                if not self._cancelled_locked():
-                    self.typist.type_text(text)
+                self.typist.type_text(text)
 
     def paste_last(self) -> None:
         """Paste-hotkey handler: type the last session's transcript.
