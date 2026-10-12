@@ -467,7 +467,7 @@ class LlamaServer:
             except (OSError, http.client.HTTPException):
                 pass
             time.sleep(0.25)
-        self.stop()
+        self.stop(keep_log=True)
         raise RuntimeError(f"llama-server not healthy after {timeout:.0f}s")
 
     def alive(self) -> bool:
