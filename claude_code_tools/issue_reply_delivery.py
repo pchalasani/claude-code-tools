@@ -69,9 +69,11 @@ def codex_target_from_environment(codex_home: Path | None = None) -> DeliveryTar
             "unset); in Claude Code use --claude-monitor"
         )
     home = _codex_home_for_thread(thread_id, codex_home)
-    executable = shutil.which("codex")
-    if executable is None:
+    found = shutil.which("codex")
+    if found is None:
         raise DeliveryConfigurationError("cannot find the codex executable")
+    # The shared watcher runs elsewhere, so a relative PATH hit must not leak.
+    executable = os.path.abspath(found)
     try:
         completed = subprocess.run(
             [executable, "queue", "--help"],

@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import stat
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 from pytest import MonkeyPatch
 
-from claude_code_tools.github_wake import cli
+import claude_code_tools
+from claude_code_tools.github_wake import _ensure_watcher, cli
 from claude_code_tools.github_watch_daemon import GitHubWatchDaemon
 from claude_code_tools.github_watch_store import IssueWatch, WatchStore
 from claude_code_tools.issue_reply_delivery import (
@@ -359,3 +364,109 @@ def test_unsupported_adapter_fails_watch_instead_of_retrying(
     assert stored.status == "failed"
     assert "re-arm" in (stored.last_error or "")
     assert store.pending_watches() == []
+
+
+def test_registration_records_absolute_codex_path(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A relative PATH hit is stored absolute for the watcher's other cwd."""
+    binary_dir = tmp_path / "bin"
+    binary_dir.mkdir()
+    _fake_gh(binary_dir)
+    codex = _fake_codex(binary_dir)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "claude_code_tools.github_wake._ensure_watcher",
+        lambda _store: True,
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["https://github.com/owner/repository/issues/42"],
+        env={
+            "PATH": f"bin:{os.environ['PATH']}",
+            "XDG_STATE_HOME": str(tmp_path / "state"),
+            "CODEX_THREAD_ID": _THREAD,
+            "CODEX_HOME": str(_codex_home(tmp_path / "account")),
+        },
+    )
+
+    assert result.exit_code == 0, result.output
+    watch = WatchStore(
+        tmp_path / "state/claude-code-tools/github-watch"
+    ).all_watches()[0]
+    assert watch.target["executable"] == str(codex)
+
+
+def _start_old_watcher(state: Path) -> subprocess.Popen[bytes]:
+    """Run a real watcher that reports an older claude-code-tools version."""
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import claude_code_tools; claude_code_tools.__version__ = '0.0.0'; "
+            "from claude_code_tools.github_watch_daemon import main; main()",
+        ],
+        env={**os.environ, "XDG_STATE_HOME": str(state)},
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    store = WatchStore(state / "claude-code-tools/github-watch")
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        status = store.watcher_status()
+        if status is not None and status.pid == process.pid:
+            return process
+        time.sleep(0.05)
+    process.kill()
+    raise AssertionError("old watcher did not start")
+
+
+def test_start_replaces_old_watcher_that_wins_the_lock_race(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """An old watcher adopted after the new one loses the lock is replaced.
+
+    The old watcher's heartbeat looks stale, so a new watcher is spawned; it
+    exits on the held lock while the old one refreshes its heartbeat.
+    """
+    state = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state))
+    old = _start_old_watcher(state)
+    store = WatchStore(state / "claude-code-tools/github-watch")
+    old_status = store.watcher_status()
+    assert old_status is not None
+    with sqlite3.connect(store.db_path) as connection:
+        connection.execute(
+            "UPDATE watcher_status SET heartbeat_at = '2000-01-01T00:00:00+00:00'"
+        )
+    real_popen = subprocess.Popen
+    calls: list[list[str]] = []
+
+    def racing_popen(args: list[str], **kwargs: object) -> subprocess.Popen[bytes]:
+        calls.append(args)
+        if len(calls) == 1:
+            store.heartbeat(
+                old_status.instance_id,
+                old_status.pid,
+                old_status.process_identity,
+                old_status.started_at,
+                "0.0.0",
+            )
+            return real_popen([sys.executable, "-c", "pass"])
+        return real_popen(args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("claude_code_tools.github_wake.subprocess.Popen", racing_popen)
+    try:
+        assert _ensure_watcher(store) is True
+        old.wait(timeout=5)
+        new = store.watcher_status()
+        assert new is not None
+        assert new.pid != old.pid
+        assert new.code_version == claude_code_tools.__version__
+        assert len(calls) == 2
+    finally:
+        old.kill()
+        CliRunner().invoke(cli, ["--stop"])

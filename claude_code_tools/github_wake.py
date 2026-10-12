@@ -21,7 +21,11 @@ import click
 
 from claude_code_tools import __version__
 from claude_code_tools.codex_server_process import process_identity
-from claude_code_tools.github_watch_store import IssueWatch, WatchStore
+from claude_code_tools.github_watch_store import (
+    IssueWatch,
+    WatcherStatus,
+    WatchStore,
+)
 from claude_code_tools.issue_reply_delivery import (
     _MAX_MONITOR_MESSAGE_BYTES,
     _MONITOR_ACK,
@@ -349,18 +353,15 @@ def _stop_watcher(store: WatchStore, announce: bool = True) -> None:
     raise click.ClickException("watcher did not stop after SIGTERM")
 
 
-def _ensure_watcher(store: WatchStore) -> bool:
+def _ensure_watcher(store: WatchStore, replace_other_version: bool = True) -> bool:
     """Start one detached watcher and wait for its certified heartbeat.
 
-    A healthy watcher left running by another installed version is replaced,
-    since it may not know the delivery adapter this version records.
+    A healthy watcher left running by another installed version is replaced
+    once, since it may not know the delivery adapter this version records.
     """
     status = store.watcher_status()
     if _watcher_is_healthy(status):
-        assert status is not None
-        if status.code_version == __version__:
-            return False
-        _stop_watcher(store, announce=False)
+        return _adopt_watcher(store, status, replace_other_version)
     log = open(store.log_path, "ab", buffering=0)
     try:
         process = subprocess.Popen(
@@ -376,8 +377,9 @@ def _ensure_watcher(store: WatchStore) -> bool:
     deadline = time.monotonic() + _DAEMON_START_SECONDS
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            if _watcher_is_healthy(store.watcher_status()):
-                return False
+            status = store.watcher_status()
+            if _watcher_is_healthy(status):
+                return _adopt_watcher(store, status, replace_other_version)
             raise RuntimeError(f"watcher exited with status {process.returncode}")
         status = store.watcher_status()
         if (
@@ -387,11 +389,27 @@ def _ensure_watcher(store: WatchStore) -> bool:
         ):
             return True
         if _watcher_is_healthy(status):
-            return False
+            return _adopt_watcher(store, status, replace_other_version)
         time.sleep(0.05)
     process.terminate()
     process.wait(timeout=2)
     raise RuntimeError("watcher did not publish a healthy heartbeat")
+
+
+def _adopt_watcher(
+    store: WatchStore,
+    status: WatcherStatus | None,
+    replace_other_version: bool,
+) -> bool:
+    """Reuse a healthy watcher of this version, or replace it once."""
+    if status is not None and status.code_version == __version__:
+        return False
+    if not replace_other_version:
+        raise RuntimeError(
+            "a watcher from another claude-code-tools version is still running"
+        )
+    _stop_watcher(store, announce=False)
+    return _ensure_watcher(store, replace_other_version=False)
 
 
 def _watcher_is_healthy(status: object) -> bool:
