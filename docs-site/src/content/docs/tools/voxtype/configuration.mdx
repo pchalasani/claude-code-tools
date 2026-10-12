@@ -230,10 +230,15 @@ strip_fillers = true
 
 # Optional LLM cleanup, off by default — see "Post-processing" below
 post_process = false
+post_process_provider = "s1-mini"    # s1-mini (local) | cerebras (external API)
+post_process_format = "auto"         # cerebras: auto | paragraphs | minimal
+post_process_newlines = "auto"       # line breaks: auto | shift_enter | flatten
+post_process_log_text = true         # log each take's before/after text
+post_process_cerebras_model = "gpt-oss-120b"
 post_process_style = "semi-formal"   # casual | semi-casual | semi-formal | formal
 post_process_structure = "prose"     # prose | lists
 post_process_context = "general"     # general | email
-post_process_timeout = 4.0           # seconds before a take is typed raw
+post_process_timeout = 0.0           # seconds before raw; 0 = 4 (s1-mini) / 2 (cerebras)
 post_process_model = ""              # local .gguf path; "" = pinned S1-mini download
 post_process_server = "llama-server" # llama.cpp server binary (name or path)
 
@@ -298,10 +303,27 @@ One trade-off worth knowing:
 
 ## Post-processing (LLM cleanup)
 
-Off by default. With `post_process = true`, every transcript goes
-through a small local language model before voxtype types it. The model
-adds punctuation and capitals, drops self-corrections, and removes
-verbal clutter like "you know". These are real takes from this Mac:
+Optionally, voxtype can pass each transcript through a language model
+before typing it, to clean it up. Pick one of three setups in
+`~/.config/voxtype/config.toml`:
+
+| You want | Put in your config | Also needed |
+|---|---|---|
+| **No cleanup** (the default) | nothing | nothing |
+| **Local cleanup** (on-device, English only) | `post_process = true` | `brew install llama.cpp` ([details](#set-up-the-local-model)) |
+| **Cerebras cleanup** (also paragraphs and lists; **sends transcripts to Cerebras**) | `post_process = true`<br/>`post_process_provider = "cerebras"` | `CEREBRAS_API_KEY` in your shell profile ([details](#cerebras-provider-external-api)) |
+
+With no cleanup, plain `voxtype` types Parakeet's transcript exactly as
+it always has, after the regex filler removal. With either kind of
+cleanup, any failure or timeout types the raw transcript, so a take is
+never lost. To turn cleanup off again, delete `post_process = true` or
+set it to `false`.
+
+### The local model (s1-mini)
+
+The local model adds punctuation and capitals, drops self-corrections,
+and removes verbal clutter like "you know". These are real takes from
+this Mac:
 
 | Parakeet heard | voxtype typed |
 |---|---|
@@ -316,7 +338,7 @@ licensed, with one added condition: anything that uses it must keep
 calling it "S1-mini" by "Superwhisper". It handles English only.
 Everything runs on your Mac; nothing leaves the machine.
 
-### Set it up
+### Set up the local model
 
 1. Install llama.cpp, which provides the `llama-server` that runs the
    model. voxtype adds no Python dependencies for this, so the base
@@ -352,18 +374,33 @@ Everything runs on your Mac; nothing leaves the machine.
 | `post_process_style` | `"semi-formal"` | `casual` (lowercase, little punctuation), `semi-casual`, `semi-formal` (sentences, capitals, full stops), or `formal` (also expands contractions). |
 | `post_process_structure` | `"prose"` | `lists` numbers "first..., second..." items. |
 | `post_process_context` | `"general"` | `email` formats the text as an email. |
-| `post_process_timeout` | `4.0` | Seconds a take may spend in cleanup before voxtype types it raw (0.5–60). |
+| `post_process_provider` | `"s1-mini"` | `s1-mini` (local) or `cerebras` (external API; see below). |
+| `post_process_newlines` | `"auto"` | How line breaks in cleaned text are typed: `shift_enter`, `flatten` (one line), or `auto` (Shift+Enter for cerebras, flatten for s1-mini). See below. |
+| `post_process_log_text` | `true` | Log each take's full before/after text. `false` logs timings only. |
+| `post_process_timeout` | `0.0` | Seconds a take may spend in cleanup before voxtype types it raw (0.5–60). `0` means the provider default: 4 s for s1-mini, 2 s for cerebras. |
 | `post_process_model` | `""` | Path to your own `.gguf` file. Empty means the pinned S1-mini download. |
 | `post_process_server` | `"llama-server"` | Name or full path of the llama.cpp server binary. |
 
 The style, structure and context values are the only ones the model
 was trained on, so voxtype rejects anything else.
 
-Cleaned text is always typed as a single line. voxtype types a newline
-by pressing Enter, so a line break in the model's output would submit a
-chat prompt or run a shell command partway through your take. With
-`lists` you therefore get "1. Install voxtype. 2. Run setup." on one
-line.
+### Line breaks
+
+voxtype never types a bare Enter in the middle of a take, because that
+would send a chat prompt or run a shell command partway through. With
+`post_process_newlines = "shift_enter"`, each line break in cleaned
+text (list items, paragraphs) is typed as Shift+Enter, which inserts a
+new line without sending in Claude Code, Codex, Slack, most chat boxes
+and editors. The default, `"auto"`, does that for the cerebras provider
+and types s1-mini's output on one line, as s1-mini always has.
+
+:::caution[Plain shells]
+In a plain shell prompt, and in some apps, Shift+Enter acts like
+Enter, so a structured take would run as several commands. If you
+dictate into a shell, set `post_process_newlines = "flatten"`: cleaned
+text is then typed on one line, and lists become "1. Install voxtype.
+2. Run setup."
+:::
 
 ### What it costs
 
@@ -407,7 +444,8 @@ cleanup off, when any of the following happens:
   reliably detected, so use cleanup only for English dictation.
 
 The terminal shows `post-processed in N ms`, or `post-process fell back
-to raw (reason)`, for every take.
+to raw (reason)`, for every take. Each take also gets a `latency:` line;
+see [Reading the logs](#reading-the-logs).
 
 Spoken commands are matched on the raw transcript, before cleanup. That
 covers the submit phrases ("go"), the stop phrase and the wake word, so
@@ -425,6 +463,162 @@ behind by a voxtype process that has died. It never touches the server
 of a voxtype process that is still running. A server that fails to
 start leaves its log in that same directory.
 
+### Cerebras provider (external API)
+
+`post_process_provider = "cerebras"` sends each transcript to
+[Cerebras](https://inference-docs.cerebras.ai/) and runs it through
+**gpt-oss-120b**. Besides cleanup, it splits long, rambling dictations
+into paragraphs at topic changes and turns spoken enumerations into
+plain-text lists, while keeping technical terms, file names, commands
+and URLs as dictated. Short utterances stay short.
+
+:::caution[Your transcripts leave your Mac]
+With this provider, every transcript is sent to `api.cerebras.ai`. The
+default (`post_process = false`, or the `s1-mini` provider) stays fully
+local. Don't enable it for dictation you would not paste into a cloud
+service.
+:::
+
+**Enable it.** Put the API key in your shell environment, not in
+voxtype's config file. For example, add this line to `~/.zshrc`:
+
+```bash
+export CEREBRAS_API_KEY="..."   # from cloud.cerebras.ai; keep it out of git
+```
+
+Then, in `~/.config/voxtype/config.toml`:
+
+```toml
+post_process = true
+post_process_provider = "cerebras"
+```
+
+To disable it, set `post_process = false`, or switch the provider back
+to `s1-mini`. voxtype reads the key only from `CEREBRAS_API_KEY` and
+never logs it. If the key is missing, it says so once at launch and
+types raw transcripts.
+
+**Try it once** without starting dictation:
+
+```bash
+voxtype post-process --provider cerebras "um so lets do it Friday no sorry Thursday"
+```
+
+| Key | Default | What it does |
+|---|---|---|
+| `post_process_provider` | `"s1-mini"` | `cerebras` selects this provider. |
+| `post_process_format` | `"auto"` | `auto`: paragraphs and lists when appropriate. `paragraphs`: paragraph breaks, but enumerations stay prose. `minimal`: fix punctuation and disfluencies only, with no added structure. |
+| `post_process_cerebras_model` | `"gpt-oss-120b"` | The Cerebras model id. |
+| `post_process_timeout` | `0.0` | `0` means 2 s for this provider. A take that takes longer is typed raw. |
+| `post_process_newlines` | `"auto"` | `auto` types Shift+Enter for this provider; paragraphs and lists need it. See [Line breaks](#line-breaks). |
+| `post_process_log_text` | `true` | Log the before/after text of each take. |
+
+The format is passed to the model through its prompt. The transcript
+is sent as delimited data, and the prompt tells the model never to
+follow instructions inside it. voxtype keeps one HTTPS connection open
+to save the TLS handshake on each take. Every failure (no key, HTTP
+error, timeout, empty or malformed reply, truncated output, or output
+that lost most of the input) types the raw transcript, and the reason
+is logged.
+
+### Reading the logs
+
+With post-processing on, every take logs one line with timings only,
+never transcript text or the key. For example (illustrative numbers):
+
+```
+[voxtype] post-process (cerebras): 412 ms
+[voxtype] latency: transcribe 966 ms, post-process 412 ms (cerebras, ok), total 1398 ms (speech end to inserted)
+```
+
+- **`transcribe`** runs from your toggle-off to Parakeet's transcript.
+  It appears in hold mode only; with VAD segmentation the engine's
+  `transcribed N s of audio in M s` line covers it.
+- **`post-process`** is the cleanup call, including the network round
+  trip. The parenthesis shows `ok`, or `fallback: <reason>` such as
+  `HTTP 402 payment_required` or `timed out`.
+- **`total`** runs from the end of your speech to the text being typed.
+  With VAD segmentation it starts when the transcript arrives instead.
+  If you start and stop a new take before the previous one has finished
+  transcribing, that earlier take is timed from the latest toggle-off,
+  so its numbers read low.
+
+The latency and fallback lines never contain your words. The
+before/after lines (`before: "…"`, `after: "…"`) contain each take's
+full text; set `post_process_log_text = false` to turn them off.
+voxtype's usual one-line previews (`typed: "…"`) still show the start of
+each take, as they always have.
+
+### Measured results
+
+On an M1 Max, using `say`-synthesized takes of 64–76 seconds (182–238
+words: several requirements, a correction, a topic change, file names,
+commands and URLs) through Parakeet, voxtype's real delivery path and
+the live Cerebras API, with gpt-oss-120b in `auto` format:
+
+| Stage | Median | 95th percentile |
+|---|---|---|
+| Transcription (Parakeet) | 1.0 s | 1.2 s |
+| Cerebras cleanup, including network | 0.39 s | 1.5 s |
+| Total, end of speech to text typed | 1.4 s | 2.5 s |
+
+The table is from the final run: 12 takes, spaced 3 s apart, all
+cleaned. Across all spaced runs, Cerebras usually answered in
+0.2–0.5 s but had a long tail. About 1 take in 10 took more than 2 s:
+with the default `post_process_timeout` it timed out and was typed raw.
+The slowest call took 4.2 s. Takes sent back-to-back sometimes got
+`HTTP 429 queue_exceeded` from Cerebras; those were typed raw within
+about 70 ms.
+
+Example (one 64-second take), Parakeet's transcript:
+
+> Okay, so um, for the new dashboard, we need a few things first a
+> login page with OAuth second or settings page, where users can change
+> their email address and their notification preferences, and third an
+> export button that dumps everything to CSV, and maybe also JSON if it
+> is easy. Oh, and the deadline for all of this is Friday, no sorry,
+> Thursday. … And then the last thing is the onboarding email. It is
+> way too long, and honestly, nobody reads it, so we should make it
+> shorter and friendlier.
+
+What voxtype typed (line breaks typed as Shift+Enter):
+
+```
+Okay, so for the new dashboard we need a few things:
+
+- A login page with OAuth. I want the login page done first because the other two depend on it.
+- A settings page where users can change their email address and their notification preferences.
+- An export button that dumps everything to CSV, and maybe also JSON if it is easy.
+- The deadline for all of this is Thursday.
+
+…
+
+Finally, the onboarding email is way too long and nobody reads it. We should make it shorter and friendlier, …
+```
+
+The live tests (`pytest tests/test_voxtype_cerebras.py`, with
+`CEREBRAS_API_KEY` set) check filler removal, self-corrections,
+paragraphs and lists, short utterances, exact technical terms and URLs,
+ignored instructions, and all three formats. All of them pass.
+
+**Limitations.**
+
+- Transcripts leave your Mac.
+- The model mostly restructures faithfully, but it sometimes drops a
+  short aside or an emphasis word ("we really need to move fast",
+  "honestly"). It also occasionally nests a list or rewords a phrase. It
+  does not fix words Parakeet misheard ("pydesk" for pytest).
+- Latency has a long tail, so about 1 long take in 10 exceeds the 2 s
+  default timeout and is typed raw. Raise `post_process_timeout` (for
+  example to 4) if you'd rather wait than lose the cleanup.
+- Dictating several takes in quick succession can hit Cerebras's
+  request-queue limit (`HTTP 429`); those takes are typed raw.
+- Shift+Enter is unsafe in plain shells (see above).
+- Corporate HTTP proxies are not used; voxtype connects to
+  `api.cerebras.ai` directly.
+- Formatting is decided by the model, so it can occasionally add
+  structure you didn't intend. `minimal` avoids that.
+
 ## CLI
 
 ```
@@ -433,7 +627,7 @@ voxtype setup [--config PATH] [--force]  interactive walkthrough -> writes confi
 voxtype init  [--config PATH] [--force]  write the commented sample config to edit
 voxtype hotkey                     press a chord; prints the config line
 voxtype skill                      install the voxtype skill into Claude + Codex
-voxtype post-process [TEXT] [--style S]  clean TEXT (or stdin) with the LLM once; downloads the model
+voxtype post-process [TEXT] [--provider P] [--format F] [--style S]  clean TEXT (or stdin) once
 voxtype --help                     full flag reference (per-subcommand: e.g. voxtype setup --help)
 ```
 

@@ -15,7 +15,14 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
-from .postprocess import VALID_CONTEXTS, VALID_STRUCTURES, VALID_STYLES
+from .postprocess import (
+    VALID_CONTEXTS,
+    VALID_FORMATS,
+    VALID_NEWLINES,
+    VALID_PROVIDERS,
+    VALID_STRUCTURES,
+    VALID_STYLES,
+)
 
 
 def default_engine() -> str:
@@ -138,16 +145,30 @@ class Config:
             far less likely, and any page-in cost lands in an idle
             moment instead of on a take. 0 disables (default);
             max 1440 (a day).
-        post_process: Clean each transcript with a local LLM ("S1-mini"
-            by "Superwhisper", run by llama.cpp's llama-server) before
-            typing it: punctuation, casing, self-corrections. Off by
-            default; any failure types the raw transcript.
+        post_process: Clean each transcript with an LLM before typing
+            it: punctuation, casing, self-corrections (and, with the
+            cerebras provider, paragraphs and lists). Off by default;
+            any failure types the raw transcript.
+        post_process_provider: "s1-mini" (local "S1-mini" by
+            "Superwhisper" via llama.cpp's llama-server) or "cerebras"
+            (gpt-oss-120b over Cerebras's API — sends transcripts to an
+            external service; needs CEREBRAS_API_KEY).
+        post_process_format: Cerebras formatting mode: "auto"
+            (paragraphs and lists when appropriate), "paragraphs" (no
+            lists), or "minimal" (no added structure).
+        post_process_newlines: How line breaks in cleaned text are
+            typed: "shift_enter" (new line without submitting),
+            "flatten" (one line), or "auto" (shift_enter for cerebras,
+            flatten for s1-mini). A bare Enter is never typed.
+        post_process_log_text: Log each take's before/after text.
+        post_process_cerebras_model: Cerebras model id.
         post_process_style: Control-line styling: casual, semi-casual,
             semi-formal, or formal.
         post_process_structure: "prose" or "lists".
         post_process_context: "general" or "email".
         post_process_timeout: Seconds a take may spend in cleanup before
-            it is typed raw (0.5–60).
+            it is typed raw (0.5–60); 0 means the provider default
+            (4 s for s1-mini, 2 s for cerebras).
         post_process_model: Path to a local GGUF; empty means download
             the pinned S1-mini Q4_K_M (~462 MiB) on first use.
         post_process_server: Name or path of the llama-server binary.
@@ -207,10 +228,15 @@ class Config:
     overlay_opacity: float = 1.0
     keepalive_minutes: float = 0.0
     post_process: bool = False
+    post_process_provider: str = "s1-mini"
+    post_process_format: str = "auto"
+    post_process_newlines: str = "auto"
+    post_process_log_text: bool = True
+    post_process_cerebras_model: str = "gpt-oss-120b"
     post_process_style: str = "semi-formal"
     post_process_structure: str = "prose"
     post_process_context: str = "general"
-    post_process_timeout: float = 4.0
+    post_process_timeout: float = 0.0
     post_process_model: str = ""
     post_process_server: str = "llama-server"
     model_arch: str = "medium-streaming"
@@ -298,6 +324,7 @@ class Config:
             "sounds",
             "overlay",
             "post_process",
+            "post_process_log_text",
         ):
             value = getattr(self, name)
             if not isinstance(value, bool):
@@ -434,6 +461,9 @@ class Config:
             ("post_process_style", VALID_STYLES),
             ("post_process_structure", VALID_STRUCTURES),
             ("post_process_context", VALID_CONTEXTS),
+            ("post_process_provider", VALID_PROVIDERS),
+            ("post_process_format", VALID_FORMATS),
+            ("post_process_newlines", VALID_NEWLINES),
         ):
             value = getattr(self, name)
             # The model was trained on exactly these values; anything
@@ -447,11 +477,18 @@ class Config:
             isinstance(t, bool)
             or not isinstance(t, (int, float))
             or (isinstance(t, float) and not math.isfinite(t))
-            or not 0.5 <= t <= 60
+            or not (t == 0 or 0.5 <= t <= 60)
         ):
             raise ValueError(
-                "post_process_timeout must be a number of seconds between "
-                f"0.5 and 60, got {t!r}"
+                "post_process_timeout must be 0 (provider default) or a "
+                f"number of seconds between 0.5 and 60, got {t!r}"
+            )
+        if (
+            not isinstance(self.post_process_cerebras_model, str)
+            or not self.post_process_cerebras_model.strip()
+        ):
+            raise ValueError(
+                "post_process_cerebras_model must be a non-empty string"
             )
         if not isinstance(self.post_process_model, str):
             raise ValueError("post_process_model must be a string")
@@ -569,24 +606,45 @@ strip_fillers = true
 # clip the first moment of dictation.
 keepalive_minutes = 0.0
 
-# Optional local LLM cleanup of each transcript before it is typed:
+# Optional LLM cleanup of each transcript before it is typed:
 # punctuation, casing, dropped self-corrections ("Tuesday, I mean
-# Wednesday" -> "Wednesday"). Uses "S1-mini" by "Superwhisper"
-# (Apache-2.0, English only), run by llama.cpp's llama-server —
-# install it with `brew install llama.cpp`. The model (~462 MiB) is
-# downloaded on first use. Adds roughly 0.1-0.6 s per take; any
-# failure, timeout, or suspicious output types the raw transcript.
-# Submit/stop phrases are matched on the raw text, before cleanup.
+# Wednesday" -> "Wednesday"). Any failure, timeout, or suspicious
+# output types the raw transcript. Submit/stop phrases are matched on
+# the raw text, before cleanup.
 post_process = false
-# Styling: casual | semi-casual | semi-formal | formal
+# Provider:
+#   "s1-mini"  - local "S1-mini" by "Superwhisper" (Apache-2.0, English
+#                only) via llama.cpp's llama-server (`brew install
+#                llama.cpp`); ~462 MiB model downloaded on first use.
+#   "cerebras" - gpt-oss-120b via Cerebras's API: also splits long
+#                dictations into paragraphs and lists. SENDS EACH
+#                TRANSCRIPT TO AN EXTERNAL SERVICE; needs the
+#                CEREBRAS_API_KEY environment variable.
+post_process_provider = "s1-mini"
+# Cerebras formatting: auto (paragraphs + lists when appropriate) |
+# paragraphs (no lists) | minimal (no added structure)
+post_process_format = "auto"
+# Line breaks in cleaned text: "shift_enter" types them as Shift+Enter
+# (a new line without sending, in chat apps and editors); "flatten"
+# types everything on one line; "auto" = shift_enter for cerebras,
+# flatten for s1-mini. Use "flatten" if you dictate into a plain shell,
+# where Shift+Enter acts like Enter. A bare Enter is never typed
+# mid-take.
+post_process_newlines = "auto"
+# Log each take's full before/after text (false: timings only).
+post_process_log_text = true
+# Cerebras model id.
+post_process_cerebras_model = "gpt-oss-120b"
+# Styling (s1-mini): casual | semi-casual | semi-formal | formal
 post_process_style = "semi-formal"
-# Structure: prose | lists ("lists" numbers "first..., second..."
-# items; typed on one line, since a typed newline would press Enter)
+# Structure (s1-mini): prose | lists ("lists" puts "first...,
+# second..." items on numbered lines)
 post_process_structure = "prose"
-# Context: general | email
+# Context (s1-mini): general | email
 post_process_context = "general"
-# Seconds a take may spend in cleanup before it is typed raw.
-post_process_timeout = 4.0
+# Seconds a take may spend in cleanup before it is typed raw; 0 means
+# the provider default (4 s for s1-mini, 2 s for cerebras).
+post_process_timeout = 0.0
 # Path to a local GGUF instead of the pinned download (empty = default).
 post_process_model = ""
 # llama-server binary name or path.

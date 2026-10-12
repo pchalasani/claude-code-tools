@@ -213,6 +213,49 @@ def _ask_hotkey(q, label: str, default: str):  # noqa: ANN001, ANN202
     return _manual_hotkey(q, default)
 
 
+def _ask_s1_mini(q, ans: dict) -> None:  # noqa: ANN001
+    """Follow-up questions for the local S1-mini provider."""
+    ans["post_process_style"] = _ask(q.select(
+        "Cleanup style:",
+        choices=[
+            q.Choice(
+                "semi-formal — sentences, capitals, full stops",
+                "semi-formal",
+            ),
+            q.Choice("formal — also expands contractions", "formal"),
+            q.Choice("semi-casual — light punctuation", "semi-casual"),
+            q.Choice("casual — lowercase, minimal punctuation", "casual"),
+        ],
+        default="semi-formal",
+    ))
+    if shutil.which("llama-server") is None:
+        print(
+            "  note: llama-server not found — install it with "
+            "`brew install llama.cpp` (until then takes are typed raw)."
+        )
+
+
+def _ask_cerebras(q, ans: dict) -> None:  # noqa: ANN001
+    """Follow-up questions for the Cerebras provider."""
+    ans["post_process_format"] = _ask(q.select(
+        "Formatting:",
+        choices=[
+            q.Choice(
+                "auto — paragraphs and lists when appropriate", "auto"
+            ),
+            q.Choice("paragraphs — paragraph breaks, no lists", "paragraphs"),
+            q.Choice("minimal — fix punctuation only, no structure", "minimal"),
+        ],
+        default="auto",
+    ))
+    print(
+        "  note: each transcript is sent to api.cerebras.ai. Set "
+        "CEREBRAS_API_KEY in your shell profile (until then takes are "
+        "typed raw). Line breaks are typed as Shift+Enter; set "
+        'post_process_newlines = "flatten" if you dictate into a shell.'
+    )
+
+
 def run_setup(config_path: Path | None = None, force: bool = False) -> int:
     """Run the interactive wizard; returns a process exit code."""
     try:
@@ -317,32 +360,32 @@ def run_setup(config_path: Path | None = None, force: bool = False) -> int:
                 ]
 
         if _ask(q.confirm(
-            "Clean up each transcript with a local LLM (adds punctuation, "
-            "drops self-corrections; \"S1-mini\" by \"Superwhisper\" via "
-            "llama.cpp, ~462 MiB download, ~0.1-0.6 s per take)?",
+            "Clean up each transcript with an LLM (punctuation, "
+            "self-corrections; optional, off by default)?",
             default=False,
         )):
             ans["post_process"] = True
-            ans["post_process_style"] = _ask(q.select(
-                "Cleanup style:",
+            provider = _ask(q.select(
+                "Cleanup provider:",
                 choices=[
                     q.Choice(
-                        "semi-formal — sentences, capitals, full stops",
-                        "semi-formal",
+                        "s1-mini — local \"S1-mini\" by \"Superwhisper\" "
+                        "via llama.cpp (~462 MiB download, on-device)",
+                        "s1-mini",
                     ),
-                    q.Choice("formal — also expands contractions", "formal"),
-                    q.Choice("semi-casual — light punctuation", "semi-casual"),
-                    q.Choice("casual — lowercase, minimal punctuation",
-                             "casual"),
+                    q.Choice(
+                        "cerebras — gpt-oss-120b via Cerebras API: also "
+                        "paragraphs + lists (SENDS TRANSCRIPTS OFF-DEVICE)",
+                        "cerebras",
+                    ),
                 ],
-                default="semi-formal",
+                default="s1-mini",
             ))
-            if shutil.which("llama-server") is None:
-                print(
-                    "  note: llama-server not found — install it with "
-                    "`brew install llama.cpp` (until then takes are "
-                    "typed raw)."
-                )
+            ans["post_process_provider"] = provider
+            if provider == "cerebras":
+                _ask_cerebras(q, ans)
+            else:
+                _ask_s1_mini(q, ans)
 
         if _ask(q.confirm(
             "Configure extras (sounds, clipboard rescue, ghost)?",

@@ -27,7 +27,6 @@ from pathlib import Path
 
 from .postprocess import (
     build_messages,
-    flatten_lines,
     max_output_tokens,
     likely_english,
     rejection_reason,
@@ -536,6 +535,8 @@ class LlamaServer:
 class PostProcessor:
     """Optional transcript cleanup; every failure returns the raw text."""
 
+    name = "s1-mini"
+
     def __init__(
         self,
         *,
@@ -547,8 +548,13 @@ class PostProcessor:
         server: str,
         keepalive_minutes: float,
         status: Status,
+        log_text: bool = True,
     ) -> None:
         self.style = style
+        self.log_text = log_text
+        # (milliseconds, problem) of the last clean(); problem "" = ok.
+        self.last_outcome: tuple[float, str] = (0.0, "")
+        self._problem = ""
         self.structure = structure
         self.context = context
         self.timeout = timeout
@@ -688,35 +694,44 @@ class PostProcessor:
         Never raises: a transcript must reach the typist whatever goes
         wrong here.
         """
+        t0 = time.monotonic()
+        self._problem = ""
         try:
-            return self._clean(text, since)
+            result = self._clean(text, since)
         except Exception as e:
+            self._problem = f"error {type(e).__name__}"
             try:  # best-effort: a failing status sink must not lose text
                 self.status(f"post-process error ({e}); typing raw")
             except Exception:
                 pass
-            return text
+            result = text
+        self.last_outcome = ((time.monotonic() - t0) * 1000, self._problem)
+        return result
 
     def _clean(self, text: str, since: float | None) -> str:
         if not text.strip():
             return text
         if not self._ready.is_set():
             self._maybe_restart()
+            self._problem = "not ready"
             if not self._warned_not_ready:
                 self._warned_not_ready = True
                 self.status("post-process not ready yet; typing raw")
             return text
         if not likely_english(text):
+            self._problem = "non-English"
             self.status("post-process skipped (non-English); typing raw")
             return text
         t0 = time.monotonic()
         deadline = (t0 if since is None else min(since, t0)) + self.timeout
         if deadline <= t0:
+            self._problem = "take waited too long"
             self.status("post-process skipped (take waited too long); typing raw")
             return text
         out: list[str] = []
         problems: list[str] = []
         if not self._req_lock.acquire(timeout=deadline - t0):
+            self._problem = "busy"
             self.status("post-process busy; typing raw")
             return text
         try:
@@ -736,6 +751,7 @@ class PostProcessor:
             self._req_lock.release()
         ms = (time.monotonic() - t0) * 1000
         if problems:
+            self._problem = problems[0]
             self.status(
                 f"post-process fell back to raw ({problems[0]}; {ms:.0f} ms)"
             )
@@ -744,6 +760,8 @@ class PostProcessor:
         result = " ".join(out)
         # Full texts, so a bad change can be pinned on the transcriber
         # (already wrong "before") or on the cleanup (wrong only "after").
+        if not self.log_text:
+            return result
         if result != text:
             self.status(f'  before: "{text}"')
             self.status(f'  after:  "{result}"')
@@ -776,7 +794,9 @@ class PostProcessor:
         reason = rejection_reason(chunk, cleaned)
         if reason:
             return chunk, reason
-        return flatten_lines(cleaned), ""
+        # Line breaks are kept; the app types them as Shift+Enter or
+        # flattens them (post_process_newlines).
+        return cleaned, ""
 
     def _mark_dead(self) -> None:
         self._ready.clear()
