@@ -23,7 +23,12 @@ from .config import (
     load_config,
     write_sample_config,
 )
-from .postprocess import VALID_FORMATS, VALID_PROVIDERS, VALID_STYLES
+from .postprocess import (
+    VALID_FORMATS,
+    VALID_PROVIDERS,
+    VALID_STYLES,
+    strip_controls,
+)
 
 _INSTALL_HINT = (
     "voxtype needs its dependencies. Install with:\n"
@@ -228,7 +233,7 @@ def _cmd_post_process(args: argparse.Namespace) -> int:
         if not text.strip():
             return 0
         t0 = time.monotonic()
-        cleaned = post.clean(text.strip())
+        cleaned = strip_controls(post.clean(text.strip()))
         status(f"total {1000 * (time.monotonic() - t0):.0f} ms")
         print(cleaned)
         return 0

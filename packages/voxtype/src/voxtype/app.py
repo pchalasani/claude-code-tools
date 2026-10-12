@@ -9,7 +9,6 @@ completes a line (most apps undo it as a single edit).
 from __future__ import annotations
 
 import queue
-import re
 import sys
 import threading
 import time
@@ -25,7 +24,7 @@ from .logic import (
     strip_fillers,
     text_after_wake_word,
 )
-from .postprocess import effective_newlines, flatten_lines
+from .postprocess import effective_newlines, flatten_lines, strip_controls
 
 
 class State(Enum):
@@ -579,11 +578,9 @@ class VoiceTypeApp:
             # hold up capture, hotkeys, or the overlay. The submit/stop/
             # wake phrases were already matched on the raw text.
             text = self._post.clean(text, since=arrived)
-            # Only "\n" may survive as a control character: a lone "\r"
-            # would be typed as Enter, a tab as the Tab key (moving
-            # focus), and other controls (Esc, backspace, ...) as keys.
-            text = text.replace("\r\n", "\n").replace("\r", "\n")
-            text = re.sub(r"[\x00-\x09\x0b-\x1f\x7f]+", " ", text).strip()
+            # Only "\n" may survive as a control character (see
+            # strip_controls).
+            text = strip_controls(text)
             if "\n" in text and effective_newlines(
                 self.cfg.post_process_newlines,
                 self.cfg.post_process_provider,

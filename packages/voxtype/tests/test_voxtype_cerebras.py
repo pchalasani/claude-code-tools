@@ -550,6 +550,12 @@ def test_tabs_never_reach_the_typist() -> None:
     assert app.typist.typed == ["First second. Third. Four. "]
 
 
+def test_strip_controls() -> None:
+    from voxtype.postprocess import strip_controls
+
+    assert strip_controls("a\x1b[2Jb\tc\r\nd\re\x08") == "a [2Jb c\nd\ne"
+
+
 def test_latency_line_has_timings_but_no_text() -> None:
     app = _app(
         "shift_enter", mode="toggle", segmentation="hold",

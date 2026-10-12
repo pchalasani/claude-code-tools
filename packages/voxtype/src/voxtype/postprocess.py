@@ -110,6 +110,20 @@ def sanitize_output(text: str) -> str:
     return text
 
 
+_CONTROL_RE = re.compile(r"[\x00-\x09\x0b-\x1f\x7f]+")
+
+
+def strip_controls(text: str) -> str:
+    """Normalize line breaks to "\\n"; replace every other control
+    character (tab, Esc, backspace, ...) with a space; trim.
+
+    LLM output is untrusted: typed, a lone "\\r" is Enter and a tab moves
+    focus; printed, an Esc sequence drives the terminal.
+    """
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return _CONTROL_RE.sub(" ", text).strip()
+
+
 def flatten_lines(text: str) -> str:
     """Collapse all whitespace, newlines included, to single spaces.
 
