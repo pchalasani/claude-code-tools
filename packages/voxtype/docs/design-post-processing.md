@@ -106,8 +106,13 @@ English only).
    footprint); the rest is the mapped model file. If `keepalive_minutes` is
    above 0, a tiny request is sent after that much idle time so the model stays
    warm, matching what the Parakeet keepalive does for the speech model.
-7. **Lifecycle.** The server process is terminated when voxtype exits,
-   including mid-load: `stop()` cancels a launch that is still in progress.
+7. **Lifecycle.** The server is launched through
+   `python -m voxtype._post_supervisor`, which leads its own process group and
+   holds a pipe from voxtype. When that pipe reaches EOF, because voxtype exited
+   in any way including SIGKILL or a closed terminal, the supervisor kills the
+   group. That also covers a `post_process_server` wrapper's child. A normal
+   stop signals the whole group with SIGTERM, then SIGKILL, and `stop()`
+   cancels a launch that is still in progress.
    Each voxtype process writes `~/.cache/voxtype/run/llama-server.<pid>.pid`,
    named by its own pid. The next launch kills a server only when that owning
    process is dead and the server's command line carries our `--alias`. That

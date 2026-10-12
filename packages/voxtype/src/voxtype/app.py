@@ -743,17 +743,21 @@ class VoiceTypeApp:
             self._status(f"engine failed: {e}")
             exit_code = 1
         finally:
-            if engine is not None:
-                try:
-                    engine.stop()
-                except Exception as e:
-                    self._status(f"error stopping engine: {e}")
-            if self._hotkeys is not None:
-                try:
-                    self._hotkeys.stop()
-                except Exception as e:
-                    self._status(f"error stopping hotkey listener: {e}")
+            # The llama-server teardown is the OUTERMOST finally: it runs
+            # its own process group (Ctrl+C at the terminal never reaches
+            # it), so a second Ctrl+C during any earlier shutdown step
+            # must still stop it.
             try:
+                if engine is not None:
+                    try:
+                        engine.stop()
+                    except Exception as e:
+                        self._status(f"error stopping engine: {e}")
+                if self._hotkeys is not None:
+                    try:
+                        self._hotkeys.stop()
+                    except Exception as e:
+                        self._status(f"error stopping hotkey listener: {e}")
                 if self._delivery_q is not None:
                     # Let queued takes finish (each bounded by the
                     # cleanup timeout) before the server goes away, then
@@ -761,8 +765,6 @@ class VoiceTypeApp:
                     self.flush_deliveries()
                     self._delivery_q.put(None)
             finally:
-                # Nested so a second Ctrl+C during the drain still stops
-                # the llama-server child.
                 if self._post is not None:
                     try:
                         self._post.stop()

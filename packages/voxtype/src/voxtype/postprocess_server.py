@@ -18,6 +18,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
 import urllib.request
@@ -430,13 +431,21 @@ class LlamaServer:
             if self._cancelled:
                 raise RuntimeError("llama-server start cancelled")
             with open(self.log, "wb") as log:
+                # Launched via _post_supervisor, which kills the server
+                # when the stdin pipe hits EOF — i.e. whenever voxtype
+                # dies, even by SIGKILL or a closed terminal. Its own
+                # process group lets stop() and stale reaping signal a
+                # wrapper's server child too (_terminate).
                 proc = subprocess.Popen(
-                    self.command(),
-                    stdin=subprocess.DEVNULL,
+                    [
+                        sys.executable,
+                        "-m",
+                        "voxtype._post_supervisor",
+                        *self.command(),
+                    ],
+                    stdin=subprocess.PIPE,
                     stdout=log,
                     stderr=subprocess.STDOUT,
-                    # Own process group, so stop() and stale reaping can
-                    # signal a wrapper's server child too (_terminate).
                     start_new_session=True,
                 )
             self.proc = proc
@@ -514,6 +523,11 @@ class LlamaServer:
             proc.wait(timeout=3)  # reap the leader
         except subprocess.TimeoutExpired:
             pass
+        if proc.stdin is not None:
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
         self.pidfile.unlink(missing_ok=True)
         if not keep_log:
             self.log.unlink(missing_ok=True)

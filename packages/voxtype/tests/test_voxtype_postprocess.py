@@ -401,6 +401,39 @@ def test_stop_kills_a_wrapped_server_child(tmp_path) -> None:
     assert not ps._pid_alive(child), "server child outlived its wrapper"
 
 
+def test_server_dies_when_voxtype_dies(tmp_path) -> None:
+    """voxtype killed outright (no cleanup runs): its end of the
+    supervisor pipe closes, and the server goes with it."""
+    import sys
+
+    fake, model = _fake_server(tmp_path, "badwarm")  # healthy server
+    script = tmp_path / "victim.py"
+    script.write_text(
+        "import os, sys, time\n"
+        "from pathlib import Path\n"
+        "from voxtype.postprocess_server import LlamaServer\n"
+        f"s = LlamaServer({fake!r}, Path({model!r}), Path({str(tmp_path)!r}))\n"
+        "s.start(timeout=20)\n"
+        "print(s.proc.pid, flush=True)\n"
+        "time.sleep(60)\n"
+    )
+    victim = subprocess.Popen(
+        [sys.executable, str(script)], stdout=subprocess.PIPE, text=True
+    )
+    try:
+        leader = int(victim.stdout.readline())
+        victim.kill()  # SIGKILL: no finally, no atexit
+        victim.wait()
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline and ps._group_alive(leader):
+            time.sleep(0.1)
+        assert not ps._group_alive(leader), "server outlived voxtype"
+    finally:
+        if victim.poll() is None:
+            victim.kill()
+            victim.wait()
+
+
 def test_warmup_failure_tears_down_for_retry(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(ps, "RUN_DIR", tmp_path / "run")
     exe, model = _fake_server(tmp_path, "badwarm")

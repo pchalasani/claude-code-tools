@@ -374,7 +374,7 @@ Measured on an M1 Max with real Parakeet takes:
   of 20 words or fewer costs under 300 ms. A 60-word take costs about
   0.6 s. A take longer than 250 words is split at sentence boundaries,
   and each piece is cleaned in turn.
-- **Memory.** The server's resident size is about 820 MB, but only
+- **Memory.** The server's resident size is about 830 MB, but only
   about 320 MB of that is its own memory. The rest is the model file
   mapped from disk, which macOS can drop and reload when memory is
   tight. If memory pressure makes the first take after a pause slow,
@@ -405,12 +405,14 @@ covers the submit phrases ("go"), the stop phrase and the wake word, so
 cleanup cannot break them. Filler-word removal (`strip_fillers`) also
 still runs first.
 
-voxtype stops the server when it exits, even if the server is still
-loading. Each voxtype process records its server in
-`~/.cache/voxtype/run/`. If voxtype is killed outright, the next launch
-finds the leftover server there and stops it, but it never touches the
-server of another voxtype process that is still running. A server that
-fails to start leaves its log in that same directory.
+The server never outlives voxtype. It runs under a tiny supervisor
+process (about 20 MB) that stops it as soon as voxtype exits for any
+reason, including a crash, a closed terminal, or `kill -9`. As a
+backstop, each voxtype process records its server in
+`~/.cache/voxtype/run/`, and the next launch stops any server left
+behind by a voxtype process that has died. It never touches the server
+of a voxtype process that is still running. A server that fails to
+start leaves its log in that same directory.
 
 ## CLI
 
