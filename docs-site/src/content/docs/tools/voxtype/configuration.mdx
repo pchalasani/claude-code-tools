@@ -398,10 +398,12 @@ cleanup off, when any of the following happens:
 - The model returns empty output, truncated output, or output that
   looks like a chat reply rather than a transcript.
 - The output is much longer than the input, or lost most of it.
-- The transcript looks non-English: a non-Latin script, or mostly common
-  Spanish, French, German, Italian, Portuguese, Dutch or Indonesian
-  words. Other languages are not detected, so use cleanup only for
-  English dictation.
+- The transcript looks non-English. Either most of its letters are
+  non-ASCII (Cyrillic or Chinese, for example), or, in a take of four or
+  more words, at least a quarter are common Spanish, French, German,
+  Italian, Portuguese, Dutch or Indonesian words, and they outnumber the
+  English ones. Other languages are not detected, so use cleanup only
+  for English dictation.
 
 The terminal shows `post-processed in N ms`, or `post-process fell back
 to raw (reason)`, for every take.
