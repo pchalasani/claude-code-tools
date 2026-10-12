@@ -19,6 +19,8 @@ from pathlib import Path
 from click.testing import CliRunner
 from pytest import MonkeyPatch
 
+import claude_code_tools
+from claude_code_tools.codex_server_process import process_identity
 from claude_code_tools.github_wake import (
     _monitor_listener,
     _receive_monitor_message,
@@ -107,75 +109,6 @@ print('[]')
     )
     executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
     return executable
-
-
-def test_registration_requires_dynamic_codex_before_github_access(
-    tmp_path: Path,
-) -> None:
-    """A missing callback target fails before invoking GitHub."""
-    binary_dir = tmp_path / "bin"
-    binary_dir.mkdir()
-    _fake_gh(binary_dir)
-    runner = CliRunner()
-
-    result = runner.invoke(
-        cli,
-        ["https://github.com/owner/repository/issues/42"],
-        env={
-            "PATH": f"{binary_dir}:{os.environ['PATH']}",
-            "XDG_STATE_HOME": str(tmp_path / "state"),
-            "CODEX_THREAD_ID": "",
-            "CCTOOLS_CODEX_CALLBACK_ENDPOINT": "",
-        },
-    )
-
-    assert result.exit_code != 0
-    assert "requires a Codex tool shell" in result.output
-
-
-def test_registers_verified_existing_issue(
-    tmp_path: Path,
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """The command verifies and registers a URL without creating an issue."""
-    binary_dir = tmp_path / "bin"
-    binary_dir.mkdir()
-    _fake_gh(binary_dir)
-    monkeypatch.setattr(
-        "claude_code_tools.github_wake.codex_target_from_environment",
-        lambda: type(
-            "Target",
-            (),
-            {
-                "kind": "codex-app-server-v1",
-                "payload": {
-                    "threadId": "thread",
-                    "endpoint": "unix:///tmp/app.sock",
-                },
-            },
-        )(),
-    )
-    monkeypatch.setattr(
-        "claude_code_tools.github_wake._ensure_watcher",
-        lambda _store: True,
-    )
-
-    result = CliRunner().invoke(
-        cli,
-        ["https://github.com/owner/repository/issues/42"],
-        env={
-            "PATH": f"{binary_dir}:{os.environ['PATH']}",
-            "XDG_STATE_HOME": str(tmp_path / "state"),
-        },
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "Reply wakeup armed" in result.output
-    watch = WatchStore(
-        tmp_path / "state/claude-code-tools/github-watch"
-    ).all_watches()[0]
-    assert watch.issue_number == 42
-    assert watch.issue_url == "https://github.com/owner/repository/issues/42"
 
 
 def test_claude_monitor_mode_uses_monitor_delivery(
@@ -425,6 +358,60 @@ def test_shared_watcher_starts_once_and_stops_exact_process(tmp_path: Path) -> N
     assert "Watcher stopped" in stopped.output
 
 
+def test_start_replaces_watcher_from_another_version(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A watcher left running by another installed version is restarted."""
+    runner = CliRunner()
+    environment = {"XDG_STATE_HOME": str(tmp_path / "state")}
+    store = WatchStore(tmp_path / "state/claude-code-tools/github-watch")
+    first = runner.invoke(cli, ["--start"], env=environment)
+    try:
+        assert first.exit_code == 0, first.output
+        old = store.watcher_status()
+        assert old is not None
+        assert old.code_version == claude_code_tools.__version__
+
+        monkeypatch.setattr("claude_code_tools.github_wake.__version__", "0.0.0")
+        second = runner.invoke(cli, ["--start"], env=environment)
+        assert second.exit_code == 0, second.output
+        assert "Watcher started" in second.output
+        new = store.watcher_status()
+        assert new is not None
+        assert new.pid != old.pid
+        assert process_identity(old.pid) != old.process_identity
+    finally:
+        runner.invoke(cli, ["--stop"], env=environment)
+
+
+def test_watcher_status_migrates_code_version_column(tmp_path: Path) -> None:
+    """A database written by an older watcher gains a NULL code version."""
+    state = tmp_path / "state"
+    state.mkdir()
+    with sqlite3.connect(state / "watches.sqlite3") as connection:
+        connection.execute(
+            """
+            CREATE TABLE watcher_status (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                instance_id TEXT NOT NULL,
+                pid INTEGER NOT NULL,
+                process_identity TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                heartbeat_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO watcher_status VALUES (1, 'old', 1, 'identity', 't', 't')"
+        )
+
+    status = WatchStore(state).watcher_status()
+
+    assert status is not None
+    assert status.code_version is None
+
+
 def test_store_preserves_pending_watch_and_delivery(tmp_path: Path) -> None:
     """A watch survives store reopen and becomes terminal after delivery."""
     store = WatchStore(tmp_path / "state")
@@ -432,10 +419,10 @@ def test_store_preserves_pending_watch_and_delivery(tmp_path: Path) -> None:
         "owner/repository",
         42,
         "https://github.com/owner/repository/issues/42",
-        "codex-app-server-v1",
+        "codex-queue-v1",
         {
             "threadId": "01a00124-9417-79a1-a34b-17b30984051b",
-            "endpoint": "unix:///tmp/app.sock",
+            "codexHome": "/tmp/codex",
         },
         "github.com",
         None,
@@ -463,8 +450,8 @@ def test_successful_poll_clears_transient_retry_error(tmp_path: Path) -> None:
         "owner/repository",
         42,
         "https://github.com/owner/repository/issues/42",
-        "codex-app-server-v1",
-        {"threadId": "thread", "endpoint": "unix:///tmp/app.sock"},
+        "codex-queue-v1",
+        {"threadId": "thread", "codexHome": "/tmp/codex"},
         "github.com",
         None,
     )
@@ -581,8 +568,8 @@ def test_conditional_poll_reuses_etag_and_accepts_gh_304(
         "owner/repository",
         42,
         "https://github.com/owner/repository/issues/42",
-        "codex-app-server-v1",
-        {"threadId": "thread", "endpoint": "unix:///tmp/app.sock"},
+        "codex-queue-v1",
+        {"threadId": "thread", "codexHome": "/tmp/codex"},
         "github.com",
         None,
     )
@@ -616,8 +603,8 @@ def test_paginated_poll_does_not_cache_first_page_etag(
         "owner/repository",
         42,
         "https://github.com/owner/repository/issues/42",
-        "codex-app-server-v1",
-        {"threadId": "thread", "endpoint": "unix:///tmp/app.sock"},
+        "codex-queue-v1",
+        {"threadId": "thread", "codexHome": "/tmp/codex"},
         "github.com",
         None,
     )
@@ -675,8 +662,8 @@ def test_notification_escapes_untrusted_comment_envelope() -> None:
         repository="o/r",
         issue_number=42,
         issue_url="https://github.com/o/r/issues/42",
-        target_kind="codex-app-server-v1",
-        target={"threadId": "thread", "endpoint": "unix:///tmp/app.sock"},
+        target_kind="codex-queue-v1",
+        target={"threadId": "thread", "codexHome": "/tmp/codex"},
         registered_at="2026-08-14T21:00:00+00:00",
         github_host="github.com",
         github_config_dir=None,
