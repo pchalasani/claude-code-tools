@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 
 import click
 
+from claude_code_tools import __version__
 from claude_code_tools.codex_server_process import process_identity
 from claude_code_tools.github_watch_store import IssueWatch, WatchStore
 from claude_code_tools.issue_reply_delivery import (
@@ -329,27 +330,37 @@ def _show_status(as_json: bool) -> None:
         )
 
 
-def _stop_watcher(store: WatchStore) -> None:
+def _stop_watcher(store: WatchStore, announce: bool = True) -> None:
     """Stop the exact watcher process recorded in durable state."""
     status = store.watcher_status()
     if not _watcher_is_healthy(status):
-        click.echo("Watcher is not running.")
+        if announce:
+            click.echo("Watcher is not running.")
         return
     assert status is not None
     os.kill(status.pid, signal.SIGTERM)
     deadline = time.monotonic() + _DAEMON_STOP_SECONDS
     while time.monotonic() < deadline:
         if process_identity(status.pid) != status.process_identity:
-            click.echo("Watcher stopped.")
+            if announce:
+                click.echo("Watcher stopped.")
             return
         time.sleep(0.05)
     raise click.ClickException("watcher did not stop after SIGTERM")
 
 
 def _ensure_watcher(store: WatchStore) -> bool:
-    """Start one detached watcher and wait for its certified heartbeat."""
-    if _watcher_is_healthy(store.watcher_status()):
-        return False
+    """Start one detached watcher and wait for its certified heartbeat.
+
+    A healthy watcher left running by another installed version is replaced,
+    since it may not know the delivery adapter this version records.
+    """
+    status = store.watcher_status()
+    if _watcher_is_healthy(status):
+        assert status is not None
+        if status.code_version == __version__:
+            return False
+        _stop_watcher(store, announce=False)
     log = open(store.log_path, "ab", buffering=0)
     try:
         process = subprocess.Popen(

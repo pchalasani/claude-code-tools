@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import FrameType
 
+from claude_code_tools import __version__
 from claude_code_tools.codex_server_process import process_identity
 from claude_code_tools.github_watch_store import (
     IssueWatch,
@@ -25,6 +26,7 @@ from claude_code_tools.github_watch_store import (
 )
 from claude_code_tools.issue_reply_delivery import (
     IssueReply,
+    UnsupportedDeliveryTarget,
     deliver_issue_reply,
 )
 
@@ -114,6 +116,7 @@ class GitHubWatchDaemon:
             self.pid,
             self.process_identity,
             self.started_at,
+            __version__,
         )
 
     def _poll_once(self) -> None:
@@ -294,6 +297,9 @@ class GitHubWatchDaemon:
         """Deliver one idempotent reply notification into the origin thread."""
         try:
             deliver_issue_reply(watch, comment)
+        except UnsupportedDeliveryTarget as exc:
+            self.store.mark_failed(watch.watch_id, _diagnostic(exc))
+            return False
         except Exception as exc:
             self.store.mark_retry(watch.watch_id, _diagnostic(exc))
             return False

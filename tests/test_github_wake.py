@@ -16,10 +16,11 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import pytest
 from click.testing import CliRunner
 from pytest import MonkeyPatch
 
+import claude_code_tools
+from claude_code_tools.codex_server_process import process_identity
 from claude_code_tools.github_wake import (
     _monitor_listener,
     _receive_monitor_message,
@@ -37,9 +38,7 @@ from claude_code_tools.github_watch_daemon import (
 )
 from claude_code_tools.github_watch_store import IssueWatch, WatchStore
 from claude_code_tools.issue_reply_delivery import (
-    DeliveryConfigurationError,
     IssueReply,
-    _codex_home_for_thread,
     _codex_notification_message,
     deliver_issue_reply,
 )
@@ -110,320 +109,6 @@ print('[]')
     )
     executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
     return executable
-
-
-_THREAD = "019a0000-1111-7222-8333-444455556666"
-
-
-def _fake_codex(directory: Path, queue_output: str | None = None) -> Path:
-    """Create a codex executable that logs queue calls and prints a receipt."""
-    output = (
-        queue_output
-        if queue_output is not None
-        else "Queued message 019a0000-aaaa-7bbb-8ccc-ddddeeeeffff for thread {thread}."
-    )
-    executable = directory / "codex"
-    executable.write_text(
-        f"""#!/usr/bin/env python3
-import json
-import os
-import sys
-from pathlib import Path
-
-args = sys.argv[1:]
-if args == ["queue", "--help"]:
-    print("Usage: codex queue [OPTIONS] --thread <THREAD> --message <TEXT>")
-    raise SystemExit(0)
-if args[:2] == ["queue", "--thread"] and args[3] == "--message":
-    log = Path(os.environ["FAKE_CODEX_LOG"])
-    log.write_text(json.dumps({{"args": args, "home": os.environ["CODEX_HOME"]}}))
-    print({output!r}.format(thread=args[2]))
-    raise SystemExit(int(os.environ.get("FAKE_CODEX_EXIT", "0")))
-print(f"unexpected codex arguments: {{args}}", file=sys.stderr)
-raise SystemExit(2)
-""",
-        encoding="utf-8",
-    )
-    executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
-    return executable
-
-
-def _codex_home(directory: Path, thread_id: str = _THREAD) -> Path:
-    """Create a Codex account directory that owns one session rollout."""
-    sessions = directory / "sessions/2026/10/12"
-    sessions.mkdir(parents=True)
-    (sessions / f"rollout-2026-10-12T10-00-00-{thread_id}.jsonl").touch()
-    return directory
-
-
-def _queue_watch(tmp_path: Path, executable: Path) -> IssueWatch:
-    """Build one pending native-queue watch."""
-    return IssueWatch(
-        watch_id="watch",
-        repository="o/r",
-        issue_number=42,
-        issue_url="https://github.com/o/r/issues/42",
-        target_kind="codex-queue-v1",
-        target={
-            "codexHome": str(tmp_path / "home"),
-            "executable": str(executable),
-            "threadId": _THREAD,
-        },
-        registered_at="2026-08-14T21:00:00+00:00",
-        github_host="github.com",
-        github_config_dir=None,
-        status="pending",
-        attempts=0,
-    )
-
-
-_REPLY = IssueReply(
-    comment_id=101,
-    issue_number=42,
-    url="https://github.com/o/r/issues/42#issuecomment-101",
-    author="octocat",
-    body="looks good",
-    created_at="2026-08-14T21:01:00Z",
-)
-
-
-def test_registration_requires_codex_thread_before_github_access(
-    tmp_path: Path,
-) -> None:
-    """A shell outside a Codex session fails before invoking GitHub."""
-    binary_dir = tmp_path / "bin"
-    binary_dir.mkdir()
-    _fake_gh(binary_dir)
-    runner = CliRunner()
-
-    result = runner.invoke(
-        cli,
-        ["https://github.com/owner/repository/issues/42"],
-        env={
-            "PATH": f"{binary_dir}:{os.environ['PATH']}",
-            "XDG_STATE_HOME": str(tmp_path / "state"),
-            "CODEX_THREAD_ID": "",
-        },
-    )
-
-    assert result.exit_code != 0
-    assert "requires a Codex session shell" in result.output
-    assert not (tmp_path / "state").exists()
-
-
-def test_registration_rejects_codex_home_without_this_thread(
-    tmp_path: Path,
-) -> None:
-    """A wrong account directory is refused instead of failing at delivery."""
-    binary_dir = tmp_path / "bin"
-    binary_dir.mkdir()
-    _fake_gh(binary_dir)
-    _fake_codex(binary_dir)
-    other = _codex_home(tmp_path / "other", "019a9999-1111-7222-8333-444455556666")
-
-    result = CliRunner().invoke(
-        cli,
-        ["--codex-home", str(other), "https://github.com/owner/repository/issues/42"],
-        env={
-            "PATH": f"{binary_dir}:{os.environ['PATH']}",
-            "XDG_STATE_HOME": str(tmp_path / "state"),
-            "CODEX_THREAD_ID": _THREAD,
-        },
-    )
-
-    assert result.exit_code != 0
-    assert "--codex-home" in result.output
-    assert not (tmp_path / "state").exists()
-
-
-def test_registration_rejects_codex_without_queue(tmp_path: Path) -> None:
-    """An older Codex CLI without `codex queue` cannot arm a wakeup."""
-    binary_dir = tmp_path / "bin"
-    binary_dir.mkdir()
-    _fake_gh(binary_dir)
-    old = binary_dir / "codex"
-    old.write_text("#!/bin/sh\necho 'error: unrecognized subcommand' >&2\nexit 2\n")
-    old.chmod(0o755)
-
-    result = CliRunner().invoke(
-        cli,
-        ["https://github.com/owner/repository/issues/42"],
-        env={
-            "PATH": f"{binary_dir}:{os.environ['PATH']}",
-            "XDG_STATE_HOME": str(tmp_path / "state"),
-            "CODEX_THREAD_ID": _THREAD,
-            "CODEX_HOME": str(_codex_home(tmp_path / "home")),
-        },
-    )
-
-    assert result.exit_code != 0
-    assert "does not support 'codex queue" in result.output
-
-
-def test_codex_home_conflicts_with_claude_monitor(tmp_path: Path) -> None:
-    """The Codex account option is meaningless for Claude delivery."""
-    result = CliRunner().invoke(
-        cli,
-        [
-            "--claude-monitor",
-            "--codex-home",
-            str(tmp_path),
-            "https://github.com/owner/repository/issues/42",
-        ],
-    )
-
-    assert result.exit_code == 2
-    assert "--codex-home applies only" in result.output
-
-
-def test_registers_verified_existing_issue(
-    tmp_path: Path,
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """The command verifies and registers a URL without creating an issue."""
-    binary_dir = tmp_path / "bin"
-    binary_dir.mkdir()
-    _fake_gh(binary_dir)
-    codex = _fake_codex(binary_dir)
-    account = _codex_home(tmp_path / "account")
-    monkeypatch.setattr(
-        "claude_code_tools.github_wake._ensure_watcher",
-        lambda _store: True,
-    )
-
-    result = CliRunner().invoke(
-        cli,
-        [
-            "--codex-home",
-            str(account),
-            "https://github.com/owner/repository/issues/42",
-        ],
-        env={
-            "PATH": f"{binary_dir}:{os.environ['PATH']}",
-            "XDG_STATE_HOME": str(tmp_path / "state"),
-            "CODEX_THREAD_ID": _THREAD.upper(),
-            "CODEX_HOME": str(tmp_path / "ignored"),
-        },
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "Reply wakeup armed" in result.output
-    watch = WatchStore(
-        tmp_path / "state/claude-code-tools/github-watch"
-    ).all_watches()[0]
-    assert watch.issue_number == 42
-    assert watch.issue_url == "https://github.com/owner/repository/issues/42"
-    assert watch.target_kind == "codex-queue-v1"
-    assert watch.target == {
-        "codexHome": str(account.resolve()),
-        "executable": str(codex),
-        "threadId": _THREAD,
-    }
-
-
-def test_registration_defaults_to_codex_home_environment(
-    tmp_path: Path,
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """Without --codex-home the session's own CODEX_HOME is recorded."""
-    binary_dir = tmp_path / "bin"
-    binary_dir.mkdir()
-    _fake_gh(binary_dir)
-    _fake_codex(binary_dir)
-    account = _codex_home(tmp_path / "account")
-    monkeypatch.setattr(
-        "claude_code_tools.github_wake._ensure_watcher",
-        lambda _store: True,
-    )
-
-    result = CliRunner().invoke(
-        cli,
-        ["https://github.com/owner/repository/issues/42"],
-        env={
-            "PATH": f"{binary_dir}:{os.environ['PATH']}",
-            "XDG_STATE_HOME": str(tmp_path / "state"),
-            "CODEX_THREAD_ID": _THREAD,
-            "CODEX_HOME": str(account),
-        },
-    )
-
-    assert result.exit_code == 0, result.output
-    watch = WatchStore(
-        tmp_path / "state/claude-code-tools/github-watch"
-    ).all_watches()[0]
-    assert watch.target["codexHome"] == str(account.resolve())
-
-
-def test_codex_home_discovery_finds_unique_account_with_thread(
-    tmp_path: Path,
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """Without CODEX_HOME the one .codex* account holding the thread wins."""
-    monkeypatch.delenv("CODEX_HOME", raising=False)
-    (tmp_path / ".codex").mkdir()
-    account = _codex_home(tmp_path / ".codex-work")
-
-    assert _codex_home_for_thread(_THREAD, None, tmp_path) == account.resolve()
-
-
-def test_codex_home_discovery_refuses_ambiguous_or_missing_thread(
-    tmp_path: Path,
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """Discovery fails closed instead of guessing an account."""
-    monkeypatch.delenv("CODEX_HOME", raising=False)
-    (tmp_path / ".codex").mkdir()
-
-    with pytest.raises(DeliveryConfigurationError, match="no account directory"):
-        _codex_home_for_thread(_THREAD, None, tmp_path)
-
-    _codex_home(tmp_path / ".codex-a")
-    _codex_home(tmp_path / ".codex-b")
-    with pytest.raises(DeliveryConfigurationError, match="several account"):
-        _codex_home_for_thread(_THREAD, None, tmp_path)
-
-
-def test_codex_queue_delivery_runs_native_queue_under_account(
-    tmp_path: Path,
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """Delivery runs `codex queue` for the thread with the recorded CODEX_HOME."""
-    log = tmp_path / "codex.json"
-    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "wrong"))
-    watch = _queue_watch(tmp_path, _fake_codex(tmp_path))
-
-    deliver_issue_reply(watch, _REPLY)
-
-    call = json.loads(log.read_text())
-    assert call["home"] == str(tmp_path / "home")
-    assert call["args"][:4] == ["queue", "--thread", _THREAD, "--message"]
-    assert call["args"][4] == _codex_notification_message(watch, _REPLY)
-
-
-def test_codex_queue_delivery_requires_acceptance(
-    tmp_path: Path,
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """A zero exit without Codex's receipt is not a delivery."""
-    monkeypatch.setenv("FAKE_CODEX_LOG", str(tmp_path / "codex.json"))
-    watch = _queue_watch(tmp_path, _fake_codex(tmp_path, queue_output=""))
-
-    with pytest.raises(RuntimeError, match="no acceptance confirmation"):
-        deliver_issue_reply(watch, _REPLY)
-
-
-def test_codex_queue_delivery_reports_queue_failure(
-    tmp_path: Path,
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """A failed `codex queue` raises so the daemon retries the reply."""
-    monkeypatch.setenv("FAKE_CODEX_LOG", str(tmp_path / "codex.json"))
-    monkeypatch.setenv("FAKE_CODEX_EXIT", "1")
-    watch = _queue_watch(tmp_path, _fake_codex(tmp_path))
-
-    with pytest.raises(RuntimeError, match="codex queue failed"):
-        deliver_issue_reply(watch, _REPLY)
 
 
 def test_claude_monitor_mode_uses_monitor_delivery(
@@ -671,6 +356,60 @@ def test_shared_watcher_starts_once_and_stops_exact_process(tmp_path: Path) -> N
 
     assert stopped.exit_code == 0, stopped.output
     assert "Watcher stopped" in stopped.output
+
+
+def test_start_replaces_watcher_from_another_version(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A watcher left running by another installed version is restarted."""
+    runner = CliRunner()
+    environment = {"XDG_STATE_HOME": str(tmp_path / "state")}
+    store = WatchStore(tmp_path / "state/claude-code-tools/github-watch")
+    first = runner.invoke(cli, ["--start"], env=environment)
+    try:
+        assert first.exit_code == 0, first.output
+        old = store.watcher_status()
+        assert old is not None
+        assert old.code_version == claude_code_tools.__version__
+
+        monkeypatch.setattr("claude_code_tools.github_wake.__version__", "0.0.0")
+        second = runner.invoke(cli, ["--start"], env=environment)
+        assert second.exit_code == 0, second.output
+        assert "Watcher started" in second.output
+        new = store.watcher_status()
+        assert new is not None
+        assert new.pid != old.pid
+        assert process_identity(old.pid) != old.process_identity
+    finally:
+        runner.invoke(cli, ["--stop"], env=environment)
+
+
+def test_watcher_status_migrates_code_version_column(tmp_path: Path) -> None:
+    """A database written by an older watcher gains a NULL code version."""
+    state = tmp_path / "state"
+    state.mkdir()
+    with sqlite3.connect(state / "watches.sqlite3") as connection:
+        connection.execute(
+            """
+            CREATE TABLE watcher_status (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                instance_id TEXT NOT NULL,
+                pid INTEGER NOT NULL,
+                process_identity TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                heartbeat_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO watcher_status VALUES (1, 'old', 1, 'identity', 't', 't')"
+        )
+
+    status = WatchStore(state).watcher_status()
+
+    assert status is not None
+    assert status.code_version is None
 
 
 def test_store_preserves_pending_watch_and_delivery(tmp_path: Path) -> None:

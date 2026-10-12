@@ -50,6 +50,7 @@ class WatcherStatus:
     process_identity: str
     started_at: str
     heartbeat_at: str
+    code_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,7 @@ class WatchStore:
         with self._connect() as connection:
             connection.executescript(_SCHEMA)
             _migrate_repository_cursors(connection)
+            _migrate_watcher_status(connection)
 
     @property
     def lock_path(self) -> Path:
@@ -242,6 +244,18 @@ class WatchStore:
                 [(watch_id,) for watch_id in watch_ids],
             )
 
+    def mark_failed(self, watch_id: str, error: str) -> None:
+        """Stop retrying one watch whose delivery can never succeed."""
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE issue_watches
+                SET status = 'failed', last_error = ?
+                WHERE watch_id = ? AND status IN ('pending', 'retrying')
+                """,
+                (error[:4096], watch_id),
+            )
+
     def cancel(self, watch_id: str) -> bool:
         """Cancel one pending watch by full ID or unambiguous prefix."""
         with self._connect() as connection:
@@ -300,23 +314,32 @@ class WatchStore:
         pid: int,
         process_identity: str,
         started_at: str,
+        code_version: str,
     ) -> None:
-        """Publish ownership and liveness for the lock-holding daemon."""
+        """Publish ownership, liveness, and code version for the daemon."""
         with self._connect() as connection:
             connection.execute(
                 """
                 INSERT INTO watcher_status(
                     singleton, instance_id, pid, process_identity,
-                    started_at, heartbeat_at
-                ) VALUES (1, ?, ?, ?, ?, ?)
+                    started_at, heartbeat_at, code_version
+                ) VALUES (1, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(singleton) DO UPDATE SET
                     instance_id = excluded.instance_id,
                     pid = excluded.pid,
                     process_identity = excluded.process_identity,
                     started_at = excluded.started_at,
-                    heartbeat_at = excluded.heartbeat_at
+                    heartbeat_at = excluded.heartbeat_at,
+                    code_version = excluded.code_version
                 """,
-                (instance_id, pid, process_identity, started_at, _now()),
+                (
+                    instance_id,
+                    pid,
+                    process_identity,
+                    started_at,
+                    _now(),
+                    code_version,
+                ),
             )
 
     def watcher_status(self) -> WatcherStatus | None:
@@ -333,6 +356,7 @@ class WatchStore:
             process_identity=row["process_identity"],
             started_at=row["started_at"],
             heartbeat_at=row["heartbeat_at"],
+            code_version=row["code_version"],
         )
 
     @contextmanager
@@ -383,6 +407,15 @@ def _migrate_repository_cursors(connection: sqlite3.Connection) -> None:
     }
     if "etag" not in columns:
         connection.execute("ALTER TABLE repository_cursors ADD COLUMN etag TEXT")
+
+
+def _migrate_watcher_status(connection: sqlite3.Connection) -> None:
+    """Record which code version a watcher runs; older watchers leave NULL."""
+    columns = {
+        row["name"] for row in connection.execute("PRAGMA table_info(watcher_status)")
+    }
+    if "code_version" not in columns:
+        connection.execute("ALTER TABLE watcher_status ADD COLUMN code_version TEXT")
 
 
 def _now() -> str:

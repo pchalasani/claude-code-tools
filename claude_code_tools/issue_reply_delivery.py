@@ -45,6 +45,10 @@ class DeliveryConfigurationError(RuntimeError):
     """The current agent session cannot receive durable notifications."""
 
 
+class UnsupportedDeliveryTarget(DeliveryConfigurationError):
+    """A stored watch names an adapter this version can never deliver to."""
+
+
 def codex_target_from_environment(codex_home: Path | None = None) -> DeliveryTarget:
     """Preflight and capture the current native Codex session as a queue target.
 
@@ -143,8 +147,9 @@ def deliver_issue_reply(watch: IssueWatch, reply: IssueReply) -> None:
     if watch.target_kind == "codex-queue-v1":
         _deliver_codex_queue(watch, reply)
         return
-    raise DeliveryConfigurationError(
-        f"unsupported issue-reply delivery adapter: {watch.target_kind}"
+    raise UnsupportedDeliveryTarget(
+        f"unsupported issue-reply delivery adapter: {watch.target_kind}; "
+        "re-arm the wakeup with github-wake"
     )
 
 
