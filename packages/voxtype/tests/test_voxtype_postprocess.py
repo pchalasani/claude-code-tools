@@ -178,6 +178,38 @@ def test_ensure_model_custom_path(tmp_path: Path) -> None:
     assert ensure_model(str(model), print) == model
 
 
+def _local_model(tmp_path: Path, monkeypatch) -> bytes:
+    """Point the pinned download at a small local file:// "model"."""
+    import hashlib
+
+    blob = b"fake gguf " * 1000
+    src = tmp_path / "upstream.gguf"
+    src.write_bytes(blob)
+    monkeypatch.setattr(ps, "MODEL_URL", src.as_uri())
+    monkeypatch.setattr(ps, "MODEL_SIZE", len(blob))
+    monkeypatch.setattr(ps, "MODEL_SHA256", hashlib.sha256(blob).hexdigest())
+    monkeypatch.setattr(ps, "MODEL_DIR", tmp_path / "models")
+    return blob
+
+
+def test_ensure_model_downloads_and_repairs(tmp_path, monkeypatch) -> None:
+    blob = _local_model(tmp_path, monkeypatch)
+    path = ensure_model("", print)
+    assert path.read_bytes() == blob
+    # Same size, wrong bytes: the hash check catches it and re-downloads.
+    path.write_bytes(b"X" * len(blob))
+    assert ensure_model("", print).read_bytes() == blob
+    assert not list((tmp_path / "models").glob("*.part"))
+
+
+def test_download_rejects_hash_mismatch(tmp_path, monkeypatch) -> None:
+    _local_model(tmp_path, monkeypatch)
+    monkeypatch.setattr(ps, "MODEL_SHA256", "0" * 64)
+    with pytest.raises(ValueError, match="sha256"):
+        ensure_model("", print)
+    assert not list((tmp_path / "models").iterdir())  # no file, no .part
+
+
 def test_find_server_binary(tmp_path: Path) -> None:
     assert find_server_binary("definitely-not-a-binary-xyz") is None
     assert find_server_binary("sh") == shutil.which("sh")
@@ -301,6 +333,7 @@ class _Stub:
         self.finish = "stop"
         self.delay = 0.0
         self.raw_body: bytes | None = None
+        self.truncate = False
         self.requests: list[dict] = []
         stub = self
 
@@ -324,6 +357,10 @@ class _Stub:
                 }).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
+                if stub.truncate:
+                    # Promise more bytes than are sent, then hang up.
+                    self.send_header("Content-Length", str(len(payload) + 50))
+                    self.close_connection = True
                 self.end_headers()
                 self.wfile.write(payload)
 
@@ -396,6 +433,12 @@ def test_clean_falls_back_on_malformed_response(stub_post) -> None:
     post, stub, _ = stub_post
     stub.raw_body = b'{"nope": 1}'
     assert post.clean("hello there") == "hello there"
+
+
+def test_clean_falls_back_on_truncated_response(stub_post) -> None:
+    post, stub, _ = stub_post
+    stub.truncate = True
+    assert post.clean("hello there friend") == "hello there friend"
 
 
 def test_clean_times_out_quickly(stub_post) -> None:
@@ -531,6 +574,32 @@ def test_app_cleans_after_filler_removal() -> None:
     assert app._post.seen == ["hello there"]
     assert app.typist.typed == ["HELLO THERE "]
     assert app._session_texts == ["HELLO THERE"]
+
+
+def test_toggle_off_during_cleanup_still_types(monkeypatch) -> None:
+    """A take whose cleanup outlasts the grace window is still typed:
+    it arrived (cleanup began) before the toggle-off."""
+    app = _vad_app()
+
+    class _Engine:
+        def request_flush(self) -> None:
+            pass
+
+        def request_reset(self) -> None:
+            pass
+
+    app._engine = _Engine()
+    monkeypatch.setattr(app, "TOGGLE_GRACE", 0.2)
+
+    class _SlowToggle:
+        def clean(self, text: str) -> str:
+            app.toggle()  # user toggles off mid-cleanup
+            time.sleep(0.4)  # cleanup outlasts the grace window
+            return text.upper()
+
+    app._post = _SlowToggle()
+    app.handle_utterance("hello there")
+    assert app.typist.typed == ["HELLO THERE "]
 
 
 def test_app_matches_phrases_on_raw_text() -> None:

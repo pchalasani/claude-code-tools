@@ -371,7 +371,7 @@ class VoiceTypeApp:
         self._status(f'typed: "{_preview(text)}"')
         self._type(text, version)
 
-    def _consume_handoff(self) -> bool:
+    def _consume_handoff(self, at: float | None = None) -> bool:
         """Consume the armed toggle-off handoff; True if one was armed.
 
         The handoff (a pending hold delivery or the wall-clock grace
@@ -383,9 +383,13 @@ class VoiceTypeApp:
         request, however long the decode took.
         """
         with self._lock:
+            # ``at``: when the delivery "arrived". A transcript held up
+            # by LLM cleanup arrived when cleanup began, so a grace
+            # window opened by a toggle during cleanup still covers it.
             armed = (
                 self._expect_hold > 0
-                or time.monotonic() < self._grace_until
+                or (time.monotonic() if at is None else at)
+                < self._grace_until
             )
             if self._expect_hold:
                 self._expect_hold -= 1
@@ -423,6 +427,7 @@ class VoiceTypeApp:
             text = collapse_repeats(strip_fillers(text))
             if not text:
                 return
+        arrived = time.monotonic()
         if self._post is not None:
             # Outside every lock: cleanup takes up to post_process_timeout
             # and must never hold up the hotkey or overlay threads. The
@@ -444,7 +449,7 @@ class VoiceTypeApp:
                 self.typist.type_text(text)
         elif not self._inject(
             version, lambda: self.typist.type_text(text)
-        ) and self._consume_handoff():
+        ) and self._consume_handoff(at=arrived):
             # The utterance snapshotted ACTIVE but lost the injection
             # race to a toggle-off that armed the grace/hold handoff.
             # It IS the one in-flight delivery that handoff authorizes

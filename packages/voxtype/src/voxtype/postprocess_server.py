@@ -11,6 +11,7 @@ never blocks past ``post_process_timeout``.
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import shutil
@@ -84,16 +85,30 @@ def ensure_model(model: str, status: Status) -> Path:
             raise FileNotFoundError(f"post_process_model not found: {path}")
         return path
     path = default_model_path()
+    # Full hash check (~0.5 s, on the background boot thread): a size
+    # match alone would accept a corrupted file.
     if path.is_file() and path.stat().st_size == MODEL_SIZE:
-        return path
+        if _sha256(path) == MODEL_SHA256:
+            return path
+        status("cached model failed its sha256 check; re-downloading")
     download_model(path, status)
     return path
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def download_model(path: Path, status: Status) -> None:
     """Download the pinned GGUF to ``path``, verifying its sha256."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    part = path.with_name(path.name + ".part")
+    # Unique per process: two concurrent downloads (dictation plus
+    # `voxtype post-process`) must never write the same partial file.
+    part = path.with_name(f"{path.name}.{os.getpid()}.part")
     status(
         f"downloading {MODEL_NAME} ({MODEL_SIZE / 2**20:.0f} MiB) "
         f"to {path} ..."
@@ -101,22 +116,26 @@ def download_model(path: Path, status: Status) -> None:
     digest = hashlib.sha256()
     done = 0
     next_report = 0.25
-    with urllib.request.urlopen(MODEL_URL, timeout=60) as resp, open(
-        part, "wb"
-    ) as out:
-        while chunk := resp.read(1 << 20):
-            out.write(chunk)
-            digest.update(chunk)
-            done += len(chunk)
-            if done / MODEL_SIZE >= next_report:
-                status(f"  ... {int(next_report * 100)}%")
-                next_report += 0.25
-    if digest.hexdigest() != MODEL_SHA256:
+    try:
+        with urllib.request.urlopen(MODEL_URL, timeout=60) as resp, open(
+            part, "wb"
+        ) as out:
+            while chunk := resp.read(1 << 20):
+                out.write(chunk)
+                digest.update(chunk)
+                done += len(chunk)
+                if done / MODEL_SIZE >= next_report:
+                    status(f"  ... {int(next_report * 100)}%")
+                    next_report += 0.25
+        if digest.hexdigest() != MODEL_SHA256:
+            raise ValueError(
+                "downloaded model does not match the pinned sha256; not used"
+            )
+        # Atomic: a concurrent download replacing it first is harmless,
+        # both files having the same verified content.
+        os.replace(part, path)
+    finally:
         part.unlink(missing_ok=True)
-        raise ValueError(
-            "downloaded model does not match the pinned sha256; not used"
-        )
-    os.replace(part, path)
     status(f"downloaded {MODEL_NAME}")
 
 
@@ -465,7 +484,18 @@ class PostProcessor:
     # -- cleanup ----------------------------------------------------------
 
     def clean(self, text: str) -> str:
-        """Return ``text`` cleaned, or unchanged on any problem."""
+        """Return ``text`` cleaned, or unchanged on any problem.
+
+        Never raises: a transcript must reach the typist whatever goes
+        wrong here.
+        """
+        try:
+            return self._clean(text)
+        except Exception as e:
+            self.status(f"post-process error ({e}); typing raw")
+            return text
+
+    def _clean(self, text: str) -> str:
         if not text.strip():
             return text
         if not self._ready.is_set():
@@ -520,7 +550,7 @@ class PostProcessor:
                 max_output_tokens(chunk),
                 timeout,
             )
-        except (OSError, ValueError) as e:
+        except (OSError, ValueError, http.client.HTTPException) as e:
             if not server.alive():
                 self._mark_dead()
                 return chunk, "llama-server died"
@@ -581,7 +611,7 @@ class PostProcessor:
                         8,
                         10.0,
                     )
-            except (OSError, ValueError):
+            except (OSError, ValueError, http.client.HTTPException):
                 pass
             finally:
                 self._last_use = time.monotonic()
