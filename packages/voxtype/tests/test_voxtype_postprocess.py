@@ -662,6 +662,24 @@ def test_toggle_off_during_cleanup_still_types(monkeypatch) -> None:
     assert app.typist.typed == ["HELLO THERE "]
 
 
+def test_wake_idle_expiry_waits_for_cleanup() -> None:
+    pytest.importorskip("pynput")
+    from voxtype.app import VoiceTypeApp
+
+    app = VoiceTypeApp(Config(mode="wake", sounds=False, idle_timeout=0.1))
+    app.typist = _Typist()
+
+    class _SlowIdle:
+        def clean(self, text: str) -> str:
+            time.sleep(0.3)  # longer than idle_timeout
+            app._check_idle_timeout()  # the idle watcher fires meanwhile
+            return text.upper()
+
+    app._post = _SlowIdle()
+    app.handle_utterance("hey claude write the summary")
+    assert app.typist.typed == ["WRITE THE SUMMARY "]
+
+
 def test_app_matches_phrases_on_raw_text() -> None:
     app = _vad_app()
     app.handle_utterance("go")

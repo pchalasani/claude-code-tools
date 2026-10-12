@@ -79,6 +79,9 @@ class VoiceTypeApp:
         # Optional LLM cleanup (post_process); created in run(). Tests
         # may set it directly — anything with a clean(str) -> str.
         self._post = None
+        # Takes currently inside LLM cleanup; wake-mode idle expiry
+        # waits for them (a take being cleaned is speech in progress).
+        self._cleaning = 0
         # Set once _start_hotkey_listener runs — in run() (no overlay) or
         # from inside the overlay loop (see _start_hotkeys_from_loop); the
         # finally block stops it. May be None if no valid hotkeys.
@@ -433,7 +436,15 @@ class VoiceTypeApp:
             # and must never hold up the hotkey or overlay threads. The
             # submit/stop/wake phrases were already matched on the raw
             # text in handle_utterance.
-            text = self._post.clean(text)
+            with self._lock:
+                self._cleaning += 1
+            try:
+                text = self._post.clean(text)
+            finally:
+                with self._lock:
+                    self._cleaning -= 1
+                    # Idle time counts from when the text lands.
+                    self._last_activity = time.monotonic()
         # Record for the paste-again hotkey / clipboard BEFORE typing:
         # even text that lands in the wrong window (or is skipped as
         # stale) stays rescuable.
@@ -638,6 +649,7 @@ class VoiceTypeApp:
             # ACTIVE -> PASSIVE transition.
             expired = (
                 self._state == State.ACTIVE
+                and not self._cleaning
                 and time.monotonic() - self._last_activity
                 > self.cfg.idle_timeout
             )
