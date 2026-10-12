@@ -210,6 +210,22 @@ def test_download_rejects_hash_mismatch(tmp_path, monkeypatch) -> None:
     assert not list((tmp_path / "models").iterdir())  # no file, no .part
 
 
+def test_download_cancel_and_dead_partials(tmp_path, monkeypatch) -> None:
+    import threading as th
+
+    _local_model(tmp_path, monkeypatch)
+    models = tmp_path / "models"
+    models.mkdir()
+    dead = models / f"{ps.MODEL_FILE}.{_dead_pid()}.part"
+    dead.write_bytes(b"half")  # left by a download killed mid-way
+    stop = th.Event()
+    stop.set()
+    with pytest.raises(InterruptedError):
+        ensure_model("", print, stop)
+    assert not dead.exists()  # dead process's partial reaped
+    assert not list(models.iterdir())  # and the cancelled one removed
+
+
 def test_find_server_binary(tmp_path: Path) -> None:
     assert find_server_binary("definitely-not-a-binary-xyz") is None
     assert find_server_binary("sh") == shutil.which("sh")
@@ -607,12 +623,15 @@ class _Typist:
     def __init__(self) -> None:
         self.typed: list[str] = []
         self.enters = 0
+        self.events: list[str] = []
 
     def type_text(self, text: str) -> None:
         self.typed.append(text)
+        self.events.append(text)
 
     def press_enter(self) -> None:
         self.enters += 1
+        self.events.append("<enter>")
 
 
 class _Upper:
@@ -639,6 +658,7 @@ def _vad_app():
 def test_app_cleans_after_filler_removal() -> None:
     app = _vad_app()
     app.handle_utterance("um hello there")
+    app.flush_deliveries()
     assert app._post.seen == ["hello there"]
     assert app.typist.typed == ["HELLO THERE "]
     assert app._session_texts == ["HELLO THERE"]
@@ -667,7 +687,49 @@ def test_toggle_off_during_cleanup_still_types(monkeypatch) -> None:
 
     app._post = _SlowToggle()
     app.handle_utterance("hello there")
+    app.flush_deliveries()
     assert app.typist.typed == ["HELLO THERE "]
+
+
+class _Slow:
+    def __init__(self, secs: float) -> None:
+        self.secs = secs
+
+    def clean(self, text: str) -> str:
+        time.sleep(self.secs)
+        return text.upper()
+
+
+def test_cleanup_never_blocks_the_capture_thread() -> None:
+    """handle_utterance runs on the engine's capture thread (VAD): it
+    must return at once while cleanup runs elsewhere."""
+    app = _vad_app()
+    app._post = _Slow(0.5)
+    t0 = time.monotonic()
+    app.handle_utterance("hello there")
+    assert time.monotonic() - t0 < 0.1
+    app.flush_deliveries()
+    assert app.typist.typed == ["HELLO THERE "]
+
+
+def test_spoken_submit_waits_for_text_being_cleaned() -> None:
+    app = _vad_app()
+    app._post = _Slow(0.3)
+    app.handle_utterance("fix the bug")
+    app.handle_utterance("go")  # arrives while the text is in cleanup
+    app.handle_utterance("and add a test")
+    app.flush_deliveries()
+    assert app.typist.events == [
+        "FIX THE BUG ", "<enter>", "AND ADD A TEST "
+    ]
+
+
+def test_without_cleanup_delivery_stays_inline() -> None:
+    app = _vad_app()
+    app._post = None
+    app.handle_utterance("hello there")
+    assert app.typist.typed == ["hello there "]  # no flush needed
+    assert app._delivery_q is None
 
 
 def test_wake_idle_expiry_waits_for_cleanup() -> None:
@@ -685,14 +747,17 @@ def test_wake_idle_expiry_waits_for_cleanup() -> None:
 
     app._post = _SlowIdle()
     app.handle_utterance("hey claude write the summary")
+    app.flush_deliveries()
     assert app.typist.typed == ["WRITE THE SUMMARY "]
 
 
 def test_app_matches_phrases_on_raw_text() -> None:
     app = _vad_app()
     app.handle_utterance("go")
+    app.flush_deliveries()
     assert app.typist.enters == 1
     app.handle_utterance("stop listening")
+    app.flush_deliveries()
     assert app._post.seen == []
     assert app.typist.typed == []
 

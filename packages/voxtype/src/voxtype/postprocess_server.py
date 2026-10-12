@@ -66,13 +66,16 @@ def default_model_path() -> Path:
     return MODEL_DIR / MODEL_FILE
 
 
-def ensure_model(model: str, status: Status) -> Path:
+def ensure_model(
+    model: str, status: Status, stop: threading.Event | None = None
+) -> Path:
     """Return a usable model path, downloading the default if needed.
 
     Args:
         model: ``post_process_model`` from the config; empty means the
             pinned S1-mini download.
         status: Progress/status sink.
+        stop: Set to abandon a download in progress.
 
     Raises:
         FileNotFoundError: A custom model path does not exist.
@@ -91,7 +94,7 @@ def ensure_model(model: str, status: Status) -> Path:
         if _sha256(path) == MODEL_SHA256:
             return path
         status("cached model failed its sha256 check; re-downloading")
-    download_model(path, status)
+    download_model(path, status, stop)
     return path
 
 
@@ -103,9 +106,25 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def download_model(path: Path, status: Status) -> None:
-    """Download the pinned GGUF to ``path``, verifying its sha256."""
+def download_model(
+    path: Path, status: Status, stop: threading.Event | None = None
+) -> None:
+    """Download the pinned GGUF to ``path``, verifying its sha256.
+
+    Raises:
+        InterruptedError: ``stop`` was set mid-download (the partial
+            file is removed).
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Partial files of downloads whose process died (e.g. killed
+    # mid-download) would otherwise pile up, ~462 MiB each.
+    for stale in path.parent.glob(f"{path.name}.*.part"):
+        try:
+            owner = int(stale.name.split(".")[-2])
+        except ValueError:
+            continue
+        if owner != os.getpid() and not _pid_alive(owner):
+            stale.unlink(missing_ok=True)
     # Unique per process: two concurrent downloads (dictation plus
     # `voxtype post-process`) must never write the same partial file.
     part = path.with_name(f"{path.name}.{os.getpid()}.part")
@@ -121,6 +140,8 @@ def download_model(path: Path, status: Status) -> None:
             part, "wb"
         ) as out:
             while chunk := resp.read(1 << 20):
+                if stop is not None and stop.is_set():
+                    raise InterruptedError("model download cancelled")
                 out.write(chunk)
                 digest.update(chunk)
                 done += len(chunk)
@@ -453,6 +474,7 @@ class PostProcessor:
         self._last_boot = 0.0
         self._last_use = time.monotonic()
         self._warned_not_ready = False
+        self._boot_thread: threading.Thread | None = None
 
     # -- lifecycle --------------------------------------------------------
 
@@ -472,9 +494,11 @@ class PostProcessor:
                 return
             self._booting = True
             self._last_boot = time.monotonic()
-        threading.Thread(
+        thread = threading.Thread(
             target=self._boot, name="voxtype-post-boot", daemon=True
-        ).start()
+        )
+        self._boot_thread = thread
+        thread.start()
 
     def _boot(self) -> None:
         try:
@@ -488,7 +512,7 @@ class PostProcessor:
                     "typing raw transcripts"
                 )
                 return
-            model_path = ensure_model(self.model, self.status)
+            model_path = ensure_model(self.model, self.status, self._stop)
             server = LlamaServer(binary, model_path)
             # Published BEFORE start(): stop() can then cancel a launch
             # still loading the model instead of orphaning it. stop()
@@ -533,6 +557,12 @@ class PostProcessor:
             server, self._server = self._server, None
         if server is not None:
             server.stop()
+        # Give the boot thread a moment to see _stop and clean up (a
+        # cancelled download removes its partial file) before the
+        # interpreter exits and kills daemon threads mid-cleanup.
+        boot = self._boot_thread
+        if boot is not None and boot is not threading.current_thread():
+            boot.join(timeout=5)
 
     @property
     def ready(self) -> bool:

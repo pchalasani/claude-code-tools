@@ -79,8 +79,17 @@ English only).
      the model if it is missing. Takes that arrive before it is ready are typed
      raw, and voxtype logs one status line saying so.
    - Each request has a deadline, `post_process_timeout` (default 4 s).
-   - Cleanup runs on the thread that delivered the transcript, outside the app
-     lock, so the hotkey and overlay threads are never held up.
+   - With cleanup on, every typing or Enter action goes through one
+     first-in-first-out delivery thread, outside the app lock. The engine
+     delivers voice-activity-detection segments on its microphone-capture
+     thread, so cleaning there would stall the microphone. The single queue
+     keeps the actions in order, so a spoken "go" never presses Enter before
+     the text dictated just before it is typed. With cleanup off, delivery
+     stays inline, exactly as before.
+   - A toggle-off during cleanup still lets that take through, because the
+     take arrived before the toggle. Wake-mode idle expiry waits for queued
+     takes. Cleaned text is typed on one line, because a typed newline presses
+     Enter.
    - The raw text is typed whenever any of these happen: a connection error, an
      HTTP error, a timeout, `finish_reason == "length"`, empty output, output
      with assistant-style chatter, output longer than Muesli's expansion
