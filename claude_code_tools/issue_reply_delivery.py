@@ -5,14 +5,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import socket
+import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 
-from claude_code_tools.codex_app_server_rpc import (
-    deliver_thread_message,
-    socket_path_from_endpoint,
-    verify_thread_loaded,
-)
 from claude_code_tools.github_watch_store import IssueWatch
 
 _THREAD_ID = re.compile(
@@ -47,45 +45,100 @@ class DeliveryConfigurationError(RuntimeError):
     """The current agent session cannot receive durable notifications."""
 
 
-def codex_target_from_environment() -> DeliveryTarget:
-    """Preflight and capture the current dynamic Codex target."""
-    thread_id = os.environ.get("CODEX_THREAD_ID", "").strip()
-    endpoint = os.environ.get("CCTOOLS_CODEX_CALLBACK_ENDPOINT", "").strip()
+class UnsupportedDeliveryTarget(DeliveryConfigurationError):
+    """A stored watch names an adapter this version can never deliver to."""
+
+
+def codex_target_from_environment(codex_home: Path | None = None) -> DeliveryTarget:
+    """Preflight and capture the current native Codex session as a queue target.
+
+    Args:
+        codex_home: Codex account directory; defaults to ``$CODEX_HOME`` and
+            then to the one ``~/.codex*`` directory holding this thread.
+
+    Returns:
+        A ``codex-queue-v1`` target naming the thread, account, and executable.
+
+    Raises:
+        DeliveryConfigurationError: This shell is not a usable Codex session.
+    """
+    thread_id = os.environ.get("CODEX_THREAD_ID", "").strip().lower()
     if not _THREAD_ID.fullmatch(thread_id):
         raise DeliveryConfigurationError(
-            "github-wake requires a Codex tool shell launched through "
-            "codex-dynamic"
+            "github-wake requires a Codex session shell (CODEX_THREAD_ID is "
+            "unset); in Claude Code use --claude-monitor"
         )
-    if not endpoint:
-        endpoint = _managed_codex_endpoint(thread_id)
+    home = _codex_home_for_thread(thread_id, codex_home)
+    found = shutil.which("codex")
+    if found is None:
+        raise DeliveryConfigurationError("cannot find the codex executable")
+    # The shared watcher runs elsewhere, so a relative PATH hit must not leak.
+    executable = os.path.abspath(found)
     try:
-        socket_path = socket_path_from_endpoint(endpoint)
-        verify_thread_loaded(socket_path, thread_id)
-    except Exception as exc:
+        completed = subprocess.run(
+            [executable, "queue", "--help"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+            env={**os.environ, "CODEX_HOME": str(home)},
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise DeliveryConfigurationError(f"cannot run codex: {exc}") from exc
+    if (
+        completed.returncode != 0
+        or "--thread" not in completed.stdout
+        or "--message" not in completed.stdout
+    ):
         raise DeliveryConfigurationError(
-            f"cannot arm a reply notification for this Codex thread: {exc}"
-        ) from exc
+            "the installed codex does not support 'codex queue --thread "
+            "--message'; upgrade Codex"
+        )
     return DeliveryTarget(
-        kind="codex-app-server-v1",
-        payload={"endpoint": endpoint, "threadId": thread_id.lower()},
+        kind="codex-queue-v1",
+        payload={
+            "codexHome": str(home),
+            "executable": executable,
+            "threadId": thread_id,
+        },
     )
 
 
-def _managed_codex_endpoint(thread_id: str) -> str:
-    """Find the unique managed App Server that already owns one thread."""
-    from claude_code_tools.codex_server_resume import resume_server_paths
+def _codex_home_for_thread(
+    thread_id: str,
+    codex_home: Path | None,
+    search_root: Path | None = None,
+) -> Path:
+    """Resolve the Codex account directory that owns one session thread.
 
-    try:
-        paths = resume_server_paths(["resume", thread_id], os.environ, ())
-    except Exception as exc:
-        raise DeliveryConfigurationError(
-            f"cannot locate this thread's managed App Server: {exc}"
-        ) from exc
-    if paths is None:
-        raise DeliveryConfigurationError(
-            "this thread is not loaded by a compatible codex-dynamic App Server"
-        )
-    return paths.endpoint
+    Codex does not export CODEX_HOME to tool shells, so without an explicit
+    directory the unique ``.codex*`` account under ``search_root`` (default:
+    the home directory) holding the rollout is used.
+    """
+    root = search_root or Path.home()
+    explicit = codex_home or (
+        Path(os.environ["CODEX_HOME"]) if os.environ.get("CODEX_HOME") else None
+    )
+    candidates = (
+        [explicit.expanduser()]
+        if explicit is not None
+        else sorted(root.glob(".codex*"))
+    )
+    pattern = f"sessions/*/*/*/rollout-*-{thread_id}.jsonl"
+    owners = {
+        path.resolve()
+        for path in candidates
+        if path.is_dir() and any(path.glob(pattern))
+    }
+    if len(owners) == 1:
+        return owners.pop()
+    searched = ", ".join(str(path) for path in candidates) or str(root)
+    problem = "several account directories" if owners else "no account directory"
+    raise DeliveryConfigurationError(
+        f"{problem} among {searched} holds Codex thread {thread_id}; pass "
+        "--codex-home with this session's account directory"
+    )
 
 
 def deliver_issue_reply(watch: IssueWatch, reply: IssueReply) -> None:
@@ -93,27 +146,47 @@ def deliver_issue_reply(watch: IssueWatch, reply: IssueReply) -> None:
     if watch.target_kind == "claude-monitor-v1":
         _deliver_claude_monitor(watch, reply)
         return
-    if watch.target_kind == "codex-app-server-v1":
-        _deliver_codex(watch, reply)
+    if watch.target_kind == "codex-queue-v1":
+        _deliver_codex_queue(watch, reply)
         return
-    raise DeliveryConfigurationError(
-        f"unsupported issue-reply delivery adapter: {watch.target_kind}"
+    raise UnsupportedDeliveryTarget(
+        f"unsupported issue-reply delivery adapter: {watch.target_kind}; "
+        "re-arm the wakeup with github-wake"
     )
 
 
-def _deliver_codex(watch: IssueWatch, reply: IssueReply) -> None:
-    """Deliver one reply through the Codex App Server."""
-    endpoint = watch.target.get("endpoint")
-    thread_id = watch.target.get("threadId")
-    if not endpoint or not thread_id:
-        raise DeliveryConfigurationError("Codex delivery target is incomplete")
-    client_id = f"github-wake:{watch.watch_id}:{reply.comment_id}"
-    deliver_thread_message(
-        socket_path_from_endpoint(endpoint),
-        thread_id,
-        client_id,
-        _codex_notification_message(watch, reply),
+def _deliver_codex_queue(watch: IssueWatch, reply: IssueReply) -> None:
+    """Queue one reply on the native Codex session and require confirmation."""
+    target = watch.target
+    codex_home = target.get("codexHome")
+    executable = target.get("executable")
+    thread_id = target.get("threadId")
+    if not codex_home or not executable or not thread_id:
+        raise DeliveryConfigurationError("Codex queue target is incomplete")
+    completed = subprocess.run(
+        [
+            executable,
+            "queue",
+            "--thread",
+            thread_id,
+            "--message",
+            _codex_notification_message(watch, reply),
+        ],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+        env={**os.environ, "CODEX_HOME": codex_home},
     )
+    if completed.returncode != 0:
+        diagnostic = " ".join(completed.stderr.split())[:1000]
+        raise RuntimeError(f"codex queue failed: {diagnostic}")
+    confirmation = re.compile(
+        r"Queued message [0-9a-f-]{36} for thread " + re.escape(thread_id) + r"\."
+    )
+    if not confirmation.search(completed.stdout):
+        raise RuntimeError("codex queue printed no acceptance confirmation")
 
 
 def _deliver_claude_monitor(watch: IssueWatch, reply: IssueReply) -> None:

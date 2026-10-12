@@ -514,18 +514,6 @@ def _ensure_leading_user(
         yield msg
 
 
-def _new_assistant_message_id() -> str:
-    """Generate an assistant message id in the modern Codex format.
-
-    Real rollout assistant items carry ids like ``msg_<50 hex chars>``
-    (25 random bytes, hex-encoded, behind a ``msg_`` prefix).
-
-    Returns:
-        A fresh id string matching ``msg_[0-9a-f]{50}``.
-    """
-    return "msg_" + secrets.token_hex(25)
-
-
 def _make_codex_item(
     msg: dict[str, Any], fallback_timestamp: str, turn_id: str
 ) -> dict[str, Any]:
@@ -534,8 +522,11 @@ def _make_codex_item(
     Shapes match real modern rollouts exactly: user messages carry
     ``input_text`` content blocks plus the turn-id metadata
     passthrough; assistant messages carry ``output_text`` content
-    plus the modern assistant payload fields (``id``, ``phase`` and
-    the same turn-id passthrough) that Codex itself writes.
+    plus the modern assistant payload fields (``phase`` and the same
+    turn-id passthrough) that Codex itself writes. Assistant items
+    deliberately omit ``id``: Codex replays item ids to the Responses
+    API, which then looks them up as server-persisted items, and an
+    id that the server never issued fails the turn with HTTP 400.
 
     Args:
         msg: Flattened message dict (role/text/timestamp).
@@ -558,7 +549,6 @@ def _make_codex_item(
     else:
         payload = {
             "type": "message",
-            "id": _new_assistant_message_id(),
             "role": role,
             "content": [
                 {"type": "output_text", "text": msg["text"]}
