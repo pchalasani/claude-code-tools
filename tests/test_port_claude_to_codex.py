@@ -35,7 +35,6 @@ ROLLOUT_NAME_RE = re.compile(
     r"\.jsonl$"
 )
 
-ASSISTANT_MSG_ID_RE = re.compile(r"^msg_[0-9a-f]{50}$")
 
 LONG_TOOL_ARGS = "z" * (TOOL_TEXT_CAP + 700)
 LONG_TOOL_RESULT = "r" * (TOOL_TEXT_CAP + 300)
@@ -491,16 +490,16 @@ class TestConverter:
                 assert block["type"] == "input_text"
             else:
                 assert role == "assistant"
+                # No `id`: a fabricated item id makes the Responses
+                # API try a persisted-item lookup and reject the turn.
                 assert set(payload.keys()) == {
                     "type",
-                    "id",
                     "role",
                     "content",
                     "phase",
                     "internal_chat_message_metadata_passthrough",
                 }
                 assert block["type"] == "output_text"
-                assert ASSISTANT_MSG_ID_RE.match(payload["id"])
                 assert payload["phase"] in (
                     "commentary",
                     "final_answer",
