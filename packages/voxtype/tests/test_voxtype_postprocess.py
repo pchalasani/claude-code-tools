@@ -226,6 +226,15 @@ def test_download_cancel_and_dead_partials(tmp_path, monkeypatch) -> None:
     assert not list(models.iterdir())  # and the cancelled one removed
 
 
+def test_dead_partials_reaped_when_model_cached(tmp_path, monkeypatch) -> None:
+    _local_model(tmp_path, monkeypatch)
+    path = ensure_model("", print)  # model now cached
+    dead = path.with_name(f"{path.name}.{_dead_pid()}.part")
+    dead.write_bytes(b"half")
+    assert ensure_model("", print) == path
+    assert not dead.exists()
+
+
 def test_find_server_binary(tmp_path: Path) -> None:
     assert find_server_binary("definitely-not-a-binary-xyz") is None
     assert find_server_binary("sh") == shutil.which("sh")

@@ -88,6 +88,7 @@ def ensure_model(
             raise FileNotFoundError(f"post_process_model not found: {path}")
         return path
     path = default_model_path()
+    _reap_dead_partials(path)
     # Full hash check (~0.5 s, on the background boot thread): a size
     # match alone would accept a corrupted file.
     if path.is_file() and path.stat().st_size == MODEL_SIZE:
@@ -106,6 +107,21 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _reap_dead_partials(path: Path) -> None:
+    """Remove partial downloads whose process died (~462 MiB each).
+
+    Runs on every model check, not only before a download, so leftovers
+    are swept even once a complete model is cached.
+    """
+    for stale in path.parent.glob(f"{path.name}.*.part"):
+        try:
+            owner = int(stale.name.split(".")[-2])
+        except ValueError:
+            continue
+        if owner != os.getpid() and not _pid_alive(owner):
+            stale.unlink(missing_ok=True)
+
+
 def download_model(
     path: Path, status: Status, stop: threading.Event | None = None
 ) -> None:
@@ -116,15 +132,6 @@ def download_model(
             file is removed).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Partial files of downloads whose process died (e.g. killed
-    # mid-download) would otherwise pile up, ~462 MiB each.
-    for stale in path.parent.glob(f"{path.name}.*.part"):
-        try:
-            owner = int(stale.name.split(".")[-2])
-        except ValueError:
-            continue
-        if owner != os.getpid() and not _pid_alive(owner):
-            stale.unlink(missing_ok=True)
     # Unique per process: two concurrent downloads (dictation plus
     # `voxtype post-process`) must never write the same partial file.
     part = path.with_name(f"{path.name}.{os.getpid()}.part")
@@ -139,7 +146,9 @@ def download_model(
         with urllib.request.urlopen(MODEL_URL, timeout=60) as resp, open(
             part, "wb"
         ) as out:
-            while chunk := resp.read(1 << 20):
+            # 64 KiB reads: a cancel is noticed promptly even on a
+            # slow connection.
+            while chunk := resp.read(1 << 16):
                 if stop is not None and stop.is_set():
                     raise InterruptedError("model download cancelled")
                 out.write(chunk)
