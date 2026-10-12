@@ -334,6 +334,7 @@ class _Stub:
         self.delay = 0.0
         self.raw_body: bytes | None = None
         self.truncate = False
+        self.body_delay = 0.0
         self.requests: list[dict] = []
         stub = self
 
@@ -358,10 +359,13 @@ class _Stub:
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 if stub.truncate:
-                    # Promise more bytes than are sent, then hang up.
-                    self.send_header("Content-Length", str(len(payload) + 50))
+                    # Promise the full body, send half, then hang up.
+                    self.send_header("Content-Length", str(len(payload)))
                     self.close_connection = True
+                    payload = payload[: len(payload) // 2]
                 self.end_headers()
+                self.wfile.flush()
+                time.sleep(stub.body_delay)
                 self.wfile.write(payload)
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -439,6 +443,27 @@ def test_clean_falls_back_on_truncated_response(stub_post) -> None:
     post, stub, _ = stub_post
     stub.truncate = True
     assert post.clean("hello there friend") == "hello there friend"
+
+
+def test_timeout_is_a_total_deadline(stub_post) -> None:
+    """Headers late AND body late: each alone fits the 1.0 s budget,
+    together they don't — the take must still fall back on time."""
+    post, stub, messages = stub_post
+    stub.delay, stub.body_delay = 0.6, 0.6
+    t0 = time.monotonic()
+    assert post.clean("hello there friend") == "hello there friend"
+    assert time.monotonic() - t0 < 1.3
+    assert any("timed out" in m for m in messages)
+
+
+def test_proxy_settings_are_ignored(stub_post, monkeypatch) -> None:
+    post, stub, _ = stub_post
+    for var in ("http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"):
+        monkeypatch.setenv(var, "http://127.0.0.1:9")  # nothing listens
+    for var in ("no_proxy", "NO_PROXY"):
+        monkeypatch.delenv(var, raising=False)
+    stub.reply = "Hello there."
+    assert post.clean("hello there") == "Hello there."
 
 
 def test_clean_times_out_quickly(stub_post) -> None:

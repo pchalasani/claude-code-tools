@@ -20,7 +20,6 @@ import socket
 import subprocess
 import threading
 import time
-import urllib.error
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
@@ -153,6 +152,51 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+def local_request(
+    port: int, method: str, path: str, body: bytes | None, timeout: float
+) -> tuple[int, bytes]:
+    """HTTP to the local server under ONE total deadline; no proxies.
+
+    ``http.client`` talks to 127.0.0.1 directly, so ``http_proxy``
+    can neither break startup nor see a transcript, and every blocking
+    step (connect, send, headers, each body read) gets only the time
+    left, so the whole call never outlives ``timeout``.
+
+    Raises:
+        TimeoutError: The deadline passed.
+        OSError: Connection failure.
+        http.client.HTTPException: A malformed or truncated response.
+    """
+    deadline = time.monotonic() + timeout
+
+    def left() -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("timed out")
+        return remaining
+
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=left())
+    try:
+        conn.connect()
+        sock = conn.sock
+        headers = {"Content-Type": "application/json"} if body else {}
+        conn.request(method, path, body=body, headers=headers)
+        sock.settimeout(left())
+        resp = conn.getresponse()
+        chunks: list[bytes] = []
+        while True:
+            sock.settimeout(left())
+            data = resp.read1(1 << 16)
+            if not data:
+                break
+            chunks.append(data)
+        if resp.length:  # bytes still owed per Content-Length
+            raise http.client.IncompleteRead(b"".join(chunks), resp.length)
+        return resp.status, b"".join(chunks)
+    finally:
+        conn.close()
+
+
 def _command_of(pid: int) -> str:
     try:
         return subprocess.run(
@@ -278,12 +322,10 @@ class LlamaServer:
                     f"llama-server exited (code {code}); see {self.log}"
                 )
             try:
-                with urllib.request.urlopen(
-                    f"http://127.0.0.1:{self.port}/health", timeout=2
-                ) as r:
-                    if r.status == 200:
-                        return
-            except (urllib.error.URLError, OSError):
+                status, _ = local_request(self.port, "GET", "/health", None, 2)
+                if status == 200:
+                    return
+            except (OSError, http.client.HTTPException):
                 pass
             time.sleep(0.25)
         self.stop()
@@ -299,8 +341,9 @@ class LlamaServer:
         """One chat completion; returns ``(content, finish_reason)``.
 
         Raises:
-            OSError: Connection failure or timeout (``URLError`` and
-                ``TimeoutError`` are both ``OSError``).
+            OSError: Connection failure, timeout (``TimeoutError``), or a
+                non-200 status.
+            http.client.HTTPException: A truncated/malformed response.
             ValueError: A malformed response body.
         """
         body = json.dumps({
@@ -309,13 +352,12 @@ class LlamaServer:
             "max_tokens": max_tokens,
             "stream": False,
         }).encode()
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{self.port}/v1/chat/completions",
-            data=body,
-            headers={"Content-Type": "application/json"},
+        status, raw = local_request(
+            self.port, "POST", "/v1/chat/completions", body, timeout
         )
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            payload = json.load(r)
+        if status != 200:
+            raise OSError(f"llama-server returned HTTP {status}")
+        payload = json.loads(raw)
         try:
             choice = payload["choices"][0]
             content = choice["message"]["content"]
