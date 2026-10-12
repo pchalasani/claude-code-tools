@@ -509,8 +509,9 @@ voxtype looks for the key in this order and never logs it:
 1. A `CEREBRAS_API_KEY` environment variable, for example one set by a
    secrets manager.
 2. `~/.config/voxtype/.env`.
-3. A `.env` next to your config file, if that config is somewhere
-   else.
+3. `~/.config/voice-type/.env`, if your config is still at that legacy
+   location. A config given with `--config` doesn't change where
+   voxtype looks for the key.
 
 If the key file is readable by other users, voxtype warns you to
 `chmod 600` it. If no key is found, it says so once at launch and types
