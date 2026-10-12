@@ -128,10 +128,17 @@ def rejection_reason(raw: str, cleaned: str) -> str | None:
     if n_raw > 40 and n_out < 0.35 * n_raw:
         return "output lost most of the input"
     # Short takes too: a reply like "OK." must not replace a dictated
-    # sentence. Self-corrections drop words, but never two thirds of a
-    # take of four or more words.
-    raw_words, out_words = len(raw.split()), len(cleaned.split())
-    if raw_words >= 4 and out_words < 0.35 * raw_words:
+    # sentence. A much shorter output is only accepted if it keeps some
+    # of the dictated words ("Tuesday no sorry Wednesday" -> "Wednesday.")
+    # or is purely numeric ("one hundred twenty three" -> "123.").
+    raw_words = {w.casefold() for w in re.findall(r"[^\W\d_]+", raw)}
+    out_words = {w.casefold() for w in re.findall(r"[^\W\d_]+", cleaned)}
+    if (
+        len(raw.split()) >= 4
+        and len(cleaned.split()) < 0.35 * len(raw.split())
+        and out_words
+        and not out_words & raw_words
+    ):
         return "output lost most of the input"
     return None
 
