@@ -439,6 +439,29 @@ def test_server_dies_when_voxtype_dies(tmp_path, mode: str) -> None:
             victim.wait()
 
 
+def test_backgrounding_wrapper_leaves_no_server(tmp_path) -> None:
+    """A wrapper that backgrounds the server and exits: the supervisor
+    ends the orphaned server instead of leaving it untracked."""
+    fake, model = _fake_server(tmp_path, "badwarm")
+    wrapper = tmp_path / "bg-wrapper.sh"
+    wrapper.write_text(f'#!/bin/sh\n"{fake}" "$@" &\nsleep 1\n')
+    wrapper.chmod(0o755)
+    server = LlamaServer(str(wrapper), Path(model), tmp_path / "run")
+    try:
+        server.start(timeout=20)  # healthy before the wrapper exits
+    except RuntimeError:
+        pass  # the wrapper may exit first; either way nothing may linger
+    leader = server.proc.pid if server.proc else None
+    deadline = time.monotonic() + 10
+    while leader and time.monotonic() < deadline and ps._group_alive(leader):
+        time.sleep(0.1)
+    server.stop()
+    out = subprocess.run(
+        ["pgrep", "-f", str(model)], capture_output=True, text=True
+    ).stdout
+    assert out.strip() == "", "backgrounded server outlived its wrapper"
+
+
 def test_warmup_failure_tears_down_for_retry(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(ps, "RUN_DIR", tmp_path / "run")
     exe, model = _fake_server(tmp_path, "badwarm")
