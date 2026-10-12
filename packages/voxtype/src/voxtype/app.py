@@ -689,17 +689,21 @@ class VoiceTypeApp:
                     self._hotkeys.stop()
                 except Exception as e:
                     self._status(f"error stopping hotkey listener: {e}")
-            if self._delivery_q is not None:
-                # Let queued takes finish (each bounded by the cleanup
-                # timeout) before the server goes away, then end the
-                # worker.
-                self.flush_deliveries()
-                self._delivery_q.put(None)
-            if self._post is not None:
-                try:
-                    self._post.stop()
-                except Exception as e:
-                    self._status(f"error stopping post-processor: {e}")
+            try:
+                if self._delivery_q is not None:
+                    # Let queued takes finish (each bounded by the
+                    # cleanup timeout) before the server goes away, then
+                    # end the worker.
+                    self.flush_deliveries()
+                    self._delivery_q.put(None)
+            finally:
+                # Nested so a second Ctrl+C during the drain still stops
+                # the llama-server child.
+                if self._post is not None:
+                    try:
+                        self._post.stop()
+                    except Exception as e:
+                        self._status(f"error stopping post-processor: {e}")
             self._status("stopped")
         return exit_code
 
