@@ -9,6 +9,7 @@ completes a line (most apps undo it as a single edit).
 from __future__ import annotations
 
 import queue
+import re
 import sys
 import threading
 import time
@@ -578,7 +579,11 @@ class VoiceTypeApp:
             # hold up capture, hotkeys, or the overlay. The submit/stop/
             # wake phrases were already matched on the raw text.
             text = self._post.clean(text, since=arrived)
+            # Only "\n" may survive as a control character: a lone "\r"
+            # would be typed as Enter and a tab as the Tab key (moving
+            # focus), so normalize them before typing.
             text = text.replace("\r\n", "\n").replace("\r", "\n")
+            text = re.sub(r"[\t\v\f]+", " ", text)
             if "\n" in text and effective_newlines(
                 self.cfg.post_process_newlines,
                 self.cfg.post_process_provider,

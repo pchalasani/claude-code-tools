@@ -513,6 +513,14 @@ def test_app_newline_modes(newlines: str, typed: str) -> None:
     assert app.typist.typed == [typed]
 
 
+def test_tabs_never_reach_the_typist() -> None:
+    app = _app("shift_enter")
+    app._post = _Structured("First\tsecond.\vThird.")
+    app.handle_utterance("first second third")
+    app.flush_deliveries()
+    assert app.typist.typed == ["First second. Third. "]
+
+
 def test_latency_line_has_timings_but_no_text() -> None:
     app = _app(
         "shift_enter", mode="toggle", segmentation="hold",
