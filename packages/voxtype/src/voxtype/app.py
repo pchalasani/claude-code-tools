@@ -24,7 +24,7 @@ from .logic import (
     strip_fillers,
     text_after_wake_word,
 )
-from .postprocess import flatten_lines
+from .postprocess import effective_newlines, flatten_lines
 
 
 class State(Enum):
@@ -579,7 +579,10 @@ class VoiceTypeApp:
             # wake phrases were already matched on the raw text.
             text = self._post.clean(text, since=arrived)
             text = text.replace("\r\n", "\n").replace("\r", "\n")
-            if "\n" in text and self.cfg.post_process_newlines == "flatten":
+            if "\n" in text and effective_newlines(
+                self.cfg.post_process_newlines,
+                self.cfg.post_process_provider,
+            ) == "flatten":
                 text = flatten_lines(text)
         # Record for the paste-again hotkey / clipboard BEFORE typing:
         # even text that lands in the wrong window (or is skipped as

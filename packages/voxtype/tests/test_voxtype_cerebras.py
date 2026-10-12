@@ -57,6 +57,31 @@ def test_transcript_is_delimited_data() -> None:
     }
 
 
+def test_dictated_tags_mid_text_are_kept() -> None:
+    assert clean_output("Use the </transcript> tag here.") == (
+        "Use the </transcript> tag here."
+    )
+    assert clean_output("<transcript>\nWrap <transcript> me.\n</transcript>") == (
+        "Wrap <transcript> me."
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider", "newlines", "typed"),
+    [
+        ("cerebras", "auto", "Para one.\n\n- a\n- b "),
+        ("s1-mini", "auto", "Para one. - a - b "),
+        ("s1-mini", "shift_enter", "Para one.\n\n- a\n- b "),
+    ],
+)
+def test_auto_newlines_per_provider(provider, newlines, typed) -> None:
+    app = _app(newlines, post_process_provider=provider)
+    app._post = _Structured("Para one.\n\n- a\n- b")
+    app.handle_utterance("para one a b")
+    app.flush_deliveries()
+    assert app.typist.typed == [typed]
+
+
 def test_clean_output_keeps_structure() -> None:
     raw = '"<transcript>\nFirst para.\n\n\n\n- one  \n- two\n</transcript>"'
     assert clean_output(raw) == "First para.\n\n- one\n- two"
@@ -283,7 +308,7 @@ def test_defaults_unchanged_and_off() -> None:
     assert cfg.post_process is False
     assert cfg.post_process_provider == "s1-mini"
     assert cfg.post_process_format == "auto"
-    assert cfg.post_process_newlines == "shift_enter"
+    assert cfg.post_process_newlines == "auto"
     assert effective_timeout(cfg) == 4.0
     cfg.post_process_provider = "cerebras"
     assert effective_timeout(cfg) == 2.0

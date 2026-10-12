@@ -97,7 +97,9 @@ Output ONLY the cleaned and structured transcript.
 Do not include commentary, explanations, or surrounding quotation marks.
 """
 
-_TAG_RE = re.compile(r"</?transcript>", re.IGNORECASE)
+# Only an outer wrapper is stripped: tags dictated mid-text are content.
+_WRAP_OPEN_RE = re.compile(r"\A\s*<transcript>\s*", re.IGNORECASE)
+_WRAP_CLOSE_RE = re.compile(r"\s*</transcript>\s*\Z", re.IGNORECASE)
 _BLANK_RUN_RE = re.compile(r"\n{3,}")
 
 
@@ -122,9 +124,13 @@ def completion_budget(text: str) -> int:
 
 def clean_output(text: str) -> str:
     """Strip debris; normalize line breaks without losing structure."""
-    text = sanitize_output(_TAG_RE.sub("", text))
-    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
-        text = text[1:-1].strip()
+    text = sanitize_output(text)
+    # Outer quotes and an outer <transcript> wrapper, in either order.
+    for _ in range(2):
+        if _WRAP_OPEN_RE.match(text) and _WRAP_CLOSE_RE.search(text):
+            text = _WRAP_CLOSE_RE.sub("", _WRAP_OPEN_RE.sub("", text))
+        if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+            text = text[1:-1].strip()
     lines = [line.rstrip() for line in text.replace("\r\n", "\n").split("\n")]
     return _BLANK_RUN_RE.sub("\n\n", "\n".join(lines)).strip()
 

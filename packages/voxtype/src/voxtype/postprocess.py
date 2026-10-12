@@ -29,10 +29,21 @@ VALID_PROVIDERS = ("s1-mini", "cerebras")
 # Cerebras formatting modes, conveyed through its prompt.
 VALID_FORMATS = ("auto", "paragraphs", "minimal")
 # How line breaks in cleaned text are typed: Shift+Enter, or flattened
-# to spaces (one line). A bare Enter is never typed mid-take.
-VALID_NEWLINES = ("shift_enter", "flatten")
+# to spaces (one line). "auto" = Shift+Enter for cerebras (whose point
+# is structure), flatten for s1-mini (its long-standing behavior). A
+# bare Enter is never typed mid-take.
+VALID_NEWLINES = ("auto", "shift_enter", "flatten")
 # Per-provider default timeouts (post_process_timeout = 0 means these).
 DEFAULT_TIMEOUTS = {"s1-mini": 4.0, "cerebras": 2.0}
+
+
+
+def effective_newlines(newlines: str, provider: str) -> str:
+    """Resolve ``post_process_newlines`` ("auto" per provider)."""
+    if newlines != "auto":
+        return newlines
+    return "shift_enter" if provider == "cerebras" else "flatten"
+
 
 # Chunk size in words. The card recommends <= ~1,000 input tokens; 250
 # words (~330 tokens) leaves room for the output in a 2048-token

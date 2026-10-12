@@ -157,8 +157,9 @@ class Config:
             (paragraphs and lists when appropriate), "paragraphs" (no
             lists), or "minimal" (no added structure).
         post_process_newlines: How line breaks in cleaned text are
-            typed: "shift_enter" (new line without submitting) or
-            "flatten" (one line). A bare Enter is never typed.
+            typed: "shift_enter" (new line without submitting),
+            "flatten" (one line), or "auto" (shift_enter for cerebras,
+            flatten for s1-mini). A bare Enter is never typed.
         post_process_log_text: Log each take's before/after text.
         post_process_cerebras_model: Cerebras model id.
         post_process_style: Control-line styling: casual, semi-casual,
@@ -229,7 +230,7 @@ class Config:
     post_process: bool = False
     post_process_provider: str = "s1-mini"
     post_process_format: str = "auto"
-    post_process_newlines: str = "shift_enter"
+    post_process_newlines: str = "auto"
     post_process_log_text: bool = True
     post_process_cerebras_model: str = "gpt-oss-120b"
     post_process_style: str = "semi-formal"
@@ -625,10 +626,11 @@ post_process_provider = "s1-mini"
 post_process_format = "auto"
 # Line breaks in cleaned text: "shift_enter" types them as Shift+Enter
 # (a new line without sending, in chat apps and editors); "flatten"
-# types everything on one line. Use "flatten" if you dictate into a
-# plain shell, where Shift+Enter acts like Enter. A bare Enter is never
-# typed mid-take.
-post_process_newlines = "shift_enter"
+# types everything on one line; "auto" = shift_enter for cerebras,
+# flatten for s1-mini. Use "flatten" if you dictate into a plain shell,
+# where Shift+Enter acts like Enter. A bare Enter is never typed
+# mid-take.
+post_process_newlines = "auto"
 # Log each take's full before/after text (false: timings only).
 post_process_log_text = true
 # Cerebras model id.

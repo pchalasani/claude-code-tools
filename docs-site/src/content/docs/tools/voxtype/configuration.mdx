@@ -364,7 +364,7 @@ Everything runs on your Mac; nothing leaves the machine.
 | `post_process_structure` | `"prose"` | `lists` numbers "first..., second..." items. |
 | `post_process_context` | `"general"` | `email` formats the text as an email. |
 | `post_process_provider` | `"s1-mini"` | `s1-mini` (local) or `cerebras` (external API; see below). |
-| `post_process_newlines` | `"shift_enter"` | How line breaks in cleaned text are typed: `shift_enter` or `flatten` (one line). See below. |
+| `post_process_newlines` | `"auto"` | How line breaks in cleaned text are typed: `shift_enter`, `flatten` (one line), or `auto` (Shift+Enter for cerebras, flatten for s1-mini). See below. |
 | `post_process_log_text` | `true` | Log each take's full before/after text. `false` logs timings only. |
 | `post_process_timeout` | `0.0` | Seconds a take may spend in cleanup before voxtype types it raw (0.5–60). `0` means the provider default: 4 s for s1-mini, 2 s for cerebras. |
 | `post_process_model` | `""` | Path to your own `.gguf` file. Empty means the pinned S1-mini download. |
@@ -377,10 +377,11 @@ was trained on, so voxtype rejects anything else.
 
 voxtype never types a bare Enter in the middle of a take, because that
 would send a chat prompt or run a shell command partway through. With
-the default `post_process_newlines = "shift_enter"`, each line break in
-cleaned text (list items, paragraphs) is typed as Shift+Enter, which
-inserts a new line without sending in Claude Code, Codex, Slack, most
-chat boxes and editors.
+`post_process_newlines = "shift_enter"`, each line break in cleaned
+text (list items, paragraphs) is typed as Shift+Enter, which inserts a
+new line without sending in Claude Code, Codex, Slack, most chat boxes
+and editors. The default, `"auto"`, does that for the cerebras provider
+and types s1-mini's output on one line, as s1-mini always has.
 
 :::caution[Plain shells]
 In a plain shell prompt, and in some apps, Shift+Enter acts like
@@ -498,7 +499,7 @@ voxtype post-process --provider cerebras "um so lets do it Friday no sorry Thurs
 | `post_process_format` | `"auto"` | `auto`: paragraphs and lists when appropriate. `paragraphs`: paragraph breaks, but enumerations stay prose. `minimal`: fix punctuation and disfluencies only, with no added structure. |
 | `post_process_cerebras_model` | `"gpt-oss-120b"` | The Cerebras model id. |
 | `post_process_timeout` | `0.0` | `0` means 2 s for this provider. A take that takes longer is typed raw. |
-| `post_process_newlines` | `"shift_enter"` | Paragraphs and lists need `shift_enter`; see [Line breaks](#line-breaks). |
+| `post_process_newlines` | `"auto"` | `auto` types Shift+Enter for this provider; paragraphs and lists need it. See [Line breaks](#line-breaks). |
 | `post_process_log_text` | `true` | Log the before/after text of each take. |
 
 The format is passed to the model through its prompt. The transcript
@@ -527,6 +528,9 @@ never transcript text or the key. For example (illustrative numbers):
   `HTTP 402 payment_required` or `timed out`.
 - **`total`** runs from the end of your speech to the text being typed.
   With VAD segmentation it starts when the transcript arrives instead.
+  If you start and stop a new take before the previous one has finished
+  transcribing, that earlier take is timed from the latest toggle-off,
+  so its numbers read low.
 
 The latency and fallback lines never contain your words. The
 before/after lines (`before: "…"`, `after: "…"`) contain each take's
