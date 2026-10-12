@@ -46,6 +46,9 @@ voxtype and set it up" — the agent installs the CLI, explains the config
 options, and walks you through the macOS permission prompts. Prefer to do
 it by hand? Read on.
 
+Already have voxtype installed? `voxtype skill` sets up the same skill for
+Claude Code and Codex through their plugin marketplaces.
+
 ## Quick start
 
 <Steps>
@@ -84,10 +87,6 @@ it by hand? Read on.
    commented sample instead.)
 
 </Steps>
-
-Rather have your coding agent do all of this? See
-[Set it up from your coding agent](#set-it-up-from-your-coding-agent)
-below.
 
 ## Why it's different
 
@@ -130,6 +129,15 @@ below.
     on screen = actively recording; no ghost = not
     recording (paused, or waiting for the wake word).
   </Card>
+  <Card title="Under the hood" icon="setting">
+    NVIDIA's **Parakeet-TDT 0.6B v3** speech model. On
+    Apple Silicon it runs on the GPU via Apple's MLX at
+    about 40x realtime; on Intel it runs on the CPU via
+    sherpa-onnx. Silero voice-activity detection
+    handles per-pause mode. voxtype itself is written
+    from scratch around these open-source pieces --
+    see the [engine comparison](./configuration/#engines).
+  </Card>
   <Card title="Nothing is ever lost" icon="random">
     `Esc` cancels a recording outright (the default
     `cancel_hotkey`). Two optional rescues, **both off
@@ -140,23 +148,6 @@ below.
     echo each session to the clipboard.
   </Card>
 </CardGrid>
-
-## Set it up from your coding agent
-
-`voxtype skill` installs a short guide skill into your
-coding agents — Claude Code, Codex, or both (each reads
-its own marketplace in this repo):
-
-```bash
-voxtype skill
-```
-
-It sets up whichever of the two agents is on your
-machine and skips the other. Afterwards, just ask your
-agent *"help me install voxtype"* (or *"set up voice
-dictation"*) and it walks you through
-`uv tool install voxtype` → `voxtype setup` → launch,
-including the macOS permission steps.
 
 ## Make it yours
 
