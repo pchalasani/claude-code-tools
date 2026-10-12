@@ -9,7 +9,6 @@ account can serve the model; otherwise they skip with the reason.
 from __future__ import annotations
 
 import json
-import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,11 +17,14 @@ import pytest
 
 from voxtype.config import Config
 from voxtype.post_providers import create_post_processor, effective_timeout
+from voxtype import postprocess_cerebras as pc
 from voxtype.postprocess_cerebras import (
     KEY_ENV,
     CerebrasProcessor,
     build_messages,
     clean_output,
+    find_key,
+    read_dotenv_key,
     system_prompt,
 )
 
@@ -267,8 +269,77 @@ def test_unreachable_api_falls_back(monkeypatch) -> None:
     assert "network error" in proc.last_outcome[1]
 
 
-def test_missing_key_types_raw(monkeypatch) -> None:
+@pytest.fixture
+def no_key_files(monkeypatch, tmp_path):
+    """Point key lookup at an empty temp dir (never the real ~/.config)."""
+    files = [tmp_path / "voxtype.env", tmp_path / "beside-config.env"]
+    monkeypatch.setattr(pc, "key_files", lambda: files)
     monkeypatch.delenv(KEY_ENV, raising=False)
+    return files
+
+
+def test_read_dotenv_key_formats(tmp_path) -> None:
+    f = tmp_path / ".env"
+    f.write_text(
+        "# comment\nOTHER=1\nexport CEREBRAS_API_KEY='sk-abc'\n"
+    )
+    assert read_dotenv_key(f) == "sk-abc"
+    f.write_text('CEREBRAS_API_KEY="sk-xyz"\n')
+    assert read_dotenv_key(f) == "sk-xyz"
+    assert read_dotenv_key(tmp_path / "missing") == ""
+
+
+def test_key_lookup_order(no_key_files, monkeypatch) -> None:
+    first, second = no_key_files
+    msgs: list[str] = []
+    assert find_key(msgs.append) == ""
+    second.write_text("CEREBRAS_API_KEY=from-second\n")
+    second.chmod(0o600)
+    assert find_key(msgs.append) == "from-second"
+    first.write_text("CEREBRAS_API_KEY=from-first\n")
+    first.chmod(0o600)
+    assert find_key(msgs.append) == "from-first"
+    monkeypatch.setenv(KEY_ENV, "from-env")
+    assert find_key(msgs.append) == "from-env"  # environment wins
+    assert msgs == []  # private files: no warning, and never the value
+
+
+def test_world_readable_key_file_warns(no_key_files) -> None:
+    first, _ = no_key_files
+    first.write_text("CEREBRAS_API_KEY=sk-secret-value\n")
+    first.chmod(0o644)
+    msgs: list[str] = []
+    assert find_key(msgs.append) == "sk-secret-value"
+    assert any("chmod 600" in m for m in msgs)
+    assert not any("sk-secret-value" in m for m in msgs)
+
+
+def test_key_file_enables_processor(no_key_files) -> None:
+    first, _ = no_key_files
+    first.write_text("CEREBRAS_API_KEY=sk-from-file\n")
+    first.chmod(0o600)
+    proc = CerebrasProcessor(
+        model="m", fmt="auto", timeout=1.0, status=lambda m: None
+    )
+    proc.start()
+    assert proc.ready
+    proc.stop()
+
+
+def test_version_flag(capsys, monkeypatch) -> None:
+    import sys
+
+    from voxtype.cli import main
+
+    monkeypatch.setattr(sys, "argv", ["voxtype", "--version"])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert out.startswith("voxtype ") and out.strip() != "voxtype unknown"
+
+
+def test_missing_key_types_raw(no_key_files) -> None:
     messages: list[str] = []
     proc = CerebrasProcessor(
         model="m", fmt="auto", timeout=1.0, status=messages.append
@@ -277,7 +348,7 @@ def test_missing_key_types_raw(monkeypatch) -> None:
     assert not proc.ready
     assert proc.clean("hello there") == "hello there"
     assert proc.last_outcome[1] == "not ready"
-    assert any(KEY_ENV in m and "not set" in m for m in messages)
+    assert any(KEY_ENV in m and "no API key" in m for m in messages)
 
 
 def test_keepalive_connection_is_reused(api) -> None:
@@ -613,8 +684,11 @@ def _live_processor(fmt: str = "auto") -> CerebrasProcessor:
 
 @pytest.fixture(scope="module")
 def live():
-    if not os.environ.get(KEY_ENV):
-        pytest.skip(f"{KEY_ENV} not set: live Cerebras checks not run")
+    if not find_key(lambda m: None):
+        pytest.skip(
+            f"no {KEY_ENV} (environment or ~/.config/voxtype/.env): live "
+            "Cerebras checks not run"
+        )
     proc = _live_processor()
     probe = "please move the meeting to thursday afternoon"
     proc.clean(probe)

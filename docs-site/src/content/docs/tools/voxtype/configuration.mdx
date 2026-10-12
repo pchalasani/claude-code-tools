@@ -311,7 +311,7 @@ before typing it, to clean it up. Pick one of three setups in
 |---|---|---|
 | **No cleanup** (the default) | nothing | nothing |
 | **Local cleanup** (on-device, English only) | `post_process = true` | `brew install llama.cpp` ([details](#set-up-the-local-model)) |
-| **Cerebras cleanup** (also paragraphs and lists; **sends transcripts to Cerebras**) | `post_process = true`<br/>`post_process_provider = "cerebras"` | `CEREBRAS_API_KEY` in your shell profile ([details](#cerebras-provider-external-api)) |
+| **Cerebras cleanup** (also paragraphs and lists; **sends transcripts to Cerebras**) | `post_process = true`<br/>`post_process_provider = "cerebras"` | `CEREBRAS_API_KEY` in `~/.config/voxtype/.env` ([details](#cerebras-provider-external-api)) |
 
 With no cleanup, plain `voxtype` types Parakeet's transcript exactly as
 it always has, after the regex filler removal. With either kind of
@@ -479,24 +479,42 @@ local. Don't enable it for dictation you would not paste into a cloud
 service.
 :::
 
-**Enable it.** Put the API key in your shell environment, not in
-voxtype's config file. For example, add this line to `~/.zshrc`:
+**Enable it.** Put your API key from cloud.cerebras.ai in voxtype's own
+key file, `~/.config/voxtype/.env`. Don't put it in your shell profile
+(where every program you run can read it) or in `config.toml`. The file
+holds a single line:
 
 ```bash
-export CEREBRAS_API_KEY="..."   # from cloud.cerebras.ai; keep it out of git
+CEREBRAS_API_KEY=your-key-here
 ```
 
-Then, in `~/.config/voxtype/config.toml`:
+Create it with your editor, then make it readable only by you:
+
+```bash
+chmod 600 ~/.config/voxtype/.env
+```
+
+Then add these lines to `~/.config/voxtype/config.toml`:
 
 ```toml
 post_process = true
 post_process_provider = "cerebras"
 ```
 
-To disable it, set `post_process = false`, or switch the provider back
-to `s1-mini`. voxtype reads the key only from `CEREBRAS_API_KEY` and
-never logs it. If the key is missing, it says so once at launch and
-types raw transcripts.
+Now plain `voxtype` uses Cerebras. To disable it, set
+`post_process = false`, or switch the provider back to `s1-mini`.
+
+voxtype looks for the key in this order and never logs it:
+
+1. A `CEREBRAS_API_KEY` environment variable, for example one set by a
+   secrets manager.
+2. `~/.config/voxtype/.env`.
+3. A `.env` next to your config file, if that config is somewhere
+   else.
+
+If the key file is readable by other users, voxtype warns you to
+`chmod 600` it. If no key is found, it says so once at launch and types
+raw transcripts.
 
 **Try it once** without starting dictation:
 
@@ -628,6 +646,7 @@ voxtype init  [--config PATH] [--force]  write the commented sample config to ed
 voxtype hotkey                     press a chord; prints the config line
 voxtype skill                      install the voxtype skill into Claude + Codex
 voxtype post-process [TEXT] [--provider P] [--format F] [--style S]  clean TEXT (or stdin) once
+voxtype --version                  print the installed version
 voxtype --help                     full flag reference (per-subcommand: e.g. voxtype setup --help)
 ```
 

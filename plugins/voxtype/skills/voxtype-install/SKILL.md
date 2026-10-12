@@ -81,8 +81,11 @@ options; common ones:
   - **Cerebras** (gpt-oss-120b over Cerebras's API): also splits long
     dictations into paragraphs and lists, about 0.4 s per take. It
     **sends every transcript to an external service** — tell the user
-    before suggesting it. It needs `CEREBRAS_API_KEY` exported in their
-    shell profile (never in the config file). Config:
+    before suggesting it. The key goes in `~/.config/voxtype/.env` as
+    one line, `CEREBRAS_API_KEY=...`, followed by
+    `chmod 600 ~/.config/voxtype/.env`. Never put it in the shell profile
+    or the config file. Have the user paste the key into that file
+    themselves rather than echoing it in a command. Config:
 
     ```toml
     post_process = true

@@ -40,7 +40,21 @@ _INSTALL_HINT = (
 )
 
 
+def _version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("voxtype")
+    except PackageNotFoundError:
+        return "unknown"
+
+
 def _add_run_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"voxtype {_version()}",
+    )
     parser.add_argument(
         "--config",
         type=Path,

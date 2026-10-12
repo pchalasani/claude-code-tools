@@ -23,6 +23,7 @@ import ssl
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 from .postprocess import rejection_reason, sanitize_output
 
@@ -34,6 +35,67 @@ DEFAULT_MODEL = "gpt-oss-120b"
 DEFAULT_TIMEOUT = 2.0
 
 Status = Callable[[str], None]
+
+
+def key_files() -> list[Path]:
+    """Dotenv files checked for the key when it isn't in the environment:
+    ``~/.config/voxtype/.env``, and the one next to the active config file
+    (``~/.config/voice-type/.env`` for legacy setups)."""
+    from .config import DEFAULT_CONFIG_PATH
+
+    files = [Path.home() / ".config" / "voxtype" / ".env"]
+    beside_config = DEFAULT_CONFIG_PATH.parent / ".env"
+    if beside_config not in files:
+        files.append(beside_config)
+    return files
+
+
+def read_dotenv_key(path: Path, name: str = KEY_ENV) -> str:
+    """``name``'s value from a dotenv file, or "" (missing file or key).
+
+    Accepts ``NAME=value``, ``export NAME=value`` and quoted values;
+    ignores comments and other keys. Never logs the value.
+    """
+    try:
+        text = path.read_text()
+    except OSError:
+        return ""
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        if not line.startswith(f"{name}="):
+            continue
+        value = line.split("=", 1)[1].strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        return value.strip()
+    return ""
+
+
+def find_key(status: Status) -> str:
+    """The API key: the environment first, then the dotenv ``key_files``.
+
+    Warns (without the value) if the file holding it is readable by
+    other users.
+    """
+    key = os.environ.get(KEY_ENV, "").strip()
+    if key:
+        return key
+    for path in key_files():
+        key = read_dotenv_key(path)
+        if not key:
+            continue
+        try:
+            if path.stat().st_mode & 0o077:
+                status(
+                    f"post-process (cerebras): {path} is readable by other "
+                    f"users; run: chmod 600 {path}"
+                )
+        except OSError:
+            pass
+        return key
+    return ""
 
 _INTRO = """\
 You are an intelligent speech-to-text post-processor.
@@ -192,11 +254,12 @@ class CerebrasProcessor:
 
     def start(self) -> None:
         """Read the key; warm the TLS connection in the background."""
-        self._key = os.environ.get(KEY_ENV, "").strip()
+        self._key = find_key(self.status)
         if not self._key:
             self.status(
-                f"post-process (cerebras): {KEY_ENV} is not set; "
-                "typing raw transcripts"
+                f"post-process (cerebras): no API key — set {KEY_ENV} in "
+                f"{key_files()[0]} (or the environment); typing raw "
+                "transcripts"
             )
             return
         self._ready = True
