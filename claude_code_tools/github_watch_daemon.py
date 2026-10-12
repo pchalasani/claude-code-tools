@@ -1,4 +1,4 @@
-"""One shared daemon that wakes Codex when watched GitHub issues get replies."""
+"""One shared daemon that wakes agent sessions when watched issues get replies."""
 
 from __future__ import annotations
 

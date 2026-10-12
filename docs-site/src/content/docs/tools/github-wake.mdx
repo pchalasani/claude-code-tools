@@ -23,9 +23,35 @@ paths) and installs with
 `npx skills add pchalasani/claude-code-tools -s github-wake` (it is also part
 of the `dynamic-workflow` plugin).
 
-Codex delivery requires a session launched through `codex-dynamic`. In Claude
-Code 2.1.98 or later, ask Claude to watch the issue with `github-wake`; the
-installed skill runs the following command through Claude's `Monitor` tool:
+## Codex
+
+Run `github-wake ISSUE_URL` from the Codex session's own shell (in practice,
+ask Codex to watch the issue and the installed skill runs it). The command reads
+the session's thread from `CODEX_THREAD_ID` and, when the reply arrives,
+delivers it with Codex's native message queue:
+
+```bash
+codex queue --thread THREAD --message ...
+```
+
+This needs a Codex CLI that has the `codex queue` command. The queue runs under
+the session's Codex account directory. Codex does not export `CODEX_HOME` to
+tool shells, so `github-wake` picks the one `~/.codex*` directory that holds the
+thread's session. When none or several do, registration fails and asks for the
+directory explicitly:
+
+```bash
+github-wake --codex-home ~/.codex-rja https://github.com/OWNER/REPOSITORY/issues/123
+```
+
+An idle Codex session starts a new turn as soon as the reply is queued. A
+session in the middle of a turn receives the reply when that turn ends.
+
+## Claude Code
+
+In Claude Code 2.1.98 or later, ask Claude to watch the issue with
+`github-wake`; the installed skill runs the following command through Claude's
+`Monitor` tool:
 
 ```bash
 github-wake --claude-monitor https://github.com/OWNER/REPOSITORY/issues/123
@@ -36,9 +62,11 @@ tool call instead of feeding the reply asynchronously into the conversation.
 Claude Code monitors stop when their session ends and are not restored when a
 session resumes.
 
+## How it works
+
 The GitHub polling and durable state are agent-neutral. Separate delivery
-adapters send the event through either the Codex App Server or Claude Code's
-live Monitor process without replacing the shared watcher.
+adapters send the event through either `codex queue` or Claude Code's live
+Monitor process without replacing the shared watcher.
 
 The daemon polls once per GitHub repository, even when many sessions have
 pending watches. It uses conditional GitHub requests, overlapping time windows,

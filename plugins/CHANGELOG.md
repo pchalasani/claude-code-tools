@@ -1,5 +1,15 @@
 # Plugin Changelog
 
+## 2026-10-12
+
+### dynamic-workflow 0.2.3
+
+- fix: the github-wake skill now matches the released CLI (issue #224)
+  - Codex replies arrive through Codex's native `codex queue`; the
+    `codex-dynamic` requirement is gone
+  - documents `--codex-home` and account-directory discovery, and that a
+    reply reaches a busy session when its current turn ends
+
 ## 2026-08-23
 
 ### safety-hooks 1.15.2

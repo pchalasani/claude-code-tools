@@ -42,6 +42,11 @@ _MAX_GH_OUTPUT_BYTES = 1024 * 1024
 @click.option("--stop", is_flag=True, help="Stop the shared watcher.")
 @click.option("--cancel", metavar="WATCH_ID", help="Cancel one pending wakeup.")
 @click.option(
+    "--codex-home",
+    type=click.Path(path_type=Path, exists=True, file_okay=False),
+    help="Codex account directory of this session (default: $CODEX_HOME).",
+)
+@click.option(
     "--claude-monitor",
     is_flag=True,
     help="Wait through Claude Code's Monitor tool until the reply arrives.",
@@ -53,9 +58,15 @@ def cli(
     start: bool,
     stop: bool,
     cancel: str | None,
+    codex_home: Path | None,
     claude_monitor: bool,
 ) -> None:
-    """Wake this session when ISSUE_URL receives its first future comment."""
+    """Wake this session when ISSUE_URL receives its first future comment.
+
+    In Codex, the reply is delivered with `codex queue` to the session named
+    by CODEX_THREAD_ID. In Claude Code, run with --claude-monitor under the
+    Monitor tool.
+    """
     modes = sum((show_status, start, stop, cancel is not None))
     if modes > 1 or (modes and issue_url is not None) or (modes and claude_monitor):
         raise click.UsageError(
@@ -63,6 +74,8 @@ def cli(
         )
     if as_json and not show_status:
         raise click.UsageError("--json requires --status")
+    if codex_home is not None and (modes or claude_monitor):
+        raise click.UsageError("--codex-home applies only to Codex reply wakeups")
     if show_status:
         _show_status(as_json)
         return
@@ -83,21 +96,20 @@ def cli(
     if claude_monitor:
         _run_claude_monitor(issue_url)
         return
-    _register(issue_url)
+    try:
+        target = codex_target_from_environment(codex_home)
+    except DeliveryConfigurationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _register(issue_url, target)
 
 
 def _register(
     issue_url: str,
-    target: DeliveryTarget | None = None,
+    target: DeliveryTarget,
     announce: bool = True,
     preserve_on_start_failure: bool = True,
 ) -> IssueWatch:
     """Validate and durably register one existing issue URL."""
-    if target is None:
-        try:
-            target = codex_target_from_environment()
-        except DeliveryConfigurationError as exc:
-            raise click.ClickException(str(exc)) from exc
     repository, issue_number, host = _parse_issue_url(issue_url)
     canonical_url = _verify_issue(repository, issue_number, host)
     store = WatchStore()
