@@ -63,24 +63,39 @@ options; common ones:
   `hotkey` chord keeps working too.
 - `keepalive_minutes` — on a memory-pressured Mac, keeps the speech
   model from being swapped out while idle (try `5`); otherwise leave 0.
-- `post_process` — optional local LLM cleanup ("S1-mini" by
-  "Superwhisper"): punctuation, capitals, dropped self-corrections, at
-  about 0.15 s per take. Needs `brew install llama.cpp`. Run
-  `voxtype post-process "some text"` once to download the 462 MiB model
-  and try it, then set `post_process = true`. `post_process_style` is
-  `casual`, `semi-casual`, `semi-formal` (default) or `formal`.
-  `post_process_timeout` (default 4 s) caps the delay. On any failure
-  the raw transcript is typed. English only.
-- `post_process_provider = "cerebras"` — instead of the local model,
-  uses gpt-oss-120b on Cerebras's API, which also splits long
-  dictations into paragraphs and lists (`post_process_format` is
-  `auto`, `paragraphs` or `minimal`). This sends every transcript to an
-  external service, so mention that to the user before suggesting it.
-  It needs `CEREBRAS_API_KEY` exported in their shell profile, never in
-  the config file. Line breaks are typed as Shift+Enter; for dictating
-  into a plain shell, set `post_process_newlines = "flatten"`.
-  `post_process_log_text = false` drops the full before/after text
-  from the logs (voxtype's short `typed: "…"` previews remain).
+- Transcript cleanup by an LLM is **off by default**: plain `voxtype`
+  types Parakeet's transcript as-is (with regex filler removal). Two
+  opt-in providers; on any failure or timeout the raw transcript is
+  typed.
+  - **Local** ("S1-mini" by "Superwhisper", on-device): punctuation,
+    capitals, dropped self-corrections, about 0.15 s per take, English
+    only. Needs `brew install llama.cpp`; run `voxtype post-process
+    "some text"` once to download the 462 MiB model and try it. Config:
+
+    ```toml
+    post_process = true
+    ```
+
+    Optional: `post_process_style` (`casual`, `semi-casual`,
+    `semi-formal` (default), `formal`).
+  - **Cerebras** (gpt-oss-120b over Cerebras's API): also splits long
+    dictations into paragraphs and lists, about 0.4 s per take. It
+    **sends every transcript to an external service** — tell the user
+    before suggesting it. It needs `CEREBRAS_API_KEY` exported in their
+    shell profile (never in the config file). Config:
+
+    ```toml
+    post_process = true
+    post_process_provider = "cerebras"
+    ```
+
+    Optional: `post_process_format` (`auto` (default), `paragraphs`,
+    `minimal`). Line breaks are typed as Shift+Enter; for dictating into
+    a plain shell, set `post_process_newlines = "flatten"`.
+  - `post_process_timeout` caps the wait (default 4 s local, 2 s
+    Cerebras; raise it to fall back to raw less often).
+    `post_process_log_text = false` drops the full before/after text
+    from the logs (voxtype's short `typed: "…"` previews remain).
 - `wake_word` / `wake_word_aliases`, `submit_phrases`, `overlay`,
   `paste_hotkey`, `cancel_hotkey`, `copy_to_clipboard`, and more.
 
