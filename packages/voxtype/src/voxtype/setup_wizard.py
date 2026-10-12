@@ -10,6 +10,7 @@ commented sample file to edit by hand), this asks questions.
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import tomllib
 from pathlib import Path
@@ -314,6 +315,34 @@ def run_setup(config_path: Path | None = None, force: bool = False) -> int:
                 ans["wake_word_aliases"] = [
                     a.strip() for a in aliases.split(",") if a.strip()
                 ]
+
+        if _ask(q.confirm(
+            "Clean up each transcript with a local LLM (adds punctuation, "
+            "drops self-corrections; \"S1-mini\" by \"Superwhisper\" via "
+            "llama.cpp, ~462 MiB download, ~0.1-0.6 s per take)?",
+            default=False,
+        )):
+            ans["post_process"] = True
+            ans["post_process_style"] = _ask(q.select(
+                "Cleanup style:",
+                choices=[
+                    q.Choice(
+                        "semi-formal — sentences, capitals, full stops",
+                        "semi-formal",
+                    ),
+                    q.Choice("formal — also expands contractions", "formal"),
+                    q.Choice("semi-casual — light punctuation", "semi-casual"),
+                    q.Choice("casual — lowercase, minimal punctuation",
+                             "casual"),
+                ],
+                default="semi-formal",
+            ))
+            if shutil.which("llama-server") is None:
+                print(
+                    "  note: llama-server not found — install it with "
+                    "`brew install llama.cpp` (until then takes are "
+                    "typed raw)."
+                )
 
         if _ask(q.confirm(
             "Configure extras (sounds, clipboard rescue, ghost)?",

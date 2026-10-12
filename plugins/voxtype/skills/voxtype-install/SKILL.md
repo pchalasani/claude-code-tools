@@ -63,6 +63,14 @@ options; common ones:
   `hotkey` chord keeps working too.
 - `keepalive_minutes` — on a memory-pressured Mac, keeps the speech
   model from being swapped out while idle (try `5`); otherwise leave 0.
+- `post_process` — optional local LLM cleanup ("S1-mini" by
+  "Superwhisper"): punctuation, capitals, dropped self-corrections, at
+  about 0.15 s per take. Needs `brew install llama.cpp`. Run
+  `voxtype post-process "some text"` once to download the 462 MiB model
+  and try it, then set `post_process = true`. `post_process_style` is
+  `casual`, `semi-casual`, `semi-formal` (default) or `formal`.
+  `post_process_timeout` (default 4 s) caps the delay. On any failure
+  the raw transcript is typed. English only.
 - `wake_word` / `wake_word_aliases`, `submit_phrases`, `overlay`,
   `paste_hotkey`, `cancel_hotkey`, `copy_to_clipboard`, and more.
 

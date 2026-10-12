@@ -228,6 +228,15 @@ submit_phrases = ["over", "go", "submit"]
 # collapse 3+ word stutters ("I I I think" -> "I think")
 strip_fillers = true
 
+# Optional LLM cleanup, off by default — see "Post-processing" below
+post_process = false
+post_process_style = "semi-formal"   # casual | semi-casual | semi-formal | formal
+post_process_structure = "prose"     # prose | lists
+post_process_context = "general"     # general | email
+post_process_timeout = 4.0           # seconds before a take is typed raw
+post_process_model = ""              # local .gguf path; "" = pinned S1-mini download
+post_process_server = "llama-server" # llama.cpp server binary (name or path)
+
 trailing_space = true        # append a space after each typed utterance
 
 # Toggle chimes. sounds = false silences the start/stop chime entirely
@@ -253,7 +262,8 @@ overlay_opacity = 1.0  # 0.1–1.0; lower it if the ghost hides text under it
 # likely to evict it to swap — otherwise, on a memory-pressured
 # machine, the first take after a long pause can stall for seconds
 # paging the model back in. Keeps ~1.7 GB in active use. 0 disables;
-# max 1440 (a day). See the note below on the one trade-off.
+# max 1440 (a day). See the note below on the one trade-off. Also keeps
+# the post-processing model warm when post_process is on.
 keepalive_minutes = 0.0
 ```
 
@@ -286,6 +296,135 @@ One trade-off worth knowing:
   keepalive means the model had already been evicted,
   which is the situation this option prevents.
 
+## Post-processing (LLM cleanup)
+
+Off by default. With `post_process = true`, every transcript goes
+through a small local language model before voxtype types it. The model
+adds punctuation and capitals, drops self-corrections, and removes
+verbal clutter like "you know". These are real takes from this Mac:
+
+| Parakeet heard | voxtype typed |
+|---|---|
+| it does not handle missing keys, I mean optional keys, and then it crashes | It does not handle optional keys, and then it crashes. |
+| Let's meet on Tuesday, no wait Wednesday at three. | Let's meet on Wednesday at 3. |
+| First install Voxtype second run Voxtype setup third grant the permissions | First, install Voxtype. Second, run Voxtype setup. Third, grant the permissions. |
+| which is like kind of surprising you know. | which is kind of surprising. |
+
+The model is **"S1-mini" by "Superwhisper"**, a 0.6B-parameter
+fine-tune of Qwen3 trained for exactly this job. It is Apache-2.0
+licensed, with one added condition: anything that uses it must keep
+calling it "S1-mini" by "Superwhisper". It handles English only.
+Everything runs on your Mac; nothing leaves the machine.
+
+### Set it up
+
+1. Install llama.cpp, which provides the `llama-server` that runs the
+   model. voxtype adds no Python dependencies for this, so the base
+   install stays as light as before.
+
+   ```bash
+   brew install llama.cpp
+   ```
+
+2. Download the model and try it once. The model is a single
+   462 MiB file, pinned to a fixed revision and checked against its
+   sha256, and stored in `~/.cache/voxtype/models/`.
+
+   ```bash
+   voxtype post-process "so um I think we should uh move it to Tuesday no wait Wednesday"
+   ```
+
+   This prints the cleaned text and how long it took. Pass
+   `--style formal` (or any other style) to compare styles.
+
+3. Turn it on in `~/.config/voxtype/config.toml`, or answer yes to the
+   question in `voxtype setup`:
+
+   ```toml
+   post_process = true
+   ```
+
+### Settings
+
+| Key | Default | What it does |
+|---|---|---|
+| `post_process` | `false` | Turn LLM cleanup on. |
+| `post_process_style` | `"semi-formal"` | `casual` (lowercase, little punctuation), `semi-casual`, `semi-formal` (sentences, capitals, full stops), or `formal` (also expands contractions). |
+| `post_process_structure` | `"prose"` | `lists` numbers "first..., second..." items. |
+| `post_process_context` | `"general"` | `email` formats the text as an email. |
+| `post_process_timeout` | `4.0` | Seconds a take may spend in cleanup before voxtype types it raw (0.5–60). |
+| `post_process_model` | `""` | Path to your own `.gguf` file. Empty means the pinned S1-mini download. |
+| `post_process_server` | `"llama-server"` | Name or full path of the llama.cpp server binary. |
+
+The style, structure and context values are the only ones the model
+was trained on, so voxtype rejects anything else.
+
+Cleaned text is always typed as a single line. voxtype types a newline
+by pressing Enter, so a line break in the model's output would submit a
+chat prompt or run a shell command partway through your take. With
+`lists` you therefore get "1. Install voxtype. 2. Run setup." on one
+line.
+
+### What it costs
+
+Measured on an M1 Max with real Parakeet takes:
+
+- **Latency.** Cleanup adds about 150 ms at the median and about
+  550 ms at the 95th percentile, after the server is warm. A short take
+  of 20 words or fewer costs under 300 ms. A 60-word take costs about
+  0.6 s. A take longer than 250 words is split at sentence boundaries,
+  and each piece is cleaned in turn.
+- **Memory.** The server's resident size is about 830 MB, but only
+  about 300 MB of that is its own (dirty) memory. The other ~470 MB is
+  the model file mapped from disk with no dirty pages: under memory
+  pressure macOS simply drops those pages and rereads them later,
+  without writing anything to swap. voxtype never locks the model into
+  RAM (`--mlock`) and keeps the context small (2048 tokens, one
+  request at a time). If memory pressure makes the first take after a pause slow,
+  `keepalive_minutes` keeps this model warm too.
+- **Startup.** voxtype starts the server in the background at launch,
+  which takes about 5–15 seconds. Takes that arrive before it is ready
+  are typed raw, with a one-line notice.
+
+### When it falls back to the raw transcript
+
+Cleanup can only change the text that gets typed. It can never lose a
+take. voxtype types the raw transcript, exactly as it would with
+cleanup off, when any of the following happens:
+
+- llama-server is missing, failed to start, or crashed. voxtype retries
+  starting it at most once a minute.
+- The take exceeds `post_process_timeout`.
+- The model returns empty output, truncated output, or output that
+  looks like a chat reply rather than a transcript.
+- The output is much longer than the input, or lost most of it.
+- The transcript looks non-English. Either most of its letters are
+  non-ASCII (Cyrillic, Greek or Chinese, for example), or, in a take of
+  four or more words, at least a quarter are common words of a single
+  one of these languages, and they outnumber the English ones: Spanish,
+  French, German, Italian, Portuguese, Dutch or Indonesian. Other
+  mostly-ASCII languages (Polish or Romanian, for example) are not
+  reliably detected, so use cleanup only for English dictation.
+
+The terminal shows `post-processed in N ms`, or `post-process fell back
+to raw (reason)`, for every take.
+
+Spoken commands are matched on the raw transcript, before cleanup. That
+covers the submit phrases ("go"), the stop phrase and the wake word, so
+cleanup cannot break them. Filler-word removal (`strip_fillers`) also
+still runs first. `Esc` behaves as it does without cleanup: it
+discards the recording in progress, but text already transcribed and
+waiting for cleanup is still typed.
+
+The server never outlives voxtype. It runs under a tiny supervisor
+process (about 20 MB) that stops it as soon as voxtype exits for any
+reason, including a crash, a closed terminal, or `kill -9`. As a
+backstop, each voxtype process records its server in
+`~/.cache/voxtype/run/`, and the next launch stops any server left
+behind by a voxtype process that has died. It never touches the server
+of a voxtype process that is still running. A server that fails to
+start leaves its log in that same directory.
+
 ## CLI
 
 ```
@@ -294,6 +433,7 @@ voxtype setup [--config PATH] [--force]  interactive walkthrough -> writes confi
 voxtype init  [--config PATH] [--force]  write the commented sample config to edit
 voxtype hotkey                     press a chord; prints the config line
 voxtype skill                      install the voxtype skill into Claude + Codex
+voxtype post-process [TEXT] [--style S]  clean TEXT (or stdin) with the LLM once; downloads the model
 voxtype --help                     full flag reference (per-subcommand: e.g. voxtype setup --help)
 ```
 

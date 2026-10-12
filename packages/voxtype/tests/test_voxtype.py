@@ -1975,6 +1975,7 @@ def test_setup_wizard_writes_valid_config(monkeypatch, tmp_path) -> None:
                 "toggle",                   # mode
                 "hold",                     # segmentation
                 "Keep default (<ctrl>+;)",  # hotkey
+                False,  # post-process?
                 False,                      # extras?
             ]
         ),
@@ -2004,6 +2005,7 @@ def test_setup_wizard_wake_mode(monkeypatch, tmp_path) -> None:
                 "Keep default (<ctrl>+;)",  # hotkey
                 "claude",                   # wake word
                 "hey cloud, claud",         # aliases
+                False,  # post-process?
                 False,                      # extras?
             ]
         ),
@@ -2044,6 +2046,7 @@ def test_setup_wizard_cancel_at_optional_prompt_keeps_file(
                 "toggle",                   # mode
                 "hold",                     # segmentation
                 "Keep default (<ctrl>+;)",  # hotkey
+                False,  # post-process?
                 None,                       # extras? -> CANCEL (Ctrl-C)
             ]
         ),
@@ -2113,6 +2116,7 @@ def test_setup_wizard_rejects_unsupported_recorded_hotkey(
                 "hold",                              # segmentation
                 "Record one now (press the combo)",  # hotkey: record
                 "<ctrl>+<alt>+d",                    # manual fallback
+                False,  # post-process?
                 False,                               # extras?
             ]
         ),
@@ -2149,6 +2153,7 @@ def test_setup_wizard_atomic_write_preserves_existing_on_failure(
                 "toggle",                   # mode
                 "hold",                     # segmentation
                 "Keep default (<ctrl>+;)",  # hotkey
+                False,  # post-process?
                 False,                      # extras?
             ]
         ),

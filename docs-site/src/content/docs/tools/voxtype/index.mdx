@@ -116,7 +116,11 @@ below.
   <Card title="Clean transcripts" icon="pencil">
     Standalone fillers (uh, um, ...) are stripped and
     3+ word stutters collapse ("I I I think" becomes
-    "I think") -- on-device regex, no LLM involved.
+    "I think") with on-device regex. Optionally, a small
+    local LLM ("S1-mini" by "Superwhisper") also adds
+    punctuation and drops self-corrections ("Tuesday, no
+    wait, Wednesday" becomes "Wednesday"); see
+    [post-processing](./configuration/#post-processing-llm-cleanup).
   </Card>
   <Card title="Visible when it matters" icon="magnifier">
     A little glowing-blue ghost appears ONLY while

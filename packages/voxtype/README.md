@@ -39,8 +39,10 @@ voxtype` works too.)
   utterance and voxtype presses Enter — dictate a prompt to a coding agent
   and send it without touching the keyboard.
 - **Clean transcripts.** Standalone fillers (uh, um, ...) are stripped and
-  3+ word stutters collapse ("I I I think" becomes "I think") — on-device
-  regex, no LLM involved.
+  3+ word stutters collapse ("I I I think" becomes "I think") with
+  on-device regex. Optionally (`post_process = true`), a small local LLM,
+  "S1-mini" by "Superwhisper" run by llama.cpp, also adds punctuation and
+  drops self-corrections.
 - **Visible when it matters.** A floating waveform pill appears ONLY while
   recording — red waves as you speak. Pill on screen = mic live; no pill =
   not listening.

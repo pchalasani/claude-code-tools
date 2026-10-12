@@ -8,6 +8,7 @@ completes a line (most apps undo it as a single edit).
 
 from __future__ import annotations
 
+import queue
 import sys
 import threading
 import time
@@ -36,6 +37,12 @@ class State(Enum):
 def _preview(text: str, limit: int = 60) -> str:
     """Shorten ``text`` for a one-line status message."""
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+# A queued delivery that failed authorization at arrival (see
+# VoiceTypeApp._deliver). State versions are never negative, so it can
+# never pass _inject, and it must never consume a LATER handoff.
+_REJECTED = -1
 
 
 class VoiceTypeApp:
@@ -76,6 +83,14 @@ class VoiceTypeApp:
         self._expect_hold = 0
         self._last_toggle = 0.0
         self._engine = None
+        # Optional LLM cleanup (post_process); created in run(). Tests
+        # may set it directly — anything with a clean(str) -> str.
+        self._post = None
+        # Deliveries (typing / Enter) queued behind LLM cleanup; wake-mode
+        # idle expiry waits for them (a take being cleaned is speech in
+        # progress). See _deliver.
+        self._cleaning = 0
+        self._delivery_q: queue.Queue | None = None
         # Set once _start_hotkey_listener runs — in run() (no overlay) or
         # from inside the overlay loop (see _start_hotkeys_from_loop); the
         # finally block stops it. May be None if no valid hotkeys.
@@ -305,6 +320,10 @@ class VoiceTypeApp:
             state = self._state
             version = self._state_version
             self._last_activity = time.monotonic()
+            # The rescue buffer of the session this utterance arrived in
+            # (a take still in cleanup when the next session starts must
+            # not land in that session's buffer).
+            origin_buf = self._session_texts
         if state in (State.PAUSED, State.PASSIVE):
             if self._consume_handoff():
                 # In-flight speech from just before a toggle-off:
@@ -313,9 +332,7 @@ class VoiceTypeApp:
                     is_exact_phrase(text, p)
                     for p in self.cfg.submit_phrases
                 ):
-                    with self._lock:
-                        self.typist.press_enter()
-                    self._status("submitted (Enter, in-flight)")
+                    self._deliver(None, lambda v, at: self._enter_in_flight())
                 elif self.cfg.stop_phrase and is_exact_phrase(
                     text, self.cfg.stop_phrase
                 ):
@@ -326,7 +343,12 @@ class VoiceTypeApp:
                     self._status("stop phrase in flight (dropped)")
                 else:
                     self._status(f'typed in-flight: "{_preview(text)}"')
-                    self._type(text, None)
+                    self._deliver(
+                        None,
+                        lambda v, at, t=text, b=self._session_texts: (
+                            self._type(t, v, at, b)
+                        ),
+                    )
                 return
         if state == State.PAUSED:
             self._status(f'heard while paused (dropped): "{_preview(text)}"')
@@ -344,21 +366,18 @@ class VoiceTypeApp:
                 return
             version = self._set_state(State.ACTIVE)
             if remainder:
-                self._type(remainder, version)
+                self._deliver(
+                    version,
+                    lambda v, at, t=remainder, b=self._session_texts: (
+                        self._type(t, v, at, b)
+                    ),
+                )
             return
         # ACTIVE
         if any(
             is_exact_phrase(text, p) for p in self.cfg.submit_phrases
         ):
-            if self._inject(version, self.typist.press_enter):
-                self._status("submitted (Enter)")
-            elif self._consume_handoff():
-                # Snapshot said ACTIVE but a toggle-off landed before
-                # injection: this utterance IS the in-flight one that
-                # toggle's grace/hold handoff authorizes.
-                with self._lock:
-                    self.typist.press_enter()
-                self._status("submitted (Enter, in-flight)")
+            self._deliver(version, self._submit)
             return
         if self.cfg.stop_phrase and contains_phrase(
             text, self.cfg.stop_phrase
@@ -366,9 +385,117 @@ class VoiceTypeApp:
             self._set_state(self._off_state)
             return
         self._status(f'typed: "{_preview(text)}"')
-        self._type(text, version)
+        self._deliver(
+            version,
+            lambda v, at, t=text, b=origin_buf: self._type(t, v, at, b),
+        )
 
-    def _consume_handoff(self) -> bool:
+    def _submit(self, version: int | None, at: float) -> None:
+        """Press Enter for a submit phrase that arrived at ``at``.
+
+        ``version=None``: already authorized (see ``_deliver``).
+        """
+        if version is None:
+            with self._lock:
+                self.typist.press_enter()
+            self._status("submitted (Enter)")
+        elif self._inject(version, self.typist.press_enter):
+            self._status("submitted (Enter)")
+        elif version != _REJECTED and self._consume_handoff(at=at):
+            # Snapshot said ACTIVE but a toggle-off landed before
+            # injection: this utterance IS the in-flight one that
+            # toggle's grace/hold handoff authorizes.
+            self._enter_in_flight()
+
+    def _enter_in_flight(self) -> None:
+        with self._lock:
+            self.typist.press_enter()
+        self._status("submitted (Enter, in-flight)")
+
+    def _deliver(
+        self,
+        version: int | None,
+        action: Callable[[int | None, float], None],
+    ) -> None:
+        """Run a typing/Enter ``action(version, arrived)`` in order.
+
+        Without LLM cleanup it runs inline, exactly as before. With it,
+        actions go through ONE FIFO worker thread: cleanup can take up
+        to post_process_timeout, and the engine calls handle_utterance
+        on its capture thread (VAD segmentation), so cleaning inline
+        would stall microphone reads. A single queue keeps every action
+        in order — a spoken "go" can never press Enter before the text
+        dictated just before it is typed. ``arrived`` is when the
+        utterance arrived; cleanup's deadline counts from then, so time
+        spent queued is part of post_process_timeout.
+
+        A queued action is AUTHORIZED NOW, as inline delivery would be:
+        if the state is still ``version`` (or the toggle-off handoff
+        covers it) it is passed ``version=None`` and is typed even if
+        dictation stops while it waits — exactly what inline typing
+        would have done at this moment. Otherwise it keeps ``version``
+        and its staleness check fails later, as it would have now.
+
+        Esc (cancel) therefore never discards text already queued here:
+        like origin/main, where a delivered utterance is typed at once,
+        Esc discards only audio the engine has not yet transcribed.
+        """
+        arrived = time.monotonic()
+        if self._post is None:
+            action(version, arrived)
+            return
+        if version is not None:
+            with self._lock:
+                current = version == self._state_version
+            # The handoff check happens HERE, once, as it would inline;
+            # a rejected take is still recorded for rescue by _type but
+            # can never be typed or claim a later session's handoff.
+            if current or self._consume_handoff(at=arrived):
+                version = None
+            else:
+                version = _REJECTED
+        with self._lock:
+            self._cleaning += 1
+            if self._delivery_q is None:
+                self._delivery_q = queue.Queue()
+                threading.Thread(
+                    target=self._delivery_loop,
+                    args=(self._delivery_q,),
+                    name="voxtype-delivery",
+                    daemon=True,
+                ).start()
+            q = self._delivery_q
+        q.put((action, version, arrived))
+
+    def _delivery_loop(self, q: queue.Queue) -> None:
+        while True:
+            item = q.get()
+            try:
+                if item is None:
+                    return
+                action, version, arrived = item
+                try:
+                    action(version, arrived)
+                except Exception as e:
+                    try:  # best-effort: never let reporting end the worker
+                        self._status(f"error delivering text: {e}")
+                    except Exception:
+                        pass
+                finally:
+                    with self._lock:
+                        self._cleaning -= 1
+                        # Idle time counts from when the text lands.
+                        self._last_activity = time.monotonic()
+            finally:
+                q.task_done()
+
+    def flush_deliveries(self) -> None:
+        """Block until every queued delivery has been typed."""
+        q = self._delivery_q
+        if q is not None:
+            q.join()
+
+    def _consume_handoff(self, at: float | None = None) -> bool:
         """Consume the armed toggle-off handoff; True if one was armed.
 
         The handoff (a pending hold delivery or the wall-clock grace
@@ -380,9 +507,13 @@ class VoiceTypeApp:
         request, however long the decode took.
         """
         with self._lock:
+            # ``at``: when the delivery "arrived". A transcript held up
+            # by LLM cleanup arrived when cleanup began, so a grace
+            # window opened by a toggle during cleanup still covers it.
             armed = (
                 self._expect_hold > 0
-                or time.monotonic() < self._grace_until
+                or (time.monotonic() if at is None else at)
+                < self._grace_until
             )
             if self._expect_hold:
                 self._expect_hold -= 1
@@ -410,7 +541,13 @@ class VoiceTypeApp:
             action()
             return True
 
-    def _type(self, text: str, version: int | None) -> None:
+    def _type(
+        self,
+        text: str,
+        version: int | None,
+        arrived: float | None = None,
+        session: list[str] | None = None,
+    ) -> None:
         """Type ``text``; ``version=None`` skips the staleness check
         (used for grace-window commits, which by definition arrive
         after a state transition)."""
@@ -420,14 +557,26 @@ class VoiceTypeApp:
             text = collapse_repeats(strip_fillers(text))
             if not text:
                 return
+        if self._post is not None:
+            # On the delivery thread (see _deliver), outside every lock:
+            # cleanup takes up to post_process_timeout and must never
+            # hold up capture, hotkeys, or the overlay. The submit/stop/
+            # wake phrases were already matched on the raw text.
+            text = self._post.clean(text, since=arrived)
         # Record for the paste-again hotkey / clipboard BEFORE typing:
         # even text that lands in the wrong window (or is skipped as
         # stale) stays rescuable.
+        # ``session`` is the buffer of the session the utterance ARRIVED
+        # in (captured at arrival): a take still in cleanup when a new
+        # session starts must not leak into the new session's rescue
+        # text, nor overwrite its clipboard copy.
         with self._lock:
-            self._session_texts.append(text)
-            session = " ".join(self._session_texts)
-        if self.cfg.copy_to_clipboard:
-            copy_to_clipboard(session)
+            buf = self._session_texts if session is None else session
+            buf.append(text)
+            current = buf is self._session_texts
+            joined = " ".join(buf)
+        if self.cfg.copy_to_clipboard and current:
+            copy_to_clipboard(joined)
         if self.cfg.trailing_space:
             text += " "
         if version is None:
@@ -435,7 +584,7 @@ class VoiceTypeApp:
                 self.typist.type_text(text)
         elif not self._inject(
             version, lambda: self.typist.type_text(text)
-        ) and self._consume_handoff():
+        ) and version != _REJECTED and self._consume_handoff(at=arrived):
             # The utterance snapshotted ACTIVE but lost the injection
             # race to a toggle-off that armed the grace/hold handoff.
             # It IS the one in-flight delivery that handoff authorizes
@@ -501,6 +650,22 @@ class VoiceTypeApp:
             )
             if self.cfg.overlay and not use_overlay:
                 self._status("overlay unavailable; running without it")
+            if self.cfg.post_process:
+                from .postprocess_server import PostProcessor
+
+                self._post = PostProcessor(
+                    style=self.cfg.post_process_style,
+                    structure=self.cfg.post_process_structure,
+                    context=self.cfg.post_process_context,
+                    timeout=self.cfg.post_process_timeout,
+                    model=self.cfg.post_process_model,
+                    server=self.cfg.post_process_server,
+                    keepalive_minutes=self.cfg.keepalive_minutes,
+                    status=self._status,
+                )
+                # Boots in the background (download, launch, warmup);
+                # takes before it is ready are typed raw.
+                self._post.start()
             engine = create_engine(self.cfg, self._status)
             self._engine = engine
             if not use_overlay:
@@ -523,16 +688,33 @@ class VoiceTypeApp:
             self._status(f"engine failed: {e}")
             exit_code = 1
         finally:
-            if engine is not None:
-                try:
-                    engine.stop()
-                except Exception as e:
-                    self._status(f"error stopping engine: {e}")
-            if self._hotkeys is not None:
-                try:
-                    self._hotkeys.stop()
-                except Exception as e:
-                    self._status(f"error stopping hotkey listener: {e}")
+            # The llama-server teardown is the OUTERMOST finally: it runs
+            # its own process group (Ctrl+C at the terminal never reaches
+            # it), so a second Ctrl+C during any earlier shutdown step
+            # must still stop it.
+            try:
+                if engine is not None:
+                    try:
+                        engine.stop()
+                    except Exception as e:
+                        self._status(f"error stopping engine: {e}")
+                if self._hotkeys is not None:
+                    try:
+                        self._hotkeys.stop()
+                    except Exception as e:
+                        self._status(f"error stopping hotkey listener: {e}")
+                if self._delivery_q is not None:
+                    # Let queued takes finish (each bounded by the
+                    # cleanup timeout) before the server goes away, then
+                    # end the worker.
+                    self.flush_deliveries()
+                    self._delivery_q.put(None)
+            finally:
+                if self._post is not None:
+                    try:
+                        self._post.stop()
+                    except Exception as e:
+                        self._status(f"error stopping post-processor: {e}")
             self._status("stopped")
         return exit_code
 
@@ -603,6 +785,7 @@ class VoiceTypeApp:
             # ACTIVE -> PASSIVE transition.
             expired = (
                 self._state == State.ACTIVE
+                and not self._cleaning
                 and time.monotonic() - self._last_activity
                 > self.cfg.idle_timeout
             )
