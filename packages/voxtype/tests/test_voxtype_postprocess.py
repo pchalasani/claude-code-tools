@@ -34,7 +34,8 @@ from voxtype.postprocess_server import (
     PostProcessor,
     ensure_model,
     find_server_binary,
-    kill_stale_server,
+    kill_stale_servers,
+    pidfile_for,
 )
 
 # -- pure logic ------------------------------------------------------------
@@ -187,17 +188,106 @@ def test_find_server_binary(tmp_path: Path) -> None:
     assert find_server_binary(str(exe)) == str(exe)
 
 
-def test_kill_stale_server_spares_unrelated_process(tmp_path: Path) -> None:
-    pidfile = tmp_path / "srv.pid"
+def _dead_pid() -> int:
+    proc = subprocess.Popen(["true"])
+    proc.wait()
+    return proc.pid
+
+
+def test_kill_stale_servers_spares_unrelated_process(tmp_path: Path) -> None:
+    """Dead owner, but the recorded pid is not our llama-server."""
     proc = subprocess.Popen(["sleep", "30"])
     try:
+        pidfile = pidfile_for(_dead_pid(), tmp_path)
         pidfile.write_text(str(proc.pid))
-        assert kill_stale_server(pidfile) is False
+        assert kill_stale_servers(tmp_path) == 0
         assert proc.poll() is None  # still running
-        assert not pidfile.exists()
+        assert not pidfile.exists()  # stale record cleared
     finally:
         proc.kill()
         proc.wait()
+
+
+def test_kill_stale_servers_spares_live_owner(tmp_path: Path) -> None:
+    owner = subprocess.Popen(["sleep", "30"])
+    try:
+        pidfile = pidfile_for(owner.pid, tmp_path)
+        pidfile.write_text("1")
+        assert kill_stale_servers(tmp_path) == 0
+        assert pidfile.exists()  # a live instance's record is untouched
+    finally:
+        owner.kill()
+        owner.wait()
+
+
+# A real stand-in for llama-server: a tiny HTTP server process taking
+# the same flags. FAKE_MODE (read from the "model" file) picks its
+# behavior: "slow" never becomes healthy; "badwarm" is healthy but
+# fails every completion.
+_FAKE_SERVER = """#!{python}
+import sys, time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+args = sys.argv[1:]
+port = int(args[args.index("--port") + 1])
+mode = open(args[args.index("-m") + 1]).read().strip()
+if mode == "slow":
+    time.sleep(60)
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+    def do_GET(self):
+        self.send_response(200); self.end_headers(); self.wfile.write(b"{{}}")
+    def do_POST(self):
+        self.send_response(500); self.end_headers()
+HTTPServer(("127.0.0.1", port), H).serve_forever()
+"""
+
+
+def _fake_server(tmp_path: Path, mode: str) -> tuple[str, str]:
+    import sys
+
+    exe = tmp_path / "fake-llama-server"
+    exe.write_text(_FAKE_SERVER.format(python=sys.executable))
+    exe.chmod(0o755)
+    model = tmp_path / f"{mode}.gguf"
+    model.write_text(mode)
+    return str(exe), str(model)
+
+
+def _processor(server: str, model: str, messages: list[str]) -> PostProcessor:
+    return PostProcessor(
+        style="semi-formal", structure="prose", context="general",
+        timeout=1.0, model=model, server=server,
+        keepalive_minutes=0.0, status=messages.append,
+    )
+
+
+def test_stop_during_start_leaves_no_server(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(ps, "RUN_DIR", tmp_path / "run")
+    exe, model = _fake_server(tmp_path, "slow")
+    post = _processor(exe, model, [])
+    post.start()
+    deadline = time.monotonic() + 5
+    while post._server is None or post._server.proc is None:
+        assert time.monotonic() < deadline, "server never launched"
+        time.sleep(0.05)
+    child = post._server.proc
+    post.stop()
+    child.wait(timeout=5)  # terminated, not orphaned
+    assert not list((tmp_path / "run").glob("*.pid"))
+
+
+def test_warmup_failure_tears_down_for_retry(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(ps, "RUN_DIR", tmp_path / "run")
+    exe, model = _fake_server(tmp_path, "badwarm")
+    messages: list[str] = []
+    post = _processor(exe, model, messages)
+    post.start()
+    assert post.wait_ready(20) is False
+    assert post._server is None  # torn down, so a restart can happen
+    assert any("unavailable" in m for m in messages)
+    assert not list((tmp_path / "run").glob("*.pid"))
+    post.stop()
 
 
 # -- PostProcessor fallbacks against an imitation llama-server ------------
@@ -327,6 +417,18 @@ def test_clean_when_server_dies(stub_post) -> None:
     assert any("died" in m for m in messages)
 
 
+def test_clean_waits_for_busy_server_only_within_timeout(stub_post) -> None:
+    post, stub, messages = stub_post
+    post._req_lock.acquire()  # e.g. a keepalive request in flight
+    try:
+        t0 = time.monotonic()
+        assert post.clean("hello there") == "hello there"
+        assert time.monotonic() - t0 < 1.5  # timeout is 1.0 s
+    finally:
+        post._req_lock.release()
+    assert any("busy" in m for m in messages)
+
+
 def test_clean_not_ready_types_raw() -> None:
     messages: list[str] = []
     post = PostProcessor(
@@ -449,9 +551,7 @@ _REAL = find_server_binary("llama-server") is not None and (
 
 @pytest.mark.skipif(not _REAL, reason="llama-server or S1-mini not installed")
 def test_real_s1_mini_end_to_end(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(ps, "CACHE_DIR", tmp_path)
-    monkeypatch.setattr(ps, "PIDFILE", tmp_path / "srv.pid")
-    monkeypatch.setattr(ps, "SERVER_LOG", tmp_path / "srv.log")
+    monkeypatch.setattr(ps, "RUN_DIR", tmp_path)
     messages: list[str] = []
     post = PostProcessor(
         style="semi-formal", structure="prose", context="general",
@@ -471,22 +571,25 @@ def test_real_s1_mini_end_to_end(tmp_path: Path, monkeypatch) -> None:
     finally:
         post.stop()
     assert subprocess.run(["kill", "-0", str(pid)]).returncode != 0
-    assert not (tmp_path / "srv.pid").exists()
+    assert not list(tmp_path.glob("*.pid"))
 
 
 @pytest.mark.skipif(not _REAL, reason="llama-server or S1-mini not installed")
-def test_real_stale_server_is_killed(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(ps, "CACHE_DIR", tmp_path)
-    monkeypatch.setattr(ps, "PIDFILE", tmp_path / "srv.pid")
-    monkeypatch.setattr(ps, "SERVER_LOG", tmp_path / "srv.log")
+def test_real_stale_server_is_killed(tmp_path: Path) -> None:
     server = LlamaServer(
-        find_server_binary("llama-server"), ps.default_model_path()
+        find_server_binary("llama-server"), ps.default_model_path(), tmp_path
     )
     server.start()
     proc = server.proc
     try:
-        # Simulate a crash: voxtype is gone, the pid file remains.
-        assert kill_stale_server(tmp_path / "srv.pid") is True
+        # A live owner (this test process) keeps its server.
+        assert kill_stale_servers(tmp_path) == 0
+        assert proc.poll() is None
+        # Simulate a crash: re-file the record under a dead owner's pid.
+        dead = pidfile_for(_dead_pid(), tmp_path)
+        server.pidfile.rename(dead)
+        assert kill_stale_servers(tmp_path) == 1
         proc.wait(timeout=10)
+        assert not dead.exists()
     finally:
         server.stop()

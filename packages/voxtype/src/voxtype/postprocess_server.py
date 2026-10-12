@@ -48,8 +48,10 @@ MODEL_SHA256 = (
 MODEL_SIZE = 484_219_808
 CACHE_DIR = Path.home() / ".cache" / "voxtype"
 MODEL_DIR = CACHE_DIR / "models"
-PIDFILE = CACHE_DIR / "llama-server.pid"
-SERVER_LOG = CACHE_DIR / "llama-server.log"
+# Per-instance pid and log files, named by the OWNING voxtype's pid, so
+# several voxtype processes (e.g. dictation plus `voxtype post-process`)
+# never clobber or kill each other's servers.
+RUN_DIR = CACHE_DIR / "run"
 # Passed as --alias so a stale server can be recognized as ours.
 SERVER_ALIAS = "voxtype-post"
 # Seconds between restart attempts after the server dies.
@@ -144,36 +146,72 @@ def _command_of(pid: int) -> str:
         return ""
 
 
-def kill_stale_server(pidfile: Path = PIDFILE) -> bool:
-    """Kill a server left by a crashed voxtype; True if one was killed.
+def pidfile_for(owner: int, run_dir: Path | None = None) -> Path:
+    """Pid file recording the server owned by voxtype process ``owner``."""
+    return (run_dir or RUN_DIR) / f"llama-server.{owner}.pid"
 
-    Only a process whose command line carries our ``--alias`` is
-    touched, so a recycled pid is never killed.
-    """
+
+def logfile_for(owner: int, run_dir: Path | None = None) -> Path:
+    """Log file of the server owned by voxtype process ``owner``."""
+    return (run_dir or RUN_DIR) / f"llama-server.{owner}.log"
+
+
+def _pid_alive(pid: int) -> bool:
     try:
-        pid = int(pidfile.read_text().strip())
-    except (OSError, ValueError):
+        os.kill(pid, 0)
+    except ProcessLookupError:
         return False
-    killed = False
-    command = _command_of(pid)
-    if "llama-server" in command and SERVER_ALIAS in command:
+    except PermissionError:
+        return True
+    return True
+
+
+def kill_stale_servers(run_dir: Path | None = None) -> int:
+    """Kill servers whose owning voxtype died; returns how many.
+
+    A server is stale only when the voxtype process that started it is
+    gone; servers of live instances are never touched. Only a process
+    whose command line carries our ``--alias`` is killed, so a recycled
+    server pid is safe too.
+    """
+    run_dir = run_dir or RUN_DIR
+    killed = 0
+    for pidfile in run_dir.glob("llama-server.*.pid"):
         try:
-            os.kill(pid, signal.SIGTERM)
-            killed = True
-        except OSError:
-            pass
-    pidfile.unlink(missing_ok=True)
+            owner = int(pidfile.name.split(".")[1])
+            pid = int(pidfile.read_text().strip())
+        except (OSError, ValueError, IndexError):
+            continue
+        if owner == os.getpid() or _pid_alive(owner):
+            continue
+        command = _command_of(pid)
+        if "llama-server" in command and SERVER_ALIAS in command:
+            try:
+                os.kill(pid, signal.SIGTERM)
+                killed += 1
+            except OSError:
+                pass
+        pidfile.unlink(missing_ok=True)
+        logfile_for(owner, run_dir).unlink(missing_ok=True)
     return killed
 
 
 class LlamaServer:
     """One ``llama-server`` child process serving S1-mini on localhost."""
 
-    def __init__(self, binary: str, model_path: Path) -> None:
+    def __init__(
+        self, binary: str, model_path: Path, run_dir: Path | None = None
+    ) -> None:
         self.binary = binary
         self.model_path = model_path
         self.port = 0
         self.proc: subprocess.Popen[bytes] | None = None
+        self.pidfile = pidfile_for(os.getpid(), run_dir)
+        self.log = logfile_for(os.getpid(), run_dir)
+        # Guards proc + _cancelled so stop() from another thread during
+        # start() either prevents the launch or terminates the child.
+        self._lock = threading.Lock()
+        self._cancelled = False
 
     def command(self) -> list[str]:
         """The launch command (thinking off and greedy, per the card)."""
@@ -197,22 +235,28 @@ class LlamaServer:
             RuntimeError: The server exited or did not become healthy.
         """
         self.port = _free_port()
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        with open(SERVER_LOG, "wb") as log:
-            self.proc = subprocess.Popen(
-                self.command(),
-                stdin=subprocess.DEVNULL,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-            )
-        PIDFILE.write_text(str(self.proc.pid))
+        self.pidfile.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            if self._cancelled:
+                raise RuntimeError("llama-server start cancelled")
+            with open(self.log, "wb") as log:
+                proc = subprocess.Popen(
+                    self.command(),
+                    stdin=subprocess.DEVNULL,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                )
+            self.proc = proc
+            self.pidfile.write_text(str(proc.pid))
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if self.proc.poll() is not None:
-                code = self.proc.returncode
-                self.stop()
+            if self._cancelled:
+                raise RuntimeError("llama-server start cancelled")
+            if proc.poll() is not None:
+                code = proc.returncode
+                self.stop(keep_log=True)
                 raise RuntimeError(
-                    f"llama-server exited (code {code}); see {SERVER_LOG}"
+                    f"llama-server exited (code {code}); see {self.log}"
                 )
             try:
                 with urllib.request.urlopen(
@@ -263,9 +307,15 @@ class LlamaServer:
             raise ValueError("malformed response: content is not a string")
         return content, str(finish)
 
-    def stop(self) -> None:
-        """Terminate the child (kill after 3 s) and clear the pid file."""
-        proc, self.proc = self.proc, None
+    def stop(self, keep_log: bool = False) -> None:
+        """Terminate the child (kill after 3 s) and clear the pid file.
+
+        Safe from any thread, including while ``start()`` is running:
+        a stop that lands before the launch cancels it.
+        """
+        with self._lock:
+            self._cancelled = True
+            proc, self.proc = self.proc, None
         if proc is None:
             return
         if proc.poll() is None:
@@ -275,11 +325,9 @@ class LlamaServer:
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=3)
-        try:
-            if PIDFILE.read_text().strip() == str(proc.pid):
-                PIDFILE.unlink()
-        except OSError:
-            pass
+        self.pidfile.unlink(missing_ok=True)
+        if not keep_log:
+            self.log.unlink(missing_ok=True)
 
 
 class PostProcessor:
@@ -308,9 +356,11 @@ class PostProcessor:
         self._server: LlamaServer | None = None
         self._ready = threading.Event()
         self._stop = threading.Event()
-        # Serializes requests (the server has a single slot) and guards
-        # the boot/restart bookkeeping below.
+        # Guards the boot/restart bookkeeping (held only briefly).
         self._lock = threading.Lock()
+        # Serializes requests: the server has a single slot. Cleanup
+        # waits for it only within its own deadline.
+        self._req_lock = threading.Lock()
         self._booting = False
         self._last_boot = 0.0
         self._last_use = time.monotonic()
@@ -340,7 +390,7 @@ class PostProcessor:
 
     def _boot(self) -> None:
         try:
-            if kill_stale_server():
+            if kill_stale_servers():
                 self.status("post-process: stopped a stale llama-server")
             binary = find_server_binary(self.server_name)
             if binary is None:
@@ -352,17 +402,15 @@ class PostProcessor:
                 return
             model_path = ensure_model(self.model, self.status)
             server = LlamaServer(binary, model_path)
-            server.start()
-            # stop() sets _stop before taking the lock, so checking both
-            # under the lock means a server is either handed to stop()
-            # or stopped here — never orphaned.
+            # Published BEFORE start(): stop() can then cancel a launch
+            # still loading the model instead of orphaning it. stop()
+            # sets _stop before taking the lock, so either it sees this
+            # server or we see _stop here.
             with self._lock:
-                stopping = self._stop.is_set()
-                if not stopping:
-                    self._server = server
-            if stopping:
-                server.stop()
-                return
+                if self._stop.is_set():
+                    return
+                self._server = server
+            server.start()
             # Warm the weights and the prompt cache with one real request.
             server.complete(
                 build_messages(
@@ -376,7 +424,15 @@ class PostProcessor:
             self._last_use = time.monotonic()
             self.status(f"post-process ready ({MODEL_NAME})")
         except Exception as e:
-            self.status(f"post-process unavailable ({e}); typing raw")
+            # A server that started but failed warmup is torn down, so
+            # _maybe_restart can try again later instead of seeing a
+            # "live" server that never became ready.
+            with self._lock:
+                failed, self._server = self._server, None
+            if failed is not None:
+                failed.stop(keep_log=True)
+            if not self._stop.is_set():
+                self.status(f"post-process unavailable ({e}); typing raw")
         finally:
             with self._lock:
                 self._booting = False
@@ -425,7 +481,10 @@ class PostProcessor:
         deadline = t0 + self.timeout
         out: list[str] = []
         problems: list[str] = []
-        with self._lock:
+        if not self._req_lock.acquire(timeout=self.timeout):
+            self.status("post-process busy; typing raw")
+            return text
+        try:
             server = self._server
             for chunk in split_chunks(text):
                 remaining = deadline - time.monotonic()
@@ -438,6 +497,8 @@ class PostProcessor:
                     problems.append(problem)
                 out.append(cleaned)
             self._last_use = time.monotonic()
+        finally:
+            self._req_lock.release()
         ms = (time.monotonic() - t0) * 1000
         if problems:
             self.status(
@@ -508,7 +569,7 @@ class PostProcessor:
             if time.monotonic() - self._last_use < self.keepalive_secs:
                 continue
             # Never make a real cleanup wait behind the keepalive.
-            if not self._lock.acquire(blocking=False):
+            if not self._req_lock.acquire(blocking=False):
                 continue
             try:
                 server = self._server
@@ -524,4 +585,4 @@ class PostProcessor:
                 pass
             finally:
                 self._last_use = time.monotonic()
-                self._lock.release()
+                self._req_lock.release()

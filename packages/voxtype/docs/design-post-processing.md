@@ -97,10 +97,15 @@ English only).
    footprint); the rest is the mapped model file. If `keepalive_minutes` is
    above 0, a tiny request is sent after that much idle time so the model stays
    warm, matching what the Parakeet keepalive does for the speech model.
-7. **Lifecycle.** The server process is terminated when voxtype exits. A pid
-   file at `~/.cache/voxtype/llama-server.pid` lets the next launch kill a
-   server orphaned by a crash, but only after checking that the process's
-   command line is our own.
+7. **Lifecycle.** The server process is terminated when voxtype exits,
+   including mid-load: `stop()` cancels a launch that is still in progress.
+   Each voxtype process writes `~/.cache/voxtype/run/llama-server.<pid>.pid`,
+   named by its own pid. The next launch kills a server only when that owning
+   process is dead and the server's command line carries our `--alias`. That
+   way a second instance, such as `voxtype post-process`, never kills a live
+   one's server. If warmup fails, the server is torn down so that a later
+   restart can happen, at most once a minute. Cleanup waits for the single
+   server slot only within its own timeout.
 
 ## Config keys
 

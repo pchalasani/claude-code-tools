@@ -399,10 +399,12 @@ covers the submit phrases ("go"), the stop phrase and the wake word, so
 cleanup cannot break them. Filler-word removal (`strip_fillers`) also
 still runs first.
 
-voxtype stops the server when it exits. If voxtype is killed outright,
-the next launch finds the leftover server through
-`~/.cache/voxtype/llama-server.pid` and stops it. The server's log is
-`~/.cache/voxtype/llama-server.log`.
+voxtype stops the server when it exits, even if the server is still
+loading. Each voxtype process records its server in
+`~/.cache/voxtype/run/`. If voxtype is killed outright, the next launch
+finds the leftover server there and stops it, but it never touches the
+server of another voxtype process that is still running. A server that
+fails to start leaves its log in that same directory.
 
 ## CLI
 
