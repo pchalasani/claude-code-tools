@@ -281,13 +281,43 @@ def logfile_for(owner: int, run_dir: Path | None = None) -> Path:
 
 
 def _pid_alive(pid: int) -> bool:
+    """True if ``pid`` is running; an exited, unreaped zombie is not."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
-    return True
+    try:
+        stat = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return bool(stat) and not stat.startswith("Z")
+
+
+def _terminate(pid: int, grace: float = 3.0) -> bool:
+    """SIGTERM ``pid``, escalating to SIGKILL; True once it has exited.
+
+    The same bounded escalation as ``LlamaServer.stop``.
+    """
+    for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 2.0)):
+        try:
+            os.kill(pid, sig)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False
+        deadline = time.monotonic() + wait
+        while time.monotonic() < deadline:
+            if not _pid_alive(pid):
+                return True
+            time.sleep(0.05)
+    return not _pid_alive(pid)
 
 
 def kill_stale_servers(run_dir: Path | None = None) -> int:
@@ -313,11 +343,11 @@ def kill_stale_servers(run_dir: Path | None = None) -> int:
         # build.
         command = _command_of(pid)
         if f"--alias {SERVER_ALIAS}" in command:
-            try:
-                os.kill(pid, signal.SIGTERM)
-                killed += 1
-            except OSError:
-                pass
+            if not _terminate(pid):
+                # Still alive: keep the record so a later launch can
+                # retry instead of losing track of the orphan.
+                continue
+            killed += 1
         pidfile.unlink(missing_ok=True)
         logfile_for(owner, run_dir).unlink(missing_ok=True)
     return killed

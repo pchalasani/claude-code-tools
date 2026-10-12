@@ -265,6 +265,34 @@ def test_kill_stale_servers_spares_unrelated_process(tmp_path: Path) -> None:
         proc.wait()
 
 
+def test_kill_stale_escalates_past_ignored_sigterm(tmp_path: Path) -> None:
+    """A stale server that ignores SIGTERM is SIGKILLed; the record is
+    only cleared once it has really exited."""
+    import sys
+
+    # Ignores SIGTERM; carries our alias on its command line.
+    script = (
+        "import signal, time; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", script, "--alias", ps.SERVER_ALIAS]
+    )
+    try:
+        time.sleep(0.3)  # let it install the handler
+        pidfile = pidfile_for(_dead_pid(), tmp_path)
+        pidfile.write_text(str(proc.pid))
+        t0 = time.monotonic()
+        assert kill_stale_servers(tmp_path) == 1
+        assert time.monotonic() - t0 < 6
+        proc.wait(timeout=5)
+        assert not pidfile.exists()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+
+
 def test_kill_stale_servers_spares_live_owner(tmp_path: Path) -> None:
     owner = subprocess.Popen(["sleep", "30"])
     try:
