@@ -76,21 +76,23 @@ def _reap_leftovers() -> None:
 def _other_members(group: int, me: int) -> list[int]:
     """Live (non-zombie) processes in ``group`` other than ``me``."""
     try:
-        out = subprocess.run(
+        # The probe itself runs in this group: exclude its pid too.
+        probe = subprocess.Popen(
             ["ps", "-A", "-o", "pid=,pgid=,stat="],
-            capture_output=True,
+            stdout=subprocess.PIPE,
             text=True,
-            timeout=5,
-        ).stdout
+        )
+        out, _ = probe.communicate(timeout=5)
     except (OSError, subprocess.SubprocessError):
         return []
+    skip = {str(me), str(probe.pid)}
     pids = []
     for line in out.splitlines():
         parts = line.split()
         if (
             len(parts) == 3
             and parts[1] == str(group)
-            and parts[0] != str(me)
+            and parts[0] not in skip
             and not parts[2].startswith("Z")
         ):
             pids.append(int(parts[0]))
@@ -117,9 +119,12 @@ def main() -> int:
     server = subprocess.Popen(sys.argv[1:], stdin=subprocess.DEVNULL)
 
     def watch_parent() -> None:
-        # Blocks until voxtype's end of the pipe closes.
+        # Blocks until voxtype's end of the pipe closes. Raw fd reads:
+        # a thread blocked inside the buffered sys.stdin would abort
+        # interpreter shutdown when the server exits first.
         try:
-            sys.stdin.buffer.read()
+            while os.read(0, 4096):
+                pass
         except OSError:
             pass
         _kill_group(server)
@@ -127,7 +132,12 @@ def main() -> int:
     threading.Thread(target=watch_parent, daemon=True).start()
     code = server.wait()
     _reap_leftovers()
-    return code
+    # os._exit: skip interpreter finalization, which the watcher thread
+    # (still blocked on the pipe) would otherwise disturb. A signal
+    # death (-N) maps to the shell convention 128+N.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code if code >= 0 else 128 - code)
 
 
 if __name__ == "__main__":

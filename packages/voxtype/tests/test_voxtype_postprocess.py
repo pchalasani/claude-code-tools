@@ -439,6 +439,27 @@ def test_server_dies_when_voxtype_dies(tmp_path, mode: str) -> None:
             victim.wait()
 
 
+def test_supervisor_exits_cleanly_with_server_status(tmp_path) -> None:
+    """Server exits on its own while voxtype lives: the supervisor
+    returns the server's status promptly, without aborting."""
+    import sys
+
+    sup = subprocess.Popen(
+        [sys.executable, "-m", "voxtype._post_supervisor",
+         sys.executable, "-c", "import sys; sys.exit(3)"],
+        stdin=subprocess.PIPE,
+        start_new_session=True,
+    )
+    t0 = time.monotonic()
+    try:
+        assert sup.wait(timeout=10) == 3  # not -6 (abort)
+        assert time.monotonic() - t0 < 2.5  # no idle 3 s grace wait
+    finally:
+        if sup.poll() is None:
+            sup.kill()
+        sup.stdin.close()
+
+
 def test_backgrounding_wrapper_leaves_no_server(tmp_path) -> None:
     """A wrapper that backgrounds the server and exits: the supervisor
     ends the orphaned server instead of leaving it untracked."""
