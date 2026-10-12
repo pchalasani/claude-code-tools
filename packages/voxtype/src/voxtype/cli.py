@@ -23,6 +23,7 @@ from .config import (
     load_config,
     write_sample_config,
 )
+from .postprocess import VALID_STYLES
 
 _INSTALL_HINT = (
     "voxtype needs its dependencies. Install with:\n"
@@ -193,6 +194,55 @@ def _cmd_skill() -> int:
     return install_skill()
 
 
+def _cmd_post_process(args: argparse.Namespace) -> int:
+    """Clean one transcript with the post-processing model and print it.
+
+    Uses the config's post_process_* settings (whether or not
+    post_process is on), so it doubles as a way to try styles and to
+    download the model ahead of time.
+    """
+    import time
+
+    from .postprocess_server import PostProcessor
+
+    try:
+        cfg = load_config(
+            args.config,
+            {"post_process_style": args.style} if args.style else None,
+        )
+    except (OSError, ValueError) as e:
+        print(f"voxtype: {e}", file=sys.stderr)
+        return 1
+    text = " ".join(args.text) if args.text else sys.stdin.read()
+    def status(msg: str) -> None:
+        print(f"[voxtype] {msg}", file=sys.stderr, flush=True)
+
+    post = PostProcessor(
+        style=cfg.post_process_style,
+        structure=cfg.post_process_structure,
+        context=cfg.post_process_context,
+        timeout=cfg.post_process_timeout,
+        model=cfg.post_process_model,
+        server=cfg.post_process_server,
+        keepalive_minutes=0.0,
+        status=status,
+    )
+    try:
+        post.start()
+        # Generous: the first run may download the model.
+        if not post.wait_ready(timeout=1800):
+            return 1
+        if not text.strip():
+            return 0
+        t0 = time.monotonic()
+        cleaned = post.clean(text.strip())
+        status(f"total {1000 * (time.monotonic() - t0):.0f} ms")
+        print(cleaned)
+        return 0
+    finally:
+        post.stop()
+
+
 def _cmd_init(args: argparse.Namespace) -> int:
     try:
         path = write_sample_config(args.config, force=args.force)
@@ -220,6 +270,8 @@ examples:
   voxtype init                # write a commented sample config
   voxtype hotkey              # record a chord, print the config line
   voxtype skill               # install the voxtype skill in Claude + Codex
+  voxtype post-process "so um I think"
+                                 # try LLM cleanup (post_process) once
 
 while recording:
   <hotkey> again  stop and type the take     Esc      cancel (discard)
@@ -278,6 +330,20 @@ Accessibility (to type), Input Monitoring (global hotkeys).
         "(from the cctools-plugins marketplace)",
     )
 
+    p_post = sub.add_parser(
+        "post-process",
+        help="clean one transcript with the local LLM (S1-mini) and "
+        "print it; downloads the model on first use",
+    )
+    p_post.add_argument(
+        "text", nargs="*", help="transcript (default: read stdin)"
+    )
+    p_post.add_argument(
+        "--style",
+        choices=VALID_STYLES,
+        help="override post_process_style for this run",
+    )
+
     args = parser.parse_args()
     if args.command == "init":
         return _cmd_init(args)
@@ -287,6 +353,8 @@ Accessibility (to type), Input Monitoring (global hotkeys).
         return _cmd_setup(args)
     if args.command == "skill":
         return _cmd_skill()
+    if args.command == "post-process":
+        return _cmd_post_process(args)
     return _cmd_run(args)
 
 

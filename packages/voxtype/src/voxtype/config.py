@@ -15,6 +15,8 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
+from .postprocess import VALID_CONTEXTS, VALID_STRUCTURES, VALID_STYLES
+
 
 def default_engine() -> str:
     """Best engine this machine can run out of the box.
@@ -136,6 +138,19 @@ class Config:
             far less likely, and any page-in cost lands in an idle
             moment instead of on a take. 0 disables (default);
             max 1440 (a day).
+        post_process: Clean each transcript with a local LLM ("S1-mini"
+            by "Superwhisper", run by llama.cpp's llama-server) before
+            typing it: punctuation, casing, self-corrections. Off by
+            default; any failure types the raw transcript.
+        post_process_style: Control-line styling: casual, semi-casual,
+            semi-formal, or formal.
+        post_process_structure: "prose" or "lists".
+        post_process_context: "general" or "email".
+        post_process_timeout: Seconds a take may spend in cleanup before
+            it is typed raw (0.5–60).
+        post_process_model: Path to a local GGUF; empty means download
+            the pinned S1-mini Q4_K_M (~462 MiB) on first use.
+        post_process_server: Name or path of the llama-server binary.
         model_arch: Moonshine model architecture name (moonshine engine
             only).
         language: Language tag understood by Moonshine (e.g. "en").
@@ -191,6 +206,13 @@ class Config:
     overlay_speed: float = 1.0
     overlay_opacity: float = 1.0
     keepalive_minutes: float = 0.0
+    post_process: bool = False
+    post_process_style: str = "semi-formal"
+    post_process_structure: str = "prose"
+    post_process_context: str = "general"
+    post_process_timeout: float = 4.0
+    post_process_model: str = ""
+    post_process_server: str = "llama-server"
     model_arch: str = "medium-streaming"
     language: str = "en"
     hotkey: str = "<ctrl>+;"
@@ -270,7 +292,13 @@ class Config:
                 f"mlx_model must be a non-empty string (a HuggingFace "
                 f"model id), got {self.mlx_model!r}"
             )
-        for name in ("strip_fillers", "trailing_space", "sounds", "overlay"):
+        for name in (
+            "strip_fillers",
+            "trailing_space",
+            "sounds",
+            "overlay",
+            "post_process",
+        ):
             value = getattr(self, name)
             if not isinstance(value, bool):
                 raise ValueError(
@@ -351,6 +379,7 @@ class Config:
                 "keepalive_minutes must be between 0 and 1440 "
                 "(a day); 0 disables"
             )
+        self._validate_post_process()
         if self.mode == "wake" and not self.wake_word.strip():
             raise ValueError('mode "wake" requires a non-empty wake_word')
         if isinstance(self.idle_timeout, bool) or not isinstance(
@@ -397,6 +426,40 @@ class Config:
                 raise ValueError(f"{field_name} must be a string")
         if not isinstance(self.copy_to_clipboard, bool):
             raise ValueError("copy_to_clipboard must be a boolean")
+
+
+    def _validate_post_process(self) -> None:
+        """Validate the ``post_process_*`` fields (see ``validate``)."""
+        for name, valid in (
+            ("post_process_style", VALID_STYLES),
+            ("post_process_structure", VALID_STRUCTURES),
+            ("post_process_context", VALID_CONTEXTS),
+        ):
+            value = getattr(self, name)
+            # The model was trained on exactly these values; anything
+            # else risks hallucinated output.
+            if value not in valid:
+                raise ValueError(
+                    f"invalid {name} {value!r}; must be one of {valid}"
+                )
+        t = self.post_process_timeout
+        if (
+            isinstance(t, bool)
+            or not isinstance(t, (int, float))
+            or (isinstance(t, float) and not math.isfinite(t))
+            or not 0.5 <= t <= 60
+        ):
+            raise ValueError(
+                "post_process_timeout must be a number of seconds between "
+                f"0.5 and 60, got {t!r}"
+            )
+        if not isinstance(self.post_process_model, str):
+            raise ValueError("post_process_model must be a string")
+        if (
+            not isinstance(self.post_process_server, str)
+            or not self.post_process_server.strip()
+        ):
+            raise ValueError("post_process_server must be a non-empty string")
 
 
 def load_config(
@@ -505,6 +568,29 @@ strip_fillers = true
 # 30 s after any hotkey, but a press landing exactly as it starts can
 # clip the first moment of dictation.
 keepalive_minutes = 0.0
+
+# Optional local LLM cleanup of each transcript before it is typed:
+# punctuation, casing, dropped self-corrections ("Tuesday, I mean
+# Wednesday" -> "Wednesday"). Uses "S1-mini" by "Superwhisper"
+# (Apache-2.0, English only), run by llama.cpp's llama-server —
+# install it with `brew install llama.cpp`. The model (~462 MiB) is
+# downloaded on first use. Adds roughly 0.1-0.6 s per take; any
+# failure, timeout, or suspicious output types the raw transcript.
+# Submit/stop phrases are matched on the raw text, before cleanup.
+post_process = false
+# Styling: casual | semi-casual | semi-formal | formal
+post_process_style = "semi-formal"
+# Structure: prose | lists ("lists" turns "first..., second..." into
+# a numbered list)
+post_process_structure = "prose"
+# Context: general | email
+post_process_context = "general"
+# Seconds a take may spend in cleanup before it is typed raw.
+post_process_timeout = 4.0
+# Path to a local GGUF instead of the pinned download (empty = default).
+post_process_model = ""
+# llama-server binary name or path.
+post_process_server = "llama-server"
 
 # Moonshine model: tiny | base | tiny-streaming | base-streaming |
 # small-streaming | medium-streaming (most accurate; ~245M params)

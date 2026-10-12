@@ -76,6 +76,9 @@ class VoiceTypeApp:
         self._expect_hold = 0
         self._last_toggle = 0.0
         self._engine = None
+        # Optional LLM cleanup (post_process); created in run(). Tests
+        # may set it directly — anything with a clean(str) -> str.
+        self._post = None
         # Set once _start_hotkey_listener runs — in run() (no overlay) or
         # from inside the overlay loop (see _start_hotkeys_from_loop); the
         # finally block stops it. May be None if no valid hotkeys.
@@ -420,6 +423,12 @@ class VoiceTypeApp:
             text = collapse_repeats(strip_fillers(text))
             if not text:
                 return
+        if self._post is not None:
+            # Outside every lock: cleanup takes up to post_process_timeout
+            # and must never hold up the hotkey or overlay threads. The
+            # submit/stop/wake phrases were already matched on the raw
+            # text in handle_utterance.
+            text = self._post.clean(text)
         # Record for the paste-again hotkey / clipboard BEFORE typing:
         # even text that lands in the wrong window (or is skipped as
         # stale) stays rescuable.
@@ -501,6 +510,22 @@ class VoiceTypeApp:
             )
             if self.cfg.overlay and not use_overlay:
                 self._status("overlay unavailable; running without it")
+            if self.cfg.post_process:
+                from .postprocess_server import PostProcessor
+
+                self._post = PostProcessor(
+                    style=self.cfg.post_process_style,
+                    structure=self.cfg.post_process_structure,
+                    context=self.cfg.post_process_context,
+                    timeout=self.cfg.post_process_timeout,
+                    model=self.cfg.post_process_model,
+                    server=self.cfg.post_process_server,
+                    keepalive_minutes=self.cfg.keepalive_minutes,
+                    status=self._status,
+                )
+                # Boots in the background (download, launch, warmup);
+                # takes before it is ready are typed raw.
+                self._post.start()
             engine = create_engine(self.cfg, self._status)
             self._engine = engine
             if not use_overlay:
@@ -533,6 +558,11 @@ class VoiceTypeApp:
                     self._hotkeys.stop()
                 except Exception as e:
                     self._status(f"error stopping hotkey listener: {e}")
+            if self._post is not None:
+                try:
+                    self._post.stop()
+                except Exception as e:
+                    self._status(f"error stopping post-processor: {e}")
             self._status("stopped")
         return exit_code
 
