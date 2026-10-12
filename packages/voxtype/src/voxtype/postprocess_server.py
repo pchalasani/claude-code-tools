@@ -691,7 +691,10 @@ class PostProcessor:
         try:
             return self._clean(text, since)
         except Exception as e:
-            self.status(f"post-process error ({e}); typing raw")
+            try:  # best-effort: a failing status sink must not lose text
+                self.status(f"post-process error ({e}); typing raw")
+            except Exception:
+                pass
             return text
 
     def _clean(self, text: str, since: float | None) -> str:

@@ -477,7 +477,10 @@ class VoiceTypeApp:
                 try:
                     action(version, arrived)
                 except Exception as e:
-                    self._status(f"error delivering text: {e}")
+                    try:  # best-effort: never let reporting end the worker
+                        self._status(f"error delivering text: {e}")
+                    except Exception:
+                        pass
                 finally:
                     with self._lock:
                         self._cleaning -= 1

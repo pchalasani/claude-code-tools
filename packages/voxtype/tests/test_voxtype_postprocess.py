@@ -766,6 +766,34 @@ def test_clean_waits_for_busy_server_only_within_timeout(stub_post) -> None:
     assert any("busy" in m for m in messages)
 
 
+def test_failing_status_sink_still_returns_text(stub_post) -> None:
+    post, stub, _ = stub_post
+
+    def broken(_msg: str) -> None:
+        raise BrokenPipeError("stderr closed")
+
+    post.status = broken
+    stub.reply = "Hello there."
+    assert post.clean("hello there") == "hello there"
+
+
+def test_delivery_worker_survives_failing_status() -> None:
+    app = _vad_app()
+
+    def broken(_msg: str) -> None:
+        raise BrokenPipeError("stderr closed")
+
+    def failing_action(_v: object, _at: float) -> None:
+        raise RuntimeError("delivery failed")
+
+    app._status = broken
+    app._post = _Upper()
+    app._deliver(None, failing_action)  # its error report also fails
+    app._deliver(None, lambda v, at: app.typist.type_text("after"))
+    app.flush_deliveries()  # returns: the worker is still alive
+    assert app.typist.typed == ["after"]
+
+
 def test_clean_not_ready_types_raw() -> None:
     messages: list[str] = []
     post = PostProcessor(
