@@ -131,6 +131,8 @@ First-run notes for the user:
 - Config file: `~/.config/voxtype/config.toml` (fully commented; edit to
   tune any setting)
 - `voxtype --help` — all flags and subcommands
+- `voxtype --set KEY=VALUE` — set any config key for one run (repeatable;
+  `-` or `_` in KEY), e.g. `--set post-process-provider=s1-mini`
 - Config reference (every key + defaults):
   https://pchalasani.github.io/claude-code-tools/tools/voxtype/configuration/
 - Overview & full docs:

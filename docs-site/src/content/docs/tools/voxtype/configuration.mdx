@@ -18,12 +18,25 @@ just an override of a config key (the exceptions are
 is: put your preferences in the config once, then
 your daily command is plain `voxtype` — flags
 exist for one-off experiments (e.g. trying another
-engine) and always win over the file. The config
-also holds keys that have *no* flag at all
-(`wake_word_aliases`, `submit_phrases`, sound names,
-`paste_hotkey`, `cancel_hotkey`, `copy_to_clipboard`,
-`parakeet_threads`, ...), so the file is the
-complete interface; the flags are a subset.
+engine) and always win over the file.
+
+Any config key can be set for one run with
+`--set KEY=VALUE`, exactly as if that line were in
+the file. The key may use hyphens or underscores,
+and `--set` can be repeated:
+
+```bash
+voxtype --set post-process-provider=s1-mini
+voxtype --set sounds=false --set submit-phrases="go, send it"
+voxtype post-process --set post-process-format=minimal "so um hi"
+```
+
+Values are read as the key's type: true/false (also
+yes/no, on/off, 1/0), numbers, plain strings, and
+lists as comma-separated items or a TOML array such
+as `["go", "send it"]`. `KEY=` gives an empty string
+or empty list. If a dedicated flag such as `--engine`
+sets the same key, that flag wins.
 
 Two ways to create that file:
 
