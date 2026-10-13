@@ -102,6 +102,25 @@ options; common ones:
 - `wake_word` / `wake_word_aliases`, `submit_phrases`, `overlay`,
   `paste_hotkey`, `cancel_hotkey`, `copy_to_clipboard`, and more.
 
+### Trying a setting for one run
+
+Any config key can be overridden for one launch with `--set KEY=VALUE`,
+exactly as if that line were in the config file. Suggest this when the
+user wants to try something without editing the file. KEY may use
+hyphens or underscores, and `--set` can be repeated:
+
+```bash
+voxtype --set post-process-provider=s1-mini   # local cleanup this run
+voxtype --set post-process=false              # no cleanup this run
+voxtype --set sounds=false --set submit-phrases="go, send it"
+voxtype post-process --set post-process-format=minimal "so um hi"
+```
+
+Booleans take true/false (also yes/no, on/off, 1/0); lists take
+comma-separated items or a TOML array; `KEY=` gives an empty value. A
+bad key or value stops voxtype with a message naming it. Once the user
+likes a setting, put it in the config file so plain `voxtype` uses it.
+
 For the full list — every key, its default, and the engine comparison —
 read the **Configuration & CLI** reference:
 <https://pchalasani.github.io/claude-code-tools/tools/voxtype/configuration/>

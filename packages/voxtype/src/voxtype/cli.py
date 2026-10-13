@@ -327,6 +327,8 @@ while recording:
 config file: ~/.config/voxtype/config.toml (all flags + more:
 wake_word_aliases, submit_phrases, sounds, copy_to_clipboard,
 paste_hotkey, cancel_hotkey, overlay, parakeet_threads, ...)
+--set KEY=VALUE overrides any of these keys for one run; KEY may use
+- or _ (e.g. --set post-process-provider=s1-mini --set sounds=false)
 docs: https://pchalasani.github.io/claude-code-tools/tools/voxtype/
 
 macOS permissions (grant to your terminal, one time): Microphone,

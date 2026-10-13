@@ -655,11 +655,13 @@ ignored instructions, and all three formats. All of them pass.
 
 ```
 voxtype [flags]                    run with config + flag overrides
+voxtype --set KEY=VALUE ...        set any config key for this run (repeatable)
 voxtype setup [--config PATH] [--force]  interactive walkthrough -> writes config
 voxtype init  [--config PATH] [--force]  write the commented sample config to edit
 voxtype hotkey                     press a chord; prints the config line
 voxtype skill                      install the voxtype skill into Claude + Codex
-voxtype post-process [TEXT] [--provider P] [--format F] [--style S]  clean TEXT (or stdin) once
+voxtype post-process [TEXT] [--provider P] [--format F] [--style S] [--set KEY=VALUE]
+                                   clean TEXT (or stdin) once
 voxtype --version                  print the installed version
 voxtype --help                     full flag reference (per-subcommand: e.g. voxtype setup --help)
 ```
@@ -668,7 +670,9 @@ Flags mirror the config keys: `--mode`, `--engine`,
 `--segmentation`, `--parakeet-model`, `--model-arch`,
 `--language`, `--hotkey`, `--wake-word`,
 `--stop-phrase`, `--no-sounds`, `--no-overlay`,
-`--config PATH`.
+`--config PATH`. Every other key, and these too,
+can be set with `--set KEY=VALUE` (see the top of
+this page).
 
 ### Double-tap toggle
 
