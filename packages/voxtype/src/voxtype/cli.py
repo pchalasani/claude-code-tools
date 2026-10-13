@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
 from .config import (
     DEFAULT_CONFIG_PATH,
@@ -21,6 +22,7 @@ from .config import (
     VALID_PARAKEET_MODELS,
     VALID_SEGMENTATIONS,
     load_config,
+    parse_set_overrides,
     write_sample_config,
 )
 from .postprocess import (
@@ -60,6 +62,14 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
         type=Path,
         default=None,
         help=f"config file (default: {DEFAULT_CONFIG_PATH})",
+    )
+    parser.add_argument(
+        "--set",
+        action="append",
+        metavar="KEY=VALUE",
+        help="set any config key for this run, as if written in the "
+        "config file (repeatable; KEY may use - or _), e.g. "
+        "--set post-process-provider=s1-mini",
     )
     parser.add_argument(
         "--mode",
@@ -125,6 +135,23 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _with_set(
+    items: list[str] | None, overrides: dict[str, Any]
+) -> dict[str, Any]:
+    """Merge ``--set`` items under the dedicated-flag ``overrides``.
+
+    Args:
+        items: Raw ``KEY=VALUE`` strings from ``--set``.
+        overrides: Values from dedicated flags; ``None`` means unset.
+
+    Returns:
+        The combined overrides; a dedicated flag beats ``--set``.
+    """
+    merged = parse_set_overrides(items)
+    merged.update({k: v for k, v in overrides.items() if v is not None})
+    return merged
+
+
 def _warn_if_unsupported_platform() -> None:
     """Warn loudly when not on macOS; voxtype is macOS-only.
 
@@ -164,6 +191,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if args.no_overlay:
         overrides["overlay"] = False
     try:
+        # Dedicated flags win over --set for the same key.
+        overrides = _with_set(args.set, overrides)
         cfg = load_config(args.config, overrides)
     except (ValueError, FileNotFoundError) as e:
         print(f"voxtype: {e}", file=sys.stderr)
@@ -230,6 +259,9 @@ def _cmd_post_process(args: argparse.Namespace) -> int:
         "post_process_format": args.format,
     }
     try:
+        overrides = _with_set(
+            (args.set or []) + (args.post_set or []), overrides
+        )
         cfg = load_config(args.config, overrides)
     except (OSError, ValueError) as e:
         print(f"voxtype: {e}", file=sys.stderr)
@@ -278,6 +310,8 @@ examples:
   voxtype --engine parakeet-mlx --segmentation hold
                                  # best accuracy: whole-take dictation
   voxtype --mode wake         # hands-free with wake word "claude"
+  voxtype --set post-process-provider=s1-mini --set sounds=false
+                                 # any config key, for this run only
   voxtype setup               # interactive walkthrough -> config
   voxtype init                # write a commented sample config
   voxtype hotkey              # record a chord, print the config line
@@ -293,6 +327,8 @@ while recording:
 config file: ~/.config/voxtype/config.toml (all flags + more:
 wake_word_aliases, submit_phrases, sounds, copy_to_clipboard,
 paste_hotkey, cancel_hotkey, overlay, parakeet_threads, ...)
+--set KEY=VALUE overrides any of these keys for one run; KEY may use
+- or _ (e.g. --set post-process-provider=s1-mini --set sounds=false)
 docs: https://pchalasani.github.io/claude-code-tools/tools/voxtype/
 
 macOS permissions (grant to your terminal, one time): Microphone,
@@ -364,6 +400,13 @@ Accessibility (to type), Input Monitoring (global hotkeys).
         "--format",
         choices=VALID_FORMATS,
         help="override post_process_format for this run (cerebras)",
+    )
+    p_post.add_argument(
+        "--set",
+        dest="post_set",
+        action="append",
+        metavar="KEY=VALUE",
+        help="set any config key for this run (repeatable)",
     )
 
     args = parser.parse_args()

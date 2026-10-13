@@ -7,6 +7,7 @@ default so voxtype runs with no config file at all.
 
 from __future__ import annotations
 
+import difflib
 import math
 import platform
 import sys
@@ -497,6 +498,83 @@ class Config:
             or not self.post_process_server.strip()
         ):
             raise ValueError("post_process_server must be a non-empty string")
+
+
+_TRUE_WORDS = ("true", "yes", "on", "1")
+_FALSE_WORDS = ("false", "no", "off", "0")
+
+
+def _convert_set_value(key: str, kind: str, raw: str) -> Any:
+    """Convert one ``--set`` value to the type of config field ``key``.
+
+    Args:
+        key: Config field name (underscore form).
+        kind: The field's annotation as a string, e.g. ``"bool"``.
+        raw: The text after ``=``.
+
+    Returns:
+        The value as the field's type.
+
+    Raises:
+        ValueError: If ``raw`` can't be read as that type.
+    """
+    text = raw.strip()
+    if kind == "bool":
+        if text.lower() in _TRUE_WORDS:
+            return True
+        if text.lower() in _FALSE_WORDS:
+            return False
+        raise ValueError(f"--set {key}: expected true or false, got {raw!r}")
+    try:
+        if kind == "int":
+            return int(text)
+        if kind == "float":
+            return float(text)
+    except ValueError:
+        raise ValueError(
+            f"--set {key}: expected a number, got {raw!r}"
+        ) from None
+    if kind.startswith("list"):
+        if text.startswith("["):
+            try:
+                return tomllib.loads(f"v = {text}")["v"]
+            except tomllib.TOMLDecodeError as e:
+                raise ValueError(f"--set {key}: bad list {raw!r}: {e}") from None
+        return [part.strip() for part in text.split(",") if part.strip()]
+    return raw
+
+
+def parse_set_overrides(items: list[str] | None) -> dict[str, Any]:
+    """Turn ``--set KEY=VALUE`` items into config overrides.
+
+    Each item works like the line ``KEY = VALUE`` in the config file.
+    ``KEY`` may use hyphens or underscores. The value is read as the
+    field's type: booleans accept true/false/yes/no/on/off/1/0, lists
+    take comma-separated items or a TOML array, and strings are taken
+    as written. Later items win over earlier ones.
+
+    Args:
+        items: Raw ``KEY=VALUE`` strings, or ``None``.
+
+    Returns:
+        Field name to converted value.
+
+    Raises:
+        ValueError: On a missing ``=``, an unknown key, or a bad value.
+    """
+    kinds = {f.name: str(f.type) for f in fields(Config)}
+    out: dict[str, Any] = {}
+    for item in items or []:
+        key, sep, raw = item.partition("=")
+        if not sep:
+            raise ValueError(f"--set expects KEY=VALUE, got {item!r}")
+        name = key.strip().replace("-", "_")
+        if name not in kinds:
+            close = difflib.get_close_matches(name, kinds, n=1)
+            hint = f" (did you mean {close[0]}?)" if close else ""
+            raise ValueError(f"--set: unknown config key {key!r}{hint}")
+        out[name] = _convert_set_value(name, kinds[name], raw)
+    return out
 
 
 def load_config(
