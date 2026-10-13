@@ -110,7 +110,8 @@ user wants to try something without editing the file. KEY may use
 hyphens or underscores, and `--set` can be repeated:
 
 ```bash
-voxtype --set post-process-provider=s1-mini   # local cleanup this run
+voxtype --set post-process=true --set post-process-provider=s1-mini
+                                              # local cleanup this run
 voxtype --set post-process=false              # no cleanup this run
 voxtype --set sounds=false --set submit-phrases="go, send it"
 voxtype post-process --set post-process-format=minimal "so um hi"
