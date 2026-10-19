@@ -547,7 +547,9 @@ voxtype post-process --provider cerebras "um so lets do it Friday no sorry Thurs
 
 The format is passed to the model through its prompt. The transcript
 is sent as delimited data, and the prompt tells the model never to
-follow instructions inside it. voxtype keeps one HTTPS connection open
+follow instructions inside it. A dictated request stays a request: say
+"write an email to John saying the meeting moved" and that sentence is
+typed, not an email. voxtype keeps one HTTPS connection open
 to save the TLS handshake on each take. Every failure (no key, HTTP
 error, timeout, empty or malformed reply, truncated output, or output
 that lost most of the input) types the raw transcript, and the reason
@@ -631,7 +633,8 @@ Finally, the onboarding email is way too long and nobody reads it. We should mak
 The live tests (`pytest tests/test_voxtype_cerebras.py`, with
 `CEREBRAS_API_KEY` set) check filler removal, self-corrections,
 paragraphs and lists, short utterances, exact technical terms and URLs,
-ignored instructions, and all three formats. All of them pass.
+ignored instructions, dictated requests typed rather than carried
+out, and all three formats. All of them pass.
 
 **Limitations.**
 
