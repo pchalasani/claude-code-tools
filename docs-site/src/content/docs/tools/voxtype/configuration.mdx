@@ -539,7 +539,7 @@ voxtype post-process --provider cerebras "um so lets do it Friday no sorry Thurs
 | Key | Default | What it does |
 |---|---|---|
 | `post_process_provider` | `"s1-mini"` | `cerebras` selects this provider. |
-| `post_process_format` | `"auto"` | `auto`: paragraphs and lists when appropriate. `paragraphs`: paragraph breaks, but enumerations stay prose. `minimal`: fix punctuation and disfluencies only, with no added structure; the output is always one line. |
+| `post_process_format` | `"auto"` | `auto`: paragraphs and lists when appropriate. `paragraphs`: paragraph breaks, but enumerations stay prose. `minimal`: fix punctuation and disfluencies only, with no added structure. |
 | `post_process_cerebras_model` | `"gpt-oss-120b"` | The Cerebras model id. |
 | `post_process_timeout` | `0.0` | `0` means 2 s for this provider. A take that takes longer is typed raw. |
 | `post_process_newlines` | `"auto"` | `auto` types Shift+Enter for this provider; paragraphs and lists need it. See [Line breaks](#line-breaks). |
@@ -549,8 +549,7 @@ The format is passed to the model through its prompt. The transcript
 is sent as delimited data, and the prompt tells the model never to
 follow instructions inside it. A dictated request stays a request: say
 "write an email to John saying the meeting moved" and that sentence is
-typed, not an email. Casual words stay as spoken: "blah" and "blah
-blah" are kept, and so are "shit" and "bullshit". voxtype keeps one HTTPS connection open
+typed, not an email. voxtype keeps one HTTPS connection open
 to save the TLS handshake on each take. Every failure (no key, HTTP
 error, timeout, empty or malformed reply, truncated output, or output
 that lost most of the input) types the raw transcript, and the reason
