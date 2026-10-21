@@ -196,6 +196,13 @@ def _proc(api: _Api, messages: list[str], **kw) -> CerebrasProcessor:
     return proc
 
 
+def test_minimal_format_output_is_one_line(api) -> None:
+    api.reply = "We need a login page.\n\nAnd an export button."
+    proc = _proc(api, [], fmt="minimal")
+    out = proc.clean("we need a login page and an export button")
+    assert out == "We need a login page. And an export button."
+
+
 def test_success_returns_structured_text(api) -> None:
     messages: list[str] = []
     api.reply = "We need three things:\n\n- a login page\n- an export button"

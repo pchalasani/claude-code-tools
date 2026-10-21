@@ -539,7 +539,7 @@ voxtype post-process --provider cerebras "um so lets do it Friday no sorry Thurs
 | Key | Default | What it does |
 |---|---|---|
 | `post_process_provider` | `"s1-mini"` | `cerebras` selects this provider. |
-| `post_process_format` | `"auto"` | `auto`: paragraphs and lists when appropriate. `paragraphs`: paragraph breaks, but enumerations stay prose. `minimal`: fix punctuation and disfluencies only, with no added structure. |
+| `post_process_format` | `"auto"` | `auto`: paragraphs and lists when appropriate. `paragraphs`: paragraph breaks, but enumerations stay prose. `minimal`: fix punctuation and disfluencies only, with no added structure; the output is always one line. |
 | `post_process_cerebras_model` | `"gpt-oss-120b"` | The Cerebras model id. |
 | `post_process_timeout` | `0.0` | `0` means 2 s for this provider. A take that takes longer is typed raw. |
 | `post_process_newlines` | `"auto"` | `auto` types Shift+Enter for this provider; paragraphs and lists need it. See [Line breaks](#line-breaks). |

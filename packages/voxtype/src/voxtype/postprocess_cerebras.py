@@ -378,6 +378,10 @@ class CerebrasProcessor:
         if finish == "length":
             return text, "output truncated"
         cleaned = clean_output(content, text)
+        if self.fmt == "minimal":
+            # The model sometimes adds paragraph breaks this format
+            # forbids; dictated text has no line breaks of its own.
+            cleaned = " ".join(cleaned.split())
         reason = rejection_reason(text, cleaned)
         if reason:
             return text, reason
