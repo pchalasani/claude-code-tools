@@ -14,8 +14,12 @@ import time
 from pathlib import Path
 
 _SYSTEM_SOUNDS = Path("/System/Library/Sounds")
-# Pause between typed text and its Enter (see Typist.press_enter).
+# Pause between typed text and its Enter (see Typist.press_enter): a
+# base, plus more per character since a long piece takes the receiving
+# app longer to take in, capped so a submit never stalls for long.
 _ENTER_SETTLE_S = 0.3
+_ENTER_SETTLE_PER_CHAR_S = 0.0015
+_ENTER_SETTLE_MAX_S = 2.0
 
 
 class Typist:
@@ -26,6 +30,7 @@ class Typist:
 
         self._keyboard = Controller()
         self._typed_at = 0.0
+        self._settle_s = 0.0
 
     def type_text(self, text: str) -> None:
         """Type ``text`` at the current cursor position.
@@ -45,6 +50,10 @@ class Typist:
             if line:
                 self._keyboard.type(line)
         self._typed_at = time.monotonic()
+        self._settle_s = min(
+            _ENTER_SETTLE_S + _ENTER_SETTLE_PER_CHAR_S * len(text),
+            _ENTER_SETTLE_MAX_S,
+        )
 
     def press_shift_enter(self) -> None:
         """Insert a line break without submitting (Shift+Enter)."""
@@ -62,7 +71,7 @@ class Typist:
         """
         from pynput.keyboard import Key
 
-        wait = _ENTER_SETTLE_S - (time.monotonic() - self._typed_at)
+        wait = self._settle_s - (time.monotonic() - self._typed_at)
         if wait > 0:
             time.sleep(wait)
         self._keyboard.tap(Key.enter)
