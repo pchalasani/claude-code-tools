@@ -173,11 +173,32 @@ turns on local cleanup for that run.
 | Cancel recording (discard) | `Esc` (only while recording) | `cancel_hotkey` |
 | Re-type last transcript | off | `paste_hotkey` |
 | Submit (press Enter) | say "go" / "over" / "submit" | `submit_phrases` |
+| Type, then submit | end with "…, go go", "…, now go" or "…, over and out" | `submit_suffixes` |
 | Stop dictating (vad segmentation) | say "stop listening" | `stop_phrase` |
 
 In the default toggle + `hold` setup you stop by pressing the toggle
 hotkey again; the spoken `stop_phrase` only applies to per-utterance
 (vad) transcription — i.e. wake mode or `segmentation = "vad"`.
+
+### Talk, then submit in one breath
+
+End what you say with "go go", "now go" or "over and out" and voxtype
+types everything before the phrase, then presses Enter. No pause is
+needed: "fix the build before the demo, go go" types "fix the build
+before the demo" and submits it. The phrase only counts at the very
+end, so "we ran over and out of time" is typed as said. Said on its
+own, the phrase just presses Enter, like "go".
+
+This pairs well with hands-free dictation, where nothing needs a
+hotkey: set `mode = "vad"` and `segmentation = "vad"`, talk, and say
+"go go" to send. `Ctrl+;` pauses listening (say, while you talk to
+someone) and resumes it.
+
+The phrases are matched on the raw transcript, before filler removal
+and LLM cleanup, so cleanup cannot remove them. Change the list with
+`submit_suffixes` (the transcriber often writes "go go" as "GoGo",
+which is why "gogo" is in the default list); `[]` turns the feature
+off.
 
 Not sure how to spell a chord for the hotkey settings
 above? Run `voxtype hotkey`, press the combo you want,
