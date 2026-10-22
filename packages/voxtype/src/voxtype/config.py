@@ -255,7 +255,7 @@ class Config:
         default_factory=lambda: ["over", "go", "submit"]
     )
     submit_suffixes: list[str] = field(
-        default_factory=lambda: ["go go", "gogo", "over and out"]
+        default_factory=lambda: ["go go", "gogo", "now go", "over and out"]
     )
     idle_timeout: float = 20.0
     trailing_space: bool = True
@@ -780,7 +780,7 @@ submit_phrases = ["over", "go", "submit"]
 # Ending a dictation with one of these types the words before it, then
 # presses Enter -- no pause needed: "fix the build, go go". "gogo" is
 # how the transcriber often writes "go go". Set to [] to disable.
-submit_suffixes = ["go go", "gogo", "over and out"]
+submit_suffixes = ["go go", "gogo", "now go", "over and out"]
 
 # In "wake" mode, go back to passive after this many seconds of silence.
 idle_timeout = 20.0

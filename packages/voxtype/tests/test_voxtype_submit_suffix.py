@@ -64,10 +64,12 @@ def test_strip_submit_suffix(text: str, expected: str | None) -> None:
         ("ship it, go-go", "ship it"),
         ("Go go.", ""),
         ("we hired a go go dancer", None),
+        ("Tell me what you think now go.", "Tell me what you think"),
+        ("Now go.", ""),
     ],
 )
-def test_default_suffixes_match_go_go(text: str, expected: str | None) -> None:
-    """Spellings parakeet produced for "go go" in real synthesized speech."""
+def test_default_suffixes_match(text: str, expected: str | None) -> None:
+    """Spellings parakeet produced in real synthesized speech."""
     assert strip_submit_suffix(text, Config().submit_suffixes) == expected
 
 
