@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 _SYSTEM_SOUNDS = Path("/System/Library/Sounds")
+# Pause between typed text and its Enter (see Typist.press_enter).
+_ENTER_SETTLE_S = 0.3
 
 
 class Typist:
@@ -22,6 +25,7 @@ class Typist:
         from pynput.keyboard import Controller
 
         self._keyboard = Controller()
+        self._typed_at = 0.0
 
     def type_text(self, text: str) -> None:
         """Type ``text`` at the current cursor position.
@@ -40,6 +44,7 @@ class Typist:
                 self.press_shift_enter()
             if line:
                 self._keyboard.type(line)
+        self._typed_at = time.monotonic()
 
     def press_shift_enter(self) -> None:
         """Insert a line break without submitting (Shift+Enter)."""
@@ -49,9 +54,17 @@ class Typist:
             self._keyboard.tap(Key.enter)
 
     def press_enter(self) -> None:
-        """Press Enter in the focused application."""
+        """Press Enter in the focused application.
+
+        Right after typing, wait a moment first: apps such as Claude Code
+        treat a fast burst of keystrokes as a paste and swallow an Enter
+        that arrives inside it, so the text shows up but is not sent.
+        """
         from pynput.keyboard import Key
 
+        wait = _ENTER_SETTLE_S - (time.monotonic() - self._typed_at)
+        if wait > 0:
+            time.sleep(wait)
         self._keyboard.tap(Key.enter)
 
 
