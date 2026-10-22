@@ -91,7 +91,9 @@ least immediate:
    be final.
 2. **Per-pause typing** — `segmentation = "vad"`.
    Speak; roughly half a second after each natural
-   pause, that utterance is typed. This is the
+   pause, that utterance is typed (hands-free mode
+   holds it for a submit phrase instead, unless
+   `wait_for_submit = false`). This is the
    closest voxtype comes to a streaming feel:
    text flows in sentence-sized pieces while you
    keep talking. Trade-off: the model transcribes
@@ -109,8 +111,13 @@ least immediate:
    can only be heard by continuous per-utterance
    transcription.
 
-Wake and vad **modes** always use per-pause typing
-(2); toggle mode lets you pick between (2) and (3),
+Wake and vad **modes** always transcribe per pause
+(2). Wake mode types each piece as you pause; vad
+(hands-free) mode by default holds the pieces until
+you say a submit phrase such as "go go", then types
+them in one go (`wait_for_submit = false` types each
+piece as you pause). Toggle mode lets you pick
+between (2) and (3),
 and **defaults to (3), whole-take**, with a parakeet
 engine — so out of the box you get maximum-accuracy
 push-to-talk. Set `segmentation = "vad"` if you'd
@@ -154,12 +161,17 @@ mode = "wake"
 wake_word_aliases = ["hey cloud"]  # add what the model mishears
 ```
 
-**Always-on transcription.** Types everything it
-hears while running — for captioning yourself or
-short bursts of use:
+**Always-on transcription.** Listens the whole time
+it runs, with no hotkey. What you say is held back
+until you say a submit phrase ("go go"), then cleaned
+and typed in one piece and sent with Enter, so pauses
+to think never split it. `Ctrl+;` pauses listening
+and types anything held, without Enter:
 
 ```toml
 mode = "vad"
+# false types each piece as soon as you pause instead
+wait_for_submit = true
 ```
 
 (These recipes leave `engine` unset so it auto-selects
@@ -198,7 +210,8 @@ mode = "toggle"
 # force a choice; the value below is just the Apple-Silicon case.
 engine = "parakeet-mlx"
 
-# "vad" types each utterance when you pause; "hold" records everything
+# "vad" transcribes each utterance when you pause (types it then, except
+# hands-free mode holds it for a submit phrase); "hold" records everything
 # between toggle-on/off and transcribes the whole take at once (parakeet
 # engines + toggle mode only). Default: "hold" with a parakeet engine in
 # toggle mode (the common case), otherwise "vad".
@@ -225,7 +238,7 @@ hotkey = "<ctrl>+;"          # toggle recording
 # keeps working as a normal modifier. "" disables.
 double_tap_key = ""
 double_tap_ms = 400          # max gap between the two taps, press to press
-cancel_hotkey = "<esc>"      # cancel recording (only intercepted WHILE recording)
+cancel_hotkey = "<esc>"      # cancel recording (only WHILE recording; never in vad mode)
 paste_hotkey = ""            # re-type last transcript, e.g. "<cmd>+<ctrl>+v"
 
 # Wake mode
@@ -240,6 +253,9 @@ submit_phrases = ["over", "go", "submit"]
 # presses Enter, with no pause: "fix the build, go go" ("gogo" is how
 # the transcriber often writes "go go")
 submit_suffixes = ["go go", "gogo", "now go", "over and out"]
+# Hands-free (mode = "vad") only: hold text until a submit phrase, then
+# clean and type it in one piece; false types it at every pause
+wait_for_submit = true
 
 # Transcript cleanup: strip standalone fillers (uh, um, ...) and
 # collapse 3+ word stutters ("I I I think" -> "I think")

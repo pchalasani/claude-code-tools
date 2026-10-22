@@ -51,7 +51,9 @@ agent) can open and edit this file to help the user tune specific
 options; common ones:
 
 - `engine` — `parakeet-mlx` (Apple GPU), `parakeet` (CPU), or `moonshine`.
-- `mode` — `toggle` (hotkey), `wake` (wake word), or `vad` (always on).
+- `mode` — `toggle` (hotkey), `wake` (wake word), or `vad` (always on;
+  text is held until a submit phrase such as "go go" unless
+  `wait_for_submit = false`).
 - `segmentation` — `hold` (whole take on toggle-off) or `vad` (per pause).
 - `hotkey` — toggle chord, e.g. `"<ctrl>+;"` (run `voxtype hotkey` to
   record one).

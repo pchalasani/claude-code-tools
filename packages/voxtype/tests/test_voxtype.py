@@ -385,7 +385,7 @@ def test_app_paused_ignores_utterances(app_factory) -> None:  # noqa: ANN001
 
 
 def test_app_empty_utterance_is_ignored(app_factory) -> None:  # noqa: ANN001
-    app, _ = app_factory(mode="vad")
+    app, _ = app_factory(mode="vad", wait_for_submit=False)
     app.handle_utterance("   ")
     assert app.typist.typed == []
 
@@ -436,7 +436,7 @@ def test_app_concurrent_toggles_never_lose_a_toggle(app_factory) -> None:
 
 def test_app_submit_phrase_beats_stop_phrase(app_factory) -> None:  # noqa: ANN001
     app, _ = app_factory(
-        mode="vad",
+        mode="vad", wait_for_submit=False,
         submit_phrases=["stop listening"],
         stop_phrase="stop listening",
     )
@@ -453,14 +453,14 @@ def test_app_submit_phrase_beats_stop_phrase(app_factory) -> None:  # noqa: ANN0
 
 
 def test_app_stop_phrase_containment_deactivates(app_factory) -> None:  # noqa: ANN001
-    app, _ = app_factory(mode="vad")
+    app, _ = app_factory(mode="vad", wait_for_submit=False)
     app.handle_utterance("Okay, stop listening now.")
     assert _state(app) == "PAUSED"
     assert app.typist.typed == []
 
 
 def test_app_strips_fillers_only_from_typed_text(app_factory) -> None:  # noqa: ANN001
-    app, _ = app_factory(mode="vad", strip_fillers=True)
+    app, _ = app_factory(mode="vad", wait_for_submit=False, strip_fillers=True)
     app.handle_utterance("Um, hello there")
     assert app.typist.typed == ["hello there "]
     app.handle_utterance("Um. Uh.")  # all fillers: nothing typed
@@ -468,7 +468,7 @@ def test_app_strips_fillers_only_from_typed_text(app_factory) -> None:  # noqa: 
 
 
 def test_app_strip_fillers_disabled_types_verbatim(app_factory) -> None:  # noqa: ANN001
-    app, _ = app_factory(mode="vad", strip_fillers=False)
+    app, _ = app_factory(mode="vad", wait_for_submit=False, strip_fillers=False)
     app.handle_utterance("Um, hi")
     assert app.typist.typed == ["Um, hi "]
 
@@ -480,7 +480,7 @@ def test_app_filler_stripping_cannot_create_submit_command(
     matching: "um go" is not the submit phrase "go" and must be typed
     (with the filler stripped), not submitted."""
     app, _ = app_factory(
-        mode="vad", strip_fillers=True, submit_phrases=["go"]
+        mode="vad", wait_for_submit=False, strip_fillers=True, submit_phrases=["go"]
     )
     app.handle_utterance("um go")
     assert app.typist.enters == 0
@@ -492,7 +492,7 @@ def test_app_filler_does_not_bridge_stop_phrase(app_factory) -> None:  # noqa: A
     """"stop um listening" must not match stop phrase "stop listening":
     command matching sees the raw transcript; only the typed text has
     the filler removed."""
-    app, _ = app_factory(mode="vad", strip_fillers=True)
+    app, _ = app_factory(mode="vad", wait_for_submit=False, strip_fillers=True)
     app.handle_utterance("stop um listening")
     assert _state(app) == "ACTIVE"  # no deactivation
     assert app.typist.typed == ["stop listening "]
@@ -523,7 +523,7 @@ def test_app_wake_idle_timeout_deferred_by_note_activity(app_factory) -> None:
 
 
 def test_app_idle_timeout_only_in_wake_mode(app_factory) -> None:  # noqa: ANN001
-    app, clock = app_factory(mode="vad", idle_timeout=20.0)
+    app, clock = app_factory(mode="vad", wait_for_submit=False, idle_timeout=20.0)
     assert _state(app) == "ACTIVE"
     clock.advance(1000.0)
     app._check_idle_timeout()
@@ -541,7 +541,7 @@ def test_app_utterance_refreshes_idle_timer(app_factory) -> None:  # noqa: ANN00
 
 
 def test_app_ignores_non_string_transcripts(app_factory) -> None:  # noqa: ANN001
-    app, _ = app_factory(mode="vad")
+    app, _ = app_factory(mode="vad", wait_for_submit=False)
     for bad in (None, 123, 4.5, b"bytes", ["list"], {"text": "hi"}):
         app.handle_utterance(bad)  # must not raise
     assert app.typist.typed == []
@@ -549,21 +549,20 @@ def test_app_ignores_non_string_transcripts(app_factory) -> None:  # noqa: ANN00
     assert _state(app) == "ACTIVE"
 
 
-def test_app_concurrent_toggle_off_commits_utterance_exactly_once(
+def test_app_toggle_off_waits_for_utterance_in_progress(
     app_factory, monkeypatch
 ) -> None:  # noqa: ANN001
-    """A toggle-off landing between snapshot and injection still commits.
+    """A toggle-off pressed mid-utterance waits for that utterance.
 
     A worker thread handles an utterance but is paused (deterministically,
-    via a patched strip_fillers) between the state inspection and the
-    injection; the main thread then toggles the app off. That toggle-off
-    arms the one-shot grace handoff for exactly this in-flight utterance,
-    so it must be typed (toggle-off means "commit what I said") — once,
-    consuming the handoff so later stray speech cannot ride it.
+    via a patched strip_fillers) before it is typed; the hotkey thread
+    then toggles off. Utterances and transitions take turns, so the
+    toggle waits: the utterance is typed exactly once while dictation is
+    still on, and only then does the app pause.
     """
     import voxtype.app as app_mod
 
-    app, _ = app_factory(mode="vad")
+    app, _ = app_factory(mode="vad", wait_for_submit=False)
     reached = threading.Event()
     proceed = threading.Event()
     orig = app_mod.strip_fillers
@@ -579,15 +578,16 @@ def test_app_concurrent_toggle_off_commits_utterance_exactly_once(
     )
     worker.start()
     assert reached.wait(timeout=5.0)
-    app.toggle()  # hotkey thread deactivates mid-utterance
+    toggler = threading.Thread(target=app.toggle)
+    toggler.start()  # hotkey thread deactivates mid-utterance
+    toggler.join(timeout=0.2)
+    assert toggler.is_alive()  # waiting its turn
+    assert _state(app) == "ACTIVE"
     proceed.set()
     worker.join(timeout=5.0)
-    assert not worker.is_alive()
+    toggler.join(timeout=5.0)
+    assert not worker.is_alive() and not toggler.is_alive()
     assert _state(app) == "PAUSED"
-    assert app.typist.typed == ["hello world "]
-    # the handoff was consumed: speech begun after the toggle is dropped
-    monkeypatch.setattr(app_mod, "strip_fillers", orig)
-    app.handle_utterance("later stray speech")
     assert app.typist.typed == ["hello world "]
 
 
@@ -598,7 +598,7 @@ def test_app_concurrent_toggle_off_still_submits_in_flight_enter(
     in-flight utterance that toggle's grace authorizes: Enter fires."""
     import voxtype.app as app_mod
 
-    app, _ = app_factory(mode="vad")
+    app, _ = app_factory(mode="vad", wait_for_submit=False)
     orig = app_mod.is_exact_phrase
 
     def racing(text: str, phrase: str) -> bool:
@@ -1096,7 +1096,7 @@ def _grace_app():
     pytest.importorskip("pynput")
     from voxtype.app import VoiceTypeApp
 
-    app = VoiceTypeApp(Config(mode="vad", sounds=False))
+    app = VoiceTypeApp(Config(mode="vad", wait_for_submit=False, sounds=False))
     app.typist = _CollectingTypist()
     app._engine = _RecordingEngine()
     return app
@@ -1311,7 +1311,9 @@ def test_session_buffer_and_paste_last() -> None:
     pytest.importorskip("pynput")
     from voxtype.app import VoiceTypeApp
 
-    app = VoiceTypeApp(Config(mode="vad", sounds=False, overlay=False))
+    app = VoiceTypeApp(Config(
+        mode="vad", wait_for_submit=False, sounds=False, overlay=False
+    ))
     app.typist = _CollectingTypist()
     app._engine = _RecordingEngine()
     app.handle_utterance("first part")
@@ -1673,7 +1675,9 @@ def test_cancel_deactivates_before_engine_reset() -> None:
     pytest.importorskip("pynput")
     from voxtype.app import State, VoiceTypeApp
 
-    app = VoiceTypeApp(Config(mode="vad", sounds=False, overlay=False))
+    app = VoiceTypeApp(Config(
+        mode="vad", wait_for_submit=False, sounds=False, overlay=False
+    ))
     app.typist = _CollectingTypist()
     states_at_reset: list[State] = []
 

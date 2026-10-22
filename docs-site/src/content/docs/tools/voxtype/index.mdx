@@ -170,7 +170,7 @@ turns on local cleanup for that run.
 | Action | Default | Configurable as |
 |--------|---------|-----------------|
 | Toggle recording | `Ctrl+;` | `hotkey` |
-| Cancel recording (discard) | `Esc` (only while recording) | `cancel_hotkey` |
+| Cancel recording (discard) | `Esc` (only while recording; not hands-free) | `cancel_hotkey` |
 | Re-type last transcript | off | `paste_hotkey` |
 | Submit (press Enter) | say "go" / "over" / "submit" | `submit_phrases` |
 | Type, then submit | end with "…, go go", "…, now go" or "…, over and out" | `submit_suffixes` |
@@ -190,9 +190,16 @@ end, so "we ran over and out of time" is typed as said. Said on its
 own, the phrase just presses Enter, like "go".
 
 This pairs well with hands-free dictation, where nothing needs a
-hotkey: set `mode = "vad"` and `segmentation = "vad"`, talk, and say
-"go go" to send. `Ctrl+;` pauses listening (say, while you talk to
-someone) and resumes it.
+hotkey: set `mode = "vad"`, talk, and say "go go" to send. In this mode
+voxtype holds your words back until the submit phrase, so you can pause
+to think as often as you like: everything since the last submit is
+typed as one piece and sent. With LLM cleanup on, that piece is cleaned
+as a whole, so a list spread over several pauses still comes out as one
+list. `Ctrl+;` pauses listening (say, while
+you talk to someone) and types anything held, without Enter. `Esc` is
+left alone in this mode, so it keeps working in your apps. Set
+`wait_for_submit = false` to have each piece typed as soon as you pause
+instead.
 
 The phrases are matched on the raw transcript, before filler removal
 and LLM cleanup, so cleanup cannot remove them. Change the list with

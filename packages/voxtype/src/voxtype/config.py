@@ -198,6 +198,9 @@ class Config:
         submit_suffixes: Phrases that, ending an utterance, type the
             words before them and then press Enter ("fix the build,
             go go"). "gogo" is how the transcriber often writes "go go".
+        wait_for_submit: Hands-free mode ("vad") only: hold the text
+            back until a submit phrase or suffix, then clean and type
+            it all at once. False types each piece at every pause.
         idle_timeout: Seconds of silence after which "wake" mode re-arms.
         trailing_space: Append a space after each typed utterance.
         sounds: Play a system sound on activate/deactivate (macOS).
@@ -212,8 +215,9 @@ class Config:
             disables.
         cancel_hotkey: Chord that cancels a recording in progress,
             discarding everything (default Escape). Only intercepted
-            WHILE recording; otherwise the key passes through to the
-            focused app. Empty disables.
+            WHILE recording, and never in hands-free mode ("vad");
+            otherwise the key passes through to the focused app. Empty
+            disables.
     """
 
     mode: str = "toggle"
@@ -257,6 +261,7 @@ class Config:
     submit_suffixes: list[str] = field(
         default_factory=lambda: ["go go", "gogo", "now go", "over and out"]
     )
+    wait_for_submit: bool = True
     idle_timeout: float = 20.0
     trailing_space: bool = True
     sounds: bool = True
@@ -328,6 +333,7 @@ class Config:
         for name in (
             "strip_fillers",
             "trailing_space",
+            "wait_for_submit",
             "sounds",
             "overlay",
             "post_process",
@@ -629,7 +635,8 @@ def sample_config() -> str:
 
 # Activation mode:
 #   "toggle" - start paused; the hotkey starts/stops dictation
-#   "vad"    - start dictating immediately (hands-free)
+#   "vad"    - start dictating immediately (hands-free; text waits for
+#              a submit phrase, see wait_for_submit)
 #   "wake"   - start passive; saying the wake word starts dictation
 mode = "toggle"
 
@@ -782,6 +789,12 @@ submit_phrases = ["over", "go", "submit"]
 # how the transcriber often writes "go go". Set to [] to disable.
 submit_suffixes = ["go go", "gogo", "now go", "over and out"]
 
+# Hands-free mode ("vad") only: hold the text back until you say a
+# submit phrase or suffix, then clean and type it all at once, so pauses
+# to think never split it. Ctrl+; or "stop listening" types what is held
+# without Enter. false types each piece at every pause.
+wait_for_submit = true
+
 # In "wake" mode, go back to passive after this many seconds of silence.
 idle_timeout = 20.0
 
@@ -806,8 +819,9 @@ copy_to_clipboard = false
 paste_hotkey = ""
 
 # Cancel a recording in progress, discarding everything. Only
-# intercepted WHILE recording; otherwise the key reaches the focused
-# app normally. Empty string disables.
+# intercepted WHILE recording, and never in hands-free mode ("vad");
+# otherwise the key reaches the focused app normally. Empty string
+# disables.
 cancel_hotkey = "<esc>"
 '''
 

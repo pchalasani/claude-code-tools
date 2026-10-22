@@ -77,7 +77,7 @@ def test_default_suffixes_match(text: str, expected: str | None) -> None:
 
 
 def test_default_go_go_types_then_submits(make_app) -> None:  # noqa: ANN001
-    app = make_app(mode="vad")
+    app = make_app(mode="vad", wait_for_submit=False)
     app.handle_utterance("Ship the release notes. Go go.")
     assert app.typist.events == ["Ship the release notes. ", "<ENTER>"]
 
@@ -93,32 +93,32 @@ def test_strip_submit_suffix_no_phrases() -> None:
 
 
 def test_suffix_types_text_then_presses_enter(make_app) -> None:  # noqa: ANN001
-    app = make_app(mode="vad")
+    app = make_app(mode="vad", wait_for_submit=False)
     app.handle_utterance("Fix the build, over and out.")
     assert app.typist.events == ["Fix the build ", "<ENTER>"]
     assert app._state.name == "ACTIVE"
 
 
 def test_suffix_alone_only_presses_enter(make_app) -> None:  # noqa: ANN001
-    app = make_app(mode="vad")
+    app = make_app(mode="vad", wait_for_submit=False)
     app.handle_utterance("Over and out.")
     assert app.typist.events == ["<ENTER>"]
 
 
 def test_suffix_mid_sentence_is_typed(make_app) -> None:  # noqa: ANN001
-    app = make_app(mode="vad")
+    app = make_app(mode="vad", wait_for_submit=False)
     app.handle_utterance("we ran over and out of time")
     assert app.typist.events == ["we ran over and out of time "]
 
 
 def test_suffix_disabled(make_app) -> None:  # noqa: ANN001
-    app = make_app(mode="vad", submit_suffixes=[])
+    app = make_app(mode="vad", wait_for_submit=False, submit_suffixes=[])
     app.handle_utterance("fix it, over and out")
     assert app.typist.events == ["fix it, over and out "]
 
 
 def test_suffix_after_fillers_only_presses_enter(make_app) -> None:  # noqa: ANN001
-    app = make_app(mode="vad", strip_fillers=True)
+    app = make_app(mode="vad", wait_for_submit=False, strip_fillers=True)
     app.handle_utterance("um, over and out")
     assert app.typist.events == ["<ENTER>"]
 
@@ -130,14 +130,14 @@ def test_suffix_after_wake_word(make_app) -> None:  # noqa: ANN001
 
 
 def test_suffix_in_toggle_off_grace(make_app) -> None:  # noqa: ANN001
-    app = make_app(mode="vad")
+    app = make_app(mode="vad", wait_for_submit=False)
     app.toggle()  # off; this utterance was already in flight
     app.handle_utterance("send it, over and out")
     assert app.typist.events == ["send it ", "<ENTER>"]
 
 
 def test_stop_phrase_still_wins(make_app) -> None:  # noqa: ANN001
-    app = make_app(mode="vad")
+    app = make_app(mode="vad", wait_for_submit=False)
     app.handle_utterance("stop listening, over and out")
     assert app.typist.events == []
     assert app._state.name == "PAUSED"
@@ -156,7 +156,7 @@ def test_toggle_during_typing_cannot_split_text_from_enter(
     Enter is sent too: the Enter never lands after dictation stopped."""
     import threading
 
-    app = make_app(mode="vad")
+    app = make_app(mode="vad", wait_for_submit=False)
     toggler: list[threading.Thread] = []
     states_at_enter: list[str] = []
     typist = app.typist
