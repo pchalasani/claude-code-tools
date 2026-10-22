@@ -62,13 +62,14 @@ def test_strip_submit_suffix(text: str, expected: str | None) -> None:
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ("Fix the build before the demo. Go go.", "Fix the build before the demo."),
-        ("tell me what you think GoGo.", "tell me what you think"),
-        ("ship it, go-go", "ship it"),
-        ("Go go.", ""),
-        ("we hired a go go dancer", None),
+        ("Fix the build before the demo. Send it.", "Fix the build before the demo."),
+        ("tell me what you think, go do it.", "tell me what you think"),
+        ("ship the fix, go to it", "ship the fix"),
+        ("Send it.", ""),
+        ("Go go.", None),
+        ("we will send it out tomorrow", None),
         ("Tell me what you think now go.", "Tell me what you think"),
-        ("Now go.", ""),
+        ("Okay, go.", ""),
     ],
 )
 def test_default_suffixes_match(text: str, expected: str | None) -> None:
@@ -76,9 +77,24 @@ def test_default_suffixes_match(text: str, expected: str | None) -> None:
     assert strip_submit_suffix(text, Config().submit_suffixes) == expected
 
 
-def test_default_go_go_types_then_submits(make_app) -> None:  # noqa: ANN001
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Fix the build. Okay, sure.", "Fix the build."),
+        ("Fix the build, ok show me", "Fix the build"),
+        ("Fix the build. Now show me.", "Fix the build."),
+        ("Fix the build, type it.", "Fix the build"),
+        ("Fix the build. Tap it.", "Fix the build."),
+        ("Show me the build", None),
+    ],
+)
+def test_default_show_suffixes_match(text: str, expected: str | None) -> None:
+    assert strip_submit_suffix(text, Config().show_suffixes) == expected
+
+
+def test_default_send_it_types_then_submits(make_app) -> None:  # noqa: ANN001
     app = make_app(mode="vad", wait_for_submit=False)
-    app.handle_utterance("Ship the release notes. Go go.")
+    app.handle_utterance("Ship the release notes. Send it.")
     assert app.typist.events == ["Ship the release notes. ", "<ENTER>"]
 
 

@@ -401,7 +401,7 @@ class VoiceTypeApp(RuntimeMixin):
                     self._status("stop phrase in flight (dropped)")
                 else:
                     t, enter, _ = self._split_suffix(text)
-                    if t:  # a bare "go go" only presses Enter
+                    if t:  # a bare "send it" only presses Enter
                         self._status(f'typed in-flight: "{_preview(t)}"')
                     self._deliver(
                         None,
@@ -449,7 +449,7 @@ class VoiceTypeApp(RuntimeMixin):
         t, enter, show = self._split_suffix(text)
         if self._hold_text(version, t, enter, show):
             return
-        if t:  # a bare "go go" only presses Enter
+        if t:  # a bare "send it" only presses Enter
             self._status(f'typed: "{_preview(t)}"')
         self._deliver(
             version,
@@ -494,7 +494,7 @@ class VoiceTypeApp(RuntimeMixin):
         return True
 
     def _split_suffix(self, text: str) -> tuple[str, bool, bool]:
-        """Split off a trailing submit ("go go") or show ("ok show") phrase.
+        """Split off a trailing submit ("send it") or show ("ok show") phrase.
 
         Returns the text to type, whether to press Enter after it, and
         whether a show phrase ended it (type held text, no Enter).

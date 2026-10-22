@@ -322,8 +322,8 @@ examples:
 while recording:
   <hotkey> again  stop and type the take     Esc      cancel (discard)
   say "go"/"over"/"submit" alone -> press Enter
-  end with "go go"/"ok go"/"over and out" -> type the rest, then press Enter
-  end with "ok show" (hands-free) -> type held text without Enter
+  end with "send it"/"ok go"/"over and out" -> type the rest, press Enter
+  end with "ok show"/"type it" (hands-free) -> type held text, no Enter
   say "stop listening" -> stop dictating (vad segmentation only)
 
 config file: ~/.config/voxtype/config.toml (all flags + more:

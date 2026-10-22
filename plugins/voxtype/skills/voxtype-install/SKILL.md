@@ -52,7 +52,7 @@ options; common ones:
 
 - `engine` — `parakeet-mlx` (Apple GPU), `parakeet` (CPU), or `moonshine`.
 - `mode` — `toggle` (hotkey), `wake` (wake word), or `vad` (always on;
-  text is held until a submit phrase such as "go go" unless
+  text is held until a submit phrase such as "send it" unless
   `wait_for_submit = false`).
 - `segmentation` — `hold` (whole take on toggle-off) or `vad` (per pause).
 - `hotkey` — toggle chord, e.g. `"<ctrl>+;"` (run `voxtype hotkey` to
@@ -103,10 +103,11 @@ options; common ones:
     from the logs (voxtype's short `typed: "…"` previews remain).
 - `wake_word` / `wake_word_aliases`, `submit_phrases`, `overlay`,
   `paste_hotkey`, `cancel_hotkey`, `copy_to_clipboard`, and more.
-- `submit_suffixes` (default `["go go", "gogo", "now go", "ok go",
-  "okay go", "over and out"]`): ending a dictation with one types the
+- `submit_suffixes` (default `["ok go", "okay go", "now go", "go do it",
+  "go to it", "send it", "over and out"]`): ending a dictation with one types the
   words before it, then presses Enter, with no pause.
-- `show_suffixes` (default `["ok show", "okay show"]`): in hands-free
+- `show_suffixes` (default `["ok show", "okay show", "ok sure", "okay sure",
+  "ok show me", "okay show me", "now show me", "type it", "tap it"]`): in hands-free
   mode, types the held text without Enter for review; "go" then sends.
 
 ### Trying a setting for one run

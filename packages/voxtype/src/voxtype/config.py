@@ -197,9 +197,10 @@ class Config:
             entire utterance (e.g. say "go" alone to submit).
         submit_suffixes: Phrases that, ending an utterance, type the
             words before them and then press Enter ("fix the build,
-            go go"). "gogo" is how the transcriber often writes "go go".
+            send it").
         show_suffixes: Phrases that, ending an utterance, type the held
             text without pressing Enter, for review ("..., ok show");
+            "ok sure" is how the transcriber often hears "ok show";
             a submit phrase then sends it.
         wait_for_submit: Hands-free mode ("vad") only: hold the text
             back until a submit phrase or suffix, then clean and type
@@ -263,11 +264,15 @@ class Config:
     )
     submit_suffixes: list[str] = field(
         default_factory=lambda: [
-            "go go", "gogo", "now go", "ok go", "okay go", "over and out"
+            "ok go", "okay go", "now go", "go do it", "go to it",
+            "send it", "over and out",
         ]
     )
     show_suffixes: list[str] = field(
-        default_factory=lambda: ["ok show", "okay show"]
+        default_factory=lambda: [
+            "ok show", "okay show", "ok sure", "okay sure", "ok show me",
+            "okay show me", "now show me", "type it", "tap it",
+        ]
     )
     wait_for_submit: bool = True
     idle_timeout: float = 20.0
@@ -793,13 +798,20 @@ stop_phrase = "stop listening"
 submit_phrases = ["over", "go", "submit"]
 
 # Ending a dictation with one of these types the words before it, then
-# presses Enter -- no pause needed: "fix the build, go go". "gogo" is
-# how the transcriber often writes "go go". Set to [] to disable.
-submit_suffixes = ["go go", "gogo", "now go", "ok go", "okay go", "over and out"]
+# presses Enter -- no pause needed: "fix the build, send it".
+# Set to [] to disable.
+submit_suffixes = [
+    "ok go", "okay go", "now go", "go do it", "go to it", "send it",
+    "over and out",
+]
 
 # Hands-free mode: ending with one of these types the held text WITHOUT
 # Enter, so you can review it; then say a submit phrase ("go") to send.
-show_suffixes = ["ok show", "okay show"]
+# "ok sure" is how the transcriber often hears "ok show".
+show_suffixes = [
+    "ok show", "okay show", "ok sure", "okay sure", "ok show me",
+    "okay show me", "now show me", "type it", "tap it",
+]
 
 # Hands-free mode ("vad") only: hold the text back until you say a
 # submit phrase or suffix, then clean and type it all at once, so pauses
