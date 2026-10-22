@@ -173,7 +173,8 @@ turns on local cleanup for that run.
 | Cancel recording (discard) | `Esc` (only while recording; not hands-free) | `cancel_hotkey` |
 | Re-type last transcript | off | `paste_hotkey` |
 | Submit (press Enter) | say "go" / "over" / "submit" | `submit_phrases` |
-| Type, then submit | end with "…, go go", "…, now go" or "…, over and out" | `submit_suffixes` |
+| Type, then submit | end with "…, go go", "…, ok go", "…, now go" or "…, over and out" | `submit_suffixes` |
+| Type for review (hands-free) | end with "…, ok show" | `show_suffixes` |
 | Stop dictating (vad segmentation) | say "stop listening" | `stop_phrase` |
 
 In the default toggle + `hold` setup you stop by pressing the toggle
@@ -182,7 +183,7 @@ hotkey again; the spoken `stop_phrase` only applies to per-utterance
 
 ### Talk, then submit in one breath
 
-End what you say with "go go", "now go" or "over and out" and voxtype
+End what you say with "go go", "ok go", "now go" or "over and out" and voxtype
 types everything before the phrase, then presses Enter. No pause is
 needed: "fix the build before the demo, go go" types "fix the build
 before the demo" and submits it. The phrase only counts at the very
@@ -200,6 +201,11 @@ you talk to someone) and types anything held, without Enter. `Esc` is
 left alone in this mode, so it keeps working in your apps. Set
 `wait_for_submit = false` to have each piece typed as soon as you pause
 instead.
+
+To look before you send, end with "ok show" instead: the held text is
+typed without Enter and voxtype keeps listening. Read it, fix it by hand
+if needed, then say "go" (or "ok go") to press Enter. Change these
+phrases with `show_suffixes`.
 
 The phrases are matched on the raw transcript, before filler removal
 and LLM cleanup, so cleanup cannot remove them. Change the list with

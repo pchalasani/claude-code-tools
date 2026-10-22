@@ -262,3 +262,41 @@ def test_last_words_authorized_by_arrival_time(
     worker.join(timeout=5.0)
     assert not worker.is_alive()
     assert app.typist.events == ["last words "]
+
+
+def test_ok_show_types_held_text_for_review(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance("First the changelog.")
+    app.handle_utterance("Then the version. Okay show.")
+    assert app.typist.events == ["First the changelog. Then the version. "]
+    assert app._state.name == "ACTIVE"  # still listening
+    app.handle_utterance("Okay go.")  # nothing held: just send it
+    assert app.typist.events[-1] == "<ENTER>"
+    assert len(app.typist.events) == 2
+
+
+def test_ok_show_alone_with_nothing_held_does_nothing(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance("Ok show.")
+    assert app.typist.events == []
+
+
+def test_ok_go_submits_in_one_step(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance("ship it")
+    app.handle_utterance("Tell me what you think, okay go.")
+    assert app.typist.events == [
+        "ship it Tell me what you think ",
+        "<ENTER>",
+    ]
+
+
+def test_ok_show_without_holding_strips_the_phrase(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad", wait_for_submit=False)
+    app.handle_utterance("Fix the build, okay show.")
+    assert app.typist.events == ["Fix the build "]
+
+
+def test_validate_rejects_bad_show_suffixes() -> None:
+    with pytest.raises(ValueError, match="show_suffixes"):
+        Config(show_suffixes=["ok show", ""]).validate()

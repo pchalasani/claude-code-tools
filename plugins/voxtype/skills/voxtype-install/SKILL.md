@@ -103,9 +103,11 @@ options; common ones:
     from the logs (voxtype's short `typed: "…"` previews remain).
 - `wake_word` / `wake_word_aliases`, `submit_phrases`, `overlay`,
   `paste_hotkey`, `cancel_hotkey`, `copy_to_clipboard`, and more.
-- `submit_suffixes` (default `["go go", "gogo", "now go", "over and out"]`): ending
-  a dictation with one types the words before it, then presses Enter,
-  with no pause.
+- `submit_suffixes` (default `["go go", "gogo", "now go", "ok go",
+  "okay go", "over and out"]`): ending a dictation with one types the
+  words before it, then presses Enter, with no pause.
+- `show_suffixes` (default `["ok show", "okay show"]`): in hands-free
+  mode, types the held text without Enter for review; "go" then sends.
 
 ### Trying a setting for one run
 

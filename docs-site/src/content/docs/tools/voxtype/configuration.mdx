@@ -252,7 +252,10 @@ submit_phrases = ["over", "go", "submit"]
 # Ending a dictation with one of these types the words before it, then
 # presses Enter, with no pause: "fix the build, go go" ("gogo" is how
 # the transcriber often writes "go go")
-submit_suffixes = ["go go", "gogo", "now go", "over and out"]
+submit_suffixes = ["go go", "gogo", "now go", "ok go", "okay go", "over and out"]
+# Hands-free: ending with one of these types the held text WITHOUT Enter
+# so you can review it; then say a submit phrase ("go") to send it
+show_suffixes = ["ok show", "okay show"]
 # Hands-free (mode = "vad") only: hold text until a submit phrase, then
 # clean and type it in one piece; false types it at every pause
 wait_for_submit = true
