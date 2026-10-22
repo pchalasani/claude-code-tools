@@ -107,6 +107,11 @@ class VoiceTypeApp(RuntimeMixin):
         # Hands-free wait_for_submit: pieces held back until a submit
         # phrase (see _hold_text); typed without Enter on deactivation.
         self._held: list[str] = []
+        # Utterance handling and state transitions take turns, so text
+        # released by a toggle-off is always queued before a trailing
+        # utterance that toggle lets through. Re-entrant: the stop phrase
+        # transitions from inside handle_utterance.
+        self._order_lock = threading.RLock()
         self._stop = threading.Event()
         # Cleared while the engine loads (run() clears then sets it),
         # so the toggle hotkey is a no-op — with feedback — until audio
@@ -122,6 +127,13 @@ class VoiceTypeApp(RuntimeMixin):
 
     def _transition(
         self, compute: Callable[[State], State], keep_held: bool = True
+    ) -> int:
+        """Commit a transition in turn with utterances (see _order_lock)."""
+        with self._order_lock:
+            return self._commit_transition(compute, keep_held)
+
+    def _commit_transition(
+        self, compute: Callable[[State], State], keep_held: bool
     ) -> int:
         """Atomically commit ``compute(current_state)`` as the new state.
 
@@ -274,6 +286,14 @@ class VoiceTypeApp(RuntimeMixin):
                 self._expect_hold = 0
             return
         if was_active:
+            if not hold:
+                # Typing released held text may have used up the grace
+                # window; the in-flight words get a full one after it.
+                with self._lock:
+                    if self._grace_until:
+                        self._grace_until = time.monotonic() + (
+                            self.TOGGLE_GRACE
+                        )
             action = getattr(
                 engine,
                 "request_hold_stop" if hold else "request_flush",
@@ -329,6 +349,10 @@ class VoiceTypeApp(RuntimeMixin):
         Malformed transcripts (None, non-strings) are ignored rather
         than raised on: engines may surface junk event payloads.
         """
+        with self._order_lock:
+            self._handle_utterance(text)
+
+    def _handle_utterance(self, text: str) -> None:
         if not isinstance(text, str):
             return
         text = text.strip()

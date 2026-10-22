@@ -549,17 +549,16 @@ def test_app_ignores_non_string_transcripts(app_factory) -> None:  # noqa: ANN00
     assert _state(app) == "ACTIVE"
 
 
-def test_app_concurrent_toggle_off_commits_utterance_exactly_once(
+def test_app_toggle_off_waits_for_utterance_in_progress(
     app_factory, monkeypatch
 ) -> None:  # noqa: ANN001
-    """A toggle-off landing between snapshot and injection still commits.
+    """A toggle-off pressed mid-utterance waits for that utterance.
 
     A worker thread handles an utterance but is paused (deterministically,
-    via a patched strip_fillers) between the state inspection and the
-    injection; the main thread then toggles the app off. That toggle-off
-    arms the one-shot grace handoff for exactly this in-flight utterance,
-    so it must be typed (toggle-off means "commit what I said") — once,
-    consuming the handoff so later stray speech cannot ride it.
+    via a patched strip_fillers) before it is typed; the hotkey thread
+    then toggles off. Utterances and transitions take turns, so the
+    toggle waits: the utterance is typed exactly once while dictation is
+    still on, and only then does the app pause.
     """
     import voxtype.app as app_mod
 
@@ -579,15 +578,16 @@ def test_app_concurrent_toggle_off_commits_utterance_exactly_once(
     )
     worker.start()
     assert reached.wait(timeout=5.0)
-    app.toggle()  # hotkey thread deactivates mid-utterance
+    toggler = threading.Thread(target=app.toggle)
+    toggler.start()  # hotkey thread deactivates mid-utterance
+    toggler.join(timeout=0.2)
+    assert toggler.is_alive()  # waiting its turn
+    assert _state(app) == "ACTIVE"
     proceed.set()
     worker.join(timeout=5.0)
-    assert not worker.is_alive()
+    toggler.join(timeout=5.0)
+    assert not worker.is_alive() and not toggler.is_alive()
     assert _state(app) == "PAUSED"
-    assert app.typist.typed == ["hello world "]
-    # the handoff was consumed: speech begun after the toggle is dropped
-    monkeypatch.setattr(app_mod, "strip_fillers", orig)
-    app.handle_utterance("later stray speech")
     assert app.typist.typed == ["hello world "]
 
 
