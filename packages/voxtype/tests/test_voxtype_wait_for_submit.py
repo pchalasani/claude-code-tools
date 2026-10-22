@@ -112,6 +112,14 @@ def test_cancel_discards_held_text(make_app) -> None:  # noqa: ANN001
     assert app.typist.events == ["fresh ", "<ENTER>"]
 
 
+def test_esc_is_never_intercepted_hands_free(make_app) -> None:  # noqa: ANN001
+    """Hands-free mode always listens, so Esc stays with the focused app."""
+    assert make_app(mode="vad")._is_recording() is False
+    app = make_app(mode="toggle")
+    app.toggle()
+    assert app._is_recording() is True
+
+
 def test_wait_for_submit_off_types_each_piece(make_app) -> None:  # noqa: ANN001
     app = make_app(mode="vad", wait_for_submit=False)
     app.handle_utterance("one")
@@ -228,3 +236,29 @@ def test_waiting_last_words_survive_slow_held_typing(
     worker.join(timeout=5.0)
     assert not worker.is_alive() and not toggler.is_alive()
     assert app.typist.events == ["a long held dictation ", "last words "]
+
+
+def test_last_words_authorized_by_arrival_time(
+    make_app, monkeypatch: pytest.MonkeyPatch
+) -> None:  # noqa: ANN001
+    """Last words that arrive inside the grace window still type even if
+    they wait past it for a busy lock (e.g. cleaned held text typing)."""
+    import threading
+
+    import voxtype.app as app_mod
+
+    now = [100.0]
+    monkeypatch.setattr(app_mod.time, "monotonic", lambda: now[0])
+    app = make_app(mode="vad")
+    app.toggle()  # off: grace window until 102
+    app._lock.acquire()  # the delivery worker is busy typing
+    worker = threading.Thread(
+        target=lambda: app.handle_utterance("last words")
+    )
+    worker.start()  # arrives at 100, then waits for the lock
+    worker.join(timeout=0.2)
+    now[0] += 3.0  # typing outlasts the grace window
+    app._lock.release()
+    worker.join(timeout=5.0)
+    assert not worker.is_alive()
+    assert app.typist.events == ["last words "]

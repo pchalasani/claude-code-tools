@@ -327,6 +327,13 @@ class VoiceTypeApp(RuntimeMixin):
         self._status("recording cancelled (discarded)")
 
     def _is_recording(self) -> bool:
+        """Whether the cancel hotkey (Esc) is intercepted right now.
+
+        Never in hands-free mode: it is always listening, so Esc would
+        be taken from every app; only the toggle hotkey pauses it.
+        """
+        if self.cfg.mode == "vad":
+            return False
         with self._lock:
             return self._state == State.ACTIVE
 
@@ -347,10 +354,14 @@ class VoiceTypeApp(RuntimeMixin):
         Malformed transcripts (None, non-strings) are ignored rather
         than raised on: engines may surface junk event payloads.
         """
+        # Arrival time, before waiting for a turn: a toggle-off busy
+        # typing held text must not run out the grace window that
+        # authorizes these (in-flight) words.
+        arrived = time.monotonic()
         with self._order_lock:
-            self._handle_utterance(text)
+            self._handle_utterance(text, arrived)
 
-    def _handle_utterance(self, text: str) -> None:
+    def _handle_utterance(self, text: str, arrived: float) -> None:
         if not isinstance(text, str):
             return
         text = text.strip()
@@ -372,7 +383,7 @@ class VoiceTypeApp(RuntimeMixin):
                 else None
             )
         if state in (State.PAUSED, State.PASSIVE):
-            if self._consume_handoff():
+            if self._consume_handoff(at=arrived):
                 # In-flight speech from just before a toggle-off:
                 # commit it (the user said it while dictating).
                 if any(
