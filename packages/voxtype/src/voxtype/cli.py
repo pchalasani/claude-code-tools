@@ -322,7 +322,7 @@ examples:
 while recording:
   <hotkey> again  stop and type the take     Esc      cancel (discard)
   say "go"/"over"/"submit" alone -> press Enter
-  end with "over and out" -> type the rest, then press Enter
+  end with "go go"/"over and out" -> type the rest, then press Enter
   say "stop listening" -> stop dictating (vad segmentation only)
 
 config file: ~/.config/voxtype/config.toml (all flags + more:

@@ -56,6 +56,27 @@ def test_strip_submit_suffix(text: str, expected: str | None) -> None:
     assert strip_submit_suffix(text, ["over and out"]) == expected
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Fix the build before the demo. Go go.", "Fix the build before the demo."),
+        ("tell me what you think GoGo.", "tell me what you think"),
+        ("ship it, go-go", "ship it"),
+        ("Go go.", ""),
+        ("we hired a go go dancer", None),
+    ],
+)
+def test_default_suffixes_match_go_go(text: str, expected: str | None) -> None:
+    """Spellings parakeet produced for "go go" in real synthesized speech."""
+    assert strip_submit_suffix(text, Config().submit_suffixes) == expected
+
+
+def test_default_go_go_types_then_submits(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance("Ship the release notes. Go go.")
+    assert app.typist.events == ["Ship the release notes. ", "<ENTER>"]
+
+
 def test_strip_submit_suffix_longest_wins() -> None:
     phrases = ["out", "over and out"]
     assert strip_submit_suffix("fix it, over and out", phrases) == "fix it"

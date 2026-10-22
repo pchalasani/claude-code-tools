@@ -356,7 +356,7 @@ class VoiceTypeApp:
                     self._status("stop phrase in flight (dropped)")
                 else:
                     t, enter = self._split_submit_suffix(text)
-                    if t:  # a bare "over and out" only presses Enter
+                    if t:  # a bare "go go" only presses Enter
                         self._status(f'typed in-flight: "{_preview(t)}"')
                     self._deliver(
                         None,
@@ -401,7 +401,7 @@ class VoiceTypeApp:
             self._set_state(self._off_state)
             return
         t, enter = self._split_submit_suffix(text)
-        if t:  # a bare "over and out" only presses Enter
+        if t:  # a bare "go go" only presses Enter
             self._status(f'typed: "{_preview(t)}"')
         self._deliver(
             version,
@@ -411,7 +411,7 @@ class VoiceTypeApp:
         )
 
     def _split_submit_suffix(self, text: str) -> tuple[str, bool]:
-        """Split off a trailing submit suffix ("..., over and out").
+        """Split off a trailing submit suffix ("..., go go").
 
         Returns the text to type and whether to press Enter after it.
         """

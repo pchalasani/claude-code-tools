@@ -197,7 +197,7 @@ class Config:
             entire utterance (e.g. say "go" alone to submit).
         submit_suffixes: Phrases that, ending an utterance, type the
             words before them and then press Enter ("fix the build,
-            over and out").
+            go go"). "gogo" is how the transcriber often writes "go go".
         idle_timeout: Seconds of silence after which "wake" mode re-arms.
         trailing_space: Append a space after each typed utterance.
         sounds: Play a system sound on activate/deactivate (macOS).
@@ -255,7 +255,7 @@ class Config:
         default_factory=lambda: ["over", "go", "submit"]
     )
     submit_suffixes: list[str] = field(
-        default_factory=lambda: ["over and out"]
+        default_factory=lambda: ["go go", "gogo", "over and out"]
     )
     idle_timeout: float = 20.0
     trailing_space: bool = True
@@ -778,9 +778,9 @@ stop_phrase = "stop listening"
 submit_phrases = ["over", "go", "submit"]
 
 # Ending a dictation with one of these types the words before it, then
-# presses Enter -- no pause needed: "fix the build, over and out".
-# Set to [] to disable.
-submit_suffixes = ["over and out"]
+# presses Enter -- no pause needed: "fix the build, go go". "gogo" is
+# how the transcriber often writes "go go". Set to [] to disable.
+submit_suffixes = ["go go", "gogo", "over and out"]
 
 # In "wake" mode, go back to passive after this many seconds of silence.
 idle_timeout = 20.0
