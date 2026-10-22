@@ -356,7 +356,8 @@ class VoiceTypeApp:
                     self._status("stop phrase in flight (dropped)")
                 else:
                     t, enter = self._split_submit_suffix(text)
-                    self._status(f'typed in-flight: "{_preview(t)}"')
+                    if t:  # a bare "over and out" only presses Enter
+                        self._status(f'typed in-flight: "{_preview(t)}"')
                     self._deliver(
                         None,
                         lambda v, at, b=self._session_texts: (
@@ -400,7 +401,8 @@ class VoiceTypeApp:
             self._set_state(self._off_state)
             return
         t, enter = self._split_submit_suffix(text)
-        self._status(f'typed: "{_preview(t)}"')
+        if t:  # a bare "over and out" only presses Enter
+            self._status(f'typed: "{_preview(t)}"')
         self._deliver(
             version,
             lambda v, at, b=origin_buf: (
