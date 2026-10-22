@@ -22,6 +22,7 @@ from .logic import (
     contains_phrase,
     is_exact_phrase,
     strip_fillers,
+    strip_submit_suffix,
     text_after_wake_word,
 )
 from .postprocess import effective_newlines, flatten_lines, strip_controls
@@ -354,11 +355,12 @@ class VoiceTypeApp:
                     # the focused app.
                     self._status("stop phrase in flight (dropped)")
                 else:
-                    self._status(f'typed in-flight: "{_preview(text)}"')
+                    t, enter = self._split_submit_suffix(text)
+                    self._status(f'typed in-flight: "{_preview(t)}"')
                     self._deliver(
                         None,
-                        lambda v, at, t=text, b=self._session_texts: (
-                            self._type(t, v, at, b, speech_end)
+                        lambda v, at, b=self._session_texts: (
+                            self._type(t, v, at, b, speech_end, enter)
                         ),
                     )
                 return
@@ -378,10 +380,11 @@ class VoiceTypeApp:
                 return
             version = self._set_state(State.ACTIVE)
             if remainder:
+                t, enter = self._split_submit_suffix(remainder)
                 self._deliver(
                     version,
-                    lambda v, at, t=remainder, b=self._session_texts: (
-                        self._type(t, v, at, b, speech_end)
+                    lambda v, at, b=self._session_texts: (
+                        self._type(t, v, at, b, speech_end, enter)
                     ),
                 )
             return
@@ -396,13 +399,22 @@ class VoiceTypeApp:
         ):
             self._set_state(self._off_state)
             return
-        self._status(f'typed: "{_preview(text)}"')
+        t, enter = self._split_submit_suffix(text)
+        self._status(f'typed: "{_preview(t)}"')
         self._deliver(
             version,
-            lambda v, at, t=text, b=origin_buf: (
-                self._type(t, v, at, b, speech_end)
+            lambda v, at, b=origin_buf: (
+                self._type(t, v, at, b, speech_end, enter)
             ),
         )
+
+    def _split_submit_suffix(self, text: str) -> tuple[str, bool]:
+        """Split off a trailing submit suffix ("..., over and out").
+
+        Returns the text to type and whether to press Enter after it.
+        """
+        rest = strip_submit_suffix(text, self.cfg.submit_suffixes)
+        return (text, False) if rest is None else (rest, True)
 
     def _submit(self, version: int | None, at: float) -> None:
         """Press Enter for a submit phrase that arrived at ``at``.
@@ -562,16 +574,21 @@ class VoiceTypeApp:
         arrived: float | None = None,
         session: list[str] | None = None,
         speech_end: float | None = None,
+        enter: bool = False,
     ) -> None:
         """Type ``text``; ``version=None`` skips the staleness check
         (used for grace-window commits, which by definition arrive
-        after a state transition)."""
+        after a state transition). ``enter`` presses Enter after the
+        text is typed (a submit suffix ended the utterance)."""
         if self.cfg.strip_fillers:
             # Fillers first: removing "um"s can make a stutter run
             # adjacent ("I um I um I" -> "I I I"), which then collapses.
             text = collapse_repeats(strip_fillers(text))
-            if not text:
-                return
+        if not text:
+            if enter:
+                at = time.monotonic() if arrived is None else arrived
+                self._submit(version, at)
+            return
         if self._post is not None:
             # On the delivery thread (see _deliver), outside every lock:
             # cleanup takes up to post_process_timeout and must never
@@ -619,6 +636,10 @@ class VoiceTypeApp:
             # later speech. Consume the handoff and type.
             with self._lock:
                 self.typist.type_text(text)
+        if enter and inserted:
+            with self._lock:
+                self.typist.press_enter()
+            self._status("submitted (Enter)")
         if self._post is not None and inserted:
             self._log_latency(arrived, speech_end)
 

@@ -195,6 +195,9 @@ class Config:
             hold mode stop with the hotkey, or Esc to cancel.
         submit_phrases: Phrases that press Enter when spoken as an
             entire utterance (e.g. say "go" alone to submit).
+        submit_suffixes: Phrases that, ending an utterance, type the
+            words before them and then press Enter ("fix the build,
+            over and out").
         idle_timeout: Seconds of silence after which "wake" mode re-arms.
         trailing_space: Append a space after each typed utterance.
         sounds: Play a system sound on activate/deactivate (macOS).
@@ -250,6 +253,9 @@ class Config:
     stop_phrase: str = "stop listening"
     submit_phrases: list[str] = field(
         default_factory=lambda: ["over", "go", "submit"]
+    )
+    submit_suffixes: list[str] = field(
+        default_factory=lambda: ["over and out"]
     )
     idle_timeout: float = 20.0
     trailing_space: bool = True
@@ -430,13 +436,14 @@ class Config:
             )
         if self.idle_timeout <= 0:
             raise ValueError("idle_timeout must be positive")
-        if not isinstance(self.submit_phrases, list) or any(
-            not isinstance(p, str) or not p.strip()
-            for p in self.submit_phrases
-        ):
-            raise ValueError(
-                "submit_phrases must be a list of non-empty strings"
-            )
+        for name in ("submit_phrases", "submit_suffixes"):
+            value = getattr(self, name)
+            if not isinstance(value, list) or any(
+                not isinstance(p, str) or not p.strip() for p in value
+            ):
+                raise ValueError(
+                    f"{name} must be a list of non-empty strings"
+                )
         if not isinstance(self.wake_word_aliases, list) or any(
             not isinstance(p, str) or not p.strip()
             for p in self.wake_word_aliases
@@ -769,6 +776,11 @@ stop_phrase = "stop listening"
 # presses Enter in the focused app -- e.g. to submit a prompt.
 # Set to [] to disable.
 submit_phrases = ["over", "go", "submit"]
+
+# Ending a dictation with one of these types the words before it, then
+# presses Enter -- no pause needed: "fix the build, over and out".
+# Set to [] to disable.
+submit_suffixes = ["over and out"]
 
 # In "wake" mode, go back to passive after this many seconds of silence.
 idle_timeout = 20.0

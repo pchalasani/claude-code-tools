@@ -322,11 +322,12 @@ examples:
 while recording:
   <hotkey> again  stop and type the take     Esc      cancel (discard)
   say "go"/"over"/"submit" alone -> press Enter
+  end with "over and out" -> type the rest, then press Enter
   say "stop listening" -> stop dictating (vad segmentation only)
 
 config file: ~/.config/voxtype/config.toml (all flags + more:
-wake_word_aliases, submit_phrases, sounds, copy_to_clipboard,
-paste_hotkey, cancel_hotkey, overlay, parakeet_threads, ...)
+wake_word_aliases, submit_phrases, submit_suffixes, sounds,
+copy_to_clipboard, paste_hotkey, cancel_hotkey, overlay, ...)
 --set KEY=VALUE overrides any of these keys for one run; KEY may use
 - or _ (e.g. --set post-process-provider=s1-mini --set sounds=false)
 docs: https://pchalasani.github.io/claude-code-tools/tools/voxtype/

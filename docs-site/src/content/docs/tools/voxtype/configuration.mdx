@@ -236,6 +236,9 @@ idle_timeout = 20.0          # seconds of silence before wake mode re-arms
 
 # Spoken submit: saying one of these as an ENTIRE utterance presses Enter
 submit_phrases = ["over", "go", "submit"]
+# Ending a dictation with one of these types the words before it, then
+# presses Enter, with no pause: "fix the build, over and out"
+submit_suffixes = ["over and out"]
 
 # Transcript cleanup: strip standalone fillers (uh, um, ...) and
 # collapse 3+ word stutters ("I I I think" -> "I think")
@@ -461,9 +464,9 @@ to raw (reason)`, for every take. Each take also gets a `latency:` line;
 see [Reading the logs](#reading-the-logs).
 
 Spoken commands are matched on the raw transcript, before cleanup. That
-covers the submit phrases ("go"), the stop phrase and the wake word, so
-cleanup cannot break them. Filler-word removal (`strip_fillers`) also
-still runs first. `Esc` behaves as it does without cleanup: it
+covers the submit phrases ("go"), the "over and out" suffix, the stop
+phrase and the wake word, so cleanup cannot break them. Filler-word
+removal (`strip_fillers`) also still runs first. `Esc` behaves as it does without cleanup: it
 discards the recording in progress, but text already transcribed and
 waiting for cleanup is still typed.
 

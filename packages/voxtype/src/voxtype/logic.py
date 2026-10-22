@@ -96,6 +96,32 @@ def is_exact_phrase(text: str, phrase: str) -> bool:
     return bool(phrase_words) and normalize_words(text) == phrase_words
 
 
+def strip_submit_suffix(text: str, phrases: list[str]) -> str | None:
+    """Return ``text`` without a trailing submit suffix, or None if absent.
+
+    "Fix the build, over and out." -> "Fix the build". The suffix
+    matches as whole words at the very end, ignoring case and
+    punctuation; the kept text keeps its original casing, minus the
+    comma or dash that led into the suffix. "over and out" alone
+    returns "".
+
+    Args:
+        text: The transcribed utterance.
+        phrases: The configured submit suffixes.
+
+    Returns:
+        The text before the suffix, or ``None`` if no suffix ends it.
+    """
+    matches = list(_WORD_RE.finditer(text))
+    words = [m.group().casefold() for m in matches]
+    for phrase in phrases:
+        target = normalize_words(phrase)
+        n = len(target)
+        if n and words[-n:] == target:
+            return text[: matches[-n].start()].rstrip(" \t\n,;:-–—")
+    return None
+
+
 def text_after_wake_word(text: str, wake_word: str) -> str | None:
     """Return the words spoken after ``wake_word``, or None if absent.
 
