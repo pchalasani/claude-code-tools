@@ -599,6 +599,7 @@ def _app(newlines: str, mode: str = "vad", **kw):
     pytest.importorskip("pynput")
     from voxtype.app import VoiceTypeApp
 
+    kw.setdefault("wait_for_submit", False)
     app = VoiceTypeApp(Config(
         mode=mode, sounds=False, post_process_newlines=newlines, **kw
     ))

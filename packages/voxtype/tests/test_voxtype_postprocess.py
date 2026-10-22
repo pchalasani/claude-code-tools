@@ -899,7 +899,7 @@ def _vad_app():
     pytest.importorskip("pynput")
     from voxtype.app import VoiceTypeApp
 
-    app = VoiceTypeApp(Config(mode="vad", sounds=False))
+    app = VoiceTypeApp(Config(mode="vad", wait_for_submit=False, sounds=False))
     app.typist = _Typist()
     app._post = _Upper()
     return app

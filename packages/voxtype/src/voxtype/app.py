@@ -103,6 +103,9 @@ class VoiceTypeApp:
         # Text of the current/most recent dictation session, for the
         # clipboard option and the paste-again hotkey.
         self._session_texts: list[str] = []
+        # Hands-free wait_for_submit: pieces held back until a submit
+        # phrase (see _hold_text); typed without Enter on deactivation.
+        self._held: list[str] = []
         self._stop = threading.Event()
         # Cleared while the engine loads (run() clears then sets it),
         # so the toggle hotkey is a no-op — with feedback — until audio
@@ -117,7 +120,7 @@ class VoiceTypeApp:
     # -- state transitions ------------------------------------------------
 
     def _transition(
-        self, compute: Callable[[State], State]
+        self, compute: Callable[[State], State], keep_held: bool = True
     ) -> int:
         """Atomically commit ``compute(current_state)`` as the new state.
 
@@ -126,6 +129,10 @@ class VoiceTypeApp:
         concurrent transitions (two hotkey toggles, a toggle vs. the
         idle timeout) serialize: none can act on a stale snapshot.
         Effects are emitted after the lock is released.
+
+        Leaving ACTIVE releases the held hands-free text in the same
+        commit (typed without Enter, or dropped if not ``keep_held``),
+        so a piece is either held before it or typed normally after.
 
         Returns:
             The resulting state version (unchanged if ``compute``
@@ -139,6 +146,8 @@ class VoiceTypeApp:
             self._state_version += 1
             version = self._state_version
             self._last_activity = time.monotonic()
+            held, self._held = " ".join(self._held), []
+            buf = self._session_texts
             if new == State.ACTIVE:
                 # Fresh dictation session: the buffer is cleared as
                 # part of the SAME commit that publishes ACTIVE, so a
@@ -146,12 +155,14 @@ class VoiceTypeApp:
                 # be appended first and then erased by a later effect
                 # (which would break clipboard/paste-last recovery).
                 self._session_texts = []
+        if held and keep_held:
+            self._deliver(None, lambda v, at: self._type(held, v, at, buf))
         self._emit_transition_effects(version, old, new)
         return version
 
-    def _set_state(self, new: State) -> int:
+    def _set_state(self, new: State, keep_held: bool = True) -> int:
         """Transition to ``new``; returns the resulting state version."""
-        return self._transition(lambda _current: new)
+        return self._transition(lambda _current: new, keep_held)
 
     def _emit_transition_effects(
         self,
@@ -287,7 +298,7 @@ class VoiceTypeApp:
                 return
             self._grace_until = 0.0
             self._expect_hold = 0
-        self._set_state(self._off_state)
+        self._set_state(self._off_state, keep_held=False)
         with self._lock:
             self._grace_until = 0.0  # _set_state must not resurrect it
             self._expect_hold = 0
@@ -393,7 +404,8 @@ class VoiceTypeApp:
         if any(
             is_exact_phrase(text, p) for p in self.cfg.submit_phrases
         ):
-            self._deliver(version, self._submit)
+            if not self._hold_text(version, "", True):
+                self._deliver(version, self._submit)
             return
         if self.cfg.stop_phrase and contains_phrase(
             text, self.cfg.stop_phrase
@@ -401,6 +413,8 @@ class VoiceTypeApp:
             self._set_state(self._off_state)
             return
         t, enter = self._split_submit_suffix(text)
+        if self._hold_text(version, t, enter):
+            return
         if t:  # a bare "go go" only presses Enter
             self._status(f'typed: "{_preview(t)}"')
         self._deliver(
@@ -409,6 +423,36 @@ class VoiceTypeApp:
                 self._type(t, v, at, b, speech_end, enter)
             ),
         )
+
+    def _hold_text(self, version: int, text: str, enter: bool) -> bool:
+        """Hands-free wait_for_submit: hold ``text`` until a submit.
+
+        On a submit (``enter``), everything held is typed as one piece,
+        so cleanup sees it whole, then Enter is pressed. Returns False
+        when not holding, or when a transition since ``version`` already
+        released the held text; the caller then types as usual.
+        """
+        if self.cfg.mode != "vad" or not self.cfg.wait_for_submit:
+            return False
+        with self._lock:
+            if version != self._state_version:
+                return False
+            if text:
+                self._held.append(text)
+            joined = " ".join(self._held)
+            if enter:
+                self._held = []
+            buf = self._session_texts
+        if not enter:
+            self._status(f'held: "{_preview(text)}"')
+            return True
+        if joined:
+            self._status(f'typed: "{_preview(joined)}"')
+        self._deliver(
+            version,
+            lambda v, at: self._type(joined, v, at, buf, None, True),
+        )
+        return True
 
     def _split_submit_suffix(self, text: str) -> tuple[str, bool]:
         """Split off a trailing submit suffix ("..., go go").

@@ -198,6 +198,9 @@ class Config:
         submit_suffixes: Phrases that, ending an utterance, type the
             words before them and then press Enter ("fix the build,
             go go"). "gogo" is how the transcriber often writes "go go".
+        wait_for_submit: Hands-free mode ("vad") only: hold the text
+            back until a submit phrase or suffix, then clean and type
+            it all at once. False types each piece at every pause.
         idle_timeout: Seconds of silence after which "wake" mode re-arms.
         trailing_space: Append a space after each typed utterance.
         sounds: Play a system sound on activate/deactivate (macOS).
@@ -257,6 +260,7 @@ class Config:
     submit_suffixes: list[str] = field(
         default_factory=lambda: ["go go", "gogo", "now go", "over and out"]
     )
+    wait_for_submit: bool = True
     idle_timeout: float = 20.0
     trailing_space: bool = True
     sounds: bool = True
@@ -328,6 +332,7 @@ class Config:
         for name in (
             "strip_fillers",
             "trailing_space",
+            "wait_for_submit",
             "sounds",
             "overlay",
             "post_process",
@@ -781,6 +786,12 @@ submit_phrases = ["over", "go", "submit"]
 # presses Enter -- no pause needed: "fix the build, go go". "gogo" is
 # how the transcriber often writes "go go". Set to [] to disable.
 submit_suffixes = ["go go", "gogo", "now go", "over and out"]
+
+# Hands-free mode ("vad") only: hold the text back until you say a
+# submit phrase or suffix, then clean and type it all at once, so pauses
+# to think never split it. Ctrl+; or "stop listening" types what is held
+# without Enter; Esc discards it. false types each piece at every pause.
+wait_for_submit = true
 
 # In "wake" mode, go back to passive after this many seconds of silence.
 idle_timeout = 20.0
