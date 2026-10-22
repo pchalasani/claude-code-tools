@@ -188,3 +188,43 @@ def test_slow_held_typing_keeps_grace_for_last_words(
     app.toggle()
     app.handle_utterance("last words")  # the flushed in-flight piece
     assert app.typist.events == ["a long held dictation ", "last words "]
+
+
+def test_waiting_last_words_survive_slow_held_typing(
+    make_app, monkeypatch: pytest.MonkeyPatch
+) -> None:  # noqa: ANN001
+    """The last words, arriving WHILE a toggle-off types slow held text,
+    still get typed after it (the grace window restarts in the same
+    turn as the typing)."""
+    import threading
+
+    import voxtype.app as app_mod
+
+    now = [100.0]
+    monkeypatch.setattr(app_mod.time, "monotonic", lambda: now[0])
+    app = make_app(mode="vad")
+    app.handle_utterance("a long held dictation")
+    typing, finish = threading.Event(), threading.Event()
+    real_type = app.typist.type_text
+
+    def slow_type(text: str) -> None:
+        typing.set()
+        assert finish.wait(timeout=5.0)
+        now[0] += 3.0  # longer than TOGGLE_GRACE
+        real_type(text)
+
+    monkeypatch.setattr(app.typist, "type_text", slow_type)
+    toggler = threading.Thread(target=app.toggle)
+    toggler.start()
+    assert typing.wait(timeout=5.0)
+    monkeypatch.setattr(app.typist, "type_text", real_type)
+    worker = threading.Thread(
+        target=lambda: app.handle_utterance("last words")
+    )
+    worker.start()  # waits for the toggle's turn to end
+    worker.join(timeout=0.2)
+    finish.set()
+    toggler.join(timeout=5.0)
+    worker.join(timeout=5.0)
+    assert not worker.is_alive() and not toggler.is_alive()
+    assert app.typist.events == ["a long held dictation ", "last words "]

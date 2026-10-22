@@ -170,6 +170,12 @@ class VoiceTypeApp(RuntimeMixin):
                 self._session_texts = []
         if held and keep_held:
             self._deliver(None, lambda v, at: self._type(held, v, at, buf))
+            # Typing it may have used up a toggle-off's grace window; the
+            # in-flight words get a full one after it. Still inside
+            # _order_lock, so no utterance can see the stale deadline.
+            with self._lock:
+                if self._grace_until:
+                    self._grace_until = time.monotonic() + self.TOGGLE_GRACE
         self._emit_transition_effects(version, old, new)
         return version
 
@@ -286,14 +292,6 @@ class VoiceTypeApp(RuntimeMixin):
                 self._expect_hold = 0
             return
         if was_active:
-            if not hold:
-                # Typing released held text may have used up the grace
-                # window; the in-flight words get a full one after it.
-                with self._lock:
-                    if self._grace_until:
-                        self._grace_until = time.monotonic() + (
-                            self.TOGGLE_GRACE
-                        )
             action = getattr(
                 engine,
                 "request_hold_stop" if hold else "request_flush",
