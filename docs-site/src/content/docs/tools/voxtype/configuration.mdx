@@ -154,12 +154,17 @@ mode = "wake"
 wake_word_aliases = ["hey cloud"]  # add what the model mishears
 ```
 
-**Always-on transcription.** Types everything it
-hears while running — for captioning yourself or
-short bursts of use:
+**Always-on transcription.** Listens the whole time
+it runs, with no hotkey. What you say is held back
+until you say a submit phrase ("go go"), then cleaned
+and typed in one piece and sent with Enter, so pauses
+to think never split it. `Ctrl+;` pauses listening
+and types anything held, without Enter:
 
 ```toml
 mode = "vad"
+# false types each piece as soon as you pause instead
+wait_for_submit = true
 ```
 
 (These recipes leave `engine` unset so it auto-selects
@@ -240,6 +245,9 @@ submit_phrases = ["over", "go", "submit"]
 # presses Enter, with no pause: "fix the build, go go" ("gogo" is how
 # the transcriber often writes "go go")
 submit_suffixes = ["go go", "gogo", "now go", "over and out"]
+# Hands-free (mode = "vad") only: hold text until a submit phrase, then
+# clean and type it in one piece; false types it at every pause
+wait_for_submit = true
 
 # Transcript cleanup: strip standalone fillers (uh, um, ...) and
 # collapse 3+ word stutters ("I I I think" -> "I think")

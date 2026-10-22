@@ -634,7 +634,8 @@ def sample_config() -> str:
 
 # Activation mode:
 #   "toggle" - start paused; the hotkey starts/stops dictation
-#   "vad"    - start dictating immediately (hands-free)
+#   "vad"    - start dictating immediately (hands-free; text waits for
+#              a submit phrase, see wait_for_submit)
 #   "wake"   - start passive; saying the wake word starts dictation
 mode = "toggle"
 
