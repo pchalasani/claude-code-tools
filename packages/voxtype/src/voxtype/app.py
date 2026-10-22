@@ -620,10 +620,18 @@ class VoiceTypeApp:
         if self.cfg.trailing_space:
             text += " "
         inserted = True
+
+        def keys() -> None:
+            # Text and its Enter go out under one lock acquisition, so a
+            # toggle-off or cancel cannot land between them.
+            self.typist.type_text(text)
+            if enter:
+                self.typist.press_enter()
+
         if version is None:
             with self._lock:
-                self.typist.type_text(text)
-        elif self._inject(version, lambda: self.typist.type_text(text)):
+                keys()
+        elif self._inject(version, keys):
             pass
         elif version == _REJECTED or not self._consume_handoff(at=arrived):
             inserted = False  # stale: kept for rescue only, never typed
@@ -635,10 +643,8 @@ class VoiceTypeApp:
             # commit while leaving the grace window armed for stray
             # later speech. Consume the handoff and type.
             with self._lock:
-                self.typist.type_text(text)
+                keys()
         if enter and inserted:
-            with self._lock:
-                self.typist.press_enter()
             self._status("submitted (Enter)")
         if self._post is not None and inserted:
             self._log_latency(arrived, speech_end)

@@ -115,3 +115,37 @@ def test_stop_phrase_still_wins(make_app) -> None:  # noqa: ANN001
 def test_validate_rejects_bad_submit_suffixes(bad: object) -> None:
     with pytest.raises(ValueError, match="submit_suffixes"):
         Config(submit_suffixes=bad).validate()  # type: ignore[arg-type]
+
+
+def test_toggle_during_typing_cannot_split_text_from_enter(
+    make_app, monkeypatch: pytest.MonkeyPatch
+) -> None:  # noqa: ANN001
+    """A toggle-off pressed while the text is being typed waits until the
+    Enter is sent too: the Enter never lands after dictation stopped."""
+    import threading
+
+    app = make_app(mode="vad")
+    toggler: list[threading.Thread] = []
+    states_at_enter: list[str] = []
+    typist = app.typist
+    real_type, real_enter = typist.type_text, typist.press_enter
+
+    def slow_type(text: str) -> None:
+        real_type(text)
+        app._last_toggle = 0.0
+        t = threading.Thread(target=app.toggle)
+        t.start()
+        toggler.append(t)
+        t.join(timeout=0.3)  # with the fix, toggle blocks on the lock
+
+    def recording_enter() -> None:
+        states_at_enter.append(app._state.name)
+        real_enter()
+
+    monkeypatch.setattr(typist, "type_text", slow_type)
+    monkeypatch.setattr(typist, "press_enter", recording_enter)
+    app.handle_utterance("ship it, over and out")
+    toggler[0].join(timeout=5.0)
+    assert typist.events == ["ship it ", "<ENTER>"]
+    assert states_at_enter == ["ACTIVE"]
+    assert app._state.name == "PAUSED"
