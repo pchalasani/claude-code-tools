@@ -91,7 +91,9 @@ least immediate:
    be final.
 2. **Per-pause typing** — `segmentation = "vad"`.
    Speak; roughly half a second after each natural
-   pause, that utterance is typed. This is the
+   pause, that utterance is typed (hands-free mode
+   holds it for a submit phrase instead, unless
+   `wait_for_submit = false`). This is the
    closest voxtype comes to a streaming feel:
    text flows in sentence-sized pieces while you
    keep talking. Trade-off: the model transcribes
@@ -208,7 +210,8 @@ mode = "toggle"
 # force a choice; the value below is just the Apple-Silicon case.
 engine = "parakeet-mlx"
 
-# "vad" types each utterance when you pause; "hold" records everything
+# "vad" transcribes each utterance when you pause (types it then, except
+# hands-free mode holds it for a submit phrase); "hold" records everything
 # between toggle-on/off and transcribes the whole take at once (parakeet
 # engines + toggle mode only). Default: "hold" with a parakeet engine in
 # toggle mode (the common case), otherwise "vad".

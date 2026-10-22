@@ -193,8 +193,9 @@ This pairs well with hands-free dictation, where nothing needs a
 hotkey: set `mode = "vad"`, talk, and say "go go" to send. In this mode
 voxtype holds your words back until the submit phrase, so you can pause
 to think as often as you like: everything since the last submit is
-cleaned as one piece (a list spread over several pauses still comes out
-as one list), typed, and sent. `Ctrl+;` pauses listening (say, while
+typed as one piece and sent. With LLM cleanup on, that piece is cleaned
+as a whole, so a list spread over several pauses still comes out as one
+list. `Ctrl+;` pauses listening (say, while
 you talk to someone) and types anything held, without Enter. `Esc` is
 left alone in this mode, so it keeps working in your apps. Set
 `wait_for_submit = false` to have each piece typed as soon as you pause
