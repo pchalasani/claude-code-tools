@@ -109,8 +109,13 @@ least immediate:
    can only be heard by continuous per-utterance
    transcription.
 
-Wake and vad **modes** always use per-pause typing
-(2); toggle mode lets you pick between (2) and (3),
+Wake and vad **modes** always transcribe per pause
+(2). Wake mode types each piece as you pause; vad
+(hands-free) mode by default holds the pieces until
+you say a submit phrase such as "go go", then types
+them in one go (`wait_for_submit = false` types each
+piece as you pause). Toggle mode lets you pick
+between (2) and (3),
 and **defaults to (3), whole-take**, with a parakeet
 engine — so out of the box you get maximum-accuracy
 push-to-talk. Set `segmentation = "vad"` if you'd
