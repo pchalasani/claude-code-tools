@@ -120,7 +120,10 @@ def strip_submit_suffix(text: str, phrases: list[str]) -> str | None:
     for target in reversed(targets):
         n = len(target)
         if n and words[-n:] == target:
-            return text[: matches[-n].start()].rstrip(" \t\n,;:-–—")
+            # Opening brackets and curly quotes can only belong to the
+            # suffix ("fix it (over and out)"); straight quotes may close
+            # the sentence before it, so they stay.
+            return text[: matches[-n].start()].rstrip(" \t\n,;:-–—([{“‘")
     return None
 
 
