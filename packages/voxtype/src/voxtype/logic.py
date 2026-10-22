@@ -114,8 +114,10 @@ def strip_submit_suffix(text: str, phrases: list[str]) -> str | None:
     """
     matches = list(_WORD_RE.finditer(text))
     words = [m.group().casefold() for m in matches]
-    for phrase in phrases:
-        target = normalize_words(phrase)
+    # Longest first: with ["out", "over and out"], "fix it, over and
+    # out" must strip the whole phrase, not leave "over and" behind.
+    targets = sorted((normalize_words(p) for p in phrases), key=len)
+    for target in reversed(targets):
         n = len(target)
         if n and words[-n:] == target:
             return text[: matches[-n].start()].rstrip(" \t\n,;:-–—")

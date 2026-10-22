@@ -56,6 +56,12 @@ def test_strip_submit_suffix(text: str, expected: str | None) -> None:
     assert strip_submit_suffix(text, ["over and out"]) == expected
 
 
+def test_strip_submit_suffix_longest_wins() -> None:
+    phrases = ["out", "over and out"]
+    assert strip_submit_suffix("fix it, over and out", phrases) == "fix it"
+    assert strip_submit_suffix("let me out", phrases) == "let me"
+
+
 def test_strip_submit_suffix_no_phrases() -> None:
     assert strip_submit_suffix("fix it, over and out", []) is None
 
