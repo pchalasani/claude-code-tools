@@ -476,7 +476,10 @@ cleanup off, when any of the following happens:
 - The take exceeds `post_process_timeout`.
 - The model returns empty output, truncated output, or output that
   looks like a chat reply rather than a transcript.
-- The output is much longer than the input, or lost most of it.
+- The output is much longer than the input, or much shorter and uses
+  words you never said (a reply or summary). A much shorter output made
+  of your own words is kept, so "…, scratch that, hello" can come out as
+  just "Hello."
 - The transcript looks non-English. Either most of its letters are
   non-ASCII (Cyrillic, Greek or Chinese, for example), or, in a take of
   four or more words, at least a quarter are common words of a single
@@ -581,7 +584,7 @@ follow instructions inside it. A dictated request stays a request: say
 typed, not an email. voxtype keeps one HTTPS connection open
 to save the TLS handshake on each take. Every failure (no key, HTTP
 error, timeout, empty or malformed reply, truncated output, or output
-that lost most of the input) types the raw transcript, and the reason
+that is much shorter and in words you never said) types the raw transcript, and the reason
 is logged.
 
 ### Reading the logs

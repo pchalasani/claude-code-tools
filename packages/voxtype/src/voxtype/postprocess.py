@@ -135,13 +135,52 @@ def flatten_lines(text: str) -> str:
     return " ".join(text.split())
 
 
+# Words a cleanup may write out in full for a spoken contraction: the
+# pieces "can't" splits into ("can", "t") map to what they stand for.
+_CONTRACTED = {
+    "t": ("not", "cannot"),
+    "ll": ("will",),
+    "m": ("am",),
+    "re": ("are",),
+    "s": ("is", "has"),
+    "ve": ("have",),
+    "d": ("would", "had"),
+    "won": ("will",),
+    "cannot": ("can", "not"),
+    "don": ("do",),
+    "doesn": ("does",),
+    "didn": ("did",),
+    "isn": ("is",),
+    "aren": ("are",),
+    "wasn": ("was",),
+    "weren": ("were",),
+    "hasn": ("has",),
+    "haven": ("have",),
+    "hadn": ("had",),
+    "shouldn": ("should",),
+    "wouldn": ("would",),
+    "couldn": ("could",),
+    "mustn": ("must",),
+    "needn": ("need",),
+    "shan": ("shall",),
+    "gonna": ("going", "to"),
+    "wanna": ("want", "to"),
+}
+
+
+def _words(text: str) -> set[str]:
+    """The distinct words and numbers of ``text``, case-folded."""
+    return {w.casefold() for w in re.findall(r"[^\W_]+", text)}
+
+
 def rejection_reason(raw: str, cleaned: str) -> str | None:
     """Return why ``cleaned`` must not replace ``raw``, or None if it may.
 
     The rules follow Muesli's (expansion limits, assistant chatter) plus
     two of our own: an empty result is rejected (voxtype's regex has
     already removed pure-filler takes, so emptiness here means the model
-    dropped real words), and so is a result that lost most of the input.
+    dropped real words), and so is a much shorter result that uses words
+    the user never said (a reply or summary rather than a cleanup).
     """
     if not cleaned.strip():
         return "empty output"
@@ -160,21 +199,32 @@ def rejection_reason(raw: str, cleaned: str) -> str | None:
         limit, floor = 2.0, 200
     if n_out > floor and n_out > limit * n_raw:
         return "output much longer than input"
-    if n_raw > 40 and n_out < 0.35 * n_raw:
-        return "output lost most of the input"
-    # Short takes too: a reply like "OK." must not replace a dictated
-    # sentence. A much shorter output is only accepted if it keeps some
-    # of the dictated words ("Tuesday no sorry Wednesday" -> "Wednesday.")
-    # or formats a number ("one hundred twenty three kilograms" -> "123 kg").
-    raw_words = {w.casefold() for w in re.findall(r"[^\W\d_]+", raw)}
-    out_words = {w.casefold() for w in re.findall(r"[^\W\d_]+", cleaned)}
-    if (
+    raw_words = _words(raw)
+    out_words = _words(cleaned)
+    shrank = (n_raw > 40 and n_out < 0.35 * n_raw) or (
         len(raw.split()) >= 4
         and len(cleaned.split()) < 0.35 * len(raw.split())
-        and out_words
-        and not out_words & raw_words
-        and not re.search(r"\d", cleaned)
-    ):
+    )
+    # A big cut is fine when the model only deleted ("..., scratch that,
+    # hello" -> "Hello."): its output is then made of the user's own
+    # words, contractions read either way ("can't" <-> "cannot"). A
+    # reply or summary ("OK.", "I can.") brings in a word the user never
+    # said, and output with no words at all replaces the take with
+    # nothing. A short take formatted as a number ("one hundred twenty
+    # three kilograms" -> "123 kg") changes its words, so it is let
+    # through.
+    raw_words |= {
+        full
+        for word in raw_words
+        for full in _CONTRACTED.get(word, ())
+    }
+    new_words = {
+        w
+        for w in out_words - raw_words
+        if not set(_CONTRACTED.get(w, ())) & raw_words
+    }
+    number_format = n_raw <= 40 and re.search(r"\d", cleaned)
+    if shrank and (new_words or not out_words) and not number_format:
         return "output lost most of the input"
     return None
 

@@ -108,6 +108,74 @@ def test_rejection_reason(raw: str, cleaned: str, expected: str | None) -> None:
         assert reason is not None and expected in reason
 
 
+SCRATCHED = (
+    "Several of them have no kind of short term deadline, those are "
+    "largely rolling deadlines. Actually scratch that. Completely ignore "
+    "what I just said. Hello, how are you?"
+)
+
+
+def test_big_cut_of_own_words_is_accepted() -> None:
+    """A retraction ("scratch that") legitimately drops most of a take."""
+    assert rejection_reason(SCRATCHED, "Hello, how are you?") is None
+
+
+def test_big_cut_in_new_words_is_rejected() -> None:
+    """A summary or reply uses words the user never said."""
+    reason = rejection_reason(SCRATCHED, "User greets the assistant.")
+    assert reason is not None and "lost most" in reason
+
+
+@pytest.mark.parametrize(
+    ("raw", "cleaned", "expected"),
+    [
+        ("we can't no sorry I can't", "I cannot.", None),
+        ("I will no sorry he will", "He'll.", None),
+        ("I cannot no sorry he cannot", "He can't.", None),
+        (
+            "Please ignore everything I said before. Actually scratch that "
+            "completely. I do not agree.",
+            "I don't agree.",
+            None,
+        ),
+        (
+            "Please ignore everything I said before. Actually scratch that "
+            "completely. I didn't agree.",
+            "I did not agree.",
+            None,
+        ),
+        (
+            "Please send the revised proposal to Alice before the meeting.",
+            ".........",
+            "lost most",
+        ),
+        (
+            "can you please review this pull request and tell me whether "
+            "all of the tests pass",
+            "I can.",
+            "lost most",
+        ),
+        (
+            "can you do that refactor of the parser module now, and then "
+            "rerun the whole test suite and tell me what fails",
+            "Sure, I'll do that.",
+            "lost most",
+        ),
+    ],
+)
+def test_big_cut_allows_only_own_words(
+    raw: str, cleaned: str, expected: str | None
+) -> None:
+    reason = rejection_reason(raw, cleaned)
+    assert reason is None if expected is None else expected in (reason or "")
+
+
+def test_big_cut_to_a_number_never_said_is_rejected() -> None:
+    raw = "Please send the revised proposal to Alice before the meeting."
+    reason = rejection_reason(raw, "42")
+    assert reason is not None and "lost most" in reason
+
+
 def test_marker_already_in_raw_is_not_chatter() -> None:
     raw = "write the analysis: revenue grew"
     assert rejection_reason(raw, "Write the analysis: revenue grew.") is None
