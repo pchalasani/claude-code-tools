@@ -131,6 +131,7 @@ def test_big_cut_in_new_words_is_rejected() -> None:
     [
         ("we can't no sorry I can't", "I cannot.", None),
         ("I will no sorry he will", "He'll.", None),
+        ("I cannot no sorry he cannot", "He can't.", None),
         (
             "Please send the revised proposal to Alice before the meeting.",
             ".........",

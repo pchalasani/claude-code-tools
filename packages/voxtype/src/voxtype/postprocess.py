@@ -146,6 +146,7 @@ _CONTRACTED = {
     "ve": ("have",),
     "d": ("would", "had"),
     "won": ("will",),
+    "cannot": ("can", "not"),
     "gonna": ("going", "to"),
     "wanna": ("want", "to"),
 }
