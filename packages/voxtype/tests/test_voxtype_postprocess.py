@@ -126,6 +126,25 @@ def test_big_cut_in_new_words_is_rejected() -> None:
     assert reason is not None and "lost most" in reason
 
 
+@pytest.mark.parametrize(
+    ("raw", "cleaned", "expected"),
+    [
+        ("we can't no sorry I can't", "I cannot.", None),
+        (
+            "can you do that refactor of the parser module now, and then "
+            "rerun the whole test suite and tell me what fails",
+            "Sure, I'll do that.",
+            "lost most",
+        ),
+    ],
+)
+def test_big_cut_tolerates_one_reworded_word(
+    raw: str, cleaned: str, expected: str | None
+) -> None:
+    reason = rejection_reason(raw, cleaned)
+    assert reason is None if expected is None else expected in (reason or "")
+
+
 def test_big_cut_to_a_number_never_said_is_rejected() -> None:
     raw = "Please send the revised proposal to Alice before the meeting."
     reason = rejection_reason(raw, "42")
