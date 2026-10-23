@@ -96,7 +96,9 @@ English only).
    - The raw text is typed whenever any of these happen: a connection error, an
      HTTP error, a timeout, `finish_reason == "length"`, empty output, output
      with assistant-style chatter, output longer than Muesli's expansion
-     limits, or output shorter than 35% of the input.
+     limits, or output shorter than 35% of the input that uses words the
+     speaker never said. A much shorter output made only of the speaker's
+     words (a "scratch that" retraction) is kept.
 4. **Long takes are split into chunks** of about 250 words or fewer at
    sentence boundaries, since Parakeet already punctuates. Each chunk is
    cleaned on its own within the shared deadline. A chunk that fails is typed
