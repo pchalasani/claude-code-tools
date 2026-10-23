@@ -114,7 +114,7 @@ least immediate:
 Wake and vad **modes** always transcribe per pause
 (2). Wake mode types each piece as you pause; vad
 (hands-free) mode by default holds the pieces until
-you say a submit phrase such as "go go", then types
+you say a submit phrase such as "send it", then types
 them in one go (`wait_for_submit = false` types each
 piece as you pause). Toggle mode lets you pick
 between (2) and (3),
@@ -163,7 +163,7 @@ wake_word_aliases = ["hey cloud"]  # add what the model mishears
 
 **Always-on transcription.** Listens the whole time
 it runs, with no hotkey. What you say is held back
-until you say a submit phrase ("go go"), then cleaned
+until you say a submit phrase ("send it"), then cleaned
 and typed in one piece and sent with Enter, so pauses
 to think never split it. `Ctrl+;` pauses listening
 and types anything held, without Enter:
@@ -250,9 +250,18 @@ idle_timeout = 20.0          # seconds of silence before wake mode re-arms
 # Spoken submit: saying one of these as an ENTIRE utterance presses Enter
 submit_phrases = ["over", "go", "submit"]
 # Ending a dictation with one of these types the words before it, then
-# presses Enter, with no pause: "fix the build, go go" ("gogo" is how
-# the transcriber often writes "go go")
-submit_suffixes = ["go go", "gogo", "now go", "over and out"]
+# presses Enter, with no pause: "fix the build, send it"
+submit_suffixes = [
+    "ok go", "okay go", "now go", "go do it", "go to it", "send it",
+    "over and out",
+]
+# Hands-free: ending with one of these types the held text WITHOUT Enter
+# so you can review it; then say a submit phrase ("go") to send it.
+# "ok sure" is how the transcriber often hears "ok show".
+show_suffixes = [
+    "ok show", "okay show", "ok sure", "okay sure", "ok show me",
+    "okay show me", "now show me", "type it", "tap it",
+]
 # Hands-free (mode = "vad") only: hold text until a submit phrase, then
 # clean and type it in one piece; false types it at every pause
 wait_for_submit = true
@@ -481,7 +490,7 @@ to raw (reason)`, for every take. Each take also gets a `latency:` line;
 see [Reading the logs](#reading-the-logs).
 
 Spoken commands are matched on the raw transcript, before cleanup. That
-covers the submit phrases ("go"), the "go go" suffix, the stop
+covers the submit phrases ("go"), the "send it" suffix, the stop
 phrase and the wake word, so cleanup cannot break them. Filler-word
 removal (`strip_fillers`) also still runs first. `Esc` behaves as it does without cleanup: it
 discards the recording in progress, but text already transcribed and

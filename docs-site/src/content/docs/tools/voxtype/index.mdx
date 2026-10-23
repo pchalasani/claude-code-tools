@@ -173,7 +173,8 @@ turns on local cleanup for that run.
 | Cancel recording (discard) | `Esc` (only while recording; not hands-free) | `cancel_hotkey` |
 | Re-type last transcript | off | `paste_hotkey` |
 | Submit (press Enter) | say "go" / "over" / "submit" | `submit_phrases` |
-| Type, then submit | end with "…, go go", "…, now go" or "…, over and out" | `submit_suffixes` |
+| Type, then submit | end with "…, send it", "…, go do it", "…, ok go" or "…, over and out" | `submit_suffixes` |
+| Type for review (hands-free) | end with "…, ok show" or "…, type it" | `show_suffixes` |
 | Stop dictating (vad segmentation) | say "stop listening" | `stop_phrase` |
 
 In the default toggle + `hold` setup you stop by pressing the toggle
@@ -182,15 +183,16 @@ hotkey again; the spoken `stop_phrase` only applies to per-utterance
 
 ### Talk, then submit in one breath
 
-End what you say with "go go", "now go" or "over and out" and voxtype
-types everything before the phrase, then presses Enter. No pause is
-needed: "fix the build before the demo, go go" types "fix the build
+End what you say with a submit phrase ("send it", "go do it", "go to
+it", "ok go", "now go" or "over and out") and voxtype types everything
+before the phrase, then presses Enter. No pause is needed: "fix the
+build before the demo, send it" types "fix the build
 before the demo" and submits it. The phrase only counts at the very
 end, so "we ran over and out of time" is typed as said. Said on its
 own, the phrase just presses Enter, like "go".
 
 This pairs well with hands-free dictation, where nothing needs a
-hotkey: set `mode = "vad"`, talk, and say "go go" to send. In this mode
+hotkey: set `mode = "vad"`, talk, and say "send it" to send. In this mode
 voxtype holds your words back until the submit phrase, so you can pause
 to think as often as you like: everything since the last submit is
 typed as one piece and sent. With LLM cleanup on, that piece is cleaned
@@ -201,11 +203,18 @@ left alone in this mode, so it keeps working in your apps. Set
 `wait_for_submit = false` to have each piece typed as soon as you pause
 instead.
 
+To look before you send, end with "ok show" (or "ok show me", "now
+show me", "type it", "tap it") instead: the held text is typed without
+Enter and voxtype keeps listening. Read it, fix it by hand if needed,
+then say "go" (or "send it") to press Enter. The transcriber often hears
+"ok show" as "ok sure", so that counts too. Change these phrases with
+`show_suffixes`.
+
 The phrases are matched on the raw transcript, before filler removal
 and LLM cleanup, so cleanup cannot remove them. Change the list with
-`submit_suffixes` (the transcriber often writes "go go" as "GoGo",
-which is why "gogo" is in the default list); `[]` turns the feature
-off.
+`submit_suffixes`; `[]` turns the feature off. A phrase that ends an
+ordinary sentence ("…and then we send it") also submits, so drop any
+that trip you up.
 
 Not sure how to spell a chord for the hotkey settings
 above? Run `voxtype hotkey`, press the combo you want,

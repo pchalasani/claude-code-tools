@@ -57,7 +57,7 @@ def test_pieces_are_held_until_suffix(make_app) -> None:  # noqa: ANN001
     app.handle_utterance("First I went to the office.")
     app.handle_utterance("No sorry, the school.")
     assert app.typist.events == []
-    app.handle_utterance("Then home. Go go.")
+    app.handle_utterance("Then home. Send it.")
     assert app.typist.events == [
         "First I went to the office. No sorry, the school. Then home. ",
         "<ENTER>",
@@ -81,7 +81,7 @@ def test_bare_submit_phrase_types_held_text(make_app) -> None:  # noqa: ANN001
     app.handle_utterance("ship it")
     app.handle_utterance("go")
     assert app.typist.events == ["ship it ", "<ENTER>"]
-    app.handle_utterance("Go go.")  # nothing held: just Enter
+    app.handle_utterance("Send it.")  # nothing held: just Enter
     assert app.typist.events == ["ship it ", "<ENTER>", "<ENTER>"]
 
 
@@ -108,7 +108,7 @@ def test_cancel_discards_held_text(make_app) -> None:  # noqa: ANN001
     assert app.typist.events == []
     app._last_toggle = 0.0
     app.toggle()  # back on: the discarded text does not come back
-    app.handle_utterance("fresh, go go")
+    app.handle_utterance("fresh, send it")
     assert app.typist.events == ["fresh ", "<ENTER>"]
 
 
@@ -123,7 +123,7 @@ def test_esc_is_never_intercepted_hands_free(make_app) -> None:  # noqa: ANN001
 def test_wait_for_submit_off_types_each_piece(make_app) -> None:  # noqa: ANN001
     app = make_app(mode="vad", wait_for_submit=False)
     app.handle_utterance("one")
-    app.handle_utterance("two, go go")
+    app.handle_utterance("two, send it")
     assert app.typist.events == ["one ", "two ", "<ENTER>"]
 
 
@@ -142,7 +142,7 @@ def test_validate_rejects_non_bool() -> None:
 def test_toggle_mid_utterance_keeps_held_text_first(
     make_app, monkeypatch: pytest.MonkeyPatch
 ) -> None:  # noqa: ANN001
-    """A toggle-off racing a final "... go go" never submits the final
+    """A toggle-off racing a final "... send it" never submits the final
     words ahead of the held text: the two take turns."""
     import threading
 
@@ -160,7 +160,7 @@ def test_toggle_mid_utterance_keeps_held_text_first(
 
     monkeypatch.setattr(app_mod, "is_exact_phrase", pausing)
     worker = threading.Thread(
-        target=lambda: app.handle_utterance("last part, go go")
+        target=lambda: app.handle_utterance("last part, send it")
     )
     worker.start()
     assert reached.wait(timeout=5.0)
@@ -262,3 +262,41 @@ def test_last_words_authorized_by_arrival_time(
     worker.join(timeout=5.0)
     assert not worker.is_alive()
     assert app.typist.events == ["last words "]
+
+
+def test_ok_show_types_held_text_for_review(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance("First the changelog.")
+    app.handle_utterance("Then the version. Okay show.")
+    assert app.typist.events == ["First the changelog. Then the version. "]
+    assert app._state.name == "ACTIVE"  # still listening
+    app.handle_utterance("Okay go.")  # nothing held: just send it
+    assert app.typist.events[-1] == "<ENTER>"
+    assert len(app.typist.events) == 2
+
+
+def test_ok_show_alone_with_nothing_held_does_nothing(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance("Ok show.")
+    assert app.typist.events == []
+
+
+def test_ok_go_submits_in_one_step(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance("ship it")
+    app.handle_utterance("Tell me what you think, okay go.")
+    assert app.typist.events == [
+        "ship it Tell me what you think ",
+        "<ENTER>",
+    ]
+
+
+def test_ok_show_without_holding_strips_the_phrase(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad", wait_for_submit=False)
+    app.handle_utterance("Fix the build, okay show.")
+    assert app.typist.events == ["Fix the build "]
+
+
+def test_validate_rejects_bad_show_suffixes() -> None:
+    with pytest.raises(ValueError, match="show_suffixes"):
+        Config(show_suffixes=["ok show", ""]).validate()

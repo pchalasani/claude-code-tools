@@ -400,8 +400,8 @@ class VoiceTypeApp(RuntimeMixin):
                     # the focused app.
                     self._status("stop phrase in flight (dropped)")
                 else:
-                    t, enter = self._split_submit_suffix(text)
-                    if t:  # a bare "go go" only presses Enter
+                    t, enter, _ = self._split_suffix(text)
+                    if t:  # a bare "send it" only presses Enter
                         self._status(f'typed in-flight: "{_preview(t)}"')
                     self._deliver(
                         None,
@@ -426,7 +426,7 @@ class VoiceTypeApp(RuntimeMixin):
                 return
             version = self._set_state(State.ACTIVE)
             if remainder:
-                t, enter = self._split_submit_suffix(remainder)
+                t, enter, _ = self._split_suffix(remainder)
                 self._deliver(
                     version,
                     lambda v, at, b=self._session_texts: (
@@ -446,10 +446,10 @@ class VoiceTypeApp(RuntimeMixin):
         ):
             self._set_state(self._off_state)
             return
-        t, enter = self._split_submit_suffix(text)
-        if self._hold_text(version, t, enter):
+        t, enter, show = self._split_suffix(text)
+        if self._hold_text(version, t, enter, show):
             return
-        if t:  # a bare "go go" only presses Enter
+        if t:  # a bare "send it" only presses Enter
             self._status(f'typed: "{_preview(t)}"')
         self._deliver(
             version,
@@ -458,11 +458,14 @@ class VoiceTypeApp(RuntimeMixin):
             ),
         )
 
-    def _hold_text(self, version: int, text: str, enter: bool) -> bool:
+    def _hold_text(
+        self, version: int, text: str, enter: bool, show: bool = False
+    ) -> bool:
         """Hands-free wait_for_submit: hold ``text`` until a submit.
 
-        On a submit (``enter``), everything held is typed as one piece,
-        so cleanup sees it whole, then Enter is pressed. Returns False
+        On a submit (``enter``) or a show phrase (``show``), everything
+        held is typed as one piece, so cleanup sees it whole; a submit
+        then presses Enter, a show leaves it for review. Returns False
         when not holding, or when a transition since ``version`` already
         released the held text; the caller then types as usual.
         """
@@ -474,27 +477,33 @@ class VoiceTypeApp(RuntimeMixin):
             if text:
                 self._held.append(text)
             joined = " ".join(self._held)
-            if enter:
+            if enter or show:
                 self._held = []
             buf = self._session_texts
-        if not enter:
+        if not (enter or show):
             self._status(f'held: "{_preview(text)}"')
             return True
         if joined:
             self._status(f'typed: "{_preview(joined)}"')
+        elif show:
+            return True  # "ok show" with nothing held: nothing to show
         self._deliver(
             version,
-            lambda v, at: self._type(joined, v, at, buf, None, True),
+            lambda v, at: self._type(joined, v, at, buf, None, enter),
         )
         return True
 
-    def _split_submit_suffix(self, text: str) -> tuple[str, bool]:
-        """Split off a trailing submit suffix ("..., go go").
+    def _split_suffix(self, text: str) -> tuple[str, bool, bool]:
+        """Split off a trailing submit ("send it") or show ("ok show") phrase.
 
-        Returns the text to type and whether to press Enter after it.
+        Returns the text to type, whether to press Enter after it, and
+        whether a show phrase ended it (type held text, no Enter).
         """
         rest = strip_submit_suffix(text, self.cfg.submit_suffixes)
-        return (text, False) if rest is None else (rest, True)
+        if rest is not None:
+            return rest, True, False
+        rest = strip_submit_suffix(text, self.cfg.show_suffixes)
+        return (text, False, False) if rest is None else (rest, False, True)
 
     def _submit(self, version: int | None, at: float) -> None:
         """Press Enter for a submit phrase that arrived at ``at``.
