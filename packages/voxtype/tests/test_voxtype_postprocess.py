@@ -131,6 +131,12 @@ def test_big_cut_in_new_words_is_rejected() -> None:
     [
         ("we can't no sorry I can't", "I cannot.", None),
         (
+            "can you please review this pull request and tell me whether "
+            "all of the tests pass",
+            "I can.",
+            "lost most",
+        ),
+        (
             "can you do that refactor of the parser module now, and then "
             "rerun the whole test suite and tell me what fails",
             "Sure, I'll do that.",
@@ -138,7 +144,7 @@ def test_big_cut_in_new_words_is_rejected() -> None:
         ),
     ],
 )
-def test_big_cut_tolerates_one_reworded_word(
+def test_big_cut_allows_only_own_words(
     raw: str, cleaned: str, expected: str | None
 ) -> None:
     reason = rejection_reason(raw, cleaned)

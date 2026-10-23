@@ -135,6 +135,22 @@ def flatten_lines(text: str) -> str:
     return " ".join(text.split())
 
 
+# Words a cleanup may write out in full for a spoken contraction: the
+# pieces "can't" splits into ("can", "t") map to what they stand for.
+_CONTRACTED = {
+    "t": ("not", "cannot"),
+    "ll": ("will",),
+    "m": ("am",),
+    "re": ("are",),
+    "s": ("is", "has"),
+    "ve": ("have",),
+    "d": ("would", "had"),
+    "won": ("will",),
+    "gonna": ("going", "to"),
+    "wanna": ("want", "to"),
+}
+
+
 def _words(text: str) -> set[str]:
     """The distinct words and numbers of ``text``, case-folded."""
     return {w.casefold() for w in re.findall(r"[^\W_]+", text)}
@@ -174,17 +190,17 @@ def rejection_reason(raw: str, cleaned: str) -> str | None:
     )
     # A big cut is fine when the model only deleted ("..., scratch that,
     # hello" -> "Hello."): its output is then made of the user's own
-    # words, give or take one reworded word ("can't" -> "cannot"). A
-    # reply or summary ("OK.", "Sure, I'll do that.") brings in words the
-    # user never said. A short take formatted as a number ("one hundred
-    # twenty three kilograms" -> "123 kg") changes its words, so it is
-    # let through.
-    new_words = out_words - raw_words
-    foreign = not (out_words & raw_words) or len(new_words) > max(
-        1, len(out_words) // 4
-    )
+    # words, contractions spelled out ("can't" -> "cannot"). A reply or
+    # summary ("OK.", "I can.") brings in a word the user never said. A
+    # short take formatted as a number ("one hundred twenty three
+    # kilograms" -> "123 kg") changes its words, so it is let through.
+    raw_words |= {
+        full
+        for word in raw_words
+        for full in _CONTRACTED.get(word, ())
+    }
     number_format = n_raw <= 40 and re.search(r"\d", cleaned)
-    if shrank and foreign and not number_format:
+    if shrank and not out_words <= raw_words and not number_format:
         return "output lost most of the input"
     return None
 
