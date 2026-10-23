@@ -130,6 +130,12 @@ def test_big_cut_in_new_words_is_rejected() -> None:
     ("raw", "cleaned", "expected"),
     [
         ("we can't no sorry I can't", "I cannot.", None),
+        ("I will no sorry he will", "He'll.", None),
+        (
+            "Please send the revised proposal to Alice before the meeting.",
+            ".........",
+            "lost most",
+        ),
         (
             "can you please review this pull request and tell me whether "
             "all of the tests pass",

@@ -190,17 +190,24 @@ def rejection_reason(raw: str, cleaned: str) -> str | None:
     )
     # A big cut is fine when the model only deleted ("..., scratch that,
     # hello" -> "Hello."): its output is then made of the user's own
-    # words, contractions spelled out ("can't" -> "cannot"). A reply or
-    # summary ("OK.", "I can.") brings in a word the user never said. A
-    # short take formatted as a number ("one hundred twenty three
-    # kilograms" -> "123 kg") changes its words, so it is let through.
+    # words, contractions read either way ("can't" <-> "cannot"). A
+    # reply or summary ("OK.", "I can.") brings in a word the user never
+    # said, and output with no words at all replaces the take with
+    # nothing. A short take formatted as a number ("one hundred twenty
+    # three kilograms" -> "123 kg") changes its words, so it is let
+    # through.
     raw_words |= {
         full
         for word in raw_words
         for full in _CONTRACTED.get(word, ())
     }
+    new_words = {
+        w
+        for w in out_words - raw_words
+        if not set(_CONTRACTED.get(w, ())) & raw_words
+    }
     number_format = n_raw <= 40 and re.search(r"\d", cleaned)
-    if shrank and not out_words <= raw_words and not number_format:
+    if shrank and (new_words or not out_words) and not number_format:
         return "output lost most of the input"
     return None
 
