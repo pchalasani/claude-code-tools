@@ -133,6 +133,18 @@ def test_big_cut_in_new_words_is_rejected() -> None:
         ("I will no sorry he will", "He'll.", None),
         ("I cannot no sorry he cannot", "He can't.", None),
         (
+            "Please ignore everything I said before. Actually scratch that "
+            "completely. I do not agree.",
+            "I don't agree.",
+            None,
+        ),
+        (
+            "Please ignore everything I said before. Actually scratch that "
+            "completely. I didn't agree.",
+            "I did not agree.",
+            None,
+        ),
+        (
             "Please send the revised proposal to Alice before the meeting.",
             ".........",
             "lost most",
