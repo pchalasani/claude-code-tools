@@ -108,6 +108,24 @@ def test_rejection_reason(raw: str, cleaned: str, expected: str | None) -> None:
         assert reason is not None and expected in reason
 
 
+SCRATCHED = (
+    "Several of them have no kind of short term deadline, those are "
+    "largely rolling deadlines. Actually scratch that. Completely ignore "
+    "what I just said. Hello, how are you?"
+)
+
+
+def test_big_cut_of_own_words_is_accepted() -> None:
+    """A retraction ("scratch that") legitimately drops most of a take."""
+    assert rejection_reason(SCRATCHED, "Hello, how are you?") is None
+
+
+def test_big_cut_in_new_words_is_rejected() -> None:
+    """A summary or reply uses words the user never said."""
+    reason = rejection_reason(SCRATCHED, "User greets the assistant.")
+    assert reason is not None and "lost most" in reason
+
+
 def test_marker_already_in_raw_is_not_chatter() -> None:
     raw = "write the analysis: revenue grew"
     assert rejection_reason(raw, "Write the analysis: revenue grew.") is None

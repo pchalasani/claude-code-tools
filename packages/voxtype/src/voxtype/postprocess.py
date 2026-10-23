@@ -135,13 +135,19 @@ def flatten_lines(text: str) -> str:
     return " ".join(text.split())
 
 
+def _words(text: str) -> set[str]:
+    """The distinct words of ``text``, case-folded, digits excluded."""
+    return {w.casefold() for w in re.findall(r"[^\W\d_]+", text)}
+
+
 def rejection_reason(raw: str, cleaned: str) -> str | None:
     """Return why ``cleaned`` must not replace ``raw``, or None if it may.
 
     The rules follow Muesli's (expansion limits, assistant chatter) plus
     two of our own: an empty result is rejected (voxtype's regex has
     already removed pure-filler takes, so emptiness here means the model
-    dropped real words), and so is a result that lost most of the input.
+    dropped real words), and so is a much shorter result that uses words
+    the user never said (a reply or summary rather than a cleanup).
     """
     if not cleaned.strip():
         return "empty output"
@@ -160,21 +166,20 @@ def rejection_reason(raw: str, cleaned: str) -> str | None:
         limit, floor = 2.0, 200
     if n_out > floor and n_out > limit * n_raw:
         return "output much longer than input"
-    if n_raw > 40 and n_out < 0.35 * n_raw:
-        return "output lost most of the input"
-    # Short takes too: a reply like "OK." must not replace a dictated
-    # sentence. A much shorter output is only accepted if it keeps some
-    # of the dictated words ("Tuesday no sorry Wednesday" -> "Wednesday.")
-    # or formats a number ("one hundred twenty three kilograms" -> "123 kg").
-    raw_words = {w.casefold() for w in re.findall(r"[^\W\d_]+", raw)}
-    out_words = {w.casefold() for w in re.findall(r"[^\W\d_]+", cleaned)}
-    if (
+    raw_words = _words(raw)
+    out_words = _words(cleaned)
+    shrank = (n_raw > 40 and n_out < 0.35 * n_raw) or (
         len(raw.split()) >= 4
         and len(cleaned.split()) < 0.35 * len(raw.split())
-        and out_words
-        and not out_words & raw_words
-        and not re.search(r"\d", cleaned)
-    ):
+    )
+    # A big cut is fine when the model only deleted ("..., scratch that,
+    # hello" -> "Hello."): its output is then made of the user's own
+    # words. A reply or summary brings in words the user never said. A
+    # short take formatted as a number ("one hundred twenty three
+    # kilograms" -> "123 kg") changes its words, so it is let through.
+    new_words = out_words - raw_words
+    number_format = n_raw <= 40 and re.search(r"\d", cleaned)
+    if shrank and len(new_words) > len(out_words) // 10 and not number_format:
         return "output lost most of the input"
     return None
 
