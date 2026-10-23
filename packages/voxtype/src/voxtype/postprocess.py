@@ -136,8 +136,8 @@ def flatten_lines(text: str) -> str:
 
 
 def _words(text: str) -> set[str]:
-    """The distinct words of ``text``, case-folded, digits excluded."""
-    return {w.casefold() for w in re.findall(r"[^\W\d_]+", text)}
+    """The distinct words and numbers of ``text``, case-folded."""
+    return {w.casefold() for w in re.findall(r"[^\W_]+", text)}
 
 
 def rejection_reason(raw: str, cleaned: str) -> str | None:

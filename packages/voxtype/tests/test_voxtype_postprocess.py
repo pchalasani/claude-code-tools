@@ -126,6 +126,12 @@ def test_big_cut_in_new_words_is_rejected() -> None:
     assert reason is not None and "lost most" in reason
 
 
+def test_big_cut_to_a_number_never_said_is_rejected() -> None:
+    raw = "Please send the revised proposal to Alice before the meeting."
+    reason = rejection_reason(raw, "42")
+    assert reason is not None and "lost most" in reason
+
+
 def test_marker_already_in_raw_is_not_chatter() -> None:
     raw = "write the analysis: revenue grew"
     assert rejection_reason(raw, "Write the analysis: revenue grew.") is None
