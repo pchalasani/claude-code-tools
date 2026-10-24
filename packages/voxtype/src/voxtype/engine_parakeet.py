@@ -574,8 +574,10 @@ class ParakeetEngine:
         Audio already queued in the stream now is dropped before ``done``;
         audio that arrives after this call is kept.
         """
-        self._request("reset")
-        self._request((done, self._queued_frames()))  # type: ignore[arg-type]
+        ack = (done, self._queued_frames())
+        self._last_command = time.monotonic()
+        with self._cmd_lock:  # together: capture cannot resume between
+            self._commands.extend(["reset", ack])  # type: ignore[list-item]
 
     def _queued_frames(self) -> int:
         """Frames waiting unread in the open input stream (0 if none)."""
