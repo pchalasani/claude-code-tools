@@ -745,8 +745,11 @@ class ParakeetEngine:
             return
         acks, self._reset_acks = self._reset_acks, []
         stale = min(max(q for _, q in acks), self._queued_frames())
-        if stale > 0:
-            stream.read(stale)
+        try:
+            if stale > 0:
+                stream.read(stale)
+        except Exception as e:  # never strand a discard: confirm anyway
+            self._report(f"dropping pre-discard audio failed: {e}")
         for done, _ in acks:
             self._safe_call(done, "reset callback")
 

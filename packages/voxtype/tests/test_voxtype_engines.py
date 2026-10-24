@@ -1402,3 +1402,18 @@ def test_reset_then_calls_back_after_the_reset_is_applied() -> None:
     assert order == ["reset", "drop 1600", "done"]
     eng._confirm_resets(stream)  # nothing pending: no read
     assert order == ["reset", "drop 1600", "done"]
+
+
+def test_reset_then_confirms_even_if_dropping_audio_fails() -> None:
+    from voxtype.engine_parakeet import ParakeetEngine
+
+    done: list[bool] = []
+
+    def broken_read(n: int) -> None:
+        raise OSError("stream gone")
+
+    eng = ParakeetEngine(Config(engine="parakeet"), lambda m: None)
+    eng._stream = SimpleNamespace(read_available=800, read=broken_read)
+    eng._reset_acks = [(lambda: done.append(True), 800)]
+    eng._confirm_resets(eng._stream)
+    assert done == [True]
