@@ -514,6 +514,13 @@ class ParakeetEngine:
         # never be replayed ahead of the hold-start it followed.
         self._cmd_lock = threading.Lock()
         self._commands: deque[str] = deque()
+        # request_reset_then callbacks, each with the stream position
+        # (frames read so far + frames queued) at the keypress.
+        self._reset_acks: list[tuple[Callable[[], None], int]] = []
+        self._frames_read = 0
+        # Held across each stream read and its count, so a discard's
+        # boundary snapshot always sees one consistent stream position.
+        self._pos_lock = threading.Lock()
         # When the last cross-thread command ARRIVED (stamped in
         # _request, so it covers commands not yet drained by the
         # worker). The MLX keepalive holds off for a grace period
@@ -565,6 +572,26 @@ class ParakeetEngine:
         into the first dictated utterance.
         """
         self._request("reset")
+
+    def request_reset_then(self, done: Callable[[], None]) -> None:
+        """``request_reset``, then call ``done`` on the worker once applied.
+
+        Anything delivered before ``done`` runs was spoken before the reset.
+        Audio already queued in the stream now is dropped before ``done``;
+        audio that arrives after this call is kept.
+        """
+        with self._pos_lock:
+            ack = (done, self._frames_read + self._queued_frames())
+        self._last_command = time.monotonic()
+        with self._cmd_lock:  # together: capture cannot resume between
+            self._commands.extend(["reset", ack])  # type: ignore[list-item]
+
+    def _queued_frames(self) -> int:
+        """Frames waiting unread in the open input stream (0 if none)."""
+        try:
+            return int(getattr(self._stream, "read_available", 0) or 0)
+        except Exception:
+            return 0
 
     def request_hold_start(self) -> None:
         """Begin a hold-mode recording (toggle-on in "hold" segmentation).
@@ -716,6 +743,28 @@ class ParakeetEngine:
                 f"{elapsed:.2f}s"
             )
 
+    def _confirm_resets(self, stream) -> None:  # noqa: ANN001
+        """Run request_reset_then callbacks once their reset is applied.
+
+        Audio that was queued unread in the stream when the reset was
+        requested (spoken during a slow decode) predates it too, so it
+        is read and dropped first; audio queued after that is kept.
+        """
+        if not self._reset_acks:
+            return
+        acks, self._reset_acks = self._reset_acks, []
+        boundary = max(b for _, b in acks)
+        stale = min(boundary - self._frames_read, self._queued_frames())
+        try:
+            if stale > 0:
+                with self._pos_lock:
+                    stream.read(stale)
+                    self._frames_read += stale
+        except Exception as e:  # never strand a discard: confirm anyway
+            self._report(f"dropping pre-discard audio failed: {e}")
+        for done, _ in acks:
+            self._safe_call(done, "reset callback")
+
     def _safe_call(self, fn: Callable[[], None], name: str) -> None:
         """Invoke a client callback; never let its exception escape.
 
@@ -866,6 +915,7 @@ class ParakeetEngine:
                 )
                 while not self._stop.is_set():
                     self._process_commands(on_utterance, np)
+                    self._confirm_resets(stream)
                     self._keepalive_tick()
                     samples = self._read_samples(
                         stream, read_size, native_rate, np
@@ -1003,7 +1053,9 @@ class ParakeetEngine:
                 if not self._commands:
                     return
                 command = self._commands.popleft()
-            if command == "reset":
+            if isinstance(command, tuple):  # see _confirm_resets
+                self._reset_acks.append(command)
+            elif command == "reset":
                 try:
                     self._vad.reset()
                 except Exception as e:
@@ -1114,7 +1166,9 @@ class ParakeetEngine:
         that would break the AGC/VAD/decoder downstream. The result is
         always a nonempty 1-D finite float32 array.
         """
-        result = stream.read(read_size)
+        with self._pos_lock:
+            result = stream.read(read_size)
+            self._frames_read += read_size
         if isinstance(result, tuple):
             if not result:
                 return None

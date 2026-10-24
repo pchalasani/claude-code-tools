@@ -222,6 +222,10 @@ class Config:
             WHILE recording, and never in hands-free mode ("vad");
             otherwise the key passes through to the focused app. Empty
             disables.
+        discard_hotkey: Hands-free mode ("vad") only: chord that throws
+            away everything held since the last submit, types nothing,
+            and keeps listening (default Shift+Escape). Passes through
+            to the focused app when not listening. Empty disables.
     """
 
     mode: str = "toggle"
@@ -283,6 +287,7 @@ class Config:
     copy_to_clipboard: bool = False
     paste_hotkey: str = ""
     cancel_hotkey: str = "<esc>"
+    discard_hotkey: str = "<shift>+<esc>"
 
     def __post_init__(self) -> None:
         # Resolve the smart segmentation default now that engine and mode
@@ -475,6 +480,7 @@ class Config:
             "sound_stop",
             "paste_hotkey",
             "cancel_hotkey",
+            "discard_hotkey",
         ):
             if not isinstance(getattr(self, field_name), str):
                 raise ValueError(f"{field_name} must be a string")
@@ -847,6 +853,10 @@ paste_hotkey = ""
 # otherwise the key reaches the focused app normally. Empty string
 # disables.
 cancel_hotkey = "<esc>"
+
+# Hands-free mode ("vad") only: throw away everything held since the last
+# submit, type nothing, keep listening. Empty disables.
+discard_hotkey = "<shift>+<esc>"
 '''
 
 

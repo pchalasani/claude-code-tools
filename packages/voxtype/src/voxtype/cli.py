@@ -324,6 +324,7 @@ while recording:
   say "go"/"over"/"submit" alone -> press Enter
   end with "send it"/"ok go"/"over and out" -> type the rest, press Enter
   end with "ok show"/"type it" (hands-free) -> type held text, no Enter
+  Shift+Esc (hands-free) -> discard held text, keep listening
   say "stop listening" -> stop dictating (vad segmentation only)
 
 config file: ~/.config/voxtype/config.toml (all flags + more:
