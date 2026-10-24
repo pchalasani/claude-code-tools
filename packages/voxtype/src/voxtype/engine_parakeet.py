@@ -514,7 +514,7 @@ class ParakeetEngine:
         # never be replayed ahead of the hold-start it followed.
         self._cmd_lock = threading.Lock()
         self._commands: deque[str] = deque()
-        self._reset_acks: list[Callable[[], None]] = []
+        self._reset_acks: list[tuple[Callable[[], None], int]] = []
         # When the last cross-thread command ARRIVED (stamped in
         # _request, so it covers commands not yet drained by the
         # worker). The MLX keepalive holds off for a grace period
@@ -571,9 +571,18 @@ class ParakeetEngine:
         """``request_reset``, then call ``done`` on the worker once applied.
 
         Anything delivered before ``done`` runs was spoken before the reset.
+        Audio already queued in the stream now is dropped before ``done``;
+        audio that arrives after this call is kept.
         """
         self._request("reset")
-        self._request(done)  # type: ignore[arg-type]
+        self._request((done, self._queued_frames()))  # type: ignore[arg-type]
+
+    def _queued_frames(self) -> int:
+        """Frames waiting unread in the open input stream (0 if none)."""
+        try:
+            return int(getattr(self._stream, "read_available", 0) or 0)
+        except Exception:
+            return 0
 
     def request_hold_start(self) -> None:
         """Begin a hold-mode recording (toggle-on in "hold" segmentation).
@@ -728,16 +737,17 @@ class ParakeetEngine:
     def _confirm_resets(self, stream) -> None:  # noqa: ANN001
         """Run request_reset_then callbacks once their reset is applied.
 
-        Audio still queued in the stream (spoken during a slow decode)
-        predates the reset too, so it is read and dropped first.
+        Audio that was queued unread in the stream when the reset was
+        requested (spoken during a slow decode) predates it too, so it
+        is read and dropped first; audio queued after that is kept.
         """
         if not self._reset_acks:
             return
-        queued = int(getattr(stream, "read_available", 0) or 0)
-        if queued > 0:
-            stream.read(queued)
         acks, self._reset_acks = self._reset_acks, []
-        for done in acks:
+        stale = min(max(q for _, q in acks), self._queued_frames())
+        if stale > 0:
+            stream.read(stale)
+        for done, _ in acks:
             self._safe_call(done, "reset callback")
 
     def _safe_call(self, fn: Callable[[], None], name: str) -> None:
@@ -1028,7 +1038,7 @@ class ParakeetEngine:
                 if not self._commands:
                     return
                 command = self._commands.popleft()
-            if callable(command):  # request_reset_then: see _confirm_resets
+            if isinstance(command, tuple):  # see _confirm_resets
                 self._reset_acks.append(command)
             elif command == "reset":
                 try:

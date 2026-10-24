@@ -1388,14 +1388,16 @@ def test_reset_then_calls_back_after_the_reset_is_applied() -> None:
     order: list[str] = []
     eng = ParakeetEngine(Config(engine="parakeet"), lambda m: None)
     eng._vad = SimpleNamespace(reset=lambda: order.append("reset"))
-    eng.request_reset_then(lambda: order.append("done"))
-    eng._process_commands(lambda t: None, np)
-    assert order == ["reset"]
-    # Audio queued during a slow decode predates the reset: dropped
-    # before the callback confirms it.
     stream = SimpleNamespace(
         read_available=1600, read=lambda n: order.append(f"drop {n}")
     )
+    eng._stream = stream
+    eng.request_reset_then(lambda: order.append("done"))  # 1600 queued
+    stream.read_available = 4000  # new speech arrives after the keypress
+    eng._process_commands(lambda t: None, np)
+    assert order == ["reset"]
+    # Only the audio queued at the keypress (spoken during a slow
+    # decode) is dropped; what came after it is kept.
     eng._confirm_resets(stream)
     assert order == ["reset", "drop 1600", "done"]
     eng._confirm_resets(stream)  # nothing pending: no read
