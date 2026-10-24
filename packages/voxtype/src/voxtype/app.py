@@ -345,6 +345,8 @@ class VoiceTypeApp(RuntimeMixin):
         without that confirmation) for ``DISCARD_GRACE`` seconds.
         Listening continues.
         """
+        if not self._ready.is_set():
+            return  # engine still starting: it would drop the reset
         reset_then = getattr(self._engine, "request_reset_then", None)
         with self._order_lock:
             with self._lock:

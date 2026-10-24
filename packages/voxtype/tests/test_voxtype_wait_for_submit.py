@@ -387,3 +387,14 @@ def test_discard_drops_speech_until_the_engine_confirms_reset(make_app) -> None:
     app._engine.apply()
     app.handle_utterance("New words. Send it.")
     assert app.typist.events == ["New words. ", "<ENTER>"]
+
+
+def test_discard_before_engine_ready_is_ignored(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app._engine = ConfirmingEngine()
+    app._ready.clear()  # engine still starting
+    app.discard()
+    assert app._engine.pending == []
+    app._ready.set()
+    app.handle_utterance("Words. Send it.")
+    assert app.typist.events == ["Words. ", "<ENTER>"]
