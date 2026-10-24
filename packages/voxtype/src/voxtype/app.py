@@ -107,6 +107,9 @@ class VoiceTypeApp(RuntimeMixin):
         # Hands-free wait_for_submit: pieces held back until a submit
         # phrase (see _hold_text); typed without Enter on deactivation.
         self._held: list[str] = []
+        # Until this time, utterances are dropped: speech said before a
+        # discard (Shift+Esc) that was still being transcribed.
+        self._discard_until = 0.0
         # Utterance handling and state transitions take turns, so text
         # released by a toggle-off is always queued before a trailing
         # utterance that toggle lets through. Re-entrant: the stop phrase
@@ -216,6 +219,9 @@ class VoiceTypeApp(RuntimeMixin):
     #: Seconds after a toggle-off during which an in-flight utterance
     #: (speech finished just before the toggle) is still committed.
     TOGGLE_GRACE = 2.0
+    #: After a discard, how long a transcript still counts as speech from
+    #: before it (the engine finishes the segment it is decoding first).
+    DISCARD_GRACE = 1.0
 
 
     #: Ignore a second toggle within this window: macro keys (e.g. UHK)
@@ -326,6 +332,32 @@ class VoiceTypeApp(RuntimeMixin):
             reset()
         self._status("recording cancelled (discarded)")
 
+    def discard(self) -> None:
+        """Discard-hotkey handler (hands-free): drop held text, keep going.
+
+        Everything held since the last submit is thrown away and nothing
+        is typed. The engine drops the speech it is buffering, and a
+        transcript of earlier speech still being decoded is dropped when
+        it arrives. Listening continues.
+        """
+        with self._order_lock:
+            with self._lock:
+                if self._state != State.ACTIVE:
+                    return
+                dropped, self._held = len(self._held), []
+                self._discard_until = time.monotonic() + self.DISCARD_GRACE
+        reset = getattr(self._engine, "request_reset", None)
+        if reset is not None:
+            reset()
+        self._status(f"discarded {dropped} held piece(s); still listening")
+
+    def _is_discardable(self) -> bool:
+        """Whether the discard hotkey (Shift+Esc) is intercepted now."""
+        if self.cfg.mode != "vad":
+            return False
+        with self._lock:
+            return self._state == State.ACTIVE
+
     def _is_recording(self) -> bool:
         """Whether the cancel hotkey (Esc) is intercepted right now.
 
@@ -435,6 +467,9 @@ class VoiceTypeApp(RuntimeMixin):
                 )
             return
         # ACTIVE
+        if arrived < self._discard_until:
+            self._status(f'discarded in flight: "{_preview(text)}"')
+            return
         if any(
             is_exact_phrase(text, p) for p in self.cfg.submit_phrases
         ):
