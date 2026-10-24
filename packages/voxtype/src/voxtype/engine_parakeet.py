@@ -514,6 +514,7 @@ class ParakeetEngine:
         # never be replayed ahead of the hold-start it followed.
         self._cmd_lock = threading.Lock()
         self._commands: deque[str] = deque()
+        self._reset_acks: list[Callable[[], None]] = []
         # When the last cross-thread command ARRIVED (stamped in
         # _request, so it covers commands not yet drained by the
         # worker). The MLX keepalive holds off for a grace period
@@ -724,6 +725,21 @@ class ParakeetEngine:
                 f"{elapsed:.2f}s"
             )
 
+    def _confirm_resets(self, stream) -> None:  # noqa: ANN001
+        """Run request_reset_then callbacks once their reset is applied.
+
+        Audio still queued in the stream (spoken during a slow decode)
+        predates the reset too, so it is read and dropped first.
+        """
+        if not self._reset_acks:
+            return
+        queued = int(getattr(stream, "read_available", 0) or 0)
+        if queued > 0:
+            stream.read(queued)
+        acks, self._reset_acks = self._reset_acks, []
+        for done in acks:
+            self._safe_call(done, "reset callback")
+
     def _safe_call(self, fn: Callable[[], None], name: str) -> None:
         """Invoke a client callback; never let its exception escape.
 
@@ -874,6 +890,7 @@ class ParakeetEngine:
                 )
                 while not self._stop.is_set():
                     self._process_commands(on_utterance, np)
+                    self._confirm_resets(stream)
                     self._keepalive_tick()
                     samples = self._read_samples(
                         stream, read_size, native_rate, np
@@ -1011,8 +1028,8 @@ class ParakeetEngine:
                 if not self._commands:
                     return
                 command = self._commands.popleft()
-            if callable(command):  # request_reset_then's callback
-                self._safe_call(command, "reset callback")
+            if callable(command):  # request_reset_then: see _confirm_resets
+                self._reset_acks.append(command)
             elif command == "reset":
                 try:
                     self._vad.reset()

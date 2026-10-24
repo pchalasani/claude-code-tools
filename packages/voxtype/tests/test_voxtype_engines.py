@@ -1390,4 +1390,13 @@ def test_reset_then_calls_back_after_the_reset_is_applied() -> None:
     eng._vad = SimpleNamespace(reset=lambda: order.append("reset"))
     eng.request_reset_then(lambda: order.append("done"))
     eng._process_commands(lambda t: None, np)
-    assert order == ["reset", "done"]
+    assert order == ["reset"]
+    # Audio queued during a slow decode predates the reset: dropped
+    # before the callback confirms it.
+    stream = SimpleNamespace(
+        read_available=1600, read=lambda n: order.append(f"drop {n}")
+    )
+    eng._confirm_resets(stream)
+    assert order == ["reset", "drop 1600", "done"]
+    eng._confirm_resets(stream)  # nothing pending: no read
+    assert order == ["reset", "drop 1600", "done"]
