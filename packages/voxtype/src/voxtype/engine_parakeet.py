@@ -514,7 +514,10 @@ class ParakeetEngine:
         # never be replayed ahead of the hold-start it followed.
         self._cmd_lock = threading.Lock()
         self._commands: deque[str] = deque()
+        # request_reset_then callbacks, each with the stream position
+        # (frames read so far + frames queued) at the keypress.
         self._reset_acks: list[tuple[Callable[[], None], int]] = []
+        self._frames_read = 0
         # When the last cross-thread command ARRIVED (stamped in
         # _request, so it covers commands not yet drained by the
         # worker). The MLX keepalive holds off for a grace period
@@ -574,7 +577,9 @@ class ParakeetEngine:
         Audio already queued in the stream now is dropped before ``done``;
         audio that arrives after this call is kept.
         """
-        ack = (done, self._queued_frames())
+        # Position read first: a capture read between the two only
+        # under-counts, and the frames it took are wiped by the reset.
+        ack = (done, self._frames_read + self._queued_frames())
         self._last_command = time.monotonic()
         with self._cmd_lock:  # together: capture cannot resume between
             self._commands.extend(["reset", ack])  # type: ignore[list-item]
@@ -746,10 +751,12 @@ class ParakeetEngine:
         if not self._reset_acks:
             return
         acks, self._reset_acks = self._reset_acks, []
-        stale = min(max(q for _, q in acks), self._queued_frames())
+        boundary = max(b for _, b in acks)
+        stale = min(boundary - self._frames_read, self._queued_frames())
         try:
             if stale > 0:
                 stream.read(stale)
+                self._frames_read += stale
         except Exception as e:  # never strand a discard: confirm anyway
             self._report(f"dropping pre-discard audio failed: {e}")
         for done, _ in acks:
@@ -1157,6 +1164,7 @@ class ParakeetEngine:
         always a nonempty 1-D finite float32 array.
         """
         result = stream.read(read_size)
+        self._frames_read += read_size
         if isinstance(result, tuple):
             if not result:
                 return None

@@ -1417,3 +1417,22 @@ def test_reset_then_confirms_even_if_dropping_audio_fails() -> None:
     eng._reset_acks = [(lambda: done.append(True), 800)]
     eng._confirm_resets(eng._stream)
     assert done == [True]
+
+
+def test_reset_then_never_drops_audio_read_after_the_keypress() -> None:
+    """A capture read between the keypress and the reset takes stale
+    frames itself; only what is still stale is dropped, never new ones."""
+    from voxtype.engine_parakeet import ParakeetEngine
+
+    dropped: list[int] = []
+    eng = ParakeetEngine(Config(engine="parakeet"), lambda m: None)
+    stream = SimpleNamespace(read_available=1600, read=dropped.append)
+    eng._stream = stream
+    eng.request_reset_then(lambda: None)  # boundary: 0 read + 1600 queued
+    eng._frames_read += 1600  # capture read the 1600 stale frames
+    stream.read_available = 1600  # all of it new speech
+    with eng._cmd_lock:
+        eng._commands.clear()
+        eng._reset_acks = [(lambda: None, 1600)]
+    eng._confirm_resets(stream)
+    assert dropped == []
