@@ -184,7 +184,7 @@ class RuntimeMixin:
         hotkey just doesn't work".
 
         Each configured chord is validated independently, so one
-        malformed OPTIONAL binding (paste/cancel) only disables itself
+        malformed OPTIONAL binding (paste/cancel/discard) only disables itself
         — a typo in cancel_hotkey must never take the toggle hotkey
         (and with it all of toggle mode) down.
         """
@@ -210,6 +210,19 @@ class RuntimeMixin:
                         self.cfg.cancel_hotkey,
                         self.cancel,
                         self._is_recording,
+                    ),
+                )
+            )
+        if self.cfg.discard_hotkey and self.cfg.mode == "vad":
+            # Hands-free only, and only while listening: drops the held
+            # text; passes through to the focused app when paused.
+            candidates.append(
+                (
+                    "discard",
+                    (
+                        self.cfg.discard_hotkey,
+                        self.discard,
+                        self._is_discardable,
                     ),
                 )
             )

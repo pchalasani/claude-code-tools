@@ -102,7 +102,8 @@ options; common ones:
     `post_process_log_text = false` drops the full before/after text
     from the logs (voxtype's short `typed: "…"` previews remain).
 - `wake_word` / `wake_word_aliases`, `submit_phrases`, `overlay`,
-  `paste_hotkey`, `cancel_hotkey`, `copy_to_clipboard`, and more.
+  `paste_hotkey`, `cancel_hotkey`, `discard_hotkey` (hands-free: Shift+Esc
+  drops held text), `copy_to_clipboard`, and more.
 - `submit_suffixes` (default `["ok go", "okay go", "now go", "go do it",
   "go to it", "send it", "over and out"]`): ending a dictation with one types the
   words before it, then presses Enter, with no pause.

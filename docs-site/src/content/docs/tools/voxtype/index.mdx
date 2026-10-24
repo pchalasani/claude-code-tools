@@ -171,6 +171,7 @@ turns on local cleanup for that run.
 |--------|---------|-----------------|
 | Toggle recording | `Ctrl+;` | `hotkey` |
 | Cancel recording (discard) | `Esc` (only while recording; not hands-free) | `cancel_hotkey` |
+| Discard held text (hands-free) | `Shift+Esc` (keeps listening) | `discard_hotkey` |
 | Re-type last transcript | off | `paste_hotkey` |
 | Submit (press Enter) | say "go" / "over" / "submit" | `submit_phrases` |
 | Type, then submit | end with "…, send it", "…, go do it", "…, ok go" or "…, over and out" | `submit_suffixes` |
@@ -199,7 +200,9 @@ typed as one piece and sent. With LLM cleanup on, that piece is cleaned
 as a whole, so a list spread over several pauses still comes out as one
 list. `Ctrl+;` pauses listening (say, while
 you talk to someone) and types anything held, without Enter. `Esc` is
-left alone in this mode, so it keeps working in your apps. Set
+left alone in this mode, so it keeps working in your apps; to throw away
+what you've said since the last submit, press `Shift+Esc` instead.
+Nothing is typed and voxtype keeps listening (`discard_hotkey`). Set
 `wait_for_submit = false` to have each piece typed as soon as you pause
 instead.
 
@@ -219,7 +222,7 @@ that trip you up.
 Not sure how to spell a chord for the hotkey settings
 above? Run `voxtype hotkey`, press the combo you want,
 and it prints a ready-to-paste `hotkey = "..."` line
-(use the same chord string for `cancel_hotkey` /
+(use the same chord string for `cancel_hotkey` / `discard_hotkey` /
 `paste_hotkey`).
 
 Full reference: [Configuration & CLI](./configuration/).

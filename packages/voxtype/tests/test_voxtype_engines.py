@@ -1378,3 +1378,61 @@ def test_capture_loop_invokes_keepalive_tick(monkeypatch) -> None:
     holder["factory"] = lambda **kw: ScriptedStream(script)
     eng._capture_session(lambda text: None, lambda: None)
     assert len(ticks) == 3
+
+
+def test_reset_then_calls_back_after_the_reset_is_applied() -> None:
+    import numpy as np
+
+    from voxtype.engine_parakeet import ParakeetEngine
+
+    order: list[str] = []
+    eng = ParakeetEngine(Config(engine="parakeet"), lambda m: None)
+    eng._vad = SimpleNamespace(reset=lambda: order.append("reset"))
+    stream = SimpleNamespace(
+        read_available=1600, read=lambda n: order.append(f"drop {n}")
+    )
+    eng._stream = stream
+    eng.request_reset_then(lambda: order.append("done"))  # 1600 queued
+    stream.read_available = 4000  # new speech arrives after the keypress
+    eng._process_commands(lambda t: None, np)
+    assert order == ["reset"]
+    # Only the audio queued at the keypress (spoken during a slow
+    # decode) is dropped; what came after it is kept.
+    eng._confirm_resets(stream)
+    assert order == ["reset", "drop 1600", "done"]
+    eng._confirm_resets(stream)  # nothing pending: no read
+    assert order == ["reset", "drop 1600", "done"]
+
+
+def test_reset_then_confirms_even_if_dropping_audio_fails() -> None:
+    from voxtype.engine_parakeet import ParakeetEngine
+
+    done: list[bool] = []
+
+    def broken_read(n: int) -> None:
+        raise OSError("stream gone")
+
+    eng = ParakeetEngine(Config(engine="parakeet"), lambda m: None)
+    eng._stream = SimpleNamespace(read_available=800, read=broken_read)
+    eng._reset_acks = [(lambda: done.append(True), 800)]
+    eng._confirm_resets(eng._stream)
+    assert done == [True]
+
+
+def test_reset_then_never_drops_audio_read_after_the_keypress() -> None:
+    """A capture read between the keypress and the reset takes stale
+    frames itself; only what is still stale is dropped, never new ones."""
+    from voxtype.engine_parakeet import ParakeetEngine
+
+    dropped: list[int] = []
+    eng = ParakeetEngine(Config(engine="parakeet"), lambda m: None)
+    stream = SimpleNamespace(read_available=1600, read=dropped.append)
+    eng._stream = stream
+    eng.request_reset_then(lambda: None)  # boundary: 0 read + 1600 queued
+    eng._frames_read += 1600  # capture read the 1600 stale frames
+    stream.read_available = 1600  # all of it new speech
+    with eng._cmd_lock:
+        eng._commands.clear()
+        eng._reset_acks = [(lambda: None, 1600)]
+    eng._confirm_resets(stream)
+    assert dropped == []

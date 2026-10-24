@@ -300,3 +300,101 @@ def test_ok_show_without_holding_strips_the_phrase(make_app) -> None:  # noqa: A
 def test_validate_rejects_bad_show_suffixes() -> None:
     with pytest.raises(ValueError, match="show_suffixes"):
         Config(show_suffixes=["ok show", ""]).validate()
+
+
+class ResetSpy:
+    """Engine stand-in that counts reset requests."""
+
+    def __init__(self) -> None:
+        self.resets = 0
+
+    def request_reset(self) -> None:
+        self.resets += 1
+
+
+def test_discard_drops_held_text_and_keeps_listening(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app._engine = ResetSpy()
+    app.handle_utterance("Something I said by accident.")
+    app.handle_utterance("More of it.")
+    app.discard()
+    assert app.typist.events == []
+    assert app._state.name == "ACTIVE"  # still listening
+    assert app._engine.resets == 1
+    app._discard_until = 0.0  # past the in-flight window
+    app.handle_utterance("What I meant. Send it.")
+    assert app.typist.events == ["What I meant. ", "<ENTER>"]
+
+
+def test_discard_drops_speech_still_in_flight(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance("Held words.")
+    app.discard()
+    app.handle_utterance("Said before the discard. Send it.")
+    assert app.typist.events == []
+
+
+def test_discard_hotkey_only_intercepted_while_listening_hands_free(
+    make_app,  # noqa: ANN001
+) -> None:
+    assert make_app(mode="toggle")._is_discardable() is False
+    app = make_app(mode="vad")
+    assert app._is_discardable() is True
+    app.toggle()  # pause
+    assert app._is_discardable() is False
+    app.discard()  # paused: a no-op
+    assert app.typist.events == []
+
+
+def test_discard_hotkey_default_and_validation() -> None:
+    assert Config().discard_hotkey == "<shift>+<esc>"
+    with pytest.raises(ValueError, match="discard_hotkey"):
+        Config(discard_hotkey=3).validate()  # type: ignore[arg-type]
+
+
+def test_discard_then_pause_still_drops_in_flight_speech(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance("Held words.")
+    app.discard()
+    app.toggle()  # pause right after
+    app.handle_utterance("Discarded words. Send it.")
+    assert app.typist.events == []
+
+
+class ConfirmingEngine:
+    """Engine stand-in that confirms a reset only when told to."""
+
+    def __init__(self) -> None:
+        self.pending: list = []
+
+    def request_reset_then(self, done) -> None:  # noqa: ANN001
+        self.pending.append(done)
+
+    def apply(self) -> None:
+        for done in self.pending:
+            done()
+        self.pending.clear()
+
+
+def test_discard_drops_speech_until_the_engine_confirms_reset(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app._engine = ConfirmingEngine()
+    app.handle_utterance("Held words.")
+    app.discard()
+    # A slow decode of earlier speech, however late, is still dropped.
+    app.handle_utterance("Said before the discard. Send it.")
+    assert app.typist.events == []
+    app._engine.apply()
+    app.handle_utterance("New words. Send it.")
+    assert app.typist.events == ["New words. ", "<ENTER>"]
+
+
+def test_discard_before_engine_ready_is_ignored(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app._engine = ConfirmingEngine()
+    app._ready.clear()  # engine still starting
+    app.discard()
+    assert app._engine.pending == []
+    app._ready.set()
+    app.handle_utterance("Words. Send it.")
+    assert app.typist.events == ["Words. ", "<ENTER>"]
