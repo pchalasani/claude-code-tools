@@ -3,7 +3,7 @@ title: "Alternative LLM Providers"
 description: >
   Use Claude Code with open-weight LLMs via
   Anthropic-compatible API providers like Kimi K2,
-  GLM-4.5, DeepSeek, and MiniMax M3.
+  GLM-4.5, DeepSeek, and MiniMax M3.1 Flash / M3.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
@@ -122,9 +122,9 @@ dseek -p "explain X"   # one-shot prompt
 ```
 
 </TabItem>
-<TabItem label="MiniMax M3">
+<TabItem label="MiniMax M3.1 Flash / M3">
 
-[MiniMax M3](https://platform.minimax.io/docs/token-plan/claude-code.md)
+[MiniMax M3.1 Flash and M3](https://platform.minimax.io/docs/token-plan/claude-code.md)
 from MiniMax.
 
 ```bash
@@ -132,26 +132,33 @@ ccmm() {
     (
         export ANTHROPIC_BASE_URL=https://api.minimax.io/anthropic
         export ANTHROPIC_AUTH_TOKEN=$MINIMAX_API_KEY
-        export CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000
-        export ANTHROPIC_MODEL='MiniMax-M3[1m]'
-        export ANTHROPIC_DEFAULT_SONNET_MODEL='MiniMax-M3[1m]'
-        export ANTHROPIC_DEFAULT_OPUS_MODEL='MiniMax-M3[1m]'
-        export ANTHROPIC_DEFAULT_HAIKU_MODEL='MiniMax-M3[1m]'
+        export CLAUDE_CODE_AUTO_COMPACT_WINDOW=524288
+        export ANTHROPIC_MODEL='MiniMax-M3.1-Flash[1m]'
+        export ANTHROPIC_DEFAULT_SONNET_MODEL='MiniMax-M3.1-Flash[1m]'
+        export ANTHROPIC_DEFAULT_OPUS_MODEL='MiniMax-M3.1-Flash[1m]'
+        export ANTHROPIC_DEFAULT_HAIKU_MODEL='MiniMax-M3.1-Flash[1m]'
         claude "$@"
     )
 }
 ```
 
 MiniMax maps the main, Sonnet, Opus, and Haiku model
-slots to `MiniMax-M3[1m]`. The auto-compact threshold
-matches the model's one-million-token context window.
+slots to `MiniMax-M3.1-Flash[1m]` by default. The
+`[1m]` suffix declares the one-million-token context
+window; auto-compaction uses the recommended 512K
+window (`524288`). Flash always enables thinking.
 
 **Usage:**
 
 ```bash
 ccmm                   # start interactive session
 ccmm -p "explain X"    # one-shot prompt
+ccmm --model 'MiniMax-M3[1m]'  # explicitly select M3
 ```
+
+Explicit `--model` arguments are passed through unchanged,
+including custom or legacy model IDs. The function does
+not edit your saved Claude Code settings.
 
 </TabItem>
 </Tabs>
