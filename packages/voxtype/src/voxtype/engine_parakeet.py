@@ -518,6 +518,9 @@ class ParakeetEngine:
         # (frames read so far + frames queued) at the keypress.
         self._reset_acks: list[tuple[Callable[[], None], int]] = []
         self._frames_read = 0
+        # Held across each stream read and its count, so a discard's
+        # boundary snapshot always sees one consistent stream position.
+        self._pos_lock = threading.Lock()
         # When the last cross-thread command ARRIVED (stamped in
         # _request, so it covers commands not yet drained by the
         # worker). The MLX keepalive holds off for a grace period
@@ -577,9 +580,8 @@ class ParakeetEngine:
         Audio already queued in the stream now is dropped before ``done``;
         audio that arrives after this call is kept.
         """
-        # Position read first: a capture read between the two only
-        # under-counts, and the frames it took are wiped by the reset.
-        ack = (done, self._frames_read + self._queued_frames())
+        with self._pos_lock:
+            ack = (done, self._frames_read + self._queued_frames())
         self._last_command = time.monotonic()
         with self._cmd_lock:  # together: capture cannot resume between
             self._commands.extend(["reset", ack])  # type: ignore[list-item]
@@ -755,8 +757,9 @@ class ParakeetEngine:
         stale = min(boundary - self._frames_read, self._queued_frames())
         try:
             if stale > 0:
-                stream.read(stale)
-                self._frames_read += stale
+                with self._pos_lock:
+                    stream.read(stale)
+                    self._frames_read += stale
         except Exception as e:  # never strand a discard: confirm anyway
             self._report(f"dropping pre-discard audio failed: {e}")
         for done, _ in acks:
@@ -1163,8 +1166,9 @@ class ParakeetEngine:
         that would break the AGC/VAD/decoder downstream. The result is
         always a nonempty 1-D finite float32 array.
         """
-        result = stream.read(read_size)
-        self._frames_read += read_size
+        with self._pos_lock:
+            result = stream.read(read_size)
+            self._frames_read += read_size
         if isinstance(result, tuple):
             if not result:
                 return None
