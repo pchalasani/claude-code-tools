@@ -110,6 +110,9 @@ class VoiceTypeApp(RuntimeMixin):
         # Until this time, utterances are dropped: speech said before a
         # discard (Shift+Esc) that was still being transcribed.
         self._discard_until = 0.0
+        # Discards whose engine reset has not been applied yet: until it
+        # is, every transcript delivered is of speech from before it.
+        self._discards_pending = 0
         # Utterance handling and state transitions take turns, so text
         # released by a toggle-off is always queued before a trailing
         # utterance that toggle lets through. Re-entrant: the stop phrase
@@ -219,8 +222,8 @@ class VoiceTypeApp(RuntimeMixin):
     #: Seconds after a toggle-off during which an in-flight utterance
     #: (speech finished just before the toggle) is still committed.
     TOGGLE_GRACE = 2.0
-    #: After a discard, how long a transcript still counts as speech from
-    #: before it (the engine finishes the segment it is decoding first).
+    #: For engines that cannot confirm a reset: how long after a discard
+    #: a transcript still counts as speech from before it.
     DISCARD_GRACE = 1.0
 
 
@@ -338,18 +341,34 @@ class VoiceTypeApp(RuntimeMixin):
         Everything held since the last submit is thrown away and nothing
         is typed. The engine drops the speech it is buffering, and a
         transcript of earlier speech still being decoded is dropped when
-        it arrives. Listening continues.
+        it arrives: until the engine confirms its reset, or (engines
+        without that confirmation) for ``DISCARD_GRACE`` seconds.
+        Listening continues.
         """
+        reset_then = getattr(self._engine, "request_reset_then", None)
         with self._order_lock:
             with self._lock:
                 if self._state != State.ACTIVE:
                     return
                 dropped, self._held = len(self._held), []
-                self._discard_until = time.monotonic() + self.DISCARD_GRACE
-        reset = getattr(self._engine, "request_reset", None)
-        if reset is not None:
-            reset()
+                if reset_then is not None:
+                    self._discards_pending += 1
+                else:
+                    self._discard_until = (
+                        time.monotonic() + self.DISCARD_GRACE
+                    )
+        if reset_then is not None:
+            reset_then(self._discard_applied)
+        else:
+            reset = getattr(self._engine, "request_reset", None)
+            if reset is not None:
+                reset()
         self._status(f"discarded {dropped} held piece(s); still listening")
+
+    def _discard_applied(self) -> None:
+        """Engine callback: a discard's reset is applied; speech is new."""
+        with self._lock:
+            self._discards_pending = max(0, self._discards_pending - 1)
 
     def _is_discardable(self) -> bool:
         """Whether the discard hotkey (Shift+Esc) is intercepted now."""
@@ -414,7 +433,11 @@ class VoiceTypeApp(RuntimeMixin):
                 if self.cfg.segmentation == "hold" and self._last_hold_stop
                 else None
             )
-        if arrived < self._discard_until:
+        with self._lock:
+            pre_discard = (
+                self._discards_pending > 0 or arrived < self._discard_until
+            )
+        if pre_discard:
             # Speech from before a discard, even if a pause followed it.
             self._status(f'discarded in flight: "{_preview(text)}"')
             return

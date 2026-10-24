@@ -359,3 +359,31 @@ def test_discard_then_pause_still_drops_in_flight_speech(make_app) -> None:  # n
     app.toggle()  # pause right after
     app.handle_utterance("Discarded words. Send it.")
     assert app.typist.events == []
+
+
+class ConfirmingEngine:
+    """Engine stand-in that confirms a reset only when told to."""
+
+    def __init__(self) -> None:
+        self.pending: list = []
+
+    def request_reset_then(self, done) -> None:  # noqa: ANN001
+        self.pending.append(done)
+
+    def apply(self) -> None:
+        for done in self.pending:
+            done()
+        self.pending.clear()
+
+
+def test_discard_drops_speech_until_the_engine_confirms_reset(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app._engine = ConfirmingEngine()
+    app.handle_utterance("Held words.")
+    app.discard()
+    # A slow decode of earlier speech, however late, is still dropped.
+    app.handle_utterance("Said before the discard. Send it.")
+    assert app.typist.events == []
+    app._engine.apply()
+    app.handle_utterance("New words. Send it.")
+    assert app.typist.events == ["New words. ", "<ENTER>"]

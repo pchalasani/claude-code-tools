@@ -1378,3 +1378,16 @@ def test_capture_loop_invokes_keepalive_tick(monkeypatch) -> None:
     holder["factory"] = lambda **kw: ScriptedStream(script)
     eng._capture_session(lambda text: None, lambda: None)
     assert len(ticks) == 3
+
+
+def test_reset_then_calls_back_after_the_reset_is_applied() -> None:
+    import numpy as np
+
+    from voxtype.engine_parakeet import ParakeetEngine
+
+    order: list[str] = []
+    eng = ParakeetEngine(Config(engine="parakeet"), lambda m: None)
+    eng._vad = SimpleNamespace(reset=lambda: order.append("reset"))
+    eng.request_reset_then(lambda: order.append("done"))
+    eng._process_commands(lambda t: None, np)
+    assert order == ["reset", "done"]

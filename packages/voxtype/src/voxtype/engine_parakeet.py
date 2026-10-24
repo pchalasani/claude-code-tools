@@ -566,6 +566,14 @@ class ParakeetEngine:
         """
         self._request("reset")
 
+    def request_reset_then(self, done: Callable[[], None]) -> None:
+        """``request_reset``, then call ``done`` on the worker once applied.
+
+        Anything delivered before ``done`` runs was spoken before the reset.
+        """
+        self._request("reset")
+        self._request(done)  # type: ignore[arg-type]
+
     def request_hold_start(self) -> None:
         """Begin a hold-mode recording (toggle-on in "hold" segmentation).
 
@@ -1003,7 +1011,9 @@ class ParakeetEngine:
                 if not self._commands:
                     return
                 command = self._commands.popleft()
-            if command == "reset":
+            if callable(command):  # request_reset_then's callback
+                self._safe_call(command, "reset callback")
+            elif command == "reset":
                 try:
                     self._vad.reset()
                 except Exception as e:
