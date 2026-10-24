@@ -414,6 +414,10 @@ class VoiceTypeApp(RuntimeMixin):
                 if self.cfg.segmentation == "hold" and self._last_hold_stop
                 else None
             )
+        if arrived < self._discard_until:
+            # Speech from before a discard, even if a pause followed it.
+            self._status(f'discarded in flight: "{_preview(text)}"')
+            return
         if state in (State.PAUSED, State.PASSIVE):
             if self._consume_handoff(at=arrived):
                 # In-flight speech from just before a toggle-off:
@@ -467,9 +471,6 @@ class VoiceTypeApp(RuntimeMixin):
                 )
             return
         # ACTIVE
-        if arrived < self._discard_until:
-            self._status(f'discarded in flight: "{_preview(text)}"')
-            return
         if any(
             is_exact_phrase(text, p) for p in self.cfg.submit_phrases
         ):

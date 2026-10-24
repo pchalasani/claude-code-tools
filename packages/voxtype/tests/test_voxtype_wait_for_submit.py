@@ -350,3 +350,12 @@ def test_discard_hotkey_default_and_validation() -> None:
     assert Config().discard_hotkey == "<shift>+<esc>"
     with pytest.raises(ValueError, match="discard_hotkey"):
         Config(discard_hotkey=3).validate()  # type: ignore[arg-type]
+
+
+def test_discard_then_pause_still_drops_in_flight_speech(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance("Held words.")
+    app.discard()
+    app.toggle()  # pause right after
+    app.handle_utterance("Discarded words. Send it.")
+    assert app.typist.events == []
