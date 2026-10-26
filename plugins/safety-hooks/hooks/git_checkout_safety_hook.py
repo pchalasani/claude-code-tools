@@ -343,9 +343,11 @@ def _env_chdir(
 
 def parse_git_checkout(
     command: str,
+    subcommand: str = "checkout",
 ) -> Tuple[Optional[List[str]], Optional[str]]:
     """
     Split ``git [global-opts] checkout <args...>`` into (args, repo_dir).
+    Pass ``subcommand`` to split another subcommand, such as ``reset``.
 
     Returns ``(None, None)`` when the command is not a git checkout at all.
 
@@ -407,7 +409,7 @@ def parse_git_checkout(
             continue
         break
 
-    if i >= len(tokens) or tokens[i] != "checkout":
+    if i >= len(tokens) or tokens[i] != subcommand:
         return None, None
 
     args = tokens[i + 1:]
@@ -440,11 +442,41 @@ def check_git_checkout_command(command: str) -> Tuple[bool, Optional[str]]:
     """
     # Check each subcommand in compound commands
     for subcmd in _split_compound_command(command):
-        result = _check_single_git_checkout_command(subcmd)
-        should_block, reason = result
-        if should_block:
-            return result
+        for check in (_check_single_git_checkout_command,
+                      _check_single_git_discard_command):
+            result = check(subcmd)
+            should_block, reason = result
+            if should_block:
+                return result
 
+    return False, None
+
+
+def _check_single_git_discard_command(
+    command: str,
+) -> Tuple[bool, Optional[str]]:
+    """
+    Block `git reset --hard` and `git clean -f`, which discard uncommitted
+    changes and untracked files.
+    """
+    args, _ = parse_git_checkout(command, "reset")
+    if args is not None:
+        head = args[:args.index("--")] if "--" in args else args
+        if "--hard" in head:
+            return True, _danger(
+                "'git reset --hard' DISCARDS all uncommitted changes!")
+        return False, None
+
+    args, _ = parse_git_checkout(command, "clean")
+    if args is not None:
+        head = args[:args.index("--")] if "--" in args else args
+        flags = _option_flags(head)
+        if "-n" in flags or "--dry-run" in flags:
+            return False, None
+        if "-f" in flags or "--force" in flags:
+            return True, _danger(
+                "'git clean -f' DELETES untracked files, which git cannot "
+                "recover!")
     return False, None
 
 
