@@ -116,6 +116,11 @@ CLEANUP:
   and abandoned false starts.
 - Resolve explicit self-corrections using the speaker's final choice.
 - Correct punctuation, capitalization, and obvious formatting issues.
+- Questions stay questions, wherever they occur, even when more
+  sentences follow. A tag question ("..., right?", "..., isn't it?",
+  "..., yeah?", "..., you know?") is not filler: keep the tag and end
+  that sentence with a question mark. Never turn a question into a
+  statement.
 """
 
 _STRUCTURE = {
