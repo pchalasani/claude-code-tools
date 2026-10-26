@@ -47,52 +47,113 @@ def _is_rm_command(single_cmd: str) -> bool:
     # find and fd run rm through their exec options. find also deletes by
     # itself with -delete.
     program = words[0].rsplit('/', 1)[-1]
-    exec_options = _EXEC_OPTIONS.get(program, set())
     for i, word in enumerate(words):
         if word == '-delete' and program == 'find':
             return True
-        if word in exec_options and i + 1 < len(words) and _is_rm_word(words[i + 1]):
-            return True
+        executed = _exec_command(program, word, words[i + 1:])
+        if executed is not None:
+            executed = _command_words(executed)
+            if executed and _is_rm_word(executed[0]):
+                return True
     return False
 
 
-# Commands that run the command after them: `sudo rm`, `xargs rm`.
-_WRAPPERS = {'sudo', 'env', 'command', 'builtin', 'exec', 'nohup', 'time',
-             'nice', 'xargs', 'doas', 'caffeinate'}
-# Options of those wrappers that take a separate value.
-_WRAPPER_VALUE_OPTIONS = {'-u', '-g', '-n', '-I', '-L', '-P', '-s', '-E',
-                          '-d', '-a', '-C', '-S', '--user', '--group',
-                          '--max-args', '--max-procs', '--delimiter',
-                          '--arg-file', '--replace'}
-# Options that take the command to run: `find -exec rm`, `fd -x rm`.
-_FD_EXEC = {'-x', '--exec', '-X', '--exec-batch'}
-_EXEC_OPTIONS = {
-    'find': {'-exec', '-execdir', '-ok', '-okdir'},
-    'fd': _FD_EXEC,
-    'fdfind': _FD_EXEC,  # the fd binary's name on Debian and Ubuntu
+# Commands that run the command after them: `sudo rm`, `xargs rm`, mapped to
+# their options that take a separate value. Each wrapper has its own set: `-n`
+# takes a value for nice and xargs, but is a flag for sudo.
+_WRAPPERS = {
+    'sudo': {'-u', '-g', '-C', '-D', '-p', '-R', '-r', '-t', '-T', '-U',
+             '--user', '--group', '--close-from', '--chdir', '--prompt',
+             '--chroot', '--role', '--type', '--command-timeout',
+             '--other-user'},
+    'doas': {'-u', '-C'},
+    'env': {'-u', '-C', '-S', '-P', '--unset', '--chdir', '--split-string'},
+    'xargs': {'-I', '-L', '-n', '-P', '-s', '-d', '-a', '-E', '--max-args',
+              '--max-procs', '--max-lines', '--max-chars', '--delimiter',
+              '--arg-file', '--replace'},
+    'nice': {'-n', '--adjustment'},
+    'time': {'-f', '-o', '--format', '--output'},
+    'exec': {'-a'},
+    'caffeinate': {'-t', '-w'},
+    'command': set(),
+    'builtin': set(),
+    'nohup': set(),
 }
+# Options that make a wrapper look the command up instead of running it:
+# `command -v rm` prints where rm is.
+_LOOKUP_OPTIONS = {'command': {'-v', '-V'}}
+_FIND_EXEC = {'-exec', '-execdir', '-ok', '-okdir'}
+_FD = {'fd', 'fdfind'}  # fdfind is the fd binary's name on Debian and Ubuntu
+# fd short options that take a value, so a cluster ends at them: in
+# `fd -ex`, x is the extension, not --exec.
+_FD_SHORT_VALUE = set('etEdScjo')
+
+
+def _exec_command(program: str, word: str, rest: list[str]) -> list[str] | None:
+    """The command that find or fd runs through `word`, or None."""
+    if program == 'find':
+        return rest if word in _FIND_EXEC else None
+    if program not in _FD:
+        return None
+    if word in ('--exec', '--exec-batch'):
+        return rest
+    for option in ('--exec=', '--exec-batch='):
+        if word.startswith(option):
+            return [word[len(option):], *rest]
+    if word.startswith('-') and not word.startswith('--'):
+        # A short cluster: `-x rm`, `-xrm`, `-Hx rm`.
+        for index, letter in enumerate(word[1:], start=1):
+            if letter in 'xX':
+                attached = word[index + 1:]
+                return [attached, *rest] if attached else rest
+            if letter in _FD_SHORT_VALUE:
+                break
+    return None
 
 
 def _is_rm_word(word: str) -> bool:
-    """rm itself, or rm by path: /bin/rm, /usr/bin/rm."""
+    """rm itself, or rm by path: /bin/rm, /usr/bin/rm.
+
+    A redirection can follow the word with no space, as in `/bin/rm>log`.
+    """
+    word = re.split(r'[<>]', word, maxsplit=1)[0]
     return word == 'rm' or bool(re.match(r'^/\S*/rm$', word))
+
+
+def _takes_value(option: str, value_options: set[str]) -> bool:
+    """Whether a wrapper option consumes the next word, as `-u` in `sudo -u root`.
+
+    In a short cluster such as `sudo -nu root`, the last letter decides.
+    """
+    if option in value_options:
+        return True
+    return (not option.startswith('--') and len(option) > 2
+            and f'-{option[-1]}' in value_options)
 
 
 def _command_words(words: list[str]) -> list[str]:
     """The words from the command that actually runs, past any wrappers.
 
-    `sudo -u root env A=1 xargs -0 rm -f` becomes ['rm', '-f'].
+    `sudo -u root env A=1 xargs -0 rm -f` becomes ['rm', '-f']. A wrapper that
+    only looks the command up, as `command -v rm`, runs nothing: [].
     """
     i = 0
     while i < len(words):
         word = words[i]
+        name = word.rsplit('/', 1)[-1]
         if '=' in word and not word.startswith('-') and re.match(r'^\w+=', word):
             i += 1  # VAR=value prefix
-        elif word.rsplit('/', 1)[-1] in _WRAPPERS:
+        elif name in _WRAPPERS:
             i += 1
-            while i < len(words) and words[i].startswith('-'):
-                i += 2 if words[i] in _WRAPPER_VALUE_OPTIONS else 1
-            if word.rsplit('/', 1)[-1] in ('nice',) and i < len(words) and words[i].lstrip('-').isdigit():
+            while i < len(words) and words[i].startswith('-') and words[i] != '-':
+                option = words[i]
+                if option == '--':
+                    i += 1
+                    break
+                if option in _LOOKUP_OPTIONS.get(name, ()):
+                    return []
+                i += 2 if _takes_value(option, _WRAPPERS[name]) else 1
+            if name == 'nice' and i < len(words) and words[i].lstrip('-').isdigit():
                 i += 1
         else:
             break
