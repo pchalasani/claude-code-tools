@@ -197,11 +197,13 @@ class Config:
             entire utterance (e.g. say "go" alone to submit).
         submit_suffixes: Phrases that, ending an utterance, type the
             words before them and then press Enter ("fix the build,
-            send it").
+            send it"); "senate" is how the transcriber often hears
+            "send it".
         show_suffixes: Phrases that, ending an utterance, type the held
             text without pressing Enter, for review ("..., ok show");
-            "ok sure" is how the transcriber often hears "ok show";
-            a submit phrase then sends it.
+            "ok sure", "ok shall we" and "ok so me" are how the
+            transcriber often hears "ok show" and "ok show me"; a
+            submit phrase then sends it.
         wait_for_submit: Hands-free mode ("vad") only: hold the text
             back until a submit phrase or suffix, then clean and type
             it all at once. False types each piece at every pause.
@@ -269,13 +271,14 @@ class Config:
     submit_suffixes: list[str] = field(
         default_factory=lambda: [
             "ok go", "okay go", "now go", "go do it", "go to it",
-            "send it", "over and out",
+            "send it", "senate", "over and out",
         ]
     )
     show_suffixes: list[str] = field(
         default_factory=lambda: [
             "ok show", "okay show", "ok sure", "okay sure", "ok show me",
-            "okay show me", "now show me", "type it", "tap it",
+            "okay show me", "ok shall we", "okay shall we", "ok so me",
+            "okay so me", "now show me", "type it", "tap it",
         ]
     )
     wait_for_submit: bool = True
@@ -808,15 +811,17 @@ submit_phrases = ["over", "go", "submit"]
 # Set to [] to disable.
 submit_suffixes = [
     "ok go", "okay go", "now go", "go do it", "go to it", "send it",
-    "over and out",
+    "senate", "over and out",
 ]
 
 # Hands-free mode: ending with one of these types the held text WITHOUT
 # Enter, so you can review it; then say a submit phrase ("go") to send.
-# "ok sure" is how the transcriber often hears "ok show".
+# "ok sure", "ok shall we" and "ok so me" are how the transcriber
+# often hears "ok show" and "ok show me".
 show_suffixes = [
     "ok show", "okay show", "ok sure", "okay sure", "ok show me",
-    "okay show me", "now show me", "type it", "tap it",
+    "okay show me", "ok shall we", "okay shall we", "ok so me",
+    "okay so me", "now show me", "type it", "tap it",
 ]
 
 # Hands-free mode ("vad") only: hold the text back until you say a

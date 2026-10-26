@@ -398,3 +398,56 @@ def test_discard_before_engine_ready_is_ignored(make_app) -> None:  # noqa: ANN0
     app._ready.set()
     app.handle_utterance("Words. Send it.")
     assert app.typist.events == ["Words. ", "<ENTER>"]
+
+
+def test_clipboard_holds_only_the_last_sent_message(
+    make_app, monkeypatch: pytest.MonkeyPatch  # noqa: ANN001
+) -> None:
+    import voxtype.app as app_mod
+
+    copied: list[str] = []
+    monkeypatch.setattr(app_mod, "copy_to_clipboard", copied.append)
+    app = make_app(mode="vad", copy_to_clipboard=True)
+    app.handle_utterance("first message, send it")
+    app.handle_utterance("second message, send it")
+    app.flush_deliveries()
+    assert copied == ["first message", "second message"]
+
+
+def test_bare_submit_after_show_keeps_the_shown_text(
+    make_app,  # noqa: ANN001
+) -> None:
+    app = make_app(mode="vad")
+    app.handle_utterance("look at this, ok show")
+    app.handle_utterance("go")
+    app.flush_deliveries()
+    assert app._session_texts == ["look at this"]
+
+
+@pytest.mark.parametrize(
+    ("said", "enter"),
+    [
+        ("fix it, senate", True),
+        ("fix it, ok shall we", False),
+        ("fix it, ok so me", False),
+    ],
+)
+def test_misheard_suffixes(make_app, said: str, enter: bool) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance(said)
+    app.flush_deliveries()
+    assert app.typist.events == ["fix it "] + (["<ENTER>"] if enter else [])
+
+
+def test_shown_then_sent_message_stays_whole(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance("first part, ok show")
+    app.handle_utterance("second part, send it")
+    app.handle_utterance("next message, send it")
+    app.flush_deliveries()
+    assert app._session_texts == ["next message"]
+    app._session_texts.clear()
+    app.handle_utterance("a, ok show")
+    app.handle_utterance("b, send it")
+    app.flush_deliveries()
+    assert app._session_texts == ["a", "b"]

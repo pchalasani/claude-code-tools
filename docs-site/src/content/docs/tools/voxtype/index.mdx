@@ -210,8 +210,10 @@ To look before you send, end with "ok show" (or "ok show me", "now
 show me", "type it", "tap it") instead: the held text is typed without
 Enter and voxtype keeps listening. Read it, fix it by hand if needed,
 then say "go" (or "send it") to press Enter. The transcriber often hears
-"ok show" as "ok sure", so that counts too. Change these phrases with
-`show_suffixes`.
+"ok show" as "ok sure", and "ok show me" as "ok shall we" or "ok so me",
+so those count too. It also hears "send it" as "senate", which submits
+like "send it". Change these phrases with `show_suffixes` and
+`submit_suffixes`.
 
 The phrases are matched on the raw transcript, before filler removal
 and LLM cleanup, so cleanup cannot remove them. Change the list with
