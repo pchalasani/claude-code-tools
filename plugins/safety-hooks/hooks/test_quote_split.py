@@ -28,6 +28,9 @@ def test_quoted_rm_is_not_a_call(command):
 @pytest.mark.parametrize("command", [
     "echo 'a|b' | rm foo",
     "rg 'x' f && rm foo",
+    """echo "$(printf '"')" ; rm foo""",
+    """echo "`printf '"'`" ; rm foo""",
+    """echo "$(echo ")")" ; rm foo""",
 ])
 def test_rm_after_a_quoted_word_is_still_a_call(command):
     assert check_rm_command(command)[0]
