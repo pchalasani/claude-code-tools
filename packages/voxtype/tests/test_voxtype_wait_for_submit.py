@@ -437,3 +437,17 @@ def test_misheard_suffixes(make_app, said: str, enter: bool) -> None:  # noqa: A
     app.handle_utterance(said)
     app.flush_deliveries()
     assert app.typist.events == ["fix it "] + (["<ENTER>"] if enter else [])
+
+
+def test_shown_then_sent_message_stays_whole(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance("first part, ok show")
+    app.handle_utterance("second part, send it")
+    app.handle_utterance("next message, send it")
+    app.flush_deliveries()
+    assert app._session_texts == ["next message"]
+    app._session_texts.clear()
+    app.handle_utterance("a, ok show")
+    app.handle_utterance("b, send it")
+    app.flush_deliveries()
+    assert app._session_texts == ["a", "b"]

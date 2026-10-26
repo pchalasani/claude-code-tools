@@ -107,6 +107,9 @@ class VoiceTypeApp(RuntimeMixin):
         # Hands-free wait_for_submit: pieces held back until a submit
         # phrase (see _hold_text); typed without Enter on deactivation.
         self._held: list[str] = []
+        # Set by a hands-free submit: the next message typed starts a
+        # fresh rescue buffer (clipboard and paste-again hold only it).
+        self._sent = False
         # Until this time, utterances are dropped: speech said before a
         # discard (Shift+Esc) that was still being transcribed.
         self._discard_until = 0.0
@@ -174,6 +177,7 @@ class VoiceTypeApp(RuntimeMixin):
                 # be appended first and then erased by a later effect
                 # (which would break clipboard/paste-last recovery).
                 self._session_texts = []
+                self._sent = False
         if held and keep_held:
             self._deliver(None, lambda v, at: self._type(held, v, at, buf))
             # Typing it may have used up a toggle-off's grace window; the
@@ -540,10 +544,11 @@ class VoiceTypeApp(RuntimeMixin):
             joined = " ".join(self._held)
             if enter or show:
                 self._held = []
-                if joined:
-                    # Each sent or shown message starts a fresh buffer,
-                    # so the clipboard and paste-again hold only it.
+                if joined and self._sent:
                     self._session_texts = []
+                    self._sent = False
+                if enter:
+                    self._sent = True
             buf = self._session_texts
         if not (enter or show):
             self._status(f'held: "{_preview(text)}"')
