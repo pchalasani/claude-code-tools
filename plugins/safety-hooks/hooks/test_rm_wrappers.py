@@ -18,6 +18,11 @@ from rm_block_hook import check_rm_command
     "find . -name x -exec /bin/rm -f {} +",
     "find . -name x -execdir rm {} +",
     "find . -name x -delete",
+    "fd -e zip -x rm",
+    "fd -e zip -X rm -f",
+    "fd -e zip --exec rm {}",
+    "fd -e zip --exec-batch /bin/rm",
+    "fdfind -e zip -x rm",
 ])
 def test_blocks_rm_through_a_wrapper_or_find(command):
     assert check_rm_command(command)[0]
@@ -28,6 +33,9 @@ def test_blocks_rm_through_a_wrapper_or_find(command):
     "echo rm",
     "git rm --cached foo",
     "find . -name '*.rm'",
+    "fd -x echo rm",
+    "fd -e rm",
+    "fd -delete",
     "sudo ls",
     "env A=1 ls",
 ])

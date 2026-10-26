@@ -44,14 +44,15 @@ def _is_rm_command(single_cmd: str) -> bool:
         return False
     if _is_rm_word(words[0]):
         return True
-    # find runs rm through -exec, -execdir or -ok, and deletes by itself
-    # with -delete.
-    if words[0].rsplit('/', 1)[-1] == 'find':
-        for i, word in enumerate(words):
-            if word == '-delete':
-                return True
-            if word in _FIND_EXEC and i + 1 < len(words) and _is_rm_word(words[i + 1]):
-                return True
+    # find and fd run rm through their exec options. find also deletes by
+    # itself with -delete.
+    program = words[0].rsplit('/', 1)[-1]
+    exec_options = _EXEC_OPTIONS.get(program, set())
+    for i, word in enumerate(words):
+        if word == '-delete' and program == 'find':
+            return True
+        if word in exec_options and i + 1 < len(words) and _is_rm_word(words[i + 1]):
+            return True
     return False
 
 
@@ -63,7 +64,13 @@ _WRAPPER_VALUE_OPTIONS = {'-u', '-g', '-n', '-I', '-L', '-P', '-s', '-E',
                           '-d', '-a', '-C', '-S', '--user', '--group',
                           '--max-args', '--max-procs', '--delimiter',
                           '--arg-file', '--replace'}
-_FIND_EXEC = {'-exec', '-execdir', '-ok', '-okdir'}
+# Options that take the command to run: `find -exec rm`, `fd -x rm`.
+_FD_EXEC = {'-x', '--exec', '-X', '--exec-batch'}
+_EXEC_OPTIONS = {
+    'find': {'-exec', '-execdir', '-ok', '-okdir'},
+    'fd': _FD_EXEC,
+    'fdfind': _FD_EXEC,  # the fd binary's name on Debian and Ubuntu
+}
 
 
 def _is_rm_word(word: str) -> bool:
