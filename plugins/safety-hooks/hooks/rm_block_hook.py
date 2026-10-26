@@ -39,13 +39,57 @@ def _is_rm_command(single_cmd: str) -> bool:
     if not normalized:
         return False
 
-    # Check for rm at the start of command (with or without path prefix)
-    # Matches: rm, rm -rf, /bin/rm, /usr/bin/rm foo, etc.
-    return bool(
-        normalized == "rm" or
-        normalized.startswith("rm ") or
-        re.match(r'^/\S*/rm\b', normalized)
-    )
+    words = _command_words(normalized.split())
+    if not words:
+        return False
+    if _is_rm_word(words[0]):
+        return True
+    # find runs rm through -exec, -execdir or -ok, and deletes by itself
+    # with -delete.
+    if words[0].rsplit('/', 1)[-1] == 'find':
+        for i, word in enumerate(words):
+            if word == '-delete':
+                return True
+            if word in _FIND_EXEC and i + 1 < len(words) and _is_rm_word(words[i + 1]):
+                return True
+    return False
+
+
+# Commands that run the command after them: `sudo rm`, `xargs rm`.
+_WRAPPERS = {'sudo', 'env', 'command', 'builtin', 'exec', 'nohup', 'time',
+             'nice', 'xargs', 'doas', 'caffeinate'}
+# Options of those wrappers that take a separate value.
+_WRAPPER_VALUE_OPTIONS = {'-u', '-g', '-n', '-I', '-L', '-P', '-s', '-E',
+                          '-d', '-a', '-C', '-S', '--user', '--group',
+                          '--max-args', '--max-procs', '--delimiter',
+                          '--arg-file', '--replace'}
+_FIND_EXEC = {'-exec', '-execdir', '-ok', '-okdir'}
+
+
+def _is_rm_word(word: str) -> bool:
+    """rm itself, or rm by path: /bin/rm, /usr/bin/rm."""
+    return word == 'rm' or bool(re.match(r'^/\S*/rm$', word))
+
+
+def _command_words(words: list[str]) -> list[str]:
+    """The words from the command that actually runs, past any wrappers.
+
+    `sudo -u root env A=1 xargs -0 rm -f` becomes ['rm', '-f'].
+    """
+    i = 0
+    while i < len(words):
+        word = words[i]
+        if '=' in word and not word.startswith('-') and re.match(r'^\w+=', word):
+            i += 1  # VAR=value prefix
+        elif word.rsplit('/', 1)[-1] in _WRAPPERS:
+            i += 1
+            while i < len(words) and words[i].startswith('-'):
+                i += 2 if words[i] in _WRAPPER_VALUE_OPTIONS else 1
+            if word.rsplit('/', 1)[-1] in ('nice',) and i < len(words) and words[i].lstrip('-').isdigit():
+                i += 1
+        else:
+            break
+    return words[i:]
 
 
 def check_rm_command(command: str) -> tuple[bool, str | None]:
