@@ -540,6 +540,10 @@ class VoiceTypeApp(RuntimeMixin):
             joined = " ".join(self._held)
             if enter or show:
                 self._held = []
+                if joined:
+                    # Each sent or shown message starts a fresh buffer,
+                    # so the clipboard and paste-again hold only it.
+                    self._session_texts = []
             buf = self._session_texts
         if not (enter or show):
             self._status(f'held: "{_preview(text)}"')
