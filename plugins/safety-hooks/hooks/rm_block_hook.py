@@ -97,9 +97,9 @@ _WRAPPERS = {
              '--other-user'},
     'doas': {'-u', '-C'},
     'env': {'-u', '-C', '-S', '-P', '--unset', '--chdir', '--split-string'},
+    # GNU --replace/--max-lines take optional attached values, unlike -I/-L.
     'xargs': {'-I', '-L', '-n', '-P', '-s', '-d', '-a', '-E', '--max-args',
-              '--max-procs', '--max-lines', '--max-chars', '--delimiter',
-              '--arg-file', '--replace'},
+              '--max-procs', '--max-chars', '--delimiter', '--arg-file'},
     'nice': {'-n', '--adjustment'},
     'time': {'-f', '-o', '--format', '--output'},
     'exec': {'-a'},
@@ -198,8 +198,35 @@ def _command_words(words: list[str]) -> list[str]:
                 if option == '--':
                     i += 1
                     break
-                if option in _LOOKUP_OPTIONS.get(name, ()):
+                if not option.startswith('--') and any(
+                    f'-{letter}' in _LOOKUP_OPTIONS.get(name, ())
+                    for letter in option[1:]
+                ):
                     return []
+                if name == 'env':
+                    # -S inserts a command, rather than discarding an operand.
+                    # Stop short-option parsing at the first value option.
+                    split_option = re.fullmatch(r'-[^uCSP]*S(.*)', option)
+                    split_value = None
+                    consumed = 1
+                    if option == '--split-string' or (
+                        split_option and not split_option[1]
+                    ):
+                        if i + 1 >= len(words):
+                            return []
+                        split_value = words[i + 1]
+                        consumed = 2
+                    elif option.startswith('--split-string='):
+                        split_value = option.partition('=')[2]
+                    elif split_option:
+                        split_value = split_option[1]
+                    if split_value is not None:
+                        try:
+                            split_words = shlex.split(split_value)
+                        except ValueError:
+                            split_words = split_value.split()
+                        words[i:i + consumed] = split_words
+                        continue
                 i += 2 if _takes_value(option, _WRAPPERS[name]) else 1
             if name == 'nice' and i < len(words) and words[i].lstrip('-').isdigit():
                 i += 1

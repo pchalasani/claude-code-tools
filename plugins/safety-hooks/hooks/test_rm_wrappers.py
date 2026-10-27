@@ -124,6 +124,12 @@ def test_allows_deletion_words_used_as_operands(command: str) -> None:
 
 @pytest.mark.parametrize(("command", "decision"), [
     ("sudo -uroot rm victim", "block"),
+    ("env -S 'rm -f victim'", "block"),
+    ("env --split-string='sudo -n rm victim'", "block"),
+    ("xargs --replace rm {}", "block"),
+    ("xargs --max-lines rm victim", "block"),
+    ("command -pv rm", "approve"),
+    ("command -p rm victim", "block"),
     ('sudo -p "Password: " rm victim', "block"),
     ('sudo "/bin/rm" victim', "block"),
     ("find . -name -delete", "approve"),
@@ -150,3 +156,49 @@ def test_hook_json_decisions(
     )
     assert json.loads(result.stdout)["decision"] == decision
     assert victim.read_text() == "untouched"
+
+
+@pytest.mark.parametrize("command", [
+    "env -S 'rm -f victim'",
+    "env --split-string 'rm -f victim'",
+    "env --split-string='rm -f victim'",
+    "env -S'rm -f victim'",
+    "env -iS'rm -f victim'",
+    "env -S '' rm victim",
+    "env --split-string='' rm victim",
+    'env -S "env -S \'sudo -n rm victim\'"',
+    "env -S 'sudo -n rm victim'",
+    "env -S 'A=1 sudo -n rm victim'",
+    "sudo env -S 'rm -f victim'",
+    "find . -exec env -S 'rm -f' {} +",
+    "fd -x env -S 'rm -f'",
+    "xargs --replace rm {}",
+    "xargs --max-lines rm victim",
+    "xargs --replace={} rm {}",
+    "xargs --max-lines=2 rm victim",
+    "xargs -I {} rm {}",
+    "xargs -L 2 rm victim",
+    "command -p rm victim",
+])
+def test_blocks_wrapper_option_execution(command: str) -> None:
+    """Split commands and optional arguments retain the actual executable."""
+    assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    "env -S 'echo rm victim'",
+    "env --split-string='echo rm victim'",
+    "env -S '-u rm echo safe'",
+    "env -uS echo rm",
+    "xargs --replace echo rm",
+    "xargs --max-lines echo rm",
+    "xargs -I rm echo safe",
+    "xargs -L 2 echo rm",
+    "command -pv rm",
+    "command -pV rm",
+    "command -vp rm",
+    "command -Vpv rm",
+])
+def test_allows_wrapper_option_lookup_and_arguments(command: str) -> None:
+    """Lookup clusters and arguments named rm do not execute it."""
+    assert not check_rm_command(command)[0]
