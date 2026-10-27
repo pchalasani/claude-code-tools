@@ -55,11 +55,15 @@ def _split_shell(command: str, operators: bool) -> list[str]:
         if quote != "'" and (command.startswith('$(', index) or character == '`'):
             end = (_end_of_balanced(command, index + 1, '(')
                    if character == '$' else _end_of_backtick(command, index))
-            if end is None:
-                # An unsupported span must not hide the remaining commands.
-                # Retain the old conservative split for that remainder.
-                pattern = r'&&|\|\||[;&|]' if operators else '\n'
-                return parts + re.split(pattern, ''.join(pieces) + command[start:])
+            if end is None or '<<' in command[index:end]:
+                # A heredoc body can contain quotes and closing parentheses.
+                # This scanner cannot trust its boundary in that case.
+                remainder = ''.join(pieces) + command[start:]
+                if not operators:
+                    # Keep the remainder together so the operator pass can
+                    # conservatively inspect it without losing quote context.
+                    return parts + [remainder]
+                return parts + re.split(r'&&|\|\||[;&|\n]', remainder)
             index = end
             word_start = False
             continue

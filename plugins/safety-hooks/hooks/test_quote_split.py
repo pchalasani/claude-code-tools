@@ -57,3 +57,10 @@ def test_comments_and_substitutions_preserve_later_commands(command: str) -> Non
 def test_hash_inside_a_word_is_not_a_comment(command: str) -> None:
     """A literal hash preserves the quoting rules for its containing word."""
     assert not check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("separator", ["; ", "\n"])
+def test_heredoc_substitution_does_not_hide_later_rm(separator: str) -> None:
+    """Unsupported heredoc boundaries must preserve following commands."""
+    command = 'echo "$(cat <<\'EOF\'\n) "\nEOF\n)"' + separator + "rm foo"
+    assert check_rm_command(command)[0]
