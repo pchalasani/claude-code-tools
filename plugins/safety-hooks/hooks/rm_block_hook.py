@@ -91,11 +91,11 @@ def _is_rm_command(single_cmd: str) -> bool:
 # their options that take a separate value. Each wrapper has its own set: `-n`
 # takes a value for nice and xargs, but is a flag for sudo.
 _WRAPPERS = {
-    'sudo': {'-u', '-g', '-C', '-D', '-p', '-R', '-r', '-t', '-T', '-U',
+    'sudo': {'-u', '-g', '-C', '-D', '-p', '-R', '-r', '-t', '-T', '-U', '-h',
              '--user', '--group', '--close-from', '--chdir', '--prompt',
              '--chroot', '--role', '--type', '--command-timeout',
-             '--other-user'},
-    'doas': {'-u', '-C'},
+             '--other-user', '--host'},
+    'doas': {'-u', '-C', '-a'},
     'env': {'-u', '-C', '-S', '-P', '-a', '--unset', '--chdir',
             '--split-string', '--argv0'},
     # GNU --replace/--max-lines take optional attached values, unlike -I/-L.
@@ -111,9 +111,13 @@ _WRAPPERS = {
     'builtin': set(),
     'nohup': set(),
 }
-# Options that make a wrapper look the command up instead of running it:
-# `command -v rm` prints where rm is.
-_LOOKUP_OPTIONS = {'command': {'-v', '-V'}, 'sudo': {'-l', '--list'}}
+# These modes do not execute the supplied command: lookup, policy queries,
+# or editing a file whose name may happen to be rm.
+_LOOKUP_OPTIONS = {
+    'command': {'-v', '-V'},
+    'sudo': {'-l', '--list', '-e', '--edit'},
+    'doas': {'-C'},
+}
 _FIND_EXEC = {'-exec', '-execdir', '-ok', '-okdir'}
 _FD = {'fd', 'fdfind'}  # fdfind is the fd binary's name on Debian and Ubuntu
 # fd short options that take a value, so a cluster ends at them: in
