@@ -101,7 +101,8 @@ _WRAPPERS = {
     # GNU --replace/--max-lines take optional attached values, unlike -I/-L.
     'xargs': {'-I', '-L', '-J', '-R', '-S', '-n', '-P', '-s', '-d', '-a', '-E',
               '--max-args',
-              '--max-procs', '--max-chars', '--delimiter', '--arg-file'},
+              '--max-procs', '--max-chars', '--delimiter', '--arg-file',
+              '--process-slot-var'},
     'nice': {'-n', '--adjustment'},
     'time': {'-f', '-o', '--format', '--output'},
     'exec': {'-a'},
@@ -166,16 +167,21 @@ def _is_rm_word(word: str) -> bool:
     return word == 'rm' or (word.startswith('/') and word.rsplit('/', 1)[-1] == 'rm')
 
 
-def _takes_value(option: str, value_options: set[str]) -> bool:
+def _takes_value(
+    option: str, value_options: set[str], optional_short: str = ''
+) -> bool:
     """Whether a wrapper option consumes the next word, as `-u` in `sudo -u root`.
 
     A short cluster ends at its first value-taking option. In `-uroot`,
     `root` is attached to `-u`; in `-nu root`, `-u` consumes the next word.
+    Optional short values are attached-only and also end the cluster.
     """
     if option.startswith('--'):
         return option in value_options
     if option.startswith('-'):
         for index, letter in enumerate(option[1:], start=1):
+            if letter in optional_short:
+                return False
             if f'-{letter}' in value_options:
                 return index == len(option) - 1
     return False
@@ -236,7 +242,10 @@ def _command_words(words: list[str]) -> list[str]:
                             split_words = split_value.split()
                         words[i:i + consumed] = split_words
                         continue
-                i += 2 if _takes_value(option, _WRAPPERS[name]) else 1
+                takes_value = _takes_value(
+                    option, _WRAPPERS[name], 'iel' if name == 'xargs' else ''
+                )
+                i += 2 if takes_value else 1
             if name == 'nice' and i < len(words) and words[i].lstrip('-').isdigit():
                 i += 1
         else:
