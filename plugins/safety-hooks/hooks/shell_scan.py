@@ -55,9 +55,10 @@ def _split_shell(command: str, operators: bool) -> list[str]:
         if quote != "'" and (command.startswith('$(', index) or character == '`'):
             end = (_end_of_balanced(command, index + 1, '(')
                    if character == '$' else _end_of_backtick(command, index))
-            if end is None or '<<' in command[index:end]:
-                # A heredoc body can contain quotes and closing parentheses.
-                # This scanner cannot trust its boundary in that case.
+            span = command[index:end]
+            if end is None or '<<' in span or r'\`' in span:
+                # Heredoc bodies and escaped legacy backticks disagree with
+                # the downstream substitution extractor's simple boundaries.
                 remainder = ''.join(pieces) + command[start:]
                 if not operators:
                     # Keep the remainder together so the operator pass can

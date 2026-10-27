@@ -64,3 +64,12 @@ def test_heredoc_substitution_does_not_hide_later_rm(separator: str) -> None:
     """Unsupported heredoc boundaries must preserve following commands."""
     command = 'echo "$(cat <<\'EOF\'\n) "\nEOF\n)"' + separator + "rm foo"
     assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    r'echo `printf "x\`true\`"; rm foo`',
+    r'echo "`printf "x\`true\`"; rm foo`"',
+])
+def test_escaped_backticks_do_not_hide_later_rm(command: str) -> None:
+    """Legacy nested backticks retain conservative command inspection."""
+    assert check_rm_command(command)[0]
