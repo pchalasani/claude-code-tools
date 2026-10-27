@@ -11,6 +11,7 @@ execute 'rm', including:
 Instead of deletion, users are guided to move files to a TRASH directory.
 """
 import re
+import shlex
 import sys
 import os
 
@@ -35,11 +36,18 @@ def _is_rm_command(single_cmd: str) -> bool:
     Returns:
         True if this command would invoke rm, False otherwise.
     """
-    normalized = ' '.join(single_cmd.strip().split())
+    normalized = single_cmd.strip()
     if not normalized:
         return False
 
-    words = _command_words(normalized.split())
+    try:
+        # The extractor splits find's escaped semicolon, leaving a final
+        # backslash token. Remove that token so quoted exec operands survive.
+        parsed = shlex.split(normalized.removesuffix(' \\'))
+    except ValueError:
+        # The compound-command extractor can leave an incomplete shell word.
+        parsed = normalized.split()
+    words = _command_words(parsed)
     if not words:
         return False
     if _is_rm_word(words[0]):
@@ -47,14 +55,35 @@ def _is_rm_command(single_cmd: str) -> bool:
     # find and fd run rm through their exec options. find also deletes by
     # itself with -delete.
     program = words[0].rsplit('/', 1)[-1]
-    for i, word in enumerate(words):
+    i = 1
+    while i < len(words):
+        word = words[i]
         if word == '-delete' and program == 'find':
             return True
+        if program in _FD and word == '--':
+            break  # All remaining words are positional operands.
         executed = _exec_command(program, word, words[i + 1:])
         if executed is not None:
             executed = _command_words(executed)
             if executed and _is_rm_word(executed[0]):
                 return True
+            # Exec arguments belong to the child command, not find/fd.
+            if program in _FD:
+                break
+            i += 1
+            while i < len(words) and words[i] not in (';', r'\;'):
+                if words[i] == '+' and words[i - 1] == '{}':
+                    break
+                i += 1
+        elif program == 'find' and word == '-fprintf':
+            i += 2  # Output filename and format.
+        elif program == 'find' and (
+            word in _FIND_VALUE or re.fullmatch(r'-newer[aBcm][aBcmMt]', word)
+        ):
+            i += 1
+        elif program in _FD and _takes_value(word, _FD_VALUE):
+            i += 1
+        i += 1
     return False
 
 
@@ -87,6 +116,21 @@ _FD = {'fd', 'fdfind'}  # fdfind is the fd binary's name on Debian and Ubuntu
 # fd short options that take a value, so a cluster ends at them: in
 # `fd -ex`, x is the extension, not --exec.
 _FD_SHORT_VALUE = set('etEdScjo')
+_FD_VALUE = {f'-{letter}' for letter in _FD_SHORT_VALUE} | {
+    '--extension', '--type', '--exclude', '--max-depth', '--size', '--color',
+    '--threads', '--owner', '--changed-within', '--changed-before',
+    '--ignore-file', '--base-directory', '--path-separator', '--max-results',
+    '--min-depth', '--exact-depth', '--search-path',
+}
+_FIND_VALUE = {
+    '-name', '-iname', '-path', '-ipath', '-wholename', '-iwholename',
+    '-regex', '-iregex', '-lname', '-ilname', '-fstype', '-type', '-xtype',
+    '-user', '-group', '-uid', '-gid', '-perm', '-size', '-links', '-inum',
+    '-samefile', '-newer', '-anewer', '-cnewer', '-mtime', '-atime', '-ctime',
+    '-mmin', '-amin', '-cmin', '-used', '-maxdepth', '-mindepth', '-regextype',
+    '-f', '-flags', '-Btime', '-Bmin', '-fprint', '-fprint0',
+    '-fls', '-printf',
+}
 
 
 def _exec_command(program: str, word: str, rest: list[str]) -> list[str] | None:
@@ -117,18 +161,22 @@ def _is_rm_word(word: str) -> bool:
     A redirection can follow the word with no space, as in `/bin/rm>log`.
     """
     word = re.split(r'[<>]', word, maxsplit=1)[0]
-    return word == 'rm' or bool(re.match(r'^/\S*/rm$', word))
+    return word == 'rm' or (word.startswith('/') and word.rsplit('/', 1)[-1] == 'rm')
 
 
 def _takes_value(option: str, value_options: set[str]) -> bool:
     """Whether a wrapper option consumes the next word, as `-u` in `sudo -u root`.
 
-    In a short cluster such as `sudo -nu root`, the last letter decides.
+    A short cluster ends at its first value-taking option. In `-uroot`,
+    `root` is attached to `-u`; in `-nu root`, `-u` consumes the next word.
     """
-    if option in value_options:
-        return True
-    return (not option.startswith('--') and len(option) > 2
-            and f'-{option[-1]}' in value_options)
+    if option.startswith('--'):
+        return option in value_options
+    if option.startswith('-'):
+        for index, letter in enumerate(option[1:], start=1):
+            if f'-{letter}' in value_options:
+                return index == len(option) - 1
+    return False
 
 
 def _command_words(words: list[str]) -> list[str]:

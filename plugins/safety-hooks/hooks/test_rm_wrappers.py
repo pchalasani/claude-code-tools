@@ -1,4 +1,10 @@
 """rm run through a wrapper command or by find is still rm."""
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
 import pytest
 from rm_block_hook import check_rm_command
 
@@ -70,3 +76,77 @@ def test_blocks_rm_through_a_wrapper_or_find(command):
 ])
 def test_allows_other_commands(command):
     assert not check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    "sudo -uroot rm victim",
+    "sudo -nuroot rm victim",
+    "sudo -groot rm victim",
+    'sudo -p "Password: " rm victim',
+    'sudo -p "Password: " /bin/rm victim',
+    'sudo "/bin/rm" victim',
+    '"/bin/rm" victim',
+    'find . -exec sudo -p "Password: " rm {} +',
+    'find . -exec sudo -p "Password: " rm {} \\;',
+    'fd -x sudo -p "Password: " rm',
+    "find . -exec echo -delete {} + -delete",
+    "find . -name -delete -exec rm {} +",
+    "fd --extension -xrm -x rm",
+    "fd --strip-cwd-prefix -xrm",
+    '"/tmp/path with spaces/rm" victim',
+])
+def test_blocks_deletion_after_option_operands(command: str) -> None:
+    """Attached/quoted option values cannot consume the executed command."""
+    assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    "sudo -uroot echo rm",
+    "sudo -nu rm echo safe",
+    'sudo -p "rm victim" echo safe',
+    "find . -name -delete",
+    "find . -path -delete",
+    "find . -fprintf output -delete",
+    "find . -exec echo -delete {} +",
+    "find . -exec echo -exec rm {} +",
+    "find . -execdir echo -delete {} +",
+    "find . -ok echo -delete {} +",
+    "fd -x echo -xrm",
+    "fd --exec echo --exec=rm",
+    "fd --extension -xrm",
+    "fd -e -xrm",
+    "fd -exec echo safe",
+])
+def test_allows_deletion_words_used_as_operands(command: str) -> None:
+    """Find/fd option operands and exec arguments are data, not options."""
+    assert not check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize(("command", "decision"), [
+    ("sudo -uroot rm victim", "block"),
+    ('sudo -p "Password: " rm victim', "block"),
+    ('sudo "/bin/rm" victim', "block"),
+    ("find . -name -delete", "approve"),
+    ("find . -exec echo -delete {} +", "approve"),
+    ("fd -x echo -xrm", "approve"),
+    ("find . -exec echo -delete {} + -delete", "block"),
+])
+def test_hook_json_decisions(
+    command: str, decision: str, tmp_path: Path
+) -> None:
+    """The real hook entry point applies parsing without running the command."""
+    victim = tmp_path / "victim"
+    victim.write_text("untouched")
+    hook = Path(__file__).with_name("rm_block_hook.py")
+    result = subprocess.run(
+        [sys.executable, str(hook)],
+        input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
+        text=True,
+        capture_output=True,
+        cwd=tmp_path,
+        env={**os.environ, "SHELL": "/bin/false"},
+        timeout=10,
+        check=True,
+    )
+    assert json.loads(result.stdout)["decision"] == decision
+    assert victim.read_text() == "untouched"
