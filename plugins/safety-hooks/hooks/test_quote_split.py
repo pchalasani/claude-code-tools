@@ -34,3 +34,26 @@ def test_quoted_rm_is_not_a_call(command):
 ])
 def test_rm_after_a_quoted_word_is_still_a_call(command):
     assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    "echo ok # '\ntrue ; rm foo",
+    'echo ok # "\ntrue ; rm foo',
+    """echo $(printf '%s' "a$(printf '"')"); rm foo""",
+    """echo "$(printf '%s' "a$(printf '"')")" ; rm foo""",
+    """echo "$(printf '"')"\ntrue ; rm foo""",
+])
+def test_comments_and_substitutions_preserve_later_commands(command: str) -> None:
+    """Quoting in comments and substitutions cannot hide later commands."""
+    assert "rm foo" in extract_all_commands(command)
+    assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    "echo '# a|rm|b'",
+    'echo "# a; rm foo"',
+    "echo prefix#suffix 'a|rm|b'",
+])
+def test_hash_inside_a_word_is_not_a_comment(command: str) -> None:
+    """A literal hash preserves the quoting rules for its containing word."""
+    assert not check_rm_command(command)[0]

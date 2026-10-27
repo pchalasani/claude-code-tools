@@ -3,6 +3,13 @@ import os
 import re
 import subprocess
 
+from shell_scan import (
+    _end_of_balanced,
+    _end_of_single_quote,
+    _split_command_lines,
+    _split_line_on_operators,
+)
+
 # Cache for alias expansions (populated on first use)
 _alias_cache: dict[str, str] | None = None
 
@@ -160,59 +167,6 @@ def expand_command_aliases(command: str) -> str:
     return ''.join(result)
 
 
-def _split_command_lines(command: str) -> list[str]:
-    """
-    Split on the newlines the shell treats as command separators.
-
-    A newline ends a command like ';' does, but only outside quotes and
-    when it is not escaped: a backslash-newline continues the line, and a
-    newline inside a quoted word is part of that word.
-
-    Args:
-        command: A bash command string, possibly spanning several lines.
-
-    Returns:
-        The command lines, without the separating newlines. A continued
-        line is returned joined, with the backslash-newline removed the
-        way the shell removes it, so the command it continues into is
-        recognisable ("cat <<EOF ; \\\\\\n rm x" ends up as one line).
-    """
-    lines = []
-    pieces = []
-    line_start = 0
-    index = 0
-    quote = None
-    while index < len(command):
-        character = command[index]
-        if character == '\\' and quote != "'":
-            if index + 1 < len(command) and command[index + 1] == '\n':
-                # A backslash-newline continues the line; the shell removes
-                # both characters, so neither is part of any command.
-                pieces.append(command[line_start:index])
-                line_start = index + 2
-            index += 2
-            continue
-        if quote is None and command.startswith("$'", index):
-            # ANSI-C quoting: a backslash escapes the closing quote.
-            end = _end_of_single_quote(command, index + 1, escapes=True)
-            index = len(command) if end is None else end + 1
-            continue
-        if character in "'\"":
-            if quote == character:
-                quote = None
-            elif quote is None:
-                quote = character
-        elif quote is None and character == '\n':
-            pieces.append(command[line_start:index])
-            lines.append(''.join(pieces))
-            pieces = []
-            line_start = index + 1
-        index += 1
-    pieces.append(command[line_start:])
-    lines.append(''.join(pieces))
-    return lines
-
-
 def extract_subcommands(command: str) -> list[str]:
     """
     Split compound bash command into individual subcommands.
@@ -250,66 +204,6 @@ def extract_subcommands(command: str) -> list[str]:
     for line in _split_command_lines(command):
         subcommands.extend(_split_line_on_operators(line))
     return [cmd.strip() for cmd in subcommands if cmd.strip()]
-
-
-def _split_line_on_operators(line: str) -> list[str]:
-    """
-    Split one command line on &&, ||, ;, & and |, outside quotes only.
-
-    An operator character inside a quoted word is data: the '|' in
-    rg 'a|rm|b' is part of a regex, not a pipe into rm.
-    """
-    parts = []
-    start = 0
-    index = 0
-    quote = None
-    while index < len(line):
-        character = line[index]
-        if character == '\\' and quote != "'":
-            index += 2
-            continue
-        if quote is None and line.startswith("$'", index):
-            # ANSI-C quoting: a backslash escapes the closing quote.
-            end = _end_of_single_quote(line, index + 1, escapes=True)
-            index = len(line) if end is None else end + 1
-            continue
-        if quote != "'" and (line.startswith("$(", index) or character == '`'):
-            # A substitution has its own quoting: the '"' in
-            # "$(printf '"')" does not close the outer quotes. Step over it.
-            end = (_end_of_balanced(line, index + 1, '(') if character == '$'
-                   else _end_of_backtick(line, index))
-            index = len(line) if end is None else end
-            continue
-        if character in "'\"":
-            if quote == character:
-                quote = None
-            elif quote is None:
-                quote = character
-            index += 1
-            continue
-        if quote is None:
-            width = 2 if line.startswith(("&&", "||"), index) else 1 if character in ";&|" else 0
-            if width:
-                parts.append(line[start:index])
-                index += width
-                start = index
-                continue
-        index += 1
-    parts.append(line[start:])
-    return parts
-
-
-def _end_of_backtick(line: str, start: int) -> int | None:
-    """Return the index just past the backtick that closes the one at start."""
-    index = start + 1
-    while index < len(line):
-        if line[index] == '\\':
-            index += 2
-            continue
-        if line[index] == '`':
-            return index + 1
-        index += 1
-    return None
 
 
 def _extract_balanced_paren_content(command: str, start_idx: int) -> str | None:
@@ -404,31 +298,6 @@ def extract_subshell_commands(command: str) -> list[str]:
             subshell_commands.append(inner_cmd)
 
     return subshell_commands
-
-
-def _end_of_single_quote(command: str, start: int, escapes: bool) -> int | None:
-    """
-    Return the index of the quote closing the one at start.
-
-    Args:
-        command: The full command string.
-        start: Index of the opening quote character.
-        escapes: Whether backslash escapes the quote inside this span, as
-            it does in ANSI-C quoting ($'...') but not in plain '...'.
-
-    Returns:
-        Index of the closing quote, or None when it is unterminated.
-    """
-    quote_character = command[start]
-    index = start + 1
-    while index < len(command):
-        if escapes and command[index] == '\\':
-            index += 2
-            continue
-        if command[index] == quote_character:
-            return index
-        index += 1
-    return None
 
 
 # Returned for a delimiter whose quoting the shell would unescape, which
@@ -668,61 +537,6 @@ def _keyword_at(command: str, index: int, keyword: str) -> bool:
         return False
     after = index + len(keyword)
     return after == len(command) or command[after] in ' \t\n;&|)'
-
-
-def _end_of_balanced(command: str, start: int, opener: str) -> int | None:
-    """
-    Return the index just past the bracket balancing the one at start.
-
-    Used to step over a span whose contents are not commands: an arithmetic
-    expansion $((...)), a parameter expansion ${...} or an array subscript
-    a[...]. A '<<' inside any of them is text or a shift, not a heredoc
-    operator.
-
-    Args:
-        command: The full command string.
-        start: Index of the opening bracket.
-        opener: The opening bracket character, '(', '{' or '['.
-
-    Returns:
-        Index just past the matching close, or None when unbalanced.
-    """
-    closer = {'(': ')', '{': '}', '[': ']'}[opener]
-    depth = 0
-    index = start
-    quote = None
-    while index < len(command):
-        character = command[index]
-        if character == '\\' and quote != "'":
-            # An escaped brace is expansion text, not the closing one.
-            index += 2
-            continue
-        if quote is None and command.startswith("$'", index):
-            # ANSI-C quoting: unlike '...', a backslash escapes the closing
-            # quote, so "$'don\\'t'" is one word. Reading it as plain
-            # single quoting would end the span early and lose the real
-            # closing bracket after it.
-            end = _end_of_single_quote(command, index + 1, escapes=True)
-            if end is None:
-                return None
-            index = end + 1
-            continue
-        if character in "'\"":
-            if quote == character:
-                quote = None
-            elif quote is None:
-                quote = character
-            index += 1
-            continue
-        if quote is None:
-            if character == opener:
-                depth += 1
-            elif character == closer:
-                depth -= 1
-                if depth == 0:
-                    return index + 1
-        index += 1
-    return None
 
 
 # The delimiter word as written: a plain name, optionally quoted one of
