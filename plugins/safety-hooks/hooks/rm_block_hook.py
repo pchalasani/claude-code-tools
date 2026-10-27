@@ -96,7 +96,8 @@ _WRAPPERS = {
              '--chroot', '--role', '--type', '--command-timeout',
              '--other-user'},
     'doas': {'-u', '-C'},
-    'env': {'-u', '-C', '-S', '-P', '--unset', '--chdir', '--split-string'},
+    'env': {'-u', '-C', '-S', '-P', '-a', '--unset', '--chdir',
+            '--split-string', '--argv0'},
     # GNU --replace/--max-lines take optional attached values, unlike -I/-L.
     'xargs': {'-I', '-L', '-J', '-R', '-S', '-n', '-P', '-s', '-d', '-a', '-E',
               '--max-args',
@@ -111,7 +112,7 @@ _WRAPPERS = {
 }
 # Options that make a wrapper look the command up instead of running it:
 # `command -v rm` prints where rm is.
-_LOOKUP_OPTIONS = {'command': {'-v', '-V'}}
+_LOOKUP_OPTIONS = {'command': {'-v', '-V'}, 'sudo': {'-l', '--list'}}
 _FIND_EXEC = {'-exec', '-execdir', '-ok', '-okdir'}
 _FD = {'fd', 'fdfind'}  # fdfind is the fd binary's name on Debian and Ubuntu
 # fd short options that take a value, so a cluster ends at them: in
@@ -201,15 +202,20 @@ def _command_words(words: list[str]) -> list[str]:
                 if option == '--':
                     i += 1
                     break
-                if not option.startswith('--') and any(
-                    f'-{letter}' in _LOOKUP_OPTIONS.get(name, ())
-                    for letter in option[1:]
-                ):
+                lookup_options = _LOOKUP_OPTIONS.get(name, ())
+                if option in lookup_options:
                     return []
+                if not option.startswith('--'):
+                    for letter in option[1:]:
+                        short_option = f'-{letter}'
+                        if short_option in lookup_options:
+                            return []
+                        if short_option in _WRAPPERS[name]:
+                            break  # Remaining letters are this option's value.
                 if name == 'env':
                     # -S inserts a command, rather than discarding an operand.
                     # Stop short-option parsing at the first value option.
-                    split_option = re.fullmatch(r'-[^uCSP]*S(.*)', option)
+                    split_option = re.fullmatch(r'-(?!-)[^auCSP]*S(.*)', option)
                     split_value = None
                     consumed = 1
                     if option == '--split-string' or (
