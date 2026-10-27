@@ -125,6 +125,11 @@ def test_allows_deletion_words_used_as_operands(command: str) -> None:
 @pytest.mark.parametrize(("command", "decision"), [
     ("sudo -uroot rm victim", "block"),
     ("env -S 'rm -f victim'", "block"),
+    ("env - rm victim", "block"),
+    ("xargs -J {} rm victim", "block"),
+    ("xargs -I {} -R 3 rm victim", "block"),
+    ("xargs -I {} -S 255 rm victim", "block"),
+    ("xargs -J rm echo safe", "approve"),
     ("env --split-string='sudo -n rm victim'", "block"),
     ("xargs --replace rm {}", "block"),
     ("xargs --max-lines rm victim", "block"),
@@ -160,6 +165,12 @@ def test_hook_json_decisions(
 
 @pytest.mark.parametrize("command", [
     "env -S 'rm -f victim'",
+    "env - rm victim",
+    "env -i - rm victim",
+    "sudo env - rm victim",
+    "xargs -J {} rm victim",
+    "xargs -I {} -R 3 rm victim",
+    "xargs -I {} -S 255 rm victim",
     "env --split-string 'rm -f victim'",
     "env --split-string='rm -f victim'",
     "env -S'rm -f victim'",
@@ -187,6 +198,11 @@ def test_blocks_wrapper_option_execution(command: str) -> None:
 
 @pytest.mark.parametrize("command", [
     "env -S 'echo rm victim'",
+    "env - echo rm victim",
+    "env -- - rm victim",
+    "xargs -J rm echo safe",
+    "xargs -I {} -R 3 echo rm",
+    "xargs -I {} -S 255 echo rm",
     "env --split-string='echo rm victim'",
     "env -S '-u rm echo safe'",
     "env -uS echo rm",

@@ -98,7 +98,8 @@ _WRAPPERS = {
     'doas': {'-u', '-C'},
     'env': {'-u', '-C', '-S', '-P', '--unset', '--chdir', '--split-string'},
     # GNU --replace/--max-lines take optional attached values, unlike -I/-L.
-    'xargs': {'-I', '-L', '-n', '-P', '-s', '-d', '-a', '-E', '--max-args',
+    'xargs': {'-I', '-L', '-J', '-R', '-S', '-n', '-P', '-s', '-d', '-a', '-E',
+              '--max-args',
               '--max-procs', '--max-chars', '--delimiter', '--arg-file'},
     'nice': {'-n', '--adjustment'},
     'time': {'-f', '-o', '--format', '--output'},
@@ -193,8 +194,10 @@ def _command_words(words: list[str]) -> list[str]:
             i += 1  # VAR=value prefix
         elif name in _WRAPPERS:
             i += 1
-            while i < len(words) and words[i].startswith('-') and words[i] != '-':
+            while i < len(words) and words[i].startswith('-'):
                 option = words[i]
+                if option == '-' and name != 'env':
+                    break  # Only env treats a lone dash as an option.
                 if option == '--':
                     i += 1
                     break
