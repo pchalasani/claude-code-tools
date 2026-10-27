@@ -145,8 +145,9 @@ def _end_of_balanced(command: str, start: int, opener: str) -> int | None:
     while index < len(command):
         character = command[index]
         if character == '\\' and quote != "'":
+            if command[index:index + 2] != '\\\n':
+                word_start = False
             index += 2
-            word_start = False
             continue
         if quote is None and character == '#' and word_start and opener == '(':
             newline = command.find('\n', index)

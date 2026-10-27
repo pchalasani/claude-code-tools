@@ -73,3 +73,9 @@ def test_heredoc_substitution_does_not_hide_later_rm(separator: str) -> None:
 def test_escaped_backticks_do_not_hide_later_rm(command: str) -> None:
     """Legacy nested backticks retain conservative command inspection."""
     assert check_rm_command(command)[0]
+
+
+def test_continued_whitespace_still_allows_a_shell_comment() -> None:
+    """Removing a continuation cannot turn a comment into expansion text."""
+    command = 'echo $(echo \\\n# )"\ntrue); rm foo'
+    assert check_rm_command(command)[0]
