@@ -119,3 +119,18 @@ def test_continued_case_keyword_cannot_hide_rm(keyword: str) -> None:
 def test_array_subscript_parenthesis_cannot_hide_rm(command: str) -> None:
     """Array subscript text cannot truncate an enclosing substitution."""
     assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    'echo ${x:- # }; rm foo',
+    'echo ${x:- # }\nrm foo',
+    'echo "$(echo ${x:- # }; rm foo)"',
+])
+def test_parameter_expansion_hash_cannot_hide_rm(command: str) -> None:
+    """A hash in parameter-expansion text does not start a shell comment."""
+    assert check_rm_command(command)[0]
+
+
+def test_parameter_expansion_operators_remain_data() -> None:
+    """Literal separators in a parameter value are not executable commands."""
+    assert not check_rm_command('echo "${x:-a|rm|b}"')[0]

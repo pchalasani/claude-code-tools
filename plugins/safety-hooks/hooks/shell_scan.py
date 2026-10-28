@@ -52,8 +52,9 @@ def _split_shell(command: str, operators: bool) -> list[str]:
             index = len(command) if end is None else end + 1
             word_start = False
             continue
-        if quote != "'" and (command.startswith('$(', index) or character == '`'):
-            end = (_end_of_balanced(command, index + 1, '(')
+        if quote != "'" and (command.startswith(('$(', '${'), index)
+                             or character == '`'):
+            end = (_end_of_balanced(command, index + 1, command[index + 1])
                    if character == '$' else _end_of_backtick(command, index))
             span = command[index:end]
             if end is None or '<<' in span or r'\`' in span:
