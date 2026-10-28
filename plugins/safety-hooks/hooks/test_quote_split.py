@@ -116,9 +116,10 @@ def test_continued_case_keyword_cannot_hide_rm(keyword: str) -> None:
     'echo "$(declare -A a; a[)]=x; rm foo)"',
     'echo "$(declare -A a=([)]=x); rm foo)"',
     'echo "$(declare -A a; a[)]=x\nrm foo)"',
+    'echo "$(cat <\\\n<\'EOF\'\n) "\nEOF\n)"; rm foo',
 ])
-def test_array_subscript_parenthesis_cannot_hide_rm(command: str) -> None:
-    """Array subscript text cannot truncate an enclosing substitution."""
+def test_unsupported_substitution_boundary_cannot_hide_rm(command: str) -> None:
+    """Unsupported substitution text cannot hide later executable commands."""
     assert check_rm_command(command)[0]
 
 
@@ -138,8 +139,7 @@ def test_parameter_expansion_operators_remain_data() -> None:
 
 
 @pytest.mark.parametrize("command", [
-    'echo ${x:-{}; rm foo # }',
-    'echo "${x:-{}"; rm foo # }',
+    'echo ${x:-{}; rm foo # }', 'echo "${x:-{}"; rm foo # }',
 ])
 def test_literal_open_brace_cannot_hide_rm(command: str) -> None:
     """Only nested expansions, not literal braces, delay the closing brace."""
