@@ -155,6 +155,14 @@ def _end_of_balanced(command: str, start: int, opener: str) -> int | None:
                 return None
             index = newline
             continue
+        if (opener == '(' and quote is None and word_start
+                and character == 'c'
+                and re.match(r'case(?:\s|[;&|()<>]|$)',
+                             command[index:].replace('\\\n', ''))):
+            # A case pattern's ')' is not the end of this substitution.
+            # Let the caller inspect separators conservatively rather than
+            # trusting a boundary this bracket scanner cannot determine.
+            return None
         if quote is None and command.startswith("$'", index):
             end = _end_of_single_quote(command, index + 1, escapes=True)
             if end is None:

@@ -79,3 +79,33 @@ def test_continued_whitespace_still_allows_a_shell_comment() -> None:
     """Removing a continuation cannot turn a comment into expansion text."""
     command = 'echo $(echo \\\n# )"\ntrue); rm foo'
     assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    'echo "$(case x in x) echo hi;; esac; rm foo)"',
+    'echo "$(case x in x) echo hi;; esac\nrm foo)"',
+    'echo "$(case x in x) echo hi;; esac)"; rm foo',
+    'echo "$(echo "$(case x in x) echo hi;; esac; rm foo)")"',
+    'echo "`case x in x) echo hi;; esac; rm foo`"',
+])
+def test_case_patterns_cannot_hide_rm(command: str) -> None:
+    """Unsupported case patterns retain conservative command inspection."""
+    assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    "echo $(printf 'case x in x) a|rm|b')",
+    'echo "$(printf \"case a|rm|b\")"',
+])
+def test_quoted_case_text_preserves_operator_quoting(command: str) -> None:
+    """A quoted occurrence of case is ordinary data, not a case pattern."""
+    assert not check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("keyword", [
+    "ca\\\nse", "case\\\n", "c\\\na\\\ns\\\ne",
+])
+def test_continued_case_keyword_cannot_hide_rm(keyword: str) -> None:
+    """Bash removes continuations before recognizing the case keyword."""
+    command = f'echo "$({keyword} x in x) echo hi;; esac; rm foo)"'
+    assert check_rm_command(command)[0]
