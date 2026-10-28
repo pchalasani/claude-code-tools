@@ -125,7 +125,7 @@ def test_array_subscript_parenthesis_cannot_hide_rm(command: str) -> None:
 @pytest.mark.parametrize("command", [
     'echo ${x:- # }; rm foo', 'echo ${| echo hi; rm foo; }',
     'echo ${x:- # }\nrm foo', 'echo ${ echo hi; rm foo; }',
-    'echo "$(echo ${x:- # }; rm foo)"',
+    'echo "$(echo ${x:- # }; rm foo)"', 'echo ${x:-${| rm foo; }}',
 ])
 def test_parameter_expansion_boundaries_cannot_hide_rm(command: str) -> None:
     """Parameter text and brace commands preserve executable separators."""
