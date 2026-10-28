@@ -54,7 +54,8 @@ def _split_shell(command: str, operators: bool) -> list[str]:
             continue
         if quote != "'" and (command.startswith(('$(', '${'), index)
                              or character == '`'):
-            end = (_end_of_balanced(command, index + 1, command[index + 1])
+            end = (_end_of_balanced(command, index + 1, command[index + 1],
+                                    conservative=True)
                    if character == '$' else _end_of_backtick(command, index))
             span = command[index:end]
             if (end is None or '<<' in span or r'\`' in span
@@ -128,13 +129,15 @@ def _end_of_single_quote(command: str, start: int, escapes: bool) -> int | None:
     return None
 
 
-def _end_of_balanced(command: str, start: int, opener: str) -> int | None:
+def _end_of_balanced(command: str, start: int, opener: str,
+                     conservative: bool = False) -> int | None:
     """Return the index after a balanced bracket, or None when unbalanced.
 
     Args:
         command: The full shell text.
         start: Index of the opening bracket.
         opener: The bracket character: '(', '{', or '['.
+        conservative: Reject uncertain boundaries only for separator splitting.
 
     Returns:
         Index after the matching close. Nested substitutions maintain their
@@ -158,11 +161,11 @@ def _end_of_balanced(command: str, start: int, opener: str) -> int | None:
                 return None
             index = newline
             continue
-        if opener == '(' and quote is None and character == '[':
+        if conservative and opener == '(' and quote is None and character == '[':
             # Array subscripts may contain ')' without closing the enclosing
             # substitution. Their shell grammar needs conservative splitting.
             return None
-        if (opener == '(' and quote is None and word_start
+        if (conservative and opener == '(' and quote is None and word_start
                 and character == 'c'
                 and re.match(r'case(?:\s|[;&|()<>]|$)',
                              command[index:].replace('\\\n', ''))):
@@ -178,7 +181,8 @@ def _end_of_balanced(command: str, start: int, opener: str) -> int | None:
             word_start = False
             continue
         if quote != "'" and command.startswith(('$(', '${'), index):
-            end = _end_of_balanced(command, index + 1, command[index + 1])
+            end = _end_of_balanced(command, index + 1, command[index + 1],
+                                   conservative=conservative)
             if end is None:
                 return None
             index = end

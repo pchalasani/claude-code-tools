@@ -161,3 +161,11 @@ def test_parameter_process_substitution_cannot_hide_rm(command: str) -> None:
 def test_carriage_return_does_not_start_a_comment(command: str) -> None:
     """Bash treats a carriage return inside a word as ordinary text."""
     assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    'echo "$(rm foo; echo [x])"', 'echo "$(rm foo; echo case)"',
+])
+def test_conservative_split_keeps_earlier_subcommands(command: str) -> None:
+    """A later unsupported construct cannot hide the first inner command."""
+    assert check_rm_command(command)[0]
