@@ -248,8 +248,68 @@ def extract_subcommands(command: str) -> list[str]:
         return []
     subcommands = []
     for line in _split_command_lines(command):
-        subcommands.extend(re.split(r'\s*(?:&&|\|\||[;&|])\s*', line))
+        subcommands.extend(_split_line_on_operators(line))
     return [cmd.strip() for cmd in subcommands if cmd.strip()]
+
+
+def _split_line_on_operators(line: str) -> list[str]:
+    """
+    Split one command line on &&, ||, ;, & and |, outside quotes only.
+
+    An operator character inside a quoted word is data: the '|' in
+    rg 'a|rm|b' is part of a regex, not a pipe into rm.
+    """
+    parts = []
+    start = 0
+    index = 0
+    quote = None
+    while index < len(line):
+        character = line[index]
+        if character == '\\' and quote != "'":
+            index += 2
+            continue
+        if quote is None and line.startswith("$'", index):
+            # ANSI-C quoting: a backslash escapes the closing quote.
+            end = _end_of_single_quote(line, index + 1, escapes=True)
+            index = len(line) if end is None else end + 1
+            continue
+        if quote != "'" and (line.startswith("$(", index) or character == '`'):
+            # A substitution has its own quoting: the '"' in
+            # "$(printf '"')" does not close the outer quotes. Step over it.
+            end = (_end_of_balanced(line, index + 1, '(') if character == '$'
+                   else _end_of_backtick(line, index))
+            index = len(line) if end is None else end
+            continue
+        if character in "'\"":
+            if quote == character:
+                quote = None
+            elif quote is None:
+                quote = character
+            index += 1
+            continue
+        if quote is None:
+            width = 2 if line.startswith(("&&", "||"), index) else 1 if character in ";&|" else 0
+            if width:
+                parts.append(line[start:index])
+                index += width
+                start = index
+                continue
+        index += 1
+    parts.append(line[start:])
+    return parts
+
+
+def _end_of_backtick(line: str, start: int) -> int | None:
+    """Return the index just past the backtick that closes the one at start."""
+    index = start + 1
+    while index < len(line):
+        if line[index] == '\\':
+            index += 2
+            continue
+        if line[index] == '`':
+            return index + 1
+        index += 1
+    return None
 
 
 def _extract_balanced_paren_content(command: str, start_idx: int) -> str | None:
