@@ -196,7 +196,8 @@ def _end_of_balanced(command: str, start: int, opener: str) -> int | None:
                 quote = character
             word_start = False
         elif quote is None:
-            if character == opener:
+            if character == opener and (opener != '{' or index == start):
+                # Bare '{' is parameter text; nested '${' was handled above.
                 depth += 1
             elif character == closer:
                 depth -= 1

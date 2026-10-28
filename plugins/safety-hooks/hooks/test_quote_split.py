@@ -134,3 +134,12 @@ def test_parameter_expansion_hash_cannot_hide_rm(command: str) -> None:
 def test_parameter_expansion_operators_remain_data() -> None:
     """Literal separators in a parameter value are not executable commands."""
     assert not check_rm_command('echo "${x:-a|rm|b}"')[0]
+
+
+@pytest.mark.parametrize("command", [
+    'echo ${x:-{}; rm foo # }',
+    'echo "${x:-{}"; rm foo # }',
+])
+def test_literal_open_brace_cannot_hide_rm(command: str) -> None:
+    """Only nested expansions, not literal braces, delay the closing brace."""
+    assert check_rm_command(command)[0]
