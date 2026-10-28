@@ -147,8 +147,7 @@ def test_literal_open_brace_cannot_hide_rm(command: str) -> None:
 
 
 @pytest.mark.parametrize("command", [
-    'cat ${x:-<(echo hi; rm foo)}',
-    'printf data >${x:->(cat; rm foo)}',
+    'cat ${x:-<(echo hi; rm foo)}', 'printf data >${x:->(cat; rm foo)}',
 ])
 def test_parameter_process_substitution_cannot_hide_rm(command: str) -> None:
     """Opaque process substitutions retain conservative command splitting."""
@@ -156,11 +155,11 @@ def test_parameter_process_substitution_cannot_hide_rm(command: str) -> None:
 
 
 @pytest.mark.parametrize("command", [
-    "echo x\r# comment; rm foo",
-    'echo "$(echo x\r# comment; rm foo)"',
+    "echo x\r# comment; rm foo", 'echo "$(echo x\r# comment; rm foo)"',
+    'echo <(true)#tag; rm foo',
 ])
-def test_carriage_return_does_not_start_a_comment(command: str) -> None:
-    """Bash treats a carriage return inside a word as ordinary text."""
+def test_word_suffix_hash_does_not_start_a_comment(command: str) -> None:
+    """A hash following literal word text does not start a comment."""
     assert check_rm_command(command)[0]
 
 

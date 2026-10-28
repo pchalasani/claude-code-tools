@@ -53,10 +53,11 @@ def _split_shell(command: str, operators: bool) -> list[str]:
             word_start = False
             continue
         if quote != "'" and (command.startswith(('$(', '${'), index)
-                             or character == '`'):
+                             or character == '`'
+                             or (quote is None and command.startswith(('<(', '>('), index))):
             end = (_end_of_balanced(command, index + 1, command[index + 1],
                                     conservative=True)
-                   if character == '$' else _end_of_backtick(command, index))
+                   if character != '`' else _end_of_backtick(command, index))
             span = command[index:end].replace('\\\n', '')
             if (end is None or '<<' in span or ('`' in span and '\\' in span)
                     or re.search(r'[<>]\(|\${[| \t\n]', span)):
@@ -166,8 +167,7 @@ def _end_of_balanced(command: str, start: int, opener: str,
             # substitution. Their shell grammar needs conservative splitting.
             return None
         if (conservative and opener == '(' and quote is None and word_start
-                and character == 'c'
-                and re.match(r'case(?:\s|[;&|()<>]|$)',
+                and character == 'c' and re.match(r'case(?:\s|[;&|()<>]|$)',
                              command[index:].replace('\\\n', ''))):
             # A case pattern's ')' is not the end of this substitution.
             # Let the caller inspect separators conservatively rather than
