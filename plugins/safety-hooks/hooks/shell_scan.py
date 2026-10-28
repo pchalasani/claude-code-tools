@@ -52,9 +52,9 @@ def _split_shell(command: str, operators: bool) -> list[str]:
             index = len(command) if end is None else end + 1
             word_start = False
             continue
-        if quote != "'" and (command.startswith(('$(', '${'), index)
-                             or character == '`'
-                             or (quote is None and command.startswith(('<(', '>('), index))):
+        if quote != "'" and (
+                command.startswith(('$(', '${'), index) or character == '`'
+                or (quote is None and command.startswith(('<(', '>('), index))):
             end = (_end_of_balanced(command, index + 1, command[index + 1],
                                     conservative=True)
                    if character != '`' else _end_of_backtick(command, index))
