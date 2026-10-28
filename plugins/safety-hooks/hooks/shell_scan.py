@@ -59,7 +59,8 @@ def _split_shell(command: str, operators: bool) -> list[str]:
                    if character == '$' else _end_of_backtick(command, index))
             span = command[index:end]
             if (end is None or '<<' in span or r'\`' in span
-                    or '<(' in span or '>(' in span):
+                    or '<(' in span or '>(' in span
+                    or (character == '`' and '\\' in span)):
                 # Heredoc bodies and escaped legacy backticks disagree with
                 # the downstream substitution extractor's simple boundaries.
                 # Process substitutions are also opaque to that extractor.

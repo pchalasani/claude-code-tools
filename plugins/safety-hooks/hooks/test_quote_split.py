@@ -67,6 +67,7 @@ def test_heredoc_substitution_does_not_hide_later_rm(separator: str) -> None:
 
 
 @pytest.mark.parametrize("command", [
+    'echo `echo \\\\"; rm foo; `',
     r'echo `printf "x\`true\`"; rm foo`',
     r'echo "`printf "x\`true\`"; rm foo`"',
 ])
