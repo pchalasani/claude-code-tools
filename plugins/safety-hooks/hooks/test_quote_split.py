@@ -67,7 +67,7 @@ def test_heredoc_substitution_does_not_hide_later_rm(separator: str) -> None:
 
 
 @pytest.mark.parametrize("command", [
-    'echo `echo \\\\"; rm foo; `',
+    'echo `echo \\\\"; rm; `', 'echo ${x:-`echo \\\\"; rm; `}',
     r'echo `printf "x\`true\`"; rm foo`',
     r'echo "`printf "x\`true\`"; rm foo`"',
 ])
@@ -123,12 +123,12 @@ def test_array_subscript_parenthesis_cannot_hide_rm(command: str) -> None:
 
 
 @pytest.mark.parametrize("command", [
-    'echo ${x:- # }; rm foo',
-    'echo ${x:- # }\nrm foo',
+    'echo ${x:- # }; rm foo', 'echo ${| echo hi; rm foo; }',
+    'echo ${x:- # }\nrm foo', 'echo ${ echo hi; rm foo; }',
     'echo "$(echo ${x:- # }; rm foo)"',
 ])
-def test_parameter_expansion_hash_cannot_hide_rm(command: str) -> None:
-    """A hash in parameter-expansion text does not start a shell comment."""
+def test_parameter_expansion_boundaries_cannot_hide_rm(command: str) -> None:
+    """Parameter text and brace commands preserve executable separators."""
     assert check_rm_command(command)[0]
 
 
