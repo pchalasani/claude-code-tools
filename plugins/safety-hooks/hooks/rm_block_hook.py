@@ -21,6 +21,28 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from command_utils import extract_all_commands
 
 
+
+def _strip_literal_redirections(command: str) -> str:
+    """Remove literal redirections while preserving quoted argument text."""
+    tokens = list(re.finditer(
+        r'''(?:[^\s'"<>\\]|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+|[<>]+''',
+        command, re.DOTALL,
+    ))
+    kept: list[re.Match[str]] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if re.fullmatch(r'[<>]+', token[0]):
+            if (kept and kept[-1].end() == token.start()
+                    and kept[-1][0].isascii() and kept[-1][0].isdigit()):
+                kept.pop()  # An adjacent unquoted number is a file descriptor.
+            index += 2  # Operator and its destination word.
+        else:
+            kept.append(token)
+            index += 1
+    return ' '.join(token[0] for token in kept)
+
+
 def _is_rm_command(single_cmd: str) -> bool:
     """
     Check if a single command (not compound) is an rm invocation.
@@ -36,7 +58,7 @@ def _is_rm_command(single_cmd: str) -> bool:
     Returns:
         True if this command would invoke rm, False otherwise.
     """
-    normalized = single_cmd.strip()
+    normalized = _strip_literal_redirections(single_cmd.strip())
     if not normalized:
         return False
 

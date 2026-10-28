@@ -81,6 +81,9 @@ def test_allows_other_commands(command):
 
 @pytest.mark.parametrize("command", [
     "sudo -uroot rm victim",
+    "env 2>/dev/null rm victim", "printf victim | xargs 2>/dev/null rm",
+    "sudo -u 2>/dev/null root rm victim",
+    'sudo -p ">" rm victim', 'env 2>"out file" rm victim',
     "sudo -nuroot rm victim",
     "sudo -groot rm victim",
     'sudo -p "Password: " rm victim',
@@ -103,6 +106,7 @@ def test_blocks_deletion_after_option_operands(command: str) -> None:
 
 @pytest.mark.parametrize("command", [
     "sudo -uroot echo rm",
+    'env "2>log" echo rm', 'sudo -p "2>log" echo rm',
     "sudo -nu rm echo safe",
     'sudo -p "rm victim" echo safe',
     "find . -name -delete",
