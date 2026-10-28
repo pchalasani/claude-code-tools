@@ -155,6 +155,10 @@ def _end_of_balanced(command: str, start: int, opener: str) -> int | None:
                 return None
             index = newline
             continue
+        if opener == '(' and quote is None and character == '[':
+            # Array subscripts may contain ')' without closing the enclosing
+            # substitution. Their shell grammar needs conservative splitting.
+            return None
         if (opener == '(' and quote is None and word_start
                 and character == 'c'
                 and re.match(r'case(?:\s|[;&|()<>]|$)',

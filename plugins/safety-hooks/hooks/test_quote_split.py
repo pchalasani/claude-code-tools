@@ -109,3 +109,13 @@ def test_continued_case_keyword_cannot_hide_rm(keyword: str) -> None:
     """Bash removes continuations before recognizing the case keyword."""
     command = f'echo "$({keyword} x in x) echo hi;; esac; rm foo)"'
     assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    'echo "$(declare -A a; a[)]=x; rm foo)"',
+    'echo "$(declare -A a=([)]=x); rm foo)"',
+    'echo "$(declare -A a; a[)]=x\nrm foo)"',
+])
+def test_array_subscript_parenthesis_cannot_hide_rm(command: str) -> None:
+    """Array subscript text cannot truncate an enclosing substitution."""
+    assert check_rm_command(command)[0]
