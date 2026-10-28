@@ -57,9 +57,11 @@ def _split_shell(command: str, operators: bool) -> list[str]:
             end = (_end_of_balanced(command, index + 1, command[index + 1])
                    if character == '$' else _end_of_backtick(command, index))
             span = command[index:end]
-            if end is None or '<<' in span or r'\`' in span:
+            if (end is None or '<<' in span or r'\`' in span
+                    or '<(' in span or '>(' in span):
                 # Heredoc bodies and escaped legacy backticks disagree with
                 # the downstream substitution extractor's simple boundaries.
+                # Process substitutions are also opaque to that extractor.
                 remainder = ''.join(pieces) + command[start:]
                 if not operators:
                     # Keep the remainder together so the operator pass can
@@ -92,7 +94,7 @@ def _split_shell(command: str, operators: bool) -> list[str]:
                 start = index
                 word_start = True
                 continue
-            word_start = character in ' \t\r\n;&|()<>'
+            word_start = character in ' \t\n;&|()<>'
         index += 1
     pieces.append(command[start:])
     parts.append(''.join(pieces))
@@ -203,6 +205,6 @@ def _end_of_balanced(command: str, start: int, opener: str) -> int | None:
                 depth -= 1
                 if depth == 0:
                     return index + 1
-            word_start = character in ' \t\r\n;&|()<>'
+            word_start = character in ' \t\n;&|()<>'
         index += 1
     return None

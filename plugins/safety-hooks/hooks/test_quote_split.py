@@ -143,3 +143,21 @@ def test_parameter_expansion_operators_remain_data() -> None:
 def test_literal_open_brace_cannot_hide_rm(command: str) -> None:
     """Only nested expansions, not literal braces, delay the closing brace."""
     assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    'cat ${x:-<(echo hi; rm foo)}',
+    'printf data >${x:->(cat; rm foo)}',
+])
+def test_parameter_process_substitution_cannot_hide_rm(command: str) -> None:
+    """Opaque process substitutions retain conservative command splitting."""
+    assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    "echo x\r# comment; rm foo",
+    'echo "$(echo x\r# comment; rm foo)"',
+])
+def test_carriage_return_does_not_start_a_comment(command: str) -> None:
+    """Bash treats a carriage return inside a word as ordinary text."""
+    assert check_rm_command(command)[0]
