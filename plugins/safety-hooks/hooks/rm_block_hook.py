@@ -191,6 +191,68 @@ def _takes_value(
     return False
 
 
+
+def _split_env_string(value: str) -> list[str]:
+    """Split literal env -S text using its own quote and escape rules.
+
+    Runtime environment-variable expansion is not evaluated by this scanner.
+    """
+    escapes = {'f': '\f', 'n': '\n', 'r': '\r', 't': '\t', 'v': '\v',
+               '#': '#', '$': '$', '_': ' ', '"': '"', "'": "'", '\\': '\\'}
+    words: list[str] = []
+    word: list[str] = []
+    quote = None
+    started = False
+    index = 0
+    while index < len(value):
+        character = value[index]
+        if character == '\\':
+            index += 1
+            if index == len(value):
+                raise ValueError('Trailing env split-string escape')
+            escaped = value[index]
+            if quote == "'" and escaped not in "'\\":
+                word.extend(('\\', escaped))
+            elif escaped == 'c' and quote is None:
+                break
+            elif escaped == '_' and quote is None:
+                if started:
+                    words.append(''.join(word))
+                word = []
+                started = False
+                index += 1
+                continue
+            elif escaped in escapes:
+                word.append(escapes[escaped])
+            else:
+                raise ValueError('Invalid env split-string escape')
+            started = True
+        elif quote is None and character in ' \t\n\r\v\f':
+            if started:
+                words.append(''.join(word))
+            word = []
+            started = False
+        elif quote is None and character == '#' and not started:
+            break
+        elif character in "'\"":
+            if quote == character:
+                quote = None
+            elif quote is None:
+                quote = character
+            else:
+                word.append(character)
+            started = True
+        else:
+            word.append(character)
+            started = True
+        index += 1
+    if quote is not None:
+        raise ValueError('Unclosed env split-string quote')
+    if started:
+        words.append(''.join(word))
+    return words
+
+
 def _command_words(words: list[str]) -> list[str]:
     """The words from the command that actually runs, past any wrappers.
 
@@ -241,7 +303,7 @@ def _command_words(words: list[str]) -> list[str]:
                         split_value = split_option[1]
                     if split_value is not None:
                         try:
-                            split_words = shlex.split(split_value)
+                            split_words = _split_env_string(split_value)
                         except ValueError:
                             split_words = split_value.split()
                         words[i:i + consumed] = split_words

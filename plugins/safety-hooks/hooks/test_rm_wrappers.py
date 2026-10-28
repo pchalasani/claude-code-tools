@@ -1,6 +1,7 @@
 """rm run through a wrapper command or by find is still rm."""
 import json
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import sys
@@ -270,3 +271,21 @@ def test_blocks_wrapper_option_execution(command: str) -> None:
 def test_allows_wrapper_option_lookup_and_arguments(command: str) -> None:
     """Lookup clusters and arguments named rm do not execute it."""
     assert not check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize(("split_value", "blocked"), [
+    (r"rm\_-f victim", True),
+    (r"env\_rm\_victim", True),
+    (r'"rm"\_-f victim', True),
+    (r"rm\c ignored", True),
+    (r"echo\_rm victim", False),
+    (r'"rm\_-f" victim', False),
+    (r"'rm\_-f' victim", False),
+    (r"echo\c rm victim", False),
+    (r"rm\\_-f victim", False),
+    (r"# rm victim", False),
+])
+def test_env_split_string_escape_rules(split_value: str, blocked: bool) -> None:
+    """env split-string escapes retain their own quoting and word boundaries."""
+    command = "env -S " + shlex.quote(split_value)
+    assert check_rm_command(command)[0] is blocked
