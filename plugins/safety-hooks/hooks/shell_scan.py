@@ -187,6 +187,12 @@ def _end_of_balanced(command: str, start: int, opener: str,
                                    conservative=conservative)
             if end is None:
                 return None
+            if (conservative and opener == '(' and quote is None
+                    and command.startswith('${', index)
+                    and ')' in command[index:end]):
+                # Bash 3.2 can close an unquoted command substitution at a
+                # parenthesis inside parameter text, even before its '}'.
+                return None
             index = end
             word_start = False
             continue

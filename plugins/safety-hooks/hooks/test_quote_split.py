@@ -180,3 +180,8 @@ def test_conservative_split_keeps_earlier_subcommands(command: str) -> None:
 def test_nested_process_suffix_hash_is_word_text(command: str) -> None:
     """A process substitution ends a word segment, not a shell comment gap."""
     assert check_rm_command(command)[0]
+
+
+def test_legacy_bash_parameter_close_cannot_hide_rm() -> None:
+    """Bash 3.2 can close an unquoted substitution inside parameter text."""
+    assert check_rm_command('echo $(echo ${x:-); rm foo # })')[0]
