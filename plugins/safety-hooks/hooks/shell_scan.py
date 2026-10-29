@@ -180,7 +180,9 @@ def _end_of_balanced(command: str, start: int, opener: str,
             index = end + 1
             word_start = False
             continue
-        if quote != "'" and command.startswith(('$(', '${'), index):
+        if quote != "'" and (
+                command.startswith(('$(', '${'), index)
+                or (quote is None and command.startswith(('<(', '>('), index))):
             end = _end_of_balanced(command, index + 1, command[index + 1],
                                    conservative=conservative)
             if end is None:

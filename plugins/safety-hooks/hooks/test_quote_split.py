@@ -169,3 +169,14 @@ def test_word_suffix_hash_does_not_start_a_comment(command: str) -> None:
 def test_conservative_split_keeps_earlier_subcommands(command: str) -> None:
     """A later unsupported construct cannot hide the first inner command."""
     assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    'echo "$(rm foo; echo <(true)#tag)"',
+    'echo "$(rm foo; echo >(true)#tag)"',
+    'echo "$(echo <(true)#tag; rm foo)"',
+    'echo "$(echo >(true)#tag; rm foo)"',
+])
+def test_nested_process_suffix_hash_is_word_text(command: str) -> None:
+    """A process substitution ends a word segment, not a shell comment gap."""
+    assert check_rm_command(command)[0]
