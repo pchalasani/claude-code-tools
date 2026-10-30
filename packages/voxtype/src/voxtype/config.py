@@ -113,6 +113,10 @@ class Config:
         mode: Activation mode. "toggle" starts paused (hotkey starts
             dictation), "vad" starts dictating immediately, "wake" starts
             passive and activates on the wake word.
+        ask_mode: Running plain ``voxtype`` (no arguments) in a terminal
+            first asks whether to use toggle or always-on (hands-free)
+            mode, with ``mode`` as the default answer. false skips the
+            question; so does passing any argument, or ``mode = "wake"``.
         engine: Transcription backend: "parakeet-mlx" (default on
             Apple Silicon), "parakeet" (default elsewhere), or
             "moonshine" (requires the voxtype[moonshine] extra).
@@ -231,6 +235,7 @@ class Config:
     """
 
     mode: str = "toggle"
+    ask_mode: bool = True
     engine: str = field(default_factory=default_engine)
     # "auto" is a sentinel resolved in __post_init__ to the best
     # segmentation for the resolved engine/mode (hold for parakeet +
@@ -489,6 +494,8 @@ class Config:
                 raise ValueError(f"{field_name} must be a string")
         if not isinstance(self.copy_to_clipboard, bool):
             raise ValueError("copy_to_clipboard must be a boolean")
+        if not isinstance(self.ask_mode, bool):
+            raise ValueError("ask_mode must be a boolean")
 
 
     def _validate_post_process(self) -> None:
@@ -661,6 +668,10 @@ def sample_config() -> str:
 #              a submit phrase, see wait_for_submit)
 #   "wake"   - start passive; saying the wake word starts dictation
 mode = "toggle"
+
+# Plain `voxtype` (no arguments) first asks: toggle or always-on? The
+# answer above is the default. false starts in `mode` without asking.
+ask_mode = true
 
 # Transcription backend (default: the best this machine can run):
 #   "parakeet-mlx" - Parakeet-TDT 0.6b v3 on the Apple GPU via MLX:

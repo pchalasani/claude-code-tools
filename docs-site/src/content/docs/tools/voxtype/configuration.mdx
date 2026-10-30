@@ -205,6 +205,10 @@ for CPU tuning.
 # Activation: "toggle" (hotkey), "vad" (hands-free), "wake" (wake word)
 mode = "toggle"
 
+# Plain `voxtype` (no arguments) asks toggle or always-on first, with
+# `mode` as the default answer; false starts in `mode` without asking
+ask_mode = true
+
 # Engine: "parakeet-mlx" | "parakeet" | "moonshine". Auto-selected when
 # unset: parakeet-mlx on Apple Silicon, parakeet on Intel. Set it only to
 # force a choice; the value below is just the Apple-Silicon case.
