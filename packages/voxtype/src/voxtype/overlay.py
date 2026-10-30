@@ -3,7 +3,8 @@
 A small always-on-top, click-through, non-activating macOS panel at the
 bottom-center of the screen, shown ONLY while recording. It scrolls a
 live waveform of the mic level — red waves as you speak — and hides
-when paused or waiting for the wake word. Because the panel is a
+when paused or waiting for the wake word. A short note (say, "Keeping
+120 words from 12 min ago") can show in a second panel above it. Because the panel is a
 non-activating borderless NSPanel that ignores mouse events, it can
 never steal keyboard focus from the app being dictated into.
 
@@ -15,15 +16,19 @@ app hands its per-tick housekeeping in as a callback.
 from __future__ import annotations
 
 import signal
+import warnings
 from typing import Callable
 
-# (state_label, is_recording, level 0..1) sampled ~20x per second.
-SampleFn = Callable[[], tuple[str, bool, float]]
+# (state_label, is_recording, level 0..1, note) sampled every frame;
+# the note ("" for none) is optional.
+SampleFn = Callable[[], tuple]
 TickFn = Callable[[], None]
 
 _WIDTH = 210.0
 _HEIGHT = 240.0  # generous headroom so the halo never clips when moving
 _MARGIN_BOTTOM = 110.0
+_NOTE_WIDTH = 440.0
+_NOTE_HEIGHT = 52.0
 _TICK_SECONDS = 0.033  # ~30 fps
 # Master animation speed: small = slow, gentle, gradual motion.
 _PHASE_SPEED = 0.05
@@ -54,7 +59,8 @@ def run_overlay(  # noqa: PLR0913
     """Show the ghost and block until ``stopped()`` returns True.
 
     Args:
-        sample: Returns (state_label, is_recording, level) each frame.
+        sample: Returns (state_label, is_recording, level[, note]) each
+            frame; a non-empty note shows above the ghost.
         tick: App housekeeping to run each frame (idle timeout, fatal
             checks); exceptions are swallowed so the UI never dies.
         stopped: Polled each frame; True ends the loop and closes the
@@ -190,7 +196,7 @@ def run_overlay(  # noqa: PLR0913
             return self
 
         def push_(self, sample):  # noqa: ANN001, ANN201, N802
-            _label, recording, level = sample
+            _label, recording, level = sample[:3]
             level = max(0.0, min(1.0, float(level)))
             # Gentle attack, slow release so the mouth and motion change
             # gradually rather than twitching frame-to-frame.
@@ -312,7 +318,19 @@ def run_overlay(  # noqa: PLR0913
             self.view = view
             self.panel = panel
             self.shown = False
+            self.note = ""
             return self
+
+        def showNote_(self, note):  # noqa: ANN001, ANN201, N802
+            # Shown only with the ghost; the text set only on change.
+            if note == self.note:
+                return
+            self.note = note
+            if note:
+                _set_note(self.note_label, note)
+                self.note_panel.orderFrontRegardless()
+            else:
+                self.note_panel.orderOut_(None)
 
         def fireReady_(self, _timer):  # noqa: ANN001, ANN201, N802
             # One-shot: install the hotkey listener now that the run loop
@@ -341,6 +359,8 @@ def run_overlay(  # noqa: PLR0913
                     self.shown = recording
                 if recording:
                     self.view.push_(data)
+                note = data[3] if len(data) > 3 and recording else ""
+                self.showNote_(str(note or ""))
             except Exception:
                 pass
             if stopped():
@@ -390,7 +410,13 @@ def run_overlay(  # noqa: PLR0913
     panel.setContentView_(view)
     # Hidden at startup; the driver shows it only while recording.
 
+    # Its bottom overlaps the ghost panel's empty headroom.
+    note_panel, note_label = _note_panel(
+        x + _WIDTH / 2, y + _HEIGHT - 40
+    )
     driver = Driver.alloc().initWithView_panel_(view, panel)
+    driver.note_panel = note_panel
+    driver.note_label = note_label
     driver.on_ready = on_ready
     timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(  # noqa: E501
         _TICK_SECONDS, driver, b"tick:", None, True
@@ -430,5 +456,78 @@ def run_overlay(  # noqa: PLR0913
         signal.signal(signal.SIGINT, previous_handler)
         timer.invalidate()
         panel.orderOut_(None)
+        note_panel.orderOut_(None)
         if sigint["hit"]:
             raise KeyboardInterrupt
+
+
+def _note_panel(center_x: float, bottom: float):  # noqa: ANN202
+    """A click-through panel for notes, centered above the ghost.
+
+    Like the ghost's panel it never takes focus or mouse events, so it
+    cannot get in the way of the app being dictated into.
+
+    Returns:
+        (panel, label): the hidden panel and its text field.
+    """
+    import AppKit
+    from AppKit import NSColor, NSMakeRect
+
+    panel = AppKit.NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(  # noqa: E501
+        NSMakeRect(
+            center_x - _NOTE_WIDTH / 2, bottom, _NOTE_WIDTH, _NOTE_HEIGHT
+        ),
+        AppKit.NSWindowStyleMaskBorderless
+        | AppKit.NSWindowStyleMaskNonactivatingPanel,
+        AppKit.NSBackingStoreBuffered,
+        False,
+    )
+    panel.setLevel_(AppKit.NSStatusWindowLevel)
+    panel.setOpaque_(False)
+    panel.setBackgroundColor_(NSColor.clearColor())
+    panel.setIgnoresMouseEvents_(True)
+    panel.setHasShadow_(True)
+    panel.setCollectionBehavior_(
+        AppKit.NSWindowCollectionBehaviorCanJoinAllSpaces
+        | AppKit.NSWindowCollectionBehaviorStationary
+    )
+    box = AppKit.NSView.alloc().initWithFrame_(
+        NSMakeRect(0, 0, _NOTE_WIDTH, _NOTE_HEIGHT)
+    )
+    box.setWantsLayer_(True)
+    box.layer().setCornerRadius_(12.0)
+    with warnings.catch_warnings():  # the CGColor is a bare pointer
+        warnings.simplefilter("ignore")
+        box.layer().setBackgroundColor_(
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                0.08, 0.14, 0.30, 0.92
+            ).CGColor()
+        )
+    label = AppKit.NSTextField.wrappingLabelWithString_("")
+    label.setFrame_(
+        NSMakeRect(12, 6, _NOTE_WIDTH - 24, _NOTE_HEIGHT - 12)
+    )
+    label.setTextColor_(NSColor.whiteColor())
+    label.setFont_(AppKit.NSFont.systemFontOfSize_(14.0))
+    label.setAlignment_(AppKit.NSTextAlignmentCenter)
+    label.setMaximumNumberOfLines_(2)
+    box.addSubview_(label)
+    panel.setContentView_(box)
+    return panel, label
+
+
+def _set_note(label, text: str) -> None:  # noqa: ANN001
+    """Set the note's text, centered vertically in its panel."""
+    from AppKit import NSMakeRect
+
+    label.setStringValue_(text)
+    width = _NOTE_WIDTH - 24
+    height = min(
+        _NOTE_HEIGHT - 8,
+        label.cell().cellSizeForBounds_(
+            NSMakeRect(0, 0, width, _NOTE_HEIGHT)
+        ).height,
+    )
+    label.setFrame_(
+        NSMakeRect(12, (_NOTE_HEIGHT - height) / 2, width, height)
+    )

@@ -468,12 +468,13 @@ def gap_app(make_app, monkeypatch, tmp_path):  # noqa: ANN001, ANN201
     import types
 
     import voxtype.app as app_mod
+    import voxtype.held as held_mod
 
     def make(**kw):  # noqa: ANN003, ANN202
         clock = Clock()
         monkeypatch.setattr(app_mod.time, "monotonic", clock)
         monkeypatch.setattr(
-            app_mod, "DEFAULT_CONFIG_PATH", tmp_path / "config.toml"
+            held_mod, "DEFAULT_CONFIG_PATH", tmp_path / "config.toml"
         )
         app = make_app(mode="vad", **kw)
         app._engine = types.SimpleNamespace(last_segment_secs=2.0)
@@ -482,16 +483,43 @@ def gap_app(make_app, monkeypatch, tmp_path):  # noqa: ANN001, ANN201
     return make
 
 
-def test_long_silence_drops_held_text(gap_app, tmp_path) -> None:  # noqa: ANN001
-    app, clock = gap_app()
-    app.handle_utterance("meeting chatter about lunch")
-    clock.now += 60  # 58 s of silence before the next 2 s of speech
+def test_long_silence_keeps_held_text_with_a_note(gap_app) -> None:  # noqa: ANN001
+    app, clock = gap_app(held_gap=600)
+    app.handle_utterance("an earlier thought")
+    clock.now += 722  # 12 min of silence before the next 2 s of speech
+    app.handle_utterance("and more")
+    assert app.current_note() == (
+        "Keeping 3 words from 12 min ago. Shift+Esc drops them."
+    )
     app.handle_utterance("fix the parser, send it")
     app.flush_deliveries()
-    assert app.typist.events == ["fix the parser ", "<ENTER>"]
-    assert (tmp_path / "dropped.txt").read_text() == (
-        "meeting chatter about lunch\n"
-    )
+    assert app.typist.events == [
+        "an earlier thought and more fix the parser ", "<ENTER>"
+    ]
+    assert app.current_note() == ""  # sent: the note is gone
+
+
+def test_note_cleared_by_discard_and_by_time(gap_app) -> None:  # noqa: ANN001
+    app, clock = gap_app(held_gap=600)
+    app.handle_utterance("old words")
+    clock.now += 700
+    app.handle_utterance("new words")
+    assert app.current_note()
+    app.discard()
+    assert app.current_note() == ""
+    app.handle_utterance("old words")
+    clock.now += 700
+    app.handle_utterance("new words")
+    clock.now += 31
+    assert app.current_note() == ""
+
+
+def test_note_without_discard_key(gap_app) -> None:  # noqa: ANN001
+    app, clock = gap_app(held_gap=600, discard_hotkey="")
+    app.handle_utterance("old words")
+    clock.now += 700
+    app.handle_utterance("new words")
+    assert app.current_note() == "Keeping 2 words from 12 min ago."
 
 
 def test_short_pause_keeps_held_text(gap_app) -> None:  # noqa: ANN001
@@ -515,10 +543,14 @@ def test_bare_submit_after_long_pause_sends_held(gap_app) -> None:  # noqa: ANN0
 def test_gap_rule_off(gap_app) -> None:  # noqa: ANN001
     app, clock = gap_app(held_gap=0)
     app.handle_utterance("first part")
-    clock.now += 60
+    clock.now += 6000
+    app.handle_utterance("middle part")
+    assert app.current_note() == ""
     app.handle_utterance("second part, send it")
     app.flush_deliveries()
-    assert app.typist.events == ["first part second part ", "<ENTER>"]
+    assert app.typist.events == [
+        "first part middle part second part ", "<ENTER>"
+    ]
 
 
 def test_no_segment_length_no_gap_rule(gap_app) -> None:  # noqa: ANN001
@@ -531,15 +563,44 @@ def test_no_segment_length_no_gap_rule(gap_app) -> None:  # noqa: ANN001
     assert app.typist.events == ["first part second part ", "<ENTER>"]
 
 
-def test_word_cap_types_without_enter(gap_app) -> None:  # noqa: ANN001
-    app, _ = gap_app(held_max_words=5)
+def test_word_cap_types_nothing(gap_app, tmp_path) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_max_words=5, paste_hotkey="<cmd>+<ctrl>+v")
     app.handle_utterance("one two three four")
     app.handle_utterance("five six, send it")
     app.flush_deliveries()
+    assert app.typist.events == []
+    assert app.current_note() == (
+        "6 words not typed (over 5). Cmd+Ctrl+V types them."
+    )
+    saved = (tmp_path / "dropped.txt").read_text()
+    assert saved.endswith(
+        ": 6 words, over held_max_words (5)\n"
+        "one two three four five six\n\n"
+    )
+    app.paste_last()
     assert app.typist.events == ["one two three four five six "]
-    app.handle_utterance("go")
+
+
+def test_word_cap_on_pause_and_show(gap_app) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_max_words=2)
+    app.handle_utterance("one two three, ok show")
+    app.handle_utterance("four five six")
+    app.toggle()  # pause: releases what is held
     app.flush_deliveries()
-    assert app.typist.events[-1] == "<ENTER>"
+    assert app.typist.events == []
+
+
+def test_dropped_file_appends(gap_app, tmp_path) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_max_words=1)
+    app.handle_utterance("first long, send it")
+    app.handle_utterance("second long, send it")
+    app.flush_deliveries()
+    saved = (tmp_path / "dropped.txt").read_text()
+    assert "first long" in saved and "second long" in saved
+    app.handle_utterance("ok, send it")  # under the cap: a fresh message
+    app.flush_deliveries()
+    assert app.typist.events == ["ok ", "<ENTER>"]
+    assert app._session_texts[app._msg_start:] == ["ok"]
 
 
 def test_under_word_cap_submits(gap_app) -> None:  # noqa: ANN001
@@ -554,99 +615,6 @@ def test_held_limits_validated(bad: object) -> None:
     for name in ("held_gap", "held_max_words"):
         with pytest.raises(ValueError, match=name):
             Config(**{name: bad}).validate()
-
-
-class StartSpy(CleanupSpy):
-    """Cleanup stand-in that also answers the message-start check."""
-
-    def __init__(self, answer: tuple[int | None, str]) -> None:
-        super().__init__()
-        self.answer = answer
-        self.asked: list[list[str]] = []
-
-    def message_start(self, pieces: list[str]) -> tuple[int | None, str]:
-        self.asked.append(pieces)
-        return self.answer
-
-
-def test_unrelated_pieces_are_dropped(gap_app, tmp_path) -> None:  # noqa: ANN001
-    app, _ = gap_app(held_check_words=4)
-    app._post = StartSpy((2, ""))
-    for piece in ("tv news tonight", "weather is clear"):
-        app.handle_utterance(piece)
-    app.handle_utterance("fix the bug, send it")
-    app.flush_deliveries()
-    assert app._post.asked == [
-        ["tv news tonight", "weather is clear", "fix the bug"]
-    ]
-    assert app.typist.events == ["fix the bug ", "<ENTER>"]
-    assert (tmp_path / "dropped.txt").read_text() == (
-        "tv news tonight weather is clear\n"
-    )
-
-
-@pytest.mark.parametrize("answer", [(0, ""), (None, "timed out")])
-def test_check_keeping_everything(gap_app, answer) -> None:  # noqa: ANN001
-    app, _ = gap_app(held_check_words=4)
-    app._post = StartSpy(answer)
-    app.handle_utterance("background first")
-    app.handle_utterance("then the request, send it")
-    app.flush_deliveries()
-    assert app.typist.events == [
-        "background first then the request ", "<ENTER>"
-    ]
-
-
-@pytest.mark.parametrize(
-    ("pieces", "words"),
-    [(["only one piece here today, send it"], 4),  # one piece
-     (["two", "short, send it"], 4)],  # under held_check_words
-)
-def test_check_skipped(gap_app, pieces, words) -> None:  # noqa: ANN001
-    app, _ = gap_app(held_check_words=words)
-    app._post = StartSpy((1, ""))
-    for piece in pieces:
-        app.handle_utterance(piece)
-    app.flush_deliveries()
-    assert app._post.asked == []
-
-
-def test_cap_applies_after_the_check(gap_app) -> None:  # noqa: ANN001
-    app, _ = gap_app(held_check_words=4, held_max_words=5)
-    app._post = StartSpy((1, ""))
-    app.handle_utterance("one two three four five six seven")
-    app.handle_utterance("fix it, send it")
-    app.flush_deliveries()
-    assert app.typist.events == ["fix it ", "<ENTER>"]
-
-
-def test_capped_text_stays_with_the_next_part(gap_app) -> None:  # noqa: ANN001
-    app, _ = gap_app(held_max_words=5)
-    app.handle_utterance("one two three four five six, send it")
-    app.handle_utterance("and seven, ok show")
-    app.flush_deliveries()
-    assert app._session_texts[app._msg_start:] == ["one two three four five six", "and seven"]
-
-
-def test_release_during_check_keeps_capped_text(gap_app) -> None:  # noqa: ANN001
-    import threading
-
-    gate = threading.Event()
-
-    class SlowStart(StartSpy):
-        def message_start(self, pieces):  # noqa: ANN001, ANN202
-            gate.wait(5)
-            return (0, "")
-
-    app, _ = gap_app(held_check_words=4, held_max_words=5)
-    app._post = SlowStart((0, ""))
-    app.handle_utterance("one two three")
-    app.handle_utterance("four five six, send it")
-    app.handle_utterance("and seven, ok show")  # while the check runs
-    gate.set()
-    app.flush_deliveries()
-    assert "<ENTER>" not in app.typist.events
-    assert app._session_texts[app._msg_start:] == ["one two three four five six", "and seven"]
 
 
 def test_queued_messages_each_reach_the_clipboard(gap_app) -> None:  # noqa: ANN001
@@ -713,18 +681,3 @@ def test_in_flight_words_after_queued_send_reach_the_clipboard(
     assert app._session_texts[app._msg_start:] == [
         "second message", "trailing words"
     ]
-
-
-def test_check_runs_on_show_but_not_on_pause(gap_app) -> None:  # noqa: ANN001
-    app, _ = gap_app(held_check_words=2)
-    app._post = StartSpy((1, ""))
-    app.handle_utterance("tv news")
-    app.handle_utterance("fix it, ok show")
-    app.flush_deliveries()
-    assert app.typist.events == ["fix it "]
-    app.handle_utterance("first thought")
-    app.handle_utterance("second thought")
-    app.toggle()  # pause: types what is held, unchecked
-    app.flush_deliveries()
-    assert app.typist.events[-1] == "first thought second thought "
-    assert len(app._post.asked) == 1

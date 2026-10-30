@@ -2062,7 +2062,7 @@ def test_setup_wizard_advanced(monkeypatch, tmp_path) -> None:
         "cerebras", "auto",          # cleanup
         True,                        # advanced?
         "parakeet-mlx",              # engine
-        True, "20", "800", "60",     # always-on safeguards
+        True, "20", "800",           # always-on safeguards
         "5",                         # cleanup time limit
         False,                       # change cancel/discard keys?
         False,                       # paste-again key?
@@ -2078,9 +2078,7 @@ def test_setup_wizard_advanced(monkeypatch, tmp_path) -> None:
     out = tmp_path / "c.toml"
     assert run_setup(config_path=out) == 0
     cfg = load_config(out)
-    assert (cfg.held_gap, cfg.held_max_words, cfg.held_check_words) == (
-        20.0, 800, 60,
-    )
+    assert (cfg.held_gap, cfg.held_max_words) == (20.0, 800)
     assert cfg.post_process_timeout == 5.0
     assert (cfg.copy_to_clipboard, cfg.sounds) == (True, False)
 
@@ -2337,3 +2335,11 @@ def test_setup_segmentation_choice_survives_mode_change() -> None:
     assert changes == {"mode": "toggle", "segmentation": "vad"}
     after = Config(**{**pinned, **changes})
     assert (after.mode, after.segmentation) == ("toggle", "vad")
+
+
+def test_retired_key_still_loads(tmp_path) -> None:
+    from voxtype.config import load_config
+
+    path = tmp_path / "config.toml"
+    path.write_text("held_check_words = 0\nheld_max_words = 100\n")
+    assert load_config(path).held_max_words == 100

@@ -177,16 +177,14 @@ and types anything held, without Enter:
 mode = "vad"
 # false types each piece as soon as you pause instead
 wait_for_submit = true
-# Hands-free hold: talking after more than this many seconds of silence
-# drops the text held from before it (saved to dropped.txt); 0 = off
-held_gap = 15.0
-# Hands-free hold: a submit with more words held than this is typed
-# without Enter, for review; 0 = off
+# Hands-free hold: talking after more than this many seconds of
+# silence, with words still held, shows a note that they are kept
+# (Shift+Esc drops them); 0 = off
+held_gap = 600.0
+# Hands-free hold: when more words than this are released at once,
+# nothing is typed; they are saved to dropped.txt and the paste-again
+# hotkey types them; 0 = off
 held_max_words = 500
-# Hands-free hold with Cerebras: a submit holding at least this many
-# words in 2+ pieces asks Cerebras where the message starts, dropping
-# earlier unrelated speech (saved to dropped.txt); 0 = off
-held_check_words = 50
 ```
 
 (These recipes leave `engine` unset so it auto-selects
