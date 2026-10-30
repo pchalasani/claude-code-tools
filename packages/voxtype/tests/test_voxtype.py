@@ -2274,3 +2274,22 @@ def test_setup_wizard_keeps_exact_numbers(monkeypatch, tmp_path) -> None:
     assert run_setup(config_path=out) == 0
     assert "1.23456789" in out.read_text()
     assert not any(m.startswith("Save") for m in fake.asked)
+
+
+def test_setup_number_prompt_uses_config_rules(monkeypatch) -> None:
+    import voxtype.setup_wizard as sw
+
+    seen = {}
+
+    def text(msg, default="", validate=None):  # noqa: ANN001, ANN202
+        seen["validate"] = validate
+        return types.SimpleNamespace(ask=lambda: "5")
+
+    fake = types.SimpleNamespace(text=text)
+    assert sw._number(fake, "t", "post_process_timeout", 0.0) == 5.0
+    check = seen["validate"]
+    assert check("5") is True and check("0") is True
+    assert check("0.1") is not True and check("120") is not True
+    assert check("abc") is not True
+    assert sw._number(fake, "w", "held_max_words", 500) == 5
+    assert seen["validate"]("2.5") is not True  # whole numbers only

@@ -203,19 +203,22 @@ def _section(title: str) -> None:
     print(f"\n── {title} " + "─" * max(0, 60 - len(title)))
 
 
-def _number(q, message: str, default: float, integer: bool = False):  # noqa: ANN001, ANN202
-    """Ask for a number >= 0; returns an int when ``integer``."""
+def _number(q, message: str, field: str, default: float):  # noqa: ANN001, ANN202
+    """Ask for config number ``field``, checked by the config's rules."""
+    integer = isinstance(default, int) and not isinstance(default, bool)
+
+    def convert(text: str) -> float:
+        return int(text) if integer else float(text)
 
     def _valid(text: str):  # noqa: ANN202
         try:
-            value = int(text) if integer else float(text)
-        except ValueError:
-            return "enter a whole number" if integer else "enter a number"
-        return True if value >= 0 else "must be 0 or more"
+            Config(**{field: convert(text)}).validate()
+        except ValueError as e:
+            return str(e) or "enter a number"
+        return True
 
-    shown = str(int(default)) if integer else repr(float(default))
-    text = _ask(q.text(message, default=shown, validate=_valid))
-    return int(text) if integer else float(text)
+    shown = str(default) if integer else repr(float(default))
+    return convert(_ask(q.text(message, default=shown, validate=_valid)))
 
 
 def _ask_basics(q, cur: Config, pinned: dict, ans: dict) -> None:  # noqa: ANN001
@@ -394,17 +397,17 @@ def _ask_advanced(q, cur: Config, ans: dict) -> None:  # noqa: ANN001
         ))
         ans["held_gap"] = _number(
             q, "Drop held words after a silence of this many seconds "
-            "(0 = never):", cur.held_gap,
+            "(0 = never):", "held_gap", cur.held_gap,
         )
         ans["held_max_words"] = _number(
             q, "Type without sending when more than this many words are "
-            "held (0 = no limit):", cur.held_max_words, integer=True,
+            "held (0 = no limit):", "held_max_words", cur.held_max_words,
         )
         if ans.get("post_process_provider") == "cerebras":
             ans["held_check_words"] = _number(
                 q, "Ask Cerebras where your message starts once this many "
-                "words are held (0 = never):", cur.held_check_words,
-                integer=True,
+                "words are held (0 = never):", "held_check_words",
+                cur.held_check_words,
             )
 
     if ans.get("post_process"):
@@ -412,7 +415,7 @@ def _ask_advanced(q, cur: Config, ans: dict) -> None:  # noqa: ANN001
         ans["post_process_timeout"] = _number(
             q, "Seconds to wait for cleanup before typing the raw text "
             "(0 = default: 2 for Cerebras, 4 for S1-mini):",
-            cur.post_process_timeout,
+            "post_process_timeout", cur.post_process_timeout,
         )
 
     _section("Other keys and extras")
