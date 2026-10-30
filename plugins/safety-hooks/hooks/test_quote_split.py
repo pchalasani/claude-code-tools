@@ -321,3 +321,13 @@ def test_multiline_pipeline_and_timeout_payloads(command: str) -> None:
 def test_remote_evaluators_and_nested_stdin_consumers(command: str) -> None:
     """Remote evaluation and nested shells retain conservative inspection."""
     assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    'docker exec container sh -c "echo ok; rm foo"',
+    'kubectl exec pod -- sh -c "echo ok; rm foo"',
+    'busybox sh -c "echo ok; rm foo"',
+])
+def test_opaque_container_and_multicall_launchers(command: str) -> None:
+    """Opaque launchers preserve legacy scanning of their executable strings."""
+    assert check_rm_command(command)[0]

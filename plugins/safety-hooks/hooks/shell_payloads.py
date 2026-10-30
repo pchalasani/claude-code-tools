@@ -105,7 +105,7 @@ def needs_conservative_shell_scan(command: str) -> bool:
         return False
     for child in _launched_commands(words):
         name = child[0].rsplit('/', 1)[-1]
-        if name in {'ssh', 'su'}:
+        if name in {'ssh', 'su', 'docker', 'kubectl', 'busybox'}:
             return True  # Retain legacy inspection of opaque shell launchers.
         payload = _evaluator_payload(child)
         if name in _SHELLS | {'source', '.'} and payload is None:
