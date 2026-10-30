@@ -2238,3 +2238,21 @@ def test_setup_wizard_atomic_write_preserves_existing_on_failure(
         sw.run_setup(config_path=out)
     assert out.read_text() == 'engine = "moonshine"\n'
     assert list(tmp_path.glob(".config-*")) == []
+
+
+def test_setup_wizard_moonshine_drops_hold(monkeypatch, tmp_path) -> None:
+    out = tmp_path / "c.toml"
+    out.write_text('engine = "parakeet"\nsegmentation = "hold"\n')
+    _wizard(monkeypatch, [
+        "toggle", True, KEEP, "off",
+        True,                        # advanced?
+        "moonshine", "medium-streaming",
+        False, False, False, True, True,  # keys, paste, clip, sounds, ghost
+        True,                        # save?
+    ])
+    from voxtype.config import load_config
+    from voxtype.setup_wizard import run_setup
+
+    assert run_setup(config_path=out) == 0
+    cfg = load_config(out)
+    assert (cfg.engine, cfg.segmentation) == ("moonshine", "vad")

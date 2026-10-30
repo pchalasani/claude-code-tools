@@ -370,6 +370,8 @@ def _ask_advanced(q, cur: Config, ans: dict) -> None:  # noqa: ANN001
             choices=list(VALID_MODEL_ARCHS),
             default=cur.model_arch,
         ))
+        if ans.get("segmentation", cur.segmentation) == "hold":
+            ans["segmentation"] = "vad"  # "hold" needs a parakeet engine
     if ans["mode"] == "toggle" and engine != "moonshine":
         ans["segmentation"] = _ask(q.select(
             "In toggle mode, when should text appear?",
