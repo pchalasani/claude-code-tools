@@ -421,7 +421,7 @@ def test_bare_submit_after_show_keeps_the_shown_text(
     app.handle_utterance("look at this, ok show")
     app.handle_utterance("go")
     app.flush_deliveries()
-    assert app._session_texts == ["look at this"]
+    assert app._session_texts[app._msg_start:] == ["look at this"]
 
 
 @pytest.mark.parametrize(
@@ -445,12 +445,11 @@ def test_shown_then_sent_message_stays_whole(make_app) -> None:  # noqa: ANN001
     app.handle_utterance("second part, send it")
     app.handle_utterance("next message, send it")
     app.flush_deliveries()
-    assert app._session_texts == ["next message"]
-    app._session_texts.clear()
+    assert app._session_texts[app._msg_start:] == ["next message"]
     app.handle_utterance("a, ok show")
     app.handle_utterance("b, send it")
     app.flush_deliveries()
-    assert app._session_texts == ["a", "b"]
+    assert app._session_texts[app._msg_start:] == ["a", "b"]
 
 
 class Clock:
@@ -555,3 +554,177 @@ def test_held_limits_validated(bad: object) -> None:
     for name in ("held_gap", "held_max_words"):
         with pytest.raises(ValueError, match=name):
             Config(**{name: bad}).validate()
+
+
+class StartSpy(CleanupSpy):
+    """Cleanup stand-in that also answers the message-start check."""
+
+    def __init__(self, answer: tuple[int | None, str]) -> None:
+        super().__init__()
+        self.answer = answer
+        self.asked: list[list[str]] = []
+
+    def message_start(self, pieces: list[str]) -> tuple[int | None, str]:
+        self.asked.append(pieces)
+        return self.answer
+
+
+def test_unrelated_pieces_are_dropped(gap_app, tmp_path) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_check_words=4)
+    app._post = StartSpy((2, ""))
+    for piece in ("tv news tonight", "weather is clear"):
+        app.handle_utterance(piece)
+    app.handle_utterance("fix the bug, send it")
+    app.flush_deliveries()
+    assert app._post.asked == [
+        ["tv news tonight", "weather is clear", "fix the bug"]
+    ]
+    assert app.typist.events == ["fix the bug ", "<ENTER>"]
+    assert (tmp_path / "dropped.txt").read_text() == (
+        "tv news tonight weather is clear\n"
+    )
+
+
+@pytest.mark.parametrize("answer", [(0, ""), (None, "timed out")])
+def test_check_keeping_everything(gap_app, answer) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_check_words=4)
+    app._post = StartSpy(answer)
+    app.handle_utterance("background first")
+    app.handle_utterance("then the request, send it")
+    app.flush_deliveries()
+    assert app.typist.events == [
+        "background first then the request ", "<ENTER>"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("pieces", "words"),
+    [(["only one piece here today, send it"], 4),  # one piece
+     (["two", "short, send it"], 4)],  # under held_check_words
+)
+def test_check_skipped(gap_app, pieces, words) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_check_words=words)
+    app._post = StartSpy((1, ""))
+    for piece in pieces:
+        app.handle_utterance(piece)
+    app.flush_deliveries()
+    assert app._post.asked == []
+
+
+def test_cap_applies_after_the_check(gap_app) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_check_words=4, held_max_words=5)
+    app._post = StartSpy((1, ""))
+    app.handle_utterance("one two three four five six seven")
+    app.handle_utterance("fix it, send it")
+    app.flush_deliveries()
+    assert app.typist.events == ["fix it ", "<ENTER>"]
+
+
+def test_capped_text_stays_with_the_next_part(gap_app) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_max_words=5)
+    app.handle_utterance("one two three four five six, send it")
+    app.handle_utterance("and seven, ok show")
+    app.flush_deliveries()
+    assert app._session_texts[app._msg_start:] == ["one two three four five six", "and seven"]
+
+
+def test_release_during_check_keeps_capped_text(gap_app) -> None:  # noqa: ANN001
+    import threading
+
+    gate = threading.Event()
+
+    class SlowStart(StartSpy):
+        def message_start(self, pieces):  # noqa: ANN001, ANN202
+            gate.wait(5)
+            return (0, "")
+
+    app, _ = gap_app(held_check_words=4, held_max_words=5)
+    app._post = SlowStart((0, ""))
+    app.handle_utterance("one two three")
+    app.handle_utterance("four five six, send it")
+    app.handle_utterance("and seven, ok show")  # while the check runs
+    gate.set()
+    app.flush_deliveries()
+    assert "<ENTER>" not in app.typist.events
+    assert app._session_texts[app._msg_start:] == ["one two three four five six", "and seven"]
+
+
+def test_queued_messages_each_reach_the_clipboard(gap_app) -> None:  # noqa: ANN001
+    import threading
+
+    gate = threading.Event()
+
+    class SlowClean(CleanupSpy):
+        def clean(self, text, since=None):  # noqa: ANN001, ANN202
+            gate.wait(5)
+            return text
+
+    app, _ = gap_app()
+    app._post = SlowClean()
+    for msg in ("first message", "second message", "third message"):
+        app.handle_utterance(f"{msg}, send it")
+    gate.set()
+    app.flush_deliveries()
+    assert app._session_texts[app._msg_start:] == ["third message"]
+
+
+def test_toggle_off_text_reaches_the_clipboard_after_queued_send(
+    gap_app,  # noqa: ANN001
+) -> None:
+    import threading
+
+    gate = threading.Event()
+
+    class SlowClean(CleanupSpy):
+        def clean(self, text, since=None):  # noqa: ANN001, ANN202
+            gate.wait(5)
+            return text
+
+    app, _ = gap_app()
+    app._post = SlowClean()
+    app.handle_utterance("first message, send it")
+    app.handle_utterance("unfinished piece")
+    app.toggle()  # off: types the held piece without Enter
+    gate.set()
+    app.flush_deliveries()
+    assert app._session_texts[app._msg_start:] == ["unfinished piece"]
+
+
+def test_in_flight_words_after_queued_send_reach_the_clipboard(
+    gap_app,  # noqa: ANN001
+) -> None:
+    import threading
+
+    gate = threading.Event()
+
+    class SlowClean(CleanupSpy):
+        def clean(self, text, since=None):  # noqa: ANN001, ANN202
+            gate.wait(5)
+            return text
+
+    app, _ = gap_app()
+    app._post = SlowClean()
+    app.handle_utterance("first message, send it")
+    app.handle_utterance("second message, send it")
+    app.toggle()  # off; the next words were said just before it
+    app.handle_utterance("trailing words")
+    gate.set()
+    app.flush_deliveries()
+    assert app._session_texts[app._msg_start:] == [
+        "second message", "trailing words"
+    ]
+
+
+def test_check_runs_on_show_but_not_on_pause(gap_app) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_check_words=2)
+    app._post = StartSpy((1, ""))
+    app.handle_utterance("tv news")
+    app.handle_utterance("fix it, ok show")
+    app.flush_deliveries()
+    assert app.typist.events == ["fix it "]
+    app.handle_utterance("first thought")
+    app.handle_utterance("second thought")
+    app.toggle()  # pause: types what is held, unchecked
+    app.flush_deliveries()
+    assert app.typist.events[-1] == "first thought second thought "
+    assert len(app._post.asked) == 1

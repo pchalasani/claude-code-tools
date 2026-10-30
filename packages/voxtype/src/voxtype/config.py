@@ -219,6 +219,11 @@ class Config:
         held_max_words: Hands-free hold only: a submit with more than
             this many words held types them without pressing Enter, so
             a long accidental recording is never sent. 0 turns this off.
+        held_check_words: Hands-free hold with Cerebras cleanup: when a
+            submit holds at least this many words in two or more pieces,
+            Cerebras is asked where the dictated message starts; earlier
+            pieces (a meeting, the TV) are dropped and saved to
+            ``dropped.txt``. 0 turns this off.
         trailing_space: Append a space after each typed utterance.
         sounds: Play a system sound on activate/deactivate (macOS).
         sound_start: Sound when recording starts — a macOS system
@@ -297,6 +302,7 @@ class Config:
     idle_timeout: float = 20.0
     held_gap: float = 15.0
     held_max_words: int = 500
+    held_check_words: int = 50
     trailing_space: bool = True
     sounds: bool = True
     sound_start: str = "Glass"
@@ -505,7 +511,7 @@ class Config:
             raise ValueError("copy_to_clipboard must be a boolean")
         if not isinstance(self.ask_mode, bool):
             raise ValueError("ask_mode must be a boolean")
-        for name in ("held_gap", "held_max_words"):
+        for name in ("held_gap", "held_max_words", "held_check_words"):
             value = getattr(self, name)
             if (
                 isinstance(value, bool)
@@ -867,6 +873,12 @@ held_gap = 15.0
 # them without pressing Enter, so a long accidental recording is never
 # sent. 0 turns this off.
 held_max_words = 500
+
+# Hands-free hold with Cerebras cleanup: a submit holding at least this
+# many words, in two or more pieces, asks Cerebras where your message
+# starts; earlier unrelated speech is dropped (saved to dropped.txt).
+# 0 turns this off.
+held_check_words = 50
 
 # In "wake" mode, go back to passive after this many seconds of silence.
 idle_timeout = 20.0
