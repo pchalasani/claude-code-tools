@@ -957,6 +957,22 @@ def test_drain_reads_segment_before_pop() -> None:
     assert got == ["len=1600"]
 
 
+def test_drain_reports_segment_length_before_delivery() -> None:
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("sherpa_onnx")
+    from voxtype.config import Config
+    from voxtype.engine_parakeet import SAMPLE_RATE, ParakeetEngine
+
+    eng = ParakeetEngine(Config(engine="parakeet"), lambda m: None)
+    eng._vad = _PopInvalidatingVad(
+        [np.ones(SAMPLE_RATE * 3, dtype=np.float32)]
+    )
+    eng.transcribe = lambda samples, sr: "hi"  # type: ignore
+    seen: list[float | None] = []
+    eng._drain_segments(lambda t: seen.append(eng.last_segment_secs))
+    assert seen == [3.0]
+
+
 # -- hold-mode robustness -------------------------------------------------
 
 

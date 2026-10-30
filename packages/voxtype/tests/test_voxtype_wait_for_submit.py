@@ -451,3 +451,107 @@ def test_shown_then_sent_message_stays_whole(make_app) -> None:  # noqa: ANN001
     app.handle_utterance("b, send it")
     app.flush_deliveries()
     assert app._session_texts == ["a", "b"]
+
+
+class Clock:
+    """Settable stand-in for time.monotonic."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@pytest.fixture
+def gap_app(make_app, monkeypatch, tmp_path):  # noqa: ANN001, ANN201
+    """Hands-free app whose engine reports 2 s segments, on a fake clock."""
+    import types
+
+    import voxtype.app as app_mod
+
+    def make(**kw):  # noqa: ANN003, ANN202
+        clock = Clock()
+        monkeypatch.setattr(app_mod.time, "monotonic", clock)
+        monkeypatch.setattr(
+            app_mod, "DEFAULT_CONFIG_PATH", tmp_path / "config.toml"
+        )
+        app = make_app(mode="vad", **kw)
+        app._engine = types.SimpleNamespace(last_segment_secs=2.0)
+        return app, clock
+
+    return make
+
+
+def test_long_silence_drops_held_text(gap_app, tmp_path) -> None:  # noqa: ANN001
+    app, clock = gap_app()
+    app.handle_utterance("meeting chatter about lunch")
+    clock.now += 60  # 58 s of silence before the next 2 s of speech
+    app.handle_utterance("fix the parser, send it")
+    app.flush_deliveries()
+    assert app.typist.events == ["fix the parser ", "<ENTER>"]
+    assert (tmp_path / "dropped.txt").read_text() == (
+        "meeting chatter about lunch\n"
+    )
+
+
+def test_short_pause_keeps_held_text(gap_app) -> None:  # noqa: ANN001
+    app, clock = gap_app()
+    app.handle_utterance("first part")
+    clock.now += 12  # 10 s pause to think
+    app.handle_utterance("second part, send it")
+    app.flush_deliveries()
+    assert app.typist.events == ["first part second part ", "<ENTER>"]
+
+
+def test_bare_submit_after_long_pause_sends_held(gap_app) -> None:  # noqa: ANN001
+    app, clock = gap_app()
+    app.handle_utterance("think it over")
+    clock.now += 60
+    app.handle_utterance("send it")
+    app.flush_deliveries()
+    assert app.typist.events == ["think it over ", "<ENTER>"]
+
+
+def test_gap_rule_off(gap_app) -> None:  # noqa: ANN001
+    app, clock = gap_app(held_gap=0)
+    app.handle_utterance("first part")
+    clock.now += 60
+    app.handle_utterance("second part, send it")
+    app.flush_deliveries()
+    assert app.typist.events == ["first part second part ", "<ENTER>"]
+
+
+def test_no_segment_length_no_gap_rule(gap_app) -> None:  # noqa: ANN001
+    app, clock = gap_app()
+    app._engine = None
+    app.handle_utterance("first part")
+    clock.now += 60
+    app.handle_utterance("second part, send it")
+    app.flush_deliveries()
+    assert app.typist.events == ["first part second part ", "<ENTER>"]
+
+
+def test_word_cap_types_without_enter(gap_app) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_max_words=5)
+    app.handle_utterance("one two three four")
+    app.handle_utterance("five six, send it")
+    app.flush_deliveries()
+    assert app.typist.events == ["one two three four five six "]
+    app.handle_utterance("go")
+    app.flush_deliveries()
+    assert app.typist.events[-1] == "<ENTER>"
+
+
+def test_under_word_cap_submits(gap_app) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_max_words=5)
+    app.handle_utterance("one two three, send it")
+    app.flush_deliveries()
+    assert app.typist.events == ["one two three ", "<ENTER>"]
+
+
+@pytest.mark.parametrize("bad", [-1, "10", True])
+def test_held_limits_validated(bad: object) -> None:
+    for name in ("held_gap", "held_max_words"):
+        with pytest.raises(ValueError, match=name):
+            Config(**{name: bad}).validate()

@@ -212,6 +212,13 @@ class Config:
             back until a submit phrase or suffix, then clean and type
             it all at once. False types each piece at every pause.
         idle_timeout: Seconds of silence after which "wake" mode re-arms.
+        held_gap: Hands-free hold only: when you start talking again
+            after a silence longer than this many seconds, the text
+            held from before it (a meeting, the TV) is dropped and saved
+            to ``dropped.txt`` next to the config. 0 turns this off.
+        held_max_words: Hands-free hold only: a submit with more than
+            this many words held types them without pressing Enter, so
+            a long accidental recording is never sent. 0 turns this off.
         trailing_space: Append a space after each typed utterance.
         sounds: Play a system sound on activate/deactivate (macOS).
         sound_start: Sound when recording starts — a macOS system
@@ -288,6 +295,8 @@ class Config:
     )
     wait_for_submit: bool = True
     idle_timeout: float = 20.0
+    held_gap: float = 15.0
+    held_max_words: int = 500
     trailing_space: bool = True
     sounds: bool = True
     sound_start: str = "Glass"
@@ -496,6 +505,14 @@ class Config:
             raise ValueError("copy_to_clipboard must be a boolean")
         if not isinstance(self.ask_mode, bool):
             raise ValueError("ask_mode must be a boolean")
+        for name in ("held_gap", "held_max_words"):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or value < 0
+            ):
+                raise ValueError(f"{name} must be a number >= 0")
 
 
     def _validate_post_process(self) -> None:
@@ -840,6 +857,16 @@ show_suffixes = [
 # to think never split it. Ctrl+; or "stop listening" types what is held
 # without Enter. false types each piece at every pause.
 wait_for_submit = true
+
+# Hands-free hold: starting to talk after more than this many seconds of
+# silence drops the text held from before (a meeting, the TV); it is
+# saved to dropped.txt next to this file. 0 turns this off.
+held_gap = 15.0
+
+# Hands-free hold: a submit with more than this many words held types
+# them without pressing Enter, so a long accidental recording is never
+# sent. 0 turns this off.
+held_max_words = 500
 
 # In "wake" mode, go back to passive after this many seconds of silence.
 idle_timeout = 20.0
