@@ -2293,3 +2293,18 @@ def test_setup_number_prompt_uses_config_rules(monkeypatch) -> None:
     assert check("abc") is not True
     assert sw._number(fake, "w", "held_max_words", 500) == 5
     assert seen["validate"]("2.5") is not True  # whole numbers only
+
+
+def test_setup_number_prompt_follows_field_type(monkeypatch) -> None:
+    import voxtype.setup_wizard as sw
+
+    seen = {}
+
+    def text(msg, default="", validate=None):  # noqa: ANN001, ANN202
+        seen["validate"] = validate
+        return types.SimpleNamespace(ask=lambda: "1.5")
+
+    fake = types.SimpleNamespace(text=text)
+    # The file said `post_process_timeout = 0` (an integer literal).
+    assert sw._number(fake, "t", "post_process_timeout", 0) == 1.5
+    assert seen["validate"]("0.5") is True

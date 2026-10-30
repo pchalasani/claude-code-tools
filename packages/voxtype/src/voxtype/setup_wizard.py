@@ -205,7 +205,10 @@ def _section(title: str) -> None:
 
 def _number(q, message: str, field: str, default: float):  # noqa: ANN001, ANN202
     """Ask for config number ``field``, checked by the config's rules."""
-    integer = isinstance(default, int) and not isinstance(default, bool)
+    from dataclasses import fields
+
+    kind = {f.name: f.type for f in fields(Config)}[field]
+    integer = kind in (int, "int")
 
     def convert(text: str) -> float:
         return int(text) if integer else float(text)
