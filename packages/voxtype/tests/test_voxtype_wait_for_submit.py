@@ -619,3 +619,11 @@ def test_cap_applies_after_the_check(gap_app) -> None:  # noqa: ANN001
     app.handle_utterance("fix it, send it")
     app.flush_deliveries()
     assert app.typist.events == ["fix it ", "<ENTER>"]
+
+
+def test_capped_text_stays_with_the_next_part(gap_app) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_max_words=5)
+    app.handle_utterance("one two three four five six, send it")
+    app.handle_utterance("and seven, ok show")
+    app.flush_deliveries()
+    assert app._session_texts == ["one two three four five six", "and seven"]

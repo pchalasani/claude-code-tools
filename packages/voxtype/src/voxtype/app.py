@@ -627,6 +627,9 @@ class VoiceTypeApp(RuntimeMixin):
         n_words = len(text.split())
         if enter and 0 < self.cfg.held_max_words < n_words:
             enter = False
+            with self._lock:
+                if self._session_texts is session:
+                    self._sent = False  # not sent: more may follow it
             self._status(
                 f"{n_words} words held, over held_max_words "
                 f"({self.cfg.held_max_words}): typed without Enter; "
