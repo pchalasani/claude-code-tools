@@ -331,3 +331,12 @@ def test_remote_evaluators_and_nested_stdin_consumers(command: str) -> None:
 def test_opaque_container_and_multicall_launchers(command: str) -> None:
     """Opaque launchers preserve legacy scanning of their executable strings."""
     assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    "&>/dev/null rm foo",
+    "&>>/dev/null /bin/rm foo",
+])
+def test_leading_combined_output_redirect_cannot_hide_rm(command: str) -> None:
+    """Combined stdout/stderr redirects cannot become a command word."""
+    assert check_rm_command(command)[0]

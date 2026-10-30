@@ -199,9 +199,10 @@ def _strip_literal_redirections(command: str) -> str:
     while index < len(tokens):
         token = tokens[index]
         if re.fullmatch(r'[<>]+', token[0]):
-            if (kept and kept[-1].end() == token.start()
-                    and kept[-1][0].isascii() and kept[-1][0].isdigit()):
-                kept.pop()  # An adjacent unquoted number is a file descriptor.
+            if kept and kept[-1].end() == token.start() and (
+                    (kept[-1][0].isascii() and kept[-1][0].isdigit())
+                    or (kept[-1][0] == '&' and token[0].startswith('>'))):
+                kept.pop()  # A descriptor number or the '&' in '&>'/'&>>'.
             index += 2  # Operator and its destination word.
         else:
             kept.append(token)
