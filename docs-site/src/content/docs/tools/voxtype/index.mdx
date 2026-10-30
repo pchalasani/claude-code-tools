@@ -215,6 +215,14 @@ Nothing is typed and voxtype keeps listening (`discard_hotkey`). Set
 `wait_for_submit = false` to have each piece typed as soon as you pause
 instead.
 
+Two safeguards stop talk you never meant to dictate (a meeting, the TV)
+from being sent. If you start talking after more than 15 seconds of
+silence (`held_gap`), what was held before the silence is dropped and
+saved to `dropped.txt` next to your config, in case you wanted it. And
+a submit with more than 500 words held (`held_max_words`) types them
+without pressing Enter, so you can check before sending. Set either to
+0 to turn it off.
+
 To look before you send, end with "ok show" (or "ok show me", "now
 show me", "type it", "tap it") instead: the held text is typed without
 Enter and voxtype keeps listening. Read it, fix it by hand if needed,

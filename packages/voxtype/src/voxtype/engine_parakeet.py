@@ -518,6 +518,9 @@ class ParakeetEngine:
         # (frames read so far + frames queued) at the keypress.
         self._reset_acks: list[tuple[Callable[[], None], int]] = []
         self._frames_read = 0
+        # Length in seconds of the VAD segment being delivered, set just
+        # before on_utterance on the same thread; None in hold mode.
+        self.last_segment_secs: float | None = None
         # Held across each stream read and its count, so a discard's
         # boundary snapshot always sees one consistent stream position.
         self._pos_lock = threading.Lock()
@@ -1247,6 +1250,7 @@ class ParakeetEngine:
                 continue
             self._report_decode_time(seg_secs, time.monotonic() - t0)
             if text:
+                self.last_segment_secs = seg_secs
                 self._safe_call(
                     lambda t=text: on_utterance(t), "on_utterance"
                 )

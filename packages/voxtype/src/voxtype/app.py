@@ -15,7 +15,7 @@ import time
 from enum import Enum
 from typing import Callable
 
-from .config import Config
+from .config import DEFAULT_CONFIG_PATH, Config
 from .inject import SoundPlayer, Typist, copy_to_clipboard
 from .logic import (
     collapse_repeats,
@@ -107,6 +107,8 @@ class VoiceTypeApp(RuntimeMixin):
         # Hands-free wait_for_submit: pieces held back until a submit
         # phrase (see _hold_text); typed without Enter on deactivation.
         self._held: list[str] = []
+        # When the last held piece arrived (for the held_gap rule).
+        self._held_at = 0.0
         # Set by a hands-free submit: the next message typed starts a
         # fresh rescue buffer (clipboard and paste-again hold only it).
         self._sent = False
@@ -415,10 +417,16 @@ class VoiceTypeApp(RuntimeMixin):
         # typing held text must not run out the grace window that
         # authorizes these (in-flight) words.
         arrived = time.monotonic()
+        # When this speech began: the engine sets the segment's length
+        # just before calling here, on this thread (VAD engines only).
+        secs = getattr(self._engine, "last_segment_secs", None)
+        started = arrived - secs if isinstance(secs, (int, float)) else None
         with self._order_lock:
-            self._handle_utterance(text, arrived)
+            self._handle_utterance(text, arrived, started)
 
-    def _handle_utterance(self, text: str, arrived: float) -> None:
+    def _handle_utterance(
+        self, text: str, arrived: float, started: float | None = None
+    ) -> None:
         if not isinstance(text, str):
             return
         text = text.strip()
@@ -512,7 +520,7 @@ class VoiceTypeApp(RuntimeMixin):
             self._set_state(self._off_state)
             return
         t, enter, show = self._split_suffix(text)
-        if self._hold_text(version, t, enter, show):
+        if self._hold_text(version, t, enter, show, arrived, started):
             return
         if t:  # a bare "send it" only presses Enter
             self._status(f'typed: "{_preview(t)}"')
@@ -524,7 +532,13 @@ class VoiceTypeApp(RuntimeMixin):
         )
 
     def _hold_text(
-        self, version: int, text: str, enter: bool, show: bool = False
+        self,
+        version: int,
+        text: str,
+        enter: bool,
+        show: bool = False,
+        arrived: float | None = None,
+        started: float | None = None,
     ) -> bool:
         """Hands-free wait_for_submit: hold ``text`` until a submit.
 
@@ -533,15 +547,31 @@ class VoiceTypeApp(RuntimeMixin):
         then presses Enter, a show leaves it for review. Returns False
         when not holding, or when a transition since ``version`` already
         released the held text; the caller then types as usual.
+
+        Speech that ``started`` over ``held_gap`` seconds after the last
+        held piece arrived first drops what is held (see
+        ``_drop_held``); a submit of over ``held_max_words`` words is
+        typed without Enter.
         """
         if self.cfg.mode != "vad" or not self.cfg.wait_for_submit:
             return False
+        dropped, gap = "", 0.0
         with self._lock:
             if version != self._state_version:
                 return False
+            if text and self._held and started is not None:
+                gap = started - self._held_at
+                if 0 < self.cfg.held_gap < gap:
+                    dropped, self._held = " ".join(self._held), []
             if text:
                 self._held.append(text)
+                self._held_at = arrived if arrived is not None else 0.0
             joined = " ".join(self._held)
+            n_words = len(joined.split())
+            if enter and 0 < self.cfg.held_max_words < n_words:
+                enter, show, capped = False, True, True
+            else:
+                capped = False
             if enter or show:
                 self._held = []
                 if joined and self._sent:
@@ -550,6 +580,14 @@ class VoiceTypeApp(RuntimeMixin):
                 if enter:
                     self._sent = True
             buf = self._session_texts
+        if dropped:
+            self._drop_held(dropped, gap)
+        if capped:
+            self._status(
+                f"{n_words} words held, over held_max_words "
+                f"({self.cfg.held_max_words}): typed without Enter; "
+                "check it, then say a submit phrase"
+            )
         if not (enter or show):
             self._status(f'held: "{_preview(text)}"')
             return True
@@ -562,6 +600,24 @@ class VoiceTypeApp(RuntimeMixin):
             lambda v, at: self._type(joined, v, at, buf, None, enter),
         )
         return True
+
+    def _drop_held(self, text: str, gap: float) -> None:
+        """Report text dropped by the ``held_gap`` rule; save it.
+
+        Only the latest drop is kept, in ``dropped.txt`` next to the
+        default config, so a wrong drop can be recovered by hand.
+        """
+        path = DEFAULT_CONFIG_PATH.parent / "dropped.txt"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text + "\n")
+            where = f"; saved to {path}"
+        except OSError:
+            where = ""
+        self._status(
+            f"dropped {len(text.split())} held words said before a "
+            f"{gap:.0f}s silence{where}"
+        )
 
     def _split_suffix(self, text: str) -> tuple[str, bool, bool]:
         """Split off a trailing submit ("send it") or show ("ok show") phrase.
