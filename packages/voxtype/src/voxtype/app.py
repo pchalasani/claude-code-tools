@@ -173,8 +173,9 @@ class VoiceTypeApp(RuntimeMixin):
             self._state_version += 1
             version = self._state_version
             self._last_activity = time.monotonic()
-            held, self._held = " ".join(self._held), []
+            pieces, self._held = list(self._held), []
             buf = self._session_texts
+            activation = self._activation
             if new == State.ACTIVE:
                 # Fresh dictation session: the buffer is cleared as
                 # part of the SAME commit that publishes ACTIVE, so a
@@ -184,8 +185,13 @@ class VoiceTypeApp(RuntimeMixin):
                 self._session_texts = []
                 self._sent = False
                 self._activation += 1
-        if held and keep_held:
-            self._deliver(None, lambda v, at: self._type(held, v, at, buf))
+        if pieces and keep_held:
+            self._deliver(
+                None,
+                lambda v, at: self._send_held(
+                    pieces, v, at, buf, False, activation
+                ),
+            )
             # Typing it may have used up a toggle-off's grace window; the
             # in-flight words get a full one after it. Still inside
             # _order_lock, so no utterance can see the stale deadline.

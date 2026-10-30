@@ -667,3 +667,25 @@ def test_queued_messages_each_reach_the_clipboard(gap_app) -> None:  # noqa: ANN
     gate.set()
     app.flush_deliveries()
     assert app._session_texts == ["third message"]
+
+
+def test_toggle_off_text_reaches_the_clipboard_after_queued_send(
+    gap_app,  # noqa: ANN001
+) -> None:
+    import threading
+
+    gate = threading.Event()
+
+    class SlowClean(CleanupSpy):
+        def clean(self, text, since=None):  # noqa: ANN001, ANN202
+            gate.wait(5)
+            return text
+
+    app, _ = gap_app()
+    app._post = SlowClean()
+    app.handle_utterance("first message, send it")
+    app.handle_utterance("unfinished piece")
+    app.toggle()  # off: types the held piece without Enter
+    gate.set()
+    app.flush_deliveries()
+    assert app._session_texts == ["unfinished piece"]
