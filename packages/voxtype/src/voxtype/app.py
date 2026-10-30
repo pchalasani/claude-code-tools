@@ -550,8 +550,7 @@ class VoiceTypeApp(RuntimeMixin):
 
         Speech that ``started`` over ``held_gap`` seconds after the last
         held piece arrived first drops what is held (see
-        ``_drop_held``); a submit of over ``held_max_words`` words is
-        typed without Enter.
+        ``_drop_held``). The release itself is ``_send_held``.
         """
         if self.cfg.mode != "vad" or not self.cfg.wait_for_submit:
             return False
@@ -566,12 +565,8 @@ class VoiceTypeApp(RuntimeMixin):
             if text:
                 self._held.append(text)
                 self._held_at = arrived if arrived is not None else 0.0
-            joined = " ".join(self._held)
-            n_words = len(joined.split())
-            if enter and 0 < self.cfg.held_max_words < n_words:
-                enter, show, capped = False, True, True
-            else:
-                capped = False
+            pieces = list(self._held)
+            joined = " ".join(pieces)
             if enter or show:
                 self._held = []
                 if joined and self._sent:
@@ -581,28 +576,66 @@ class VoiceTypeApp(RuntimeMixin):
                     self._sent = True
             buf = self._session_texts
         if dropped:
-            self._drop_held(dropped, gap)
-        if capped:
+            self._drop_held(dropped, f"said before a {gap:.0f}s silence")
+        if not (enter or show):
+            self._status(f'held: "{_preview(text)}"')
+            return True
+        if not joined and show:
+            return True  # "ok show" with nothing held: nothing to show
+        self._deliver(
+            version,
+            lambda v, at: self._send_held(pieces, v, at, buf, enter),
+        )
+        return True
+
+    def _send_held(
+        self,
+        pieces: list[str],
+        version: int | None,
+        arrived: float,
+        session: list[str],
+        enter: bool,
+    ) -> None:
+        """Type released held pieces (on the delivery thread).
+
+        With Cerebras cleanup and at least ``held_check_words`` words in
+        two or more pieces, Cerebras says where the dictated message
+        starts and earlier pieces are dropped; any problem keeps them
+        all. Then a submit of over ``held_max_words`` words is typed
+        without Enter, for review.
+        """
+        check = getattr(self._post, "message_start", None)
+        n_words = len(" ".join(pieces).split())
+        checked = None
+        if (
+            check is not None
+            and len(pieces) > 1
+            and 0 < self.cfg.held_check_words <= n_words
+        ):
+            start, problem = check(pieces)
+            checked = time.monotonic()
+            if problem:
+                self._status(f"message-start check skipped ({problem})")
+            elif start:
+                self._drop_held(
+                    " ".join(pieces[:start]), "judged unrelated by Cerebras"
+                )
+                pieces = pieces[start:]
+        text = " ".join(pieces)
+        if text:
+            self._status(f'typed: "{_preview(text)}"')
+        n_words = len(text.split())
+        if enter and 0 < self.cfg.held_max_words < n_words:
+            enter = False
             self._status(
                 f"{n_words} words held, over held_max_words "
                 f"({self.cfg.held_max_words}): typed without Enter; "
                 "check it, then say a submit phrase"
             )
-        if not (enter or show):
-            self._status(f'held: "{_preview(text)}"')
-            return True
-        if joined:
-            self._status(f'typed: "{_preview(joined)}"')
-        elif show:
-            return True  # "ok show" with nothing held: nothing to show
-        self._deliver(
-            version,
-            lambda v, at: self._type(joined, v, at, buf, None, enter),
-        )
-        return True
+        self._type(text, version, arrived, session, None, enter, checked)
 
-    def _drop_held(self, text: str, gap: float) -> None:
-        """Report text dropped by the ``held_gap`` rule; save it.
+    def _drop_held(self, text: str, why: str) -> None:
+        """Report held text that was dropped, and save it.
 
         Only the latest drop is kept, in ``dropped.txt`` next to the
         default config, so a wrong drop can be recovered by hand.
@@ -615,8 +648,7 @@ class VoiceTypeApp(RuntimeMixin):
         except OSError:
             where = ""
         self._status(
-            f"dropped {len(text.split())} held words said before a "
-            f"{gap:.0f}s silence{where}"
+            f"dropped {len(text.split())} held words {why}{where}"
         )
 
     def _split_suffix(self, text: str) -> tuple[str, bool, bool]:
@@ -790,11 +822,14 @@ class VoiceTypeApp(RuntimeMixin):
         session: list[str] | None = None,
         speech_end: float | None = None,
         enter: bool = False,
+        clean_since: float | None = None,
     ) -> None:
         """Type ``text``; ``version=None`` skips the staleness check
         (used for grace-window commits, which by definition arrive
         after a state transition). ``enter`` presses Enter after the
-        text is typed (a submit suffix ended the utterance)."""
+        text is typed (a submit suffix ended the utterance).
+        ``clean_since`` starts cleanup's timeout later than ``arrived``
+        (after the message-start check)."""
         if self.cfg.strip_fillers:
             # Fillers first: removing "um"s can make a stutter run
             # adjacent ("I um I um I" -> "I I I"), which then collapses.
@@ -809,7 +844,9 @@ class VoiceTypeApp(RuntimeMixin):
             # cleanup takes up to post_process_timeout and must never
             # hold up capture, hotkeys, or the overlay. The submit/stop/
             # wake phrases were already matched on the raw text.
-            text = self._post.clean(text, since=arrived)
+            text = self._post.clean(
+                text, since=clean_since if clean_since else arrived
+            )
             # Only "\n" may survive as a control character (see
             # strip_controls).
             text = strip_controls(text)

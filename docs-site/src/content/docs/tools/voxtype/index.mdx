@@ -220,8 +220,13 @@ from being sent. If you start talking after more than 15 seconds of
 silence (`held_gap`), what was held before the silence is dropped and
 saved to `dropped.txt` next to your config, in case you wanted it. And
 a submit with more than 500 words held (`held_max_words`) types them
-without pressing Enter, so you can check before sending. Set either to
-0 to turn it off.
+without pressing Enter, so you can check before sending. With Cerebras
+cleanup on, a submit holding 50 words or more in several pieces
+(`held_check_words`) also asks Cerebras where your message starts; the
+pieces before it (a meeting, the TV, a chat with someone in the room)
+are dropped and saved to `dropped.txt` too. This adds about 0.3 seconds,
+and if Cerebras doesn't answer in time, everything is kept. Set any of
+these to 0 to turn it off.
 
 To look before you send, end with "ok show" (or "ok show me", "now
 show me", "type it", "tap it") instead: the held text is typed without

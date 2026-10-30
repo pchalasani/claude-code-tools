@@ -178,6 +178,10 @@ held_gap = 15.0
 # Hands-free hold: a submit with more words held than this is typed
 # without Enter, for review; 0 = off
 held_max_words = 500
+# Hands-free hold with Cerebras: a submit holding at least this many
+# words in 2+ pieces asks Cerebras where the message starts, dropping
+# earlier unrelated speech (saved to dropped.txt); 0 = off
+held_check_words = 50
 ```
 
 (These recipes leave `engine` unset so it auto-selects

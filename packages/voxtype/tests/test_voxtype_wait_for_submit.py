@@ -555,3 +555,67 @@ def test_held_limits_validated(bad: object) -> None:
     for name in ("held_gap", "held_max_words"):
         with pytest.raises(ValueError, match=name):
             Config(**{name: bad}).validate()
+
+
+class StartSpy(CleanupSpy):
+    """Cleanup stand-in that also answers the message-start check."""
+
+    def __init__(self, answer: tuple[int | None, str]) -> None:
+        super().__init__()
+        self.answer = answer
+        self.asked: list[list[str]] = []
+
+    def message_start(self, pieces: list[str]) -> tuple[int | None, str]:
+        self.asked.append(pieces)
+        return self.answer
+
+
+def test_unrelated_pieces_are_dropped(gap_app, tmp_path) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_check_words=4)
+    app._post = StartSpy((2, ""))
+    for piece in ("tv news tonight", "weather is clear"):
+        app.handle_utterance(piece)
+    app.handle_utterance("fix the bug, send it")
+    app.flush_deliveries()
+    assert app._post.asked == [
+        ["tv news tonight", "weather is clear", "fix the bug"]
+    ]
+    assert app.typist.events == ["fix the bug ", "<ENTER>"]
+    assert (tmp_path / "dropped.txt").read_text() == (
+        "tv news tonight weather is clear\n"
+    )
+
+
+@pytest.mark.parametrize("answer", [(0, ""), (None, "timed out")])
+def test_check_keeping_everything(gap_app, answer) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_check_words=4)
+    app._post = StartSpy(answer)
+    app.handle_utterance("background first")
+    app.handle_utterance("then the request, send it")
+    app.flush_deliveries()
+    assert app.typist.events == [
+        "background first then the request ", "<ENTER>"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("pieces", "words"),
+    [(["only one piece here today, send it"], 4),  # one piece
+     (["two", "short, send it"], 4)],  # under held_check_words
+)
+def test_check_skipped(gap_app, pieces, words) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_check_words=words)
+    app._post = StartSpy((1, ""))
+    for piece in pieces:
+        app.handle_utterance(piece)
+    app.flush_deliveries()
+    assert app._post.asked == []
+
+
+def test_cap_applies_after_the_check(gap_app) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_check_words=4, held_max_words=5)
+    app._post = StartSpy((1, ""))
+    app.handle_utterance("one two three four five six seven")
+    app.handle_utterance("fix it, send it")
+    app.flush_deliveries()
+    assert app.typist.events == ["fix it ", "<ENTER>"]

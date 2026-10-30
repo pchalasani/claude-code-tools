@@ -783,3 +783,52 @@ def test_live_formats(live, fmt: str) -> None:
     if fmt == "minimal":
         assert "\n\n" not in out
     proc.stop()
+
+
+# -- where the dictated message starts --------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("answer", "index"),
+    [("3", 2), (" 1 ", 0), ("[2].", 1), ("0", None), ("4", None),
+     ("piece 2", None), ("", None), (None, None)],
+)
+def test_parse_start(answer: object, index: int | None) -> None:
+    from voxtype.postprocess_cerebras import parse_start
+
+    assert parse_start(answer, 3) == index
+
+
+def test_start_messages_number_the_pieces() -> None:
+    from voxtype.postprocess_cerebras import start_messages
+
+    msgs = start_messages(["tv news", "fix the bug"])
+    assert "If unsure, reply 1." in msgs[0]["content"]
+    assert msgs[1]["content"] == (
+        "<pieces>\n[1] tv news\n[2] fix the bug\n</pieces>"
+    )
+
+
+def test_message_start_success(api) -> None:
+    api.reply = "2"
+    proc = _proc(api, [])
+    assert proc.message_start(["tv news", "fix the bug"]) == (1, "")
+    assert api.requests[0]["messages"][1]["content"].startswith("<pieces>")
+    proc.stop()
+
+
+@pytest.mark.parametrize(
+    ("setup", "problem"),
+    [
+        ({"status": 500}, "HTTP 500"),
+        ({"raw_body": b"not json"}, "malformed response"),
+        ({"reply": "the second one"}, "unclear answer"),
+        ({"delay": 2.0}, "timed out"),
+    ],
+)
+def test_message_start_problems_keep_everything(api, setup, problem) -> None:
+    for k, v in setup.items():
+        setattr(api, k, v)
+    proc = _proc(api, [], timeout=0.5)
+    assert proc.message_start(["a", "b"]) == (None, problem)
+    proc.stop()
