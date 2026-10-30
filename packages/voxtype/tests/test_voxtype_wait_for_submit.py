@@ -713,3 +713,18 @@ def test_in_flight_words_after_queued_send_reach_the_clipboard(
     assert app._session_texts[app._msg_start:] == [
         "second message", "trailing words"
     ]
+
+
+def test_check_runs_on_show_but_not_on_pause(gap_app) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_check_words=2)
+    app._post = StartSpy((1, ""))
+    app.handle_utterance("tv news")
+    app.handle_utterance("fix it, ok show")
+    app.flush_deliveries()
+    assert app.typist.events == ["fix it "]
+    app.handle_utterance("first thought")
+    app.handle_utterance("second thought")
+    app.toggle()  # pause: types what is held, unchecked
+    app.flush_deliveries()
+    assert app.typist.events[-1] == "first thought second thought "
+    assert len(app._post.asked) == 1

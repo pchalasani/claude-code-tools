@@ -189,7 +189,9 @@ class VoiceTypeApp(RuntimeMixin):
         if pieces and keep_held:
             self._deliver(
                 None,
-                lambda v, at: self._send_held(pieces, v, at, buf, False),
+                lambda v, at: self._send_held(
+                    pieces, v, at, buf, False, ended=False
+                ),
             )
             # Typing it may have used up a toggle-off's grace window; the
             # in-flight words get a full one after it. Still inside
@@ -599,20 +601,23 @@ class VoiceTypeApp(RuntimeMixin):
         arrived: float,
         session: list[str],
         enter: bool,
+        ended: bool = True,
     ) -> None:
         """Type released held pieces (on the delivery thread).
 
         With Cerebras cleanup and at least ``held_check_words`` words in
         two or more pieces, Cerebras says where the dictated message
         starts and earlier pieces are dropped; any problem keeps them
-        all. Then a submit of over ``held_max_words`` words is typed
-        without Enter, for review.
+        all; only when a submit or show phrase ``ended`` the message
+        (not a pause or stop). Then a submit of over ``held_max_words``
+        words is typed without Enter, for review.
         """
         check = getattr(self._post, "message_start", None)
         n_words = len(" ".join(pieces).split())
         checked = None
         if (
             check is not None
+            and ended
             and len(pieces) > 1
             and 0 < self.cfg.held_check_words <= n_words
         ):
