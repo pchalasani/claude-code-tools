@@ -211,7 +211,12 @@ def _number(q, message: str, field: str, default: float):  # noqa: ANN001, ANN20
     integer = kind in (int, "int")
 
     def convert(text: str) -> float:
-        return int(text) if integer else float(text)
+        value = float(text)
+        if integer:
+            if not value.is_integer():
+                raise ValueError("enter a whole number")
+            return int(value)
+        return value
 
     def _valid(text: str):  # noqa: ANN202
         try:
@@ -220,7 +225,11 @@ def _number(q, message: str, field: str, default: float):  # noqa: ANN001, ANN20
             return str(e) or "enter a number"
         return True
 
-    shown = str(default) if integer else repr(float(default))
+    shown = (
+        str(int(default))
+        if integer and float(default).is_integer()
+        else repr(float(default))
+    )
     return convert(_ask(q.text(message, default=shown, validate=_valid)))
 
 
