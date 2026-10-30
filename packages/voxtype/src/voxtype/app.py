@@ -190,8 +190,6 @@ class VoiceTypeApp(HeldNotesMixin, RuntimeMixin):
                 self._session_texts = []
                 self._sent = False
                 self._msg_start = 0
-        if pieces:
-            self._clear_note()
         if pieces and keep_held:
             self._deliver(
                 None,
@@ -590,8 +588,6 @@ class VoiceTypeApp(HeldNotesMixin, RuntimeMixin):
             buf = self._session_texts
         if kept:
             self._note_kept(kept, gap)
-        if enter or show:
-            self._clear_note()
         if not (enter or show):
             self._status(f'held: "{_preview(text)}"')
             return True
@@ -614,8 +610,11 @@ class VoiceTypeApp(HeldNotesMixin, RuntimeMixin):
         """Type released held pieces (on the delivery thread).
 
         Over ``held_max_words`` words (a long accidental recording, say)
-        nothing is typed: see ``_hold_over_cap``.
+        nothing is typed: see ``_hold_over_cap``. Any note goes: what
+        it was about is released now (in delivery order, so a later
+        message never clears an earlier one's note too soon).
         """
+        self._clear_note()
         text = " ".join(pieces)
         n_words = len(text.split())
         if 0 < self.cfg.held_max_words < n_words:

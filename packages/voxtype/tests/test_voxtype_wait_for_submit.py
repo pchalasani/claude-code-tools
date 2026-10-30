@@ -681,3 +681,31 @@ def test_in_flight_words_after_queued_send_reach_the_clipboard(
     assert app._session_texts[app._msg_start:] == [
         "second message", "trailing words"
     ]
+
+
+def test_queued_message_clears_cap_note_in_order(gap_app) -> None:  # noqa: ANN001
+    import threading
+
+    gate = threading.Event()
+
+    class SlowClean(CleanupSpy):
+        def clean(self, text, since=None):  # noqa: ANN001, ANN202
+            gate.wait(5)
+            return text
+
+    app, _ = gap_app(held_max_words=3, paste_hotkey="<cmd>+<ctrl>+v")
+    app._post = SlowClean()
+    app.handle_utterance("first, send it")
+    app.handle_utterance("one two three four, send it")
+    app.handle_utterance("last, send it")
+    gate.set()
+    app.flush_deliveries()
+    assert app.current_note() == ""  # "last" came after: no stale note
+
+
+def test_cap_note_survives_a_pause(gap_app) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_max_words=2)
+    app.handle_utterance("one two three")
+    app.toggle()  # pause: releases it, over the cap
+    app.flush_deliveries()
+    assert app.current_note().startswith("3 words not typed")

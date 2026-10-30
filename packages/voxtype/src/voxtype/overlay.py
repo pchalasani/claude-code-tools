@@ -322,7 +322,7 @@ def run_overlay(  # noqa: PLR0913
             return self
 
         def showNote_(self, note):  # noqa: ANN001, ANN201, N802
-            # Shown only with the ghost; the text set only on change.
+            # The text is set only when it changes.
             if note == self.note:
                 return
             self.note = note
@@ -359,7 +359,9 @@ def run_overlay(  # noqa: PLR0913
                     self.shown = recording
                 if recording:
                     self.view.push_(data)
-                note = data[3] if len(data) > 3 and recording else ""
+                # Notes show even while paused: a pause can release
+                # held text that is then not typed (the word cap).
+                note = data[3] if len(data) > 3 else ""
                 self.showNote_(str(note or ""))
             except Exception:
                 pass
