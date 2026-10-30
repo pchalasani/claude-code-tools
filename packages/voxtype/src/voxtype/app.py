@@ -112,6 +112,9 @@ class VoiceTypeApp(RuntimeMixin):
         # Set by a hands-free submit: the next message typed starts a
         # fresh rescue buffer (clipboard and paste-again hold only it).
         self._sent = False
+        # Counts activations (fresh dictation sessions), so a held
+        # release can tell whether its session is still the current one.
+        self._activation = 0
         # Until this time, utterances are dropped: speech said before a
         # discard (Shift+Esc) that was still being transcribed.
         self._discard_until = 0.0
@@ -180,6 +183,7 @@ class VoiceTypeApp(RuntimeMixin):
                 # (which would break clipboard/paste-last recovery).
                 self._session_texts = []
                 self._sent = False
+                self._activation += 1
         if held and keep_held:
             self._deliver(None, lambda v, at: self._type(held, v, at, buf))
             # Typing it may have used up a toggle-off's grace window; the
@@ -570,6 +574,7 @@ class VoiceTypeApp(RuntimeMixin):
             if enter or show:
                 self._held = []
             buf = self._session_texts
+            activation = self._activation
         if dropped:
             self._drop_held(dropped, f"said before a {gap:.0f}s silence")
         if not (enter or show):
@@ -579,7 +584,9 @@ class VoiceTypeApp(RuntimeMixin):
             return True  # "ok show" with nothing held: nothing to show
         self._deliver(
             version,
-            lambda v, at: self._send_held(pieces, v, at, buf, enter),
+            lambda v, at: self._send_held(
+                pieces, v, at, buf, enter, activation
+            ),
         )
         return True
 
@@ -590,6 +597,7 @@ class VoiceTypeApp(RuntimeMixin):
         arrived: float,
         session: list[str],
         enter: bool,
+        activation: int = 0,
     ) -> None:
         """Type released held pieces (on the delivery thread).
 
@@ -631,7 +639,8 @@ class VoiceTypeApp(RuntimeMixin):
         # here, in delivery order, once it is known whether Enter is
         # pressed. After a sent message, the next one starts fresh.
         with self._lock:
-            if self._session_texts is session:
+            if self._activation == activation:
+                session = self._session_texts
                 if text and self._sent:
                     self._session_texts = session = []
                     self._sent = False

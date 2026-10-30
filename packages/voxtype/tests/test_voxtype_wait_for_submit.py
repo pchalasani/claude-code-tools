@@ -648,3 +648,22 @@ def test_release_during_check_keeps_capped_text(gap_app) -> None:  # noqa: ANN00
     app.flush_deliveries()
     assert "<ENTER>" not in app.typist.events
     assert app._session_texts == ["one two three four five six", "and seven"]
+
+
+def test_queued_messages_each_reach_the_clipboard(gap_app) -> None:  # noqa: ANN001
+    import threading
+
+    gate = threading.Event()
+
+    class SlowClean(CleanupSpy):
+        def clean(self, text, since=None):  # noqa: ANN001, ANN202
+            gate.wait(5)
+            return text
+
+    app, _ = gap_app()
+    app._post = SlowClean()
+    for msg in ("first message", "second message", "third message"):
+        app.handle_utterance(f"{msg}, send it")
+    gate.set()
+    app.flush_deliveries()
+    assert app._session_texts == ["third message"]
