@@ -791,7 +791,7 @@ def test_live_formats(live, fmt: str) -> None:
 @pytest.mark.parametrize(
     ("answer", "index"),
     [("3", 2), (" 1 ", 0), ("[2].", 1), ("0", None), ("4", None),
-     ("piece 2", None), ("", None), (None, None)],
+     ("piece 2", None), ("", None), (None, None), ("²", None)],
 )
 def test_parse_start(answer: object, index: int | None) -> None:
     from voxtype.postprocess_cerebras import parse_start

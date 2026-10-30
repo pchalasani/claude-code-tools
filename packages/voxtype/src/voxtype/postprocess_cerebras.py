@@ -238,7 +238,7 @@ def parse_start(content: object, n_pieces: int) -> int | None:
     if not isinstance(content, str):
         return None
     answer = sanitize_output(content).strip().strip(".[]")
-    if not answer.isdigit():
+    if not re.fullmatch(r"[0-9]{1,4}", answer):
         return None
     number = int(answer)
     return number - 1 if 1 <= number <= n_pieces else None

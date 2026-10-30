@@ -616,7 +616,10 @@ class VoiceTypeApp(RuntimeMixin):
             and len(pieces) > 1
             and 0 < self.cfg.held_check_words <= n_words
         ):
-            start, problem = check(pieces)
+            try:
+                start, problem = check(pieces)
+            except Exception as e:  # never lose held text to the check
+                start, problem = None, f"error {type(e).__name__}"
             checked = time.monotonic()
             if problem:
                 self._status(f"message-start check skipped ({problem})")
