@@ -2715,6 +2715,7 @@ dependencies = [
     { name = "sherpa-onnx" },
     { name = "sherpa-onnx-core" },
     { name = "sounddevice" },
+    { name = "tomlkit" },
 ]
 
 [package.optional-dependencies]
@@ -2738,6 +2739,7 @@ requires-dist = [
     { name = "sherpa-onnx", specifier = ">=1.12.0,<1.13" },
     { name = "sherpa-onnx-core", specifier = ">=1.12.0,<1.13" },
     { name = "sounddevice", specifier = ">=0.5.0" },
+    { name = "tomlkit", specifier = ">=0.12" },
 ]
 
 [package.metadata.requires-dev]

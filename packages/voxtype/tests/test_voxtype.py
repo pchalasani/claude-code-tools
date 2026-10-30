@@ -1931,32 +1931,45 @@ def test_sound_player_constructs_and_plays_safely() -> None:
 # -- setup wizard ---------------------------------------------------------
 
 
+DEFAULT = object()  # scripted answer: take the prompt's default
+
+
 def _fake_questionary(script):
-    """Build a fake questionary module that returns scripted answers."""
+    """Build a fake questionary module that returns scripted answers.
+
+    An answer may be ``DEFAULT`` (the prompt's default) or a callable
+    (called, and its result returned).
+    """
     it = iter(script)
+    asked: list[str] = []
 
     class _Ans:
-        def __init__(self, v):
-            self._v = v
+        def __init__(self, msg, default):  # noqa: ANN001
+            self._msg, self._default = msg, default
 
-        def ask(self):
-            return self._v
+        def ask(self):  # noqa: ANN202
+            asked.append(self._msg)
+            v = next(it)
+            if v is DEFAULT:
+                return self._default
+            return v() if callable(v) else v
 
     def _select(msg, choices=None, default=None):  # noqa: ANN001, ANN202
-        return _Ans(next(it))
+        return _Ans(msg, default)
 
     def _confirm(msg, default=None):  # noqa: ANN001, ANN202
-        return _Ans(next(it))
+        return _Ans(msg, default)
 
     def _text(msg, default="", validate=None):  # noqa: ANN001, ANN202
-        return _Ans(next(it))
+        return _Ans(msg, default)
 
     class _Choice:
         def __init__(self, title, value=None):  # noqa: ANN001
             self.title, self.value = title, value
 
     return types.SimpleNamespace(
-        select=_select, confirm=_confirm, text=_text, Choice=_Choice
+        select=_select, confirm=_confirm, text=_text, Choice=_Choice,
+        asked=asked,
     )
 
 
@@ -1969,96 +1982,178 @@ def test_toml_value_serialization() -> None:
     assert _toml_value('say "go"') == '"say \\"go\\""'
 
 
+KEEP = "Keep current (<ctrl>+;)"
+
+
+def _wizard(monkeypatch, script):  # noqa: ANN001, ANN202
+    fake = _fake_questionary(script)
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    return fake
+
+
 def test_setup_wizard_writes_valid_config(monkeypatch, tmp_path) -> None:
-    monkeypatch.setitem(
-        sys.modules,
-        "questionary",
-        _fake_questionary(
-            [
-                "parakeet-mlx",             # engine
-                "toggle",                   # mode
-                "hold",                     # segmentation
-                "Keep default (<ctrl>+;)",  # hotkey
-                False,  # post-process?
-                False,                      # extras?
-            ]
-        ),
-    )
+    _wizard(monkeypatch, [
+        "toggle",  # mode
+        True,      # ask at start?
+        KEEP,      # hotkey
+        "off",     # cleanup
+        False,     # advanced?
+        True,      # save?
+    ])
     from voxtype.config import load_config
     from voxtype.setup_wizard import run_setup
 
     out = tmp_path / "c.toml"
-    assert run_setup(config_path=out, force=True) == 0
+    assert run_setup(config_path=out) == 0
     cfg = load_config(out)
-    assert (cfg.engine, cfg.mode, cfg.segmentation) == (
-        "parakeet-mlx",
-        "toggle",
-        "hold",
-    )
+    assert (cfg.mode, cfg.ask_mode) == ("toggle", True)
+    assert "# voxtype configuration" in out.read_text()  # commented sample
 
 
 def test_setup_wizard_wake_mode(monkeypatch, tmp_path) -> None:
-    monkeypatch.setitem(
-        sys.modules,
-        "questionary",
-        _fake_questionary(
-            [
-                "moonshine",                # engine
-                "medium-streaming",         # model_arch
-                "wake",                     # mode
-                "Keep default (<ctrl>+;)",  # hotkey
-                "claude",                   # wake word
-                "hey cloud, claud",         # aliases
-                False,  # post-process?
-                False,                      # extras?
-            ]
-        ),
-    )
+    _wizard(monkeypatch, [
+        "wake", KEEP, "claude", "hey cloud, claud", "off", False, True,
+    ])
     from voxtype.config import load_config
     from voxtype.setup_wizard import run_setup
 
     out = tmp_path / "c.toml"
-    assert run_setup(config_path=out, force=True) == 0
+    assert run_setup(config_path=out) == 0
     cfg = load_config(out)
     assert cfg.mode == "wake"
     assert cfg.wake_word_aliases == ["hey cloud", "claud"]
 
 
-def test_setup_wizard_cancel_leaves_no_file(monkeypatch, tmp_path) -> None:
-    monkeypatch.setitem(
-        sys.modules, "questionary", _fake_questionary([None])  # engine=None
+def test_setup_wizard_edits_in_place(monkeypatch, tmp_path) -> None:
+    out = tmp_path / "c.toml"
+    out.write_text(
+        '# my notes\nmode = "toggle"\nsegmentation = "hold"\n'
+        "sounds = false\n"
     )
+    fake = _wizard(monkeypatch, [
+        "vad", DEFAULT, KEEP, "off", False, True,
+    ])
+    from voxtype.config import load_config
+    from voxtype.setup_wizard import run_setup
+
+    assert run_setup(config_path=out) == 0
+    text = out.read_text()
+    assert "# my notes" in text
+    cfg = load_config(out)
+    # "hold" only works in toggle mode, so always-on switches it.
+    assert (cfg.mode, cfg.segmentation, cfg.sounds) == ("vad", "vad", False)
+    assert fake.asked[-1].startswith("Save to")
+
+
+def test_setup_wizard_no_changes(monkeypatch, tmp_path) -> None:
+    out = tmp_path / "c.toml"
+    out.write_text('mode = "vad"\n')
+    fake = _wizard(monkeypatch, [DEFAULT, DEFAULT, DEFAULT, DEFAULT, False])
+    from voxtype.setup_wizard import run_setup
+
+    assert run_setup(config_path=out) == 0
+    assert out.read_text() == 'mode = "vad"\n'
+    assert not any(m.startswith("Save") for m in fake.asked)
+
+
+def test_setup_wizard_advanced(monkeypatch, tmp_path) -> None:
+    _wizard(monkeypatch, [
+        "vad", True, KEEP,
+        "cerebras", "auto",          # cleanup
+        True,                        # advanced?
+        "parakeet-mlx",              # engine
+        True, "20", "800", "60",     # always-on safeguards
+        "5",                         # cleanup time limit
+        False,                       # change cancel/discard keys?
+        False,                       # paste-again key?
+        True, False, True,           # clipboard, sounds, ghost
+        True,                        # save?
+    ])
+    import voxtype.postprocess_cerebras as pc
+
+    monkeypatch.setattr(pc, "find_key", lambda status: "")
+    from voxtype.config import load_config
     from voxtype.setup_wizard import run_setup
 
     out = tmp_path / "c.toml"
-    assert run_setup(config_path=out, force=True) == 1
+    assert run_setup(config_path=out) == 0
+    cfg = load_config(out)
+    assert (cfg.held_gap, cfg.held_max_words, cfg.held_check_words) == (
+        20.0, 800, 60,
+    )
+    assert cfg.post_process_timeout == 5.0
+    assert (cfg.copy_to_clipboard, cfg.sounds) == (True, False)
+
+
+def test_setup_wizard_cancel_leaves_no_file(monkeypatch, tmp_path) -> None:
+    _wizard(monkeypatch, [None])  # Ctrl-C at the first question
+    from voxtype.setup_wizard import run_setup
+
+    out = tmp_path / "c.toml"
+    assert run_setup(config_path=out) == 1
     assert not out.exists()
 
 
 def test_setup_wizard_cancel_at_optional_prompt_keeps_file(
     monkeypatch, tmp_path
 ) -> None:
-    """Aborting an OPTIONAL prompt cancels — never overwrites a config."""
+    """Aborting an OPTIONAL prompt cancels; never saves."""
     out = tmp_path / "c.toml"
-    out.write_text('engine = "moonshine"\n')  # pre-existing config
-    monkeypatch.setitem(
-        sys.modules,
-        "questionary",
-        _fake_questionary(
-            [
-                "parakeet-mlx",             # engine
-                "toggle",                   # mode
-                "hold",                     # segmentation
-                "Keep default (<ctrl>+;)",  # hotkey
-                False,  # post-process?
-                None,                       # extras? -> CANCEL (Ctrl-C)
-            ]
-        ),
-    )
+    out.write_text('engine = "moonshine"\n')
+    _wizard(monkeypatch, ["vad", True, KEEP, "off", None])
     from voxtype.setup_wizard import run_setup
 
-    assert run_setup(config_path=out, force=True) == 1
-    assert out.read_text() == 'engine = "moonshine"\n'  # untouched
+    assert run_setup(config_path=out) == 1
+    assert out.read_text() == 'engine = "moonshine"\n'
+
+
+def test_setup_wizard_declined_save_keeps_file(monkeypatch, tmp_path) -> None:
+    out = tmp_path / "c.toml"
+    out.write_text('mode = "toggle"\n')
+    _wizard(monkeypatch, ["vad", True, KEEP, "off", False, False])
+    from voxtype.setup_wizard import run_setup
+
+    assert run_setup(config_path=out) == 1
+    assert out.read_text() == 'mode = "toggle"\n'
+
+
+def test_setup_wizard_file_changed_meanwhile(monkeypatch, tmp_path) -> None:
+    out = tmp_path / "c.toml"
+    out.write_text('mode = "toggle"\n')
+
+    def edit_then_save() -> bool:
+        out.write_text('mode = "wake"\n')
+        return True
+
+    _wizard(monkeypatch, ["vad", True, KEEP, "off", False, edit_then_save])
+    from voxtype.setup_wizard import run_setup
+
+    assert run_setup(config_path=out) == 1
+    assert out.read_text() == 'mode = "wake"\n'
+
+
+def test_setup_wizard_force_starts_from_defaults(monkeypatch, tmp_path) -> None:
+    out = tmp_path / "c.toml"
+    out.write_text('mode = "vad"\nsounds = false\n')
+    fake = _wizard(monkeypatch, [DEFAULT, DEFAULT, DEFAULT, DEFAULT, False,
+                                 True])
+    from voxtype.config import load_config
+    from voxtype.setup_wizard import run_setup
+
+    assert run_setup(config_path=out, force=True) == 0
+    cfg = load_config(out)
+    assert (cfg.mode, cfg.sounds) == ("toggle", True)
+    assert fake.asked[-1].startswith("Save to")
+
+
+def test_setup_wizard_unreadable_config(monkeypatch, tmp_path) -> None:
+    out = tmp_path / "c.toml"
+    out.write_text('mode = "nope"\n')
+    _wizard(monkeypatch, [])
+    from voxtype.setup_wizard import run_setup
+
+    assert run_setup(config_path=out) == 1
+    assert out.read_text() == 'mode = "nope"\n'
 
 
 def test_setup_config_flag_before_subcommand_preserved(
@@ -2110,64 +2205,36 @@ def test_setup_wizard_rejects_unsupported_recorded_hotkey(
     monkeypatch.setattr(
         hotkey_mod, "record_hotkey", lambda *a, **k: "<caps_lock>"
     )
-    monkeypatch.setitem(
-        sys.modules,
-        "questionary",
-        _fake_questionary(
-            [
-                "parakeet-mlx",                      # engine
-                "toggle",                            # mode
-                "hold",                              # segmentation
-                "Record one now (press the combo)",  # hotkey: record
-                "<ctrl>+<alt>+d",                    # manual fallback
-                False,  # post-process?
-                False,                               # extras?
-            ]
-        ),
-    )
+    _wizard(monkeypatch, [
+        "toggle", True,
+        "Record one now (press the combo)",
+        "<ctrl>+<alt>+d",  # manual fallback
+        "off", False, True,
+    ])
     from voxtype.config import load_config
     from voxtype.setup_wizard import run_setup
 
     out = tmp_path / "c.toml"
-    assert run_setup(config_path=out, force=True) == 0
-    cfg = load_config(out)
-    # The unsupported recorded <caps_lock> was refused; the manually
-    # typed chord was written instead.
-    assert cfg.hotkey == "<ctrl>+<alt>+d"
+    assert run_setup(config_path=out) == 0
+    assert load_config(out).hotkey == "<ctrl>+<alt>+d"
 
 
 def test_setup_wizard_atomic_write_preserves_existing_on_failure(
     monkeypatch, tmp_path
 ) -> None:
-    """A write interrupted mid-flight never truncates the old config.
-
-    An fsync failure must leave the pre-existing file byte-for-byte
-    intact and leave no temporary litter behind.
-    """
+    """A write interrupted mid-flight never truncates the old config,
+    and leaves no temporary litter behind."""
     import voxtype.setup_wizard as sw
 
     out = tmp_path / "c.toml"
     out.write_text('engine = "moonshine"\n')
-    monkeypatch.setitem(
-        sys.modules,
-        "questionary",
-        _fake_questionary(
-            [
-                "parakeet-mlx",             # engine
-                "toggle",                   # mode
-                "hold",                     # segmentation
-                "Keep default (<ctrl>+;)",  # hotkey
-                False,  # post-process?
-                False,                      # extras?
-            ]
-        ),
-    )
+    _wizard(monkeypatch, ["vad", True, KEEP, "off", False, True])
 
     def boom(_fd: int) -> None:
         raise OSError("disk full")
 
     monkeypatch.setattr(sw.os, "fsync", boom)
     with pytest.raises(OSError):
-        sw.run_setup(config_path=out, force=True)
-    assert out.read_text() == 'engine = "moonshine"\n'  # untouched
-    assert list(tmp_path.glob(".config-*")) == []  # temp cleaned up
+        sw.run_setup(config_path=out)
+    assert out.read_text() == 'engine = "moonshine"\n'
+    assert list(tmp_path.glob(".config-*")) == []
