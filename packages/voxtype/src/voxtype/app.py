@@ -190,6 +190,9 @@ class VoiceTypeApp(HeldNotesMixin, RuntimeMixin):
                 self._session_texts = []
                 self._sent = False
                 self._msg_start = 0
+                # A note about the old session (its paste-again hint) no
+                # longer applies.
+                self._note, self._note_until = "", 0.0
         if pieces and keep_held:
             self._deliver(
                 None,

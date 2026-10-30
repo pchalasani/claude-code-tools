@@ -734,3 +734,14 @@ def test_cap_note_after_new_session_points_to_file(gap_app) -> None:  # noqa: AN
     assert app.current_note() == (
         "3 words not typed (over 2). Saved to dropped.txt."
     )
+
+
+def test_resume_clears_cap_note(gap_app) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_max_words=2, paste_hotkey="<cmd>+<ctrl>+v")
+    app.handle_utterance("one two three")
+    app.toggle()  # pause: over the cap, a note with the paste hint
+    app.flush_deliveries()
+    assert "Cmd+Ctrl+V" in app.current_note()
+    app._last_toggle = -10.0
+    app.toggle()  # resume: a new session, the hint no longer applies
+    assert app.current_note() == ""
