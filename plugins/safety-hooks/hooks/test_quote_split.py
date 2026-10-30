@@ -302,3 +302,12 @@ def test_escaped_redirects_and_function_spacing(command: str) -> None:
 def test_stdin_and_additional_shell_evaluators(command: str) -> None:
     """Executable input and other shell frontends retain legacy inspection."""
     assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    'printf %s "echo ok; rm foo" |\nbash',
+    'timeout 10 bash -c "echo ok; rm foo"',
+])
+def test_multiline_pipeline_and_timeout_payloads(command: str) -> None:
+    """A physical newline and a timeout wrapper do not hide executable text."""
+    assert check_rm_command(command)[0]

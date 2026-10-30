@@ -879,13 +879,13 @@ def extract_all_commands(command: str) -> list[str]:
     # Extract from normalized lines before operator splitting can break spans.
     # A continuation can join "$" and "(" into a substitution marker.
     subshell_cmds = []
-    for line in _split_command_lines(stripped):
+    lines = _split_command_lines(stripped)
+    for line in lines:
         subshell_cmds.extend(extract_subshell_commands(line))
-        if any(needs_conservative_shell_scan(part)
-               for part in _split_line_on_operators(line)):
-            # A shell reading stdin may execute earlier pipeline/here-string
-            # text. Preserve legacy inspection rather than treating it as data.
-            all_commands.extend(re.split(r'&&|\|\||[;&|\n]', line))
+    if any(needs_conservative_shell_scan(part) for part in subcommands):
+        # A stdin consumer may follow a pipeline continued across newlines.
+        # Preserve legacy inspection of the whole normalized input.
+        all_commands.extend(re.split(r'&&|\|\||[;&|\n]', '\n'.join(lines)))
 
     # Quoted strings passed to evaluators are code, unlike search patterns.
     for subcommand in subcommands:

@@ -19,6 +19,8 @@ _WRAPPERS = {
               '--max-args',
               '--max-procs', '--max-chars', '--delimiter', '--arg-file',
               '--process-slot-var'},
+    'timeout': {'-s', '-k', '--signal', '--kill-after'},
+    'gtimeout': {'-s', '-k', '--signal', '--kill-after'},
     'nice': {'-n', '--adjustment'},
     'time': {'-f', '-o', '--format', '--output'},
     'exec': {'-a'},
@@ -179,6 +181,8 @@ def _command_words(words: list[str]) -> list[str]:
                 i += 2 if takes_value else 1
             if name == 'nice' and i < len(words) and words[i].lstrip('-').isdigit():
                 i += 1
+            if name in ('timeout', 'gtimeout'):
+                i += 1  # Required duration precedes the command.
         else:
             break
     return words[i:]
