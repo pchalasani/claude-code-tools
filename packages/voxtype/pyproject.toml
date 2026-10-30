@@ -22,6 +22,8 @@ dependencies = [
     # advertised first-run path, so it ships in the base install (not an
     # extra) — otherwise `voxtype setup` would fail on a clean install.
     "questionary>=2.0.0",
+    # `voxtype setup` edits config.toml in place, keeping comments.
+    "tomlkit>=0.12",
     # Apple-GPU engine (Apple Silicon Macs only; wheels are arm64).
     "parakeet-mlx>=0.5.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
     # Resolver guard: without it uv can backtrack through parakeet-mlx

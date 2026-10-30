@@ -459,24 +459,26 @@ def test_factory_builds_cerebras(monkeypatch) -> None:
 def test_wizard_cerebras_path(monkeypatch, tmp_path) -> None:
     import sys
 
-    from test_voxtype import _fake_questionary
+    import voxtype.postprocess_cerebras as pc
+    from test_voxtype import KEEP, _fake_questionary
 
+    monkeypatch.setattr(pc, "find_key", lambda status: "")
     monkeypatch.setitem(
         sys.modules,
         "questionary",
         _fake_questionary([
-            "parakeet-mlx", "toggle", "hold", "Keep default (<ctrl>+;)",
-            True,  # post-process?
-            "cerebras",  # provider
+            "toggle", True, KEEP,
+            "cerebras",    # cleanup
             "paragraphs",  # format
-            False,  # extras?
+            False,         # advanced?
+            True,          # save?
         ]),
     )
     from voxtype.config import load_config
     from voxtype.setup_wizard import run_setup
 
     out = tmp_path / "c.toml"
-    assert run_setup(config_path=out, force=True) == 0
+    assert run_setup(config_path=out) == 0
     cfg = load_config(out)
     assert cfg.post_process and cfg.post_process_provider == "cerebras"
     assert cfg.post_process_format == "paragraphs"

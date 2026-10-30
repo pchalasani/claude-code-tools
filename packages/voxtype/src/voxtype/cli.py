@@ -384,7 +384,10 @@ Accessibility (to type), Input Monitoring (global hotkeys).
         help="destination path",
     )
     p_setup.add_argument(
-        "--force", action="store_true", help="overwrite existing config"
+        "--force",
+        action="store_true",
+        help="start from the defaults instead of your current config "
+        "(replaces the file)",
     )
     sub.add_parser(
         "skill",

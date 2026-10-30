@@ -1,10 +1,11 @@
 """Interactive setup wizard for voxtype (``voxtype setup``).
 
-Walks a new user through the handful of choices that matter — engine,
-activation mode, segmentation, hotkey, wake word, and a few niceties —
-explaining each, then writes a valid ``config.toml`` and prints the
-command to run. Unlike ``voxtype init`` (which drops a fully
-commented sample file to edit by hand), this asks questions.
+Walks through the common choices first (how you dictate, the hotkey,
+cleanup), then advanced ones only if asked, explaining each. It edits
+the existing ``config.toml`` in place: current values are the defaults,
+comments and other settings are kept, and a summary of the changes is
+shown before saving. ``voxtype init`` instead drops a fully commented
+sample file to edit by hand.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from .config import (
     VALID_MODEL_ARCHS,
     Config,
     default_engine,
+    sample_config,
 )
 
 
@@ -126,21 +128,6 @@ def _atomic_write(path: Path, text: str, overwrite: bool) -> None:
         raise
 
 
-def _write_config(path: Path, answers: dict, overwrite: bool) -> None:
-    lines = [
-        "# voxtype configuration — written by `voxtype setup`.",
-        "# Run `voxtype init --force` for a fully commented sample.",
-        "",
-    ]
-    for key, value in answers.items():
-        lines.append(f"{key} = {_toml_value(value)}")
-    text = "\n".join(lines) + "\n"
-    # Guard: never replace the destination with a document tomllib can't
-    # read back (the loader that voxtype itself uses).
-    tomllib.loads(text)
-    _atomic_write(path, text, overwrite)
-
-
 def _manual_hotkey(q, default: str):  # noqa: ANN001, ANN202
     """Prompt for a hotkey typed by hand, validated by ``parse_hotkey``."""
     from .hotkey import parse_hotkey
@@ -160,14 +147,13 @@ def _manual_hotkey(q, default: str):  # noqa: ANN001, ANN202
 
 
 def _ask_hotkey(q, label: str, default: str):  # noqa: ANN001, ANN202
-    """Return a hotkey string via keep-default / record / type."""
+    """Return a hotkey string via keep-current / record / type."""
+    keep = f"Keep current ({default})" if default else "Keep it off"
     how = _ask(q.select(
         f"{label} hotkey:",
-        choices=[
-            f"Keep default ({default})",
-            "Record one now (press the combo)",
-            "Type it manually",
-        ],
+        choices=[keep, "Record one now (press the combo)",
+                 "Type it manually"],
+        default=keep,
     ))
     if how.startswith("Keep"):
         return default
@@ -213,52 +199,304 @@ def _ask_hotkey(q, label: str, default: str):  # noqa: ANN001, ANN202
     return _manual_hotkey(q, default)
 
 
-def _ask_s1_mini(q, ans: dict) -> None:  # noqa: ANN001
-    """Follow-up questions for the local S1-mini provider."""
-    ans["post_process_style"] = _ask(q.select(
-        "Cleanup style:",
+def _section(title: str) -> None:
+    print(f"\n── {title} " + "─" * max(0, 60 - len(title)))
+
+
+def _number(q, message: str, field: str, default: float):  # noqa: ANN001, ANN202
+    """Ask for config number ``field``, checked by the config's rules."""
+    from dataclasses import fields
+
+    kind = {f.name: f.type for f in fields(Config)}[field]
+    integer = kind in (int, "int")
+
+    def convert(text: str) -> float:
+        value = float(text)
+        if integer:
+            if not value.is_integer():
+                raise ValueError("enter a whole number")
+            return int(value)
+        return value
+
+    def _valid(text: str):  # noqa: ANN202
+        try:
+            Config(**{field: convert(text)}).validate()
+        except ValueError as e:
+            return str(e) or "enter a number"
+        return True
+
+    shown = (
+        str(int(default))
+        if integer and float(default).is_integer()
+        else repr(float(default))
+    )
+    return convert(_ask(q.text(message, default=shown, validate=_valid)))
+
+
+def _ask_basics(q, cur: Config, pinned: dict, ans: dict) -> None:  # noqa: ANN001
+    """Mode, startup question, hotkey, wake word."""
+    from .mode_menu import chord_label
+
+    _section("How you dictate")
+    key = chord_label(cur.hotkey)
+    ans["mode"] = _ask(q.select(
+        "How do you usually want to dictate?",
         choices=[
             q.Choice(
-                "semi-formal — sentences, capitals, full stops",
-                "semi-formal",
+                f"Toggle: press {key} to start recording, {key} to stop",
+                "toggle",
             ),
-            q.Choice("formal — also expands contractions", "formal"),
-            q.Choice("semi-casual — light punctuation", "semi-casual"),
-            q.Choice("casual — lowercase, minimal punctuation", "casual"),
+            q.Choice(
+                'Always-on: just talk; end with "send it" to send', "vad"
+            ),
+            q.Choice(
+                f'Wake word: say "{cur.wake_word}" to start dictating',
+                "wake",
+            ),
         ],
-        default="semi-formal",
+        default=cur.mode,
     ))
-    if shutil.which("llama-server") is None:
-        print(
-            "  note: llama-server not found — install it with "
-            "`brew install llama.cpp` (until then takes are typed raw)."
+    if ans["mode"] != "toggle" and pinned.get("segmentation") == "hold":
+        # "hold" (whole-take) works only in toggle mode.
+        ans["segmentation"] = "vad"
+    if ans["mode"] != "wake":
+        ans["ask_mode"] = _ask(q.confirm(
+            "When you run plain `voxtype`, ask toggle or always-on each "
+            "time?",
+            default=cur.ask_mode,
+        ))
+    ans["hotkey"] = _ask_hotkey(q, "Start/stop recording", cur.hotkey)
+    if ans["mode"] == "wake":
+        word = _ask(q.text("Wake word:", default=cur.wake_word))
+        ans["wake_word"] = word.strip() or cur.wake_word
+        aliases = _ask(q.text(
+            "Ways the transcriber mishears it (comma-separated, optional):",
+            default=", ".join(cur.wake_word_aliases),
+        ))
+        ans["wake_word_aliases"] = [
+            a.strip() for a in aliases.split(",") if a.strip()
+        ]
+
+
+def _ask_cleanup(q, cur: Config, ans: dict) -> None:  # noqa: ANN001
+    """LLM cleanup: off, Cerebras, or local S1-mini."""
+    _section("Cleanup")
+    choice = _ask(q.select(
+        "Clean up what you dictate with an LLM (punctuation, "
+        "self-corrections)?",
+        choices=[
+            q.Choice("Off: type exactly what was heard", "off"),
+            q.Choice(
+                "Cerebras: cloud, about 0.3 s, also adds paragraphs and "
+                "lists (sends your words to api.cerebras.ai)",
+                "cerebras",
+            ),
+            q.Choice(
+                "S1-mini: runs on this Mac, private; punctuation and "
+                "capitals only (~462 MiB download)",
+                "s1-mini",
+            ),
+        ],
+        default=cur.post_process_provider if cur.post_process else "off",
+    ))
+    ans["post_process"] = choice != "off"
+    if choice == "off":
+        return
+    ans["post_process_provider"] = choice
+    if choice == "cerebras":
+        ans["post_process_format"] = _ask(q.select(
+            "Formatting:",
+            choices=[
+                q.Choice(
+                    "auto: paragraphs and lists when they help", "auto"
+                ),
+                q.Choice("paragraphs: paragraph breaks, no lists",
+                         "paragraphs"),
+                q.Choice("minimal: fix punctuation only", "minimal"),
+            ],
+            default=cur.post_process_format,
+        ))
+        from .postprocess_cerebras import KEY_ENV, find_key, key_files
+
+        if find_key(lambda _msg: None):
+            print("  Cerebras API key: found.")
+        else:
+            print(
+                f"  Cerebras API key: not found. Put {KEY_ENV}=... in "
+                f"{key_files()[0]} (chmod 600); until then your words are "
+                "typed without cleanup."
+            )
+    else:
+        ans["post_process_style"] = _ask(q.select(
+            "Cleanup style:",
+            choices=[
+                q.Choice(
+                    "semi-formal: sentences, capitals, full stops",
+                    "semi-formal",
+                ),
+                q.Choice("formal: also expands contractions", "formal"),
+                q.Choice("semi-casual: light punctuation", "semi-casual"),
+                q.Choice("casual: lowercase, minimal punctuation",
+                         "casual"),
+            ],
+            default=cur.post_process_style,
+        ))
+        if shutil.which("llama-server") is None:
+            print(
+                "  note: llama-server not found; install it with "
+                "`brew install llama.cpp` (until then your words are "
+                "typed without cleanup)."
+            )
+
+
+def _ask_advanced(q, cur: Config, ans: dict) -> None:  # noqa: ANN001
+    """Engine, hands-free safeguards, time limit, keys, niceties."""
+    _section("Engine")
+    engine = _ask(q.select(
+        "Transcription engine:",
+        choices=[
+            q.Choice(
+                "parakeet-mlx: best accuracy and speed (Apple Silicon GPU)",
+                "parakeet-mlx",
+            ),
+            q.Choice("parakeet: Parakeet on the CPU (works everywhere)",
+                     "parakeet"),
+            q.Choice(
+                "moonshine: small streaming models (needs the "
+                "voxtype[moonshine] extra)",
+                "moonshine",
+            ),
+        ],
+        default=cur.engine or default_engine(),
+    ))
+    ans["engine"] = engine
+    if engine == "parakeet":
+        ans["parakeet_model"] = _ask(q.select(
+            "Parakeet build:",
+            choices=[
+                q.Choice("v3-int8: multilingual, ~490 MB", "v3-int8"),
+                q.Choice("v2-fp16: English, higher precision", "v2-fp16"),
+            ],
+            default=cur.parakeet_model,
+        ))
+    elif engine == "moonshine":
+        ans["model_arch"] = _ask(q.select(
+            "Moonshine model:",
+            choices=list(VALID_MODEL_ARCHS),
+            default=cur.model_arch,
+        ))
+        if ans.get("segmentation", cur.segmentation) == "hold":
+            ans["segmentation"] = "vad"  # "hold" needs a parakeet engine
+    if ans["mode"] == "toggle" and engine != "moonshine":
+        ans["segmentation"] = _ask(q.select(
+            "In toggle mode, when should text appear?",
+            choices=[
+                q.Choice(
+                    "hold: all at once when you stop (most accurate)",
+                    "hold",
+                ),
+                q.Choice("vad: piece by piece as you pause", "vad"),
+            ],
+            default=cur.segmentation,
+        ))
+
+    if ans["mode"] == "vad" or ans.get("ask_mode"):
+        _section("Always-on safeguards")
+        ans["wait_for_submit"] = _ask(q.confirm(
+            'Hold what you say until "send it" (instead of typing at '
+            "every pause)?",
+            default=cur.wait_for_submit,
+        ))
+        ans["held_gap"] = _number(
+            q, "Drop held words after a silence of this many seconds "
+            "(0 = never):", "held_gap", cur.held_gap,
+        )
+        ans["held_max_words"] = _number(
+            q, "Type without sending when more than this many words are "
+            "held (0 = no limit):", "held_max_words", cur.held_max_words,
+        )
+        if ans.get("post_process_provider") == "cerebras":
+            ans["held_check_words"] = _number(
+                q, "Ask Cerebras where your message starts once this many "
+                "words are held (0 = never):", "held_check_words",
+                cur.held_check_words,
+            )
+
+    if ans.get("post_process"):
+        _section("Cleanup time limit")
+        ans["post_process_timeout"] = _number(
+            q, "Seconds to wait for cleanup before typing the raw text "
+            "(0 = default: 2 for Cerebras, 4 for S1-mini):",
+            "post_process_timeout", cur.post_process_timeout,
         )
 
-
-def _ask_cerebras(q, ans: dict) -> None:  # noqa: ANN001
-    """Follow-up questions for the Cerebras provider."""
-    ans["post_process_format"] = _ask(q.select(
-        "Formatting:",
-        choices=[
-            q.Choice(
-                "auto — paragraphs and lists when appropriate", "auto"
-            ),
-            q.Choice("paragraphs — paragraph breaks, no lists", "paragraphs"),
-            q.Choice("minimal — fix punctuation only, no structure", "minimal"),
-        ],
-        default="auto",
+    _section("Other keys and extras")
+    if _ask(q.confirm(
+        "Change the cancel (Esc) and discard (Shift+Esc) keys?",
+        default=False,
+    )):
+        ans["cancel_hotkey"] = _ask_hotkey(
+            q, "Cancel a recording", cur.cancel_hotkey
+        )
+        ans["discard_hotkey"] = _ask_hotkey(
+            q, "Discard held text (always-on)", cur.discard_hotkey
+        )
+    if _ask(q.confirm(
+        "Add a key that re-types your last message (wrong-window rescue)?",
+        default=bool(cur.paste_hotkey),
+    )):
+        ans["paste_hotkey"] = _ask_hotkey(
+            q, "Re-type last message", cur.paste_hotkey or "<cmd>+<ctrl>+v"
+        )
+    else:
+        ans["paste_hotkey"] = ""
+    ans["copy_to_clipboard"] = _ask(q.confirm(
+        "Also copy each message to the clipboard?",
+        default=cur.copy_to_clipboard,
     ))
-    print(
-        "  note: each transcript is sent to api.cerebras.ai. Set "
-        "CEREBRAS_API_KEY=... in ~/.config/voxtype/.env, chmod 600 "
-        "(until then takes are "
-        "typed raw). Line breaks are typed as Shift+Enter; set "
-        'post_process_newlines = "flatten" if you dictate into a shell.'
+    ans["sounds"] = _ask(
+        q.confirm("Play start/stop chimes?", default=cur.sounds)
     )
+    ans["overlay"] = _ask(q.confirm(
+        "Show the floating ghost while recording?", default=cur.overlay
+    ))
+
+
+def _changes(cur: Config, pinned: dict, ans: dict) -> dict:
+    """The answers to write: those that differ from the current
+    settings, plus any whose effective value the other changes would
+    alter (e.g. a segmentation default that follows the mode)."""
+    changes = {k: v for k, v in ans.items() if getattr(cur, k) != v}
+    try:
+        after = Config(**{**pinned, **changes})
+    except TypeError:
+        return changes
+    for key, value in ans.items():
+        if getattr(after, key) != value:
+            changes[key] = value
+    return changes
+
+
+def _render(path: Path, base: str | None, changes: dict) -> str:
+    """The config text with ``changes`` applied, comments kept."""
+    import tomlkit
+
+    doc = tomlkit.parse(base if base is not None else sample_config())
+    for key, value in changes.items():
+        doc[key] = value
+    text = tomlkit.dumps(doc)
+    data = tomllib.loads(text)  # never write what voxtype can't read
+    Config(**data).validate()
+    return text
 
 
 def run_setup(config_path: Path | None = None, force: bool = False) -> int:
-    """Run the interactive wizard; returns a process exit code."""
+    """Run the interactive wizard; returns a process exit code.
+
+    Edits the config in place: your current values are the defaults,
+    and comments and other settings are kept. ``force`` starts from the
+    built-in defaults instead and replaces the file.
+    """
     try:
         import questionary as q
     except ImportError as e:  # pragma: no cover - questionary is a base dep
@@ -266,168 +504,73 @@ def run_setup(config_path: Path | None = None, force: bool = False) -> int:
         return 1
 
     path = config_path or DEFAULT_CONFIG_PATH
-    ans: dict = {}
-    # Whether clobbering an existing config was authorized: --force, or the
-    # user confirming the overwrite prompt below. If neither, the final
-    # write uses an atomic no-clobber publish so a config created by another
-    # process while the wizard runs is never silently overwritten.
-    overwrite_ok = force
+    base = None
+    if path.exists() and not force:
+        base = path.read_text(encoding="utf-8")
     try:
-        if path.exists() and not force:
-            if not _ask(
-                q.confirm(f"{path} exists — overwrite it?", default=False)
-            ):
-                print("setup cancelled.")
-                return 1
-            overwrite_ok = True
-
-        print("voxtype setup — a few questions, then you're ready.\n")
-
-        engine = _ask(q.select(
-            "Transcription engine:",
-            choices=[
-                q.Choice(
-                    "parakeet-mlx — best accuracy + speed "
-                    "(Apple GPU; Apple Silicon only)",
-                    value="parakeet-mlx",
-                ),
-                q.Choice(
-                    "parakeet — Parakeet on CPU (works everywhere)",
-                    value="parakeet",
-                ),
-                q.Choice(
-                    "moonshine — small streaming models (needs the "
-                    "voxtype[moonshine] extra)",
-                    value="moonshine",
-                ),
-            ],
-            default=default_engine(),
-        ))
-        ans["engine"] = engine
-        is_parakeet = engine in ("parakeet", "parakeet-mlx")
-
-        if engine == "parakeet":
-            ans["parakeet_model"] = _ask(q.select(
-                "Parakeet build:",
-                choices=[
-                    q.Choice("v3-int8 — multilingual, ~490 MB", "v3-int8"),
-                    q.Choice(
-                        "v2-fp16 — English, higher precision", "v2-fp16"
-                    ),
-                ],
-            ))
-        elif engine == "moonshine":
-            ans["model_arch"] = _ask(q.select(
-                "Moonshine model:",
-                choices=list(VALID_MODEL_ARCHS),
-                default="medium-streaming",
-            ))
-
-        mode = _ask(q.select(
-            "How should dictation activate?",
-            choices=[
-                q.Choice("toggle — a hotkey starts/stops", "toggle"),
-                q.Choice("wake — say a wake word (hands-free)", "wake"),
-                q.Choice("vad — always on while running", "vad"),
-            ],
-        ))
-        ans["mode"] = mode
-
-        if mode == "toggle" and is_parakeet:
-            ans["segmentation"] = _ask(q.select(
-                "When should the text appear?",
-                choices=[
-                    q.Choice(
-                        "hold — whole take on toggle-off (most accurate)",
-                        "hold",
-                    ),
-                    q.Choice("vad — each utterance when you pause", "vad"),
-                ],
-            ))
-
-        ans["hotkey"] = _ask_hotkey(q, "Toggle-recording", "<ctrl>+;")
-
-        if mode == "wake":
-            word = _ask(q.text("Wake word:", default="claude"))
-            ans["wake_word"] = word.strip() or "claude"
-            aliases = _ask(q.text(
-                "Wake-word aliases the model mishears "
-                "(comma-separated, optional):",
-                default="",
-            ))
-            if aliases.strip():
-                ans["wake_word_aliases"] = [
-                    a.strip() for a in aliases.split(",") if a.strip()
-                ]
-
-        if _ask(q.confirm(
-            "Clean up each transcript with an LLM (punctuation, "
-            "self-corrections; optional, off by default)?",
-            default=False,
-        )):
-            ans["post_process"] = True
-            provider = _ask(q.select(
-                "Cleanup provider:",
-                choices=[
-                    q.Choice(
-                        "s1-mini — local \"S1-mini\" by \"Superwhisper\" "
-                        "via llama.cpp (~462 MiB download, on-device)",
-                        "s1-mini",
-                    ),
-                    q.Choice(
-                        "cerebras — gpt-oss-120b via Cerebras API: also "
-                        "paragraphs + lists (SENDS TRANSCRIPTS OFF-DEVICE)",
-                        "cerebras",
-                    ),
-                ],
-                default="s1-mini",
-            ))
-            ans["post_process_provider"] = provider
-            if provider == "cerebras":
-                _ask_cerebras(q, ans)
-            else:
-                _ask_s1_mini(q, ans)
-
-        if _ask(q.confirm(
-            "Configure extras (sounds, clipboard rescue, ghost)?",
-            default=False,
-        )):
-            ans["sounds"] = _ask(
-                q.confirm("Play start/stop chimes?", default=True)
-            )
-            if _ask(q.confirm(
-                "Add a hotkey to re-type the last transcript "
-                "(wrong-window rescue)?",
-                default=False,
-            )):
-                ans["paste_hotkey"] = _ask_hotkey(
-                    q, "Paste-again", "<cmd>+<ctrl>+v"
-                )
-                ans["copy_to_clipboard"] = True
-            ans["overlay"] = _ask(q.confirm(
-                "Show the floating ghost while recording?", default=True
-            ))
-    except _Cancelled:
-        print("\nsetup cancelled — nothing written.")
-        return 1
-
-    # Validate the combination before writing.
-    try:
-        Config(**ans).validate()
+        pinned = tomllib.loads(base) if base is not None else {}
+        cur = Config(**pinned)
+        cur.validate()
     except (ValueError, TypeError) as e:
-        print(f"\nvoxtype: those choices don't combine ({e}).")
-        return 1
-
-    try:
-        _write_config(path, ans, overwrite_ok)
-    except FileExistsError:
-        # A config appeared after the initial existence check and the user
-        # never authorized an overwrite; refuse rather than clobber it.
         print(
-            f"\nvoxtype: {path} was created while setup was running; "
-            "not overwriting it. Re-run with --force to replace it."
+            f"voxtype: can't read {path} ({e}). Fix it, or run "
+            "`voxtype setup --force` to start from the defaults."
         )
         return 1
-    print(f"\n✓ wrote {path}")
+
+    print(
+        "voxtype setup: the common settings first; press Enter to keep "
+        "what's shown."
+    )
+    if base is not None:
+        print(f"Editing {path} (your comments and other settings stay).")
+    ans: dict = {}
+    try:
+        _ask_basics(q, cur, pinned, ans)
+        _ask_cleanup(q, cur, ans)
+        print()
+        if _ask(q.confirm(
+            "Change advanced settings (engine, always-on safeguards, "
+            "other keys, sounds)?",
+            default=False,
+        )):
+            _ask_advanced(q, cur, ans)
+        changes = _changes(cur, pinned, ans)
+        if not changes and base is not None:
+            print("\nNo changes; your config is as it was.")
+            return 0
+        _section("Summary")
+        for key, value in changes.items():
+            print(f"  {key}: {getattr(cur, key)!r} → {value!r}")
+        if not changes:
+            print("  (all defaults)")
+        try:
+            text = _render(path, base, changes)
+        except (ValueError, TypeError) as e:
+            print(f"\nvoxtype: those choices don't combine ({e}).")
+            return 1
+        if not _ask(q.confirm(f"Save to {path}?", default=True)):
+            print("Nothing saved.")
+            return 1
+    except _Cancelled:
+        print("\nsetup cancelled; nothing saved.")
+        return 1
+
+    now = path.read_text(encoding="utf-8") if path.exists() else None
+    if now != base and not (force and base is None):
+        print(
+            f"\nvoxtype: {path} changed while setup was running; not "
+            "saving over it. Run `voxtype setup` again."
+        )
+        return 1
+    try:
+        _atomic_write(path, text, overwrite=path.exists())
+    except FileExistsError:
+        print(
+            f"\nvoxtype: {path} was created while setup was running; "
+            "not saving over it. Run `voxtype setup` again."
+        )
+        return 1
+    print(f"\n✓ saved {path}")
     print("\nStart dictating with:\n  voxtype")
     return 0
