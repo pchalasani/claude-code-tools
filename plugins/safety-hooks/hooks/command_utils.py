@@ -10,7 +10,7 @@ from shell_scan import (
     _split_line_on_operators,
 )
 
-from shell_payloads import literal_shell_payloads
+from shell_payloads import literal_shell_payloads, needs_conservative_shell_scan
 
 # Cache for alias expansions (populated on first use)
 _alias_cache: dict[str, str] | None = None
@@ -881,6 +881,11 @@ def extract_all_commands(command: str) -> list[str]:
     subshell_cmds = []
     for line in _split_command_lines(stripped):
         subshell_cmds.extend(extract_subshell_commands(line))
+        if any(needs_conservative_shell_scan(part)
+               for part in _split_line_on_operators(line)):
+            # A shell reading stdin may execute earlier pipeline/here-string
+            # text. Preserve legacy inspection rather than treating it as data.
+            all_commands.extend(re.split(r'&&|\|\||[;&|\n]', line))
 
     # Quoted strings passed to evaluators are code, unlike search patterns.
     for subcommand in subcommands:

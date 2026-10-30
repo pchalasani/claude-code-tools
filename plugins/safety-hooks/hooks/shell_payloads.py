@@ -8,6 +8,10 @@ from shell_wrappers import (
 )
 
 
+_SHELLS = {'sh', 'bash', 'dash', 'zsh', 'ksh', 'csh', 'tcsh',
+           'fish', 'ash', 'yash'}
+
+
 def _launched_commands(words: list[str]) -> list[list[str]]:
     """Include literal child commands launched by find and fd exec options."""
     words = _command_words(words)
@@ -54,7 +58,7 @@ def _evaluator_payload(words: list[str]) -> str | None:
         if arguments and arguments[0] not in ('-', '-p', '-l'):
             return arguments[0]
         return None
-    if name not in ('sh', 'bash', 'dash', 'zsh', 'ksh'):
+    if name not in _SHELLS:
         return None
     index = 0
     evaluates = False
@@ -89,3 +93,14 @@ def literal_shell_payloads(command: str) -> list[str]:
         return []  # Conservative fragments can contain incomplete quotes.
     return [payload for child in _launched_commands(words)
             if (payload := _evaluator_payload(child))]
+
+
+def needs_conservative_shell_scan(command: str) -> bool:
+    """Keep legacy inspection when a shell may consume code from stdin/files."""
+    try:
+        words = shlex.split(_strip_literal_redirections(command))
+    except ValueError:
+        return False
+    return any(child[0].rsplit('/', 1)[-1] in _SHELLS | {'source', '.'}
+               and _evaluator_payload(child) is None
+               for child in _launched_commands(words))
