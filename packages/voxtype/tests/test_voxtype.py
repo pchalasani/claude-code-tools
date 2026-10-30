@@ -2323,3 +2323,17 @@ def test_setup_whole_number_written_as_float(monkeypatch) -> None:
     assert sw._number(fake, "w", "held_max_words", 500.0) == 500
     assert seen["default"] == "500"
     assert seen["validate"]("500.0") is True
+
+
+def test_setup_segmentation_choice_survives_mode_change() -> None:
+    from voxtype.config import Config
+    from voxtype.setup_wizard import _changes
+
+    pinned = {"engine": "parakeet", "mode": "vad"}
+    cur = Config(**pinned)
+    changes = _changes(
+        cur, pinned, {"mode": "toggle", "segmentation": "vad"}
+    )
+    assert changes == {"mode": "toggle", "segmentation": "vad"}
+    after = Config(**{**pinned, **changes})
+    assert (after.mode, after.segmentation) == ("toggle", "vad")

@@ -462,9 +462,19 @@ def _ask_advanced(q, cur: Config, ans: dict) -> None:  # noqa: ANN001
     ))
 
 
-def _changes(cur: Config, ans: dict) -> dict:
-    """The answers that differ from the current settings."""
-    return {k: v for k, v in ans.items() if getattr(cur, k) != v}
+def _changes(cur: Config, pinned: dict, ans: dict) -> dict:
+    """The answers to write: those that differ from the current
+    settings, plus any whose effective value the other changes would
+    alter (e.g. a segmentation default that follows the mode)."""
+    changes = {k: v for k, v in ans.items() if getattr(cur, k) != v}
+    try:
+        after = Config(**{**pinned, **changes})
+    except TypeError:
+        return changes
+    for key, value in ans.items():
+        if getattr(after, key) != value:
+            changes[key] = value
+    return changes
 
 
 def _render(path: Path, base: str | None, changes: dict) -> str:
@@ -525,7 +535,7 @@ def run_setup(config_path: Path | None = None, force: bool = False) -> int:
             default=False,
         )):
             _ask_advanced(q, cur, ans)
-        changes = _changes(cur, ans)
+        changes = _changes(cur, pinned, ans)
         if not changes and base is not None:
             print("\nNo changes; your config is as it was.")
             return 0
