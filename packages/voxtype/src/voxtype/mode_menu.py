@@ -8,6 +8,7 @@ before starting, explaining both modes in plain words. The configured
 from __future__ import annotations
 
 import sys
+import textwrap
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -65,13 +66,24 @@ def should_ask(argv: Sequence[str], cfg: Config, interactive: bool) -> bool:
     )
 
 
+def _pick(phrases: list[str], preferred: str) -> str:
+    """``preferred`` if configured, else the first phrase, else ""."""
+    if preferred in phrases:
+        return preferred
+    return phrases[0] if phrases else ""
+
+
 def explanations(cfg: Config) -> dict[str, str]:
-    """Plain-words description of each mode, using this config's keys."""
+    """Plain-words description of each mode, using this config's keys
+    and phrases."""
     key = chord_label(cfg.hotkey)
+    send = _pick(cfg.submit_suffixes, "send it")
+    show = _pick(cfg.show_suffixes, "ok show")
     toggle = [
         f"Press {key} to start recording, and {key} again to stop.",
-        "Your words are typed where your cursor is; press Enter to send",
-        'them (or end with "send it" to send them for you).',
+        "Your words are typed where your cursor is; press Enter to send "
+        + (f'them (or end with "{send}" to send them for you).'
+           if send else "them."),
     ]
     if cfg.cancel_hotkey:
         toggle.append(
@@ -79,20 +91,27 @@ def explanations(cfg: Config) -> dict[str, str]:
             "in progress."
         )
     always = [
-        "voxtype listens all the time: just talk, and pause whenever",
+        "voxtype listens all the time: just talk, and pause whenever "
         "you like.",
     ]
-    if cfg.wait_for_submit:
-        always += [
-            'Nothing is typed until you end with "send it"; then it is',
-            'typed and sent. End with "ok show" instead to type it',
-            "without sending, so you can check it first.",
-        ]
+    if not cfg.wait_for_submit:
+        always.append("Each piece is typed when you pause.")
+        if send:
+            always.append(f'End with "{send}" to also press Enter.')
+    elif send:
+        always.append(
+            f'Nothing is typed until you end with "{send}"; then it is '
+            "typed and sent."
+        )
+        if show:
+            always.append(
+                f'End with "{show}" instead to type it without sending, '
+                "so you can check it first."
+            )
     else:
-        always += [
-            "Each piece is typed when you pause; end with \"send it\" to",
-            "press Enter.",
-        ]
+        always.append(
+            f"Nothing is typed until you press {key}, which types it."
+        )
     if cfg.discard_hotkey:
         always.append(
             f"{chord_label(cfg.discard_hotkey)} throws away what you've "
@@ -112,7 +131,13 @@ def render(cfg: Config) -> str:
     indent = "    "
 
     def block(title: str, body: str) -> str:
-        lines = "\n".join(indent + line for line in body.splitlines())
+        lines = "\n".join(
+            textwrap.fill(
+                line, width=72, initial_indent=indent,
+                subsequent_indent=indent,
+            )
+            for line in body.splitlines()
+        )
         return f"  {_bold(title)}\n{lines}"
 
     return "\n".join([

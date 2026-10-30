@@ -86,3 +86,19 @@ def test_toggle_from_vad_config_uses_smart_segmentation(
     chosen = mode_menu.ask(load_config(path), select=lambda d: "toggle")
     cfg = load_config(path, chosen)
     assert (cfg.mode, cfg.segmentation) == ("toggle", "hold")
+
+
+def test_explanations_use_configured_phrases() -> None:
+    text = mode_menu.explanations(
+        _cfg(submit_suffixes=["finish now"], show_suffixes=["preview now"])
+    )
+    assert '"finish now"' in text["always-on"]
+    assert '"preview now"' in text["always-on"]
+    assert '"finish now"' in text["toggle"]
+    assert "send it" not in text["always-on"] + text["toggle"]
+
+
+def test_no_phrases_configured() -> None:
+    text = mode_menu.explanations(_cfg(submit_suffixes=[], show_suffixes=[]))
+    assert "until you press Ctrl+;" in text["always-on"]
+    assert '"' not in text["always-on"] + text["toggle"]
