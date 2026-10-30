@@ -246,3 +246,19 @@ def test_literal_shell_payloads_are_inspected(command: str) -> None:
 def test_evaluator_data_arguments_remain_literal(command: str) -> None:
     """Only an evaluator's executable payload receives recursive inspection."""
     assert not check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    "bash -c -e 'echo ok; rm foo'",
+    "bash -c -- 'echo ok; rm foo'",
+    "bash -oc posix 'echo ok; rm foo'",
+    "2>/dev/null bash -c 'echo ok; rm foo'",
+    "bash 2>/dev/null -c 'echo ok; rm foo'",
+    "bash -c 2>/dev/null 'echo ok; rm foo'",
+    "bash -c 'echo ok; rm foo' # unmatched '",
+    "find /dev/null -exec bash -c 'echo ok; rm foo' \\;",
+    "fd x -x bash -c 'echo ok; rm foo'",
+])
+def test_shell_payload_options_and_launchers(command: str) -> None:
+    """Shell option ordering, redirects and launchers preserve executable code."""
+    assert check_rm_command(command)[0]

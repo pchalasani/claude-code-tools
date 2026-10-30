@@ -33,9 +33,12 @@ def _split_shell(command: str, operators: bool) -> list[str]:
         character = command[index]
         if quote is None and character == '#' and word_start:
             # Quotes in comments have no effect on the next command line.
+            pieces.append(command[start:index])
             newline = command.find('\n', index)
             if newline == -1:
+                start = len(command)
                 break
+            start = newline
             index = newline
             character = '\n'
         if character == '\\' and quote != "'":

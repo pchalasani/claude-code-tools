@@ -1,7 +1,6 @@
 """Shared utilities for bash command parsing."""
 import os
 import re
-import shlex
 import subprocess
 
 from shell_scan import (
@@ -11,7 +10,7 @@ from shell_scan import (
     _split_line_on_operators,
 )
 
-from shell_wrappers import _command_words
+from shell_payloads import literal_shell_payloads
 
 # Cache for alias expansions (populated on first use)
 _alias_cache: dict[str, str] | None = None
@@ -834,48 +833,6 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[str]]:
     return ''.join(pieces), expanded_bodies
 
 
-def _literal_shell_payload(command: str) -> str | None:
-    """Return code passed to a shell evaluator, excluding data arguments.
-
-    Args:
-        command: One command fragment with its original quoting.
-
-    Returns:
-        Literal shell code, or None if this command does not evaluate a string.
-    """
-    try:
-        words = _command_words(shlex.split(command))
-    except ValueError:
-        return None  # Conservative fragments can contain incomplete quotes.
-    if not words:
-        return None
-    name = words[0].rsplit('/', 1)[-1]
-    arguments = words[1:]
-    if arguments[:1] == ['--']:
-        arguments = arguments[1:]
-    if name == 'eval':
-        return ' '.join(arguments)
-    if name == 'trap':
-        if arguments and arguments[0] not in ('-', '-p', '-l'):
-            return arguments[0]
-        return None
-    if name not in ('sh', 'bash', 'dash', 'zsh', 'ksh'):
-        return None
-    index = 0
-    while index < len(arguments):
-        option = arguments[index]
-        if option == '--' or not option.startswith(('-', '+')):
-            break
-        if option in ('-o', '+o', '-O', '+O', '--rcfile', '--init-file'):
-            index += 2
-            continue
-        if (option.startswith('-') and not option.startswith('--')
-                and 'c' in option):
-            return arguments[index + 1] if index + 1 < len(arguments) else None
-        index += 1
-    return None
-
-
 def extract_all_commands(command: str) -> list[str]:
     """
     Recursively extract all commands from a bash command string.
@@ -927,9 +884,7 @@ def extract_all_commands(command: str) -> list[str]:
 
     # Quoted strings passed to evaluators are code, unlike search patterns.
     for subcommand in subcommands:
-        payload = _literal_shell_payload(subcommand)
-        if payload:
-            subshell_cmds.append(payload)
+        subshell_cmds.extend(literal_shell_payloads(subcommand))
 
     # Only the substitutions inside an unquoted heredoc body execute; the
     # surrounding text is literal, so it is not split into subcommands.

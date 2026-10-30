@@ -184,3 +184,66 @@ def _command_words(words: list[str]) -> list[str]:
     return words[i:]
 
 
+def _strip_literal_redirections(command: str) -> str:
+    """Remove literal redirections while preserving quoted argument text."""
+    tokens = list(re.finditer(
+        r'''(?:[^\s'"<>\\]|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+|[<>]+''',
+        command, re.DOTALL,
+    ))
+    kept: list[re.Match[str]] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if re.fullmatch(r'[<>]+', token[0]):
+            if (kept and kept[-1].end() == token.start()
+                    and kept[-1][0].isascii() and kept[-1][0].isdigit()):
+                kept.pop()  # An adjacent unquoted number is a file descriptor.
+            index += 2  # Operator and its destination word.
+        else:
+            kept.append(token)
+            index += 1
+    return ' '.join(token[0] for token in kept)
+
+
+_FIND_EXEC = {'-exec', '-execdir', '-ok', '-okdir'}
+_FD = {'fd', 'fdfind'}  # fdfind is the fd binary's name on Debian and Ubuntu
+# fd short options that take a value, so a cluster ends at them: in
+# `fd -ex`, x is the extension, not --exec.
+_FD_SHORT_VALUE = set('etEdScjo')
+_FD_VALUE = {f'-{letter}' for letter in _FD_SHORT_VALUE} | {
+    '--extension', '--type', '--exclude', '--max-depth', '--size', '--color',
+    '--threads', '--owner', '--changed-within', '--changed-before',
+    '--ignore-file', '--base-directory', '--path-separator', '--max-results',
+    '--min-depth', '--exact-depth', '--search-path',
+}
+_FIND_VALUE = {
+    '-name', '-iname', '-path', '-ipath', '-wholename', '-iwholename',
+    '-regex', '-iregex', '-lname', '-ilname', '-fstype', '-type', '-xtype',
+    '-user', '-group', '-uid', '-gid', '-perm', '-size', '-links', '-inum',
+    '-samefile', '-newer', '-anewer', '-cnewer', '-mtime', '-atime', '-ctime',
+    '-mmin', '-amin', '-cmin', '-used', '-maxdepth', '-mindepth', '-regextype',
+    '-f', '-flags', '-Btime', '-Bmin', '-fprint', '-fprint0',
+    '-fls', '-printf',
+}
+
+
+def _exec_command(program: str, word: str, rest: list[str]) -> list[str] | None:
+    """The command that find or fd runs through `word`, or None."""
+    if program == 'find':
+        return rest if word in _FIND_EXEC else None
+    if program not in _FD:
+        return None
+    if word in ('--exec', '--exec-batch'):
+        return rest
+    for option in ('--exec=', '--exec-batch='):
+        if word.startswith(option):
+            return [word[len(option):], *rest]
+    if word.startswith('-') and not word.startswith('--'):
+        # A short cluster: `-x rm`, `-xrm`, `-Hx rm`.
+        for index, letter in enumerate(word[1:], start=1):
+            if letter in 'xX':
+                attached = word[index + 1:]
+                return [attached, *rest] if attached else rest
+            if letter in _FD_SHORT_VALUE:
+                break
+    return None
