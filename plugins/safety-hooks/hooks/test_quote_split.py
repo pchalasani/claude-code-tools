@@ -222,3 +222,27 @@ def test_fallback_preserves_earlier_substitution(suffix: str) -> None:
 def test_fallback_preserves_single_quoted_continuation() -> None:
     """A conservative fallback must not manufacture an executable marker."""
     assert not check_rm_command("echo '$\\\n(rm foo)' $((1 << 2))")[0]
+
+
+@pytest.mark.parametrize("command", [
+    "bash -c 'echo ok; rm foo'",
+    '/bin/bash -lc "echo ok; rm foo"',
+    "sh -c 'echo ok && rm foo'",
+    "eval 'echo ok; rm foo'",
+    "trap 'echo ok; rm foo' EXIT",
+    "env bash -c 'echo ok; rm foo'",
+    "command bash -c 'echo ok; rm foo'",
+])
+def test_literal_shell_payloads_are_inspected(command: str) -> None:
+    """Quoted code passed to an evaluator remains executable code."""
+    assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    "bash -c \"printf '%s' 'a|rm|b'\"",
+    "printf '%s' \"bash -c 'echo ok; rm foo'\"",
+    "trap -p 'echo ok; rm foo'",
+])
+def test_evaluator_data_arguments_remain_literal(command: str) -> None:
+    """Only an evaluator's executable payload receives recursive inspection."""
+    assert not check_rm_command(command)[0]
