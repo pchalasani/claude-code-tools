@@ -874,8 +874,11 @@ def extract_all_commands(command: str) -> list[str]:
     subcommands = extract_subcommands(stripped)
     all_commands.extend(subcommands)
 
-    # Then, extract commands from subshells within the original command
-    subshell_cmds = extract_subshell_commands(stripped)
+    # Extract from normalized lines before operator splitting can break spans.
+    # A continuation can join "$" and "(" into a substitution marker.
+    subshell_cmds = []
+    for line in _split_command_lines(stripped):
+        subshell_cmds.extend(extract_subshell_commands(line))
 
     # Only the substitutions inside an unquoted heredoc body execute; the
     # surrounding text is literal, so it is not split into subcommands.

@@ -185,3 +185,40 @@ def test_nested_process_suffix_hash_is_word_text(command: str) -> None:
 def test_legacy_bash_parameter_close_cannot_hide_rm() -> None:
     """Bash 3.2 can close an unquoted substitution inside parameter text."""
     assert check_rm_command('echo $(echo ${x:-); rm foo # })')[0]
+
+
+@pytest.mark.parametrize("prefix", [
+    "echo $((1 << 2)); ",
+    'echo "$(case x in x) :;; esac)"; ',
+])
+def test_conservative_fallback_joins_continued_commands(prefix: str) -> None:
+    """A fallback still joins command words continued over a physical newline."""
+    assert check_rm_command(prefix + "r\\\nm foo")[0]
+
+
+@pytest.mark.parametrize("command", [
+    "echo $\\\n(echo ok; rm foo)",
+    'echo "$(echo $\\\n(printf x; rm foo))"',
+])
+def test_continued_substitution_marker_is_extracted(command: str) -> None:
+    """Splitting and recursive extraction inspect the same continued text."""
+    assert check_rm_command(command)[0]
+
+
+def test_single_quoted_continuation_is_literal_data() -> None:
+    """Single quotes prevent removal of an apparent line continuation."""
+    assert not check_rm_command("echo '$\\\n(rm foo)'")[0]
+
+
+@pytest.mark.parametrize("suffix", [
+    ' "$((1 << 2))"',
+    ' "$(echo case)"',
+])
+def test_fallback_preserves_earlier_substitution(suffix: str) -> None:
+    """Fallback splitting cannot destroy substitutions earlier on the line."""
+    assert check_rm_command('echo "$(rm \'a|b\')"' + suffix)[0]
+
+
+def test_fallback_preserves_single_quoted_continuation() -> None:
+    """A conservative fallback must not manufacture an executable marker."""
+    assert not check_rm_command("echo '$\\\n(rm foo)' $((1 << 2))")[0]

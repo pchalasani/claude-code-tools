@@ -64,7 +64,7 @@ def _split_shell(command: str, operators: bool) -> list[str]:
                 # Heredoc bodies and escaped legacy backticks disagree with
                 # the downstream substitution extractor's simple boundaries.
                 # Process substitutions and brace commands are opaque to that extractor.
-                remainder = ''.join(pieces) + command[start:]
+                remainder = _join_continuations(''.join(pieces) + command[start:])
                 if not operators:
                     # Keep the remainder together so the operator pass can
                     # conservatively inspect it without losing quote context.
@@ -101,6 +101,34 @@ def _split_shell(command: str, operators: bool) -> list[str]:
     pieces.append(command[start:])
     parts.append(''.join(pieces))
     return parts
+
+
+def _join_continuations(command: str) -> str:
+    """Apply the legacy continuation rules without removing single-quoted data."""
+    pieces: list[str] = []
+    index = 0
+    quote = None
+    while index < len(command):
+        character = command[index]
+        if character == '\\' and quote != "'":
+            if command[index:index + 2] != '\\\n':
+                pieces.append(command[index:index + 2])
+            index += 2
+            continue
+        if quote is None and command.startswith("$'", index):
+            end = _end_of_single_quote(command, index + 1, escapes=True)
+            end = len(command) if end is None else end + 1
+            pieces.append(command[index:end])
+            index = end
+            continue
+        if character in "'\"":
+            if quote == character:
+                quote = None
+            elif quote is None:
+                quote = character
+        pieces.append(character)
+        index += 1
+    return ''.join(pieces)
 
 
 def _end_of_backtick(command: str, start: int) -> int | None:
