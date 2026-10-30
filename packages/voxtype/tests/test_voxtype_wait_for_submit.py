@@ -627,3 +627,24 @@ def test_capped_text_stays_with_the_next_part(gap_app) -> None:  # noqa: ANN001
     app.handle_utterance("and seven, ok show")
     app.flush_deliveries()
     assert app._session_texts == ["one two three four five six", "and seven"]
+
+
+def test_release_during_check_keeps_capped_text(gap_app) -> None:  # noqa: ANN001
+    import threading
+
+    gate = threading.Event()
+
+    class SlowStart(StartSpy):
+        def message_start(self, pieces):  # noqa: ANN001, ANN202
+            gate.wait(5)
+            return (0, "")
+
+    app, _ = gap_app(held_check_words=4, held_max_words=5)
+    app._post = SlowStart((0, ""))
+    app.handle_utterance("one two three")
+    app.handle_utterance("four five six, send it")
+    app.handle_utterance("and seven, ok show")  # while the check runs
+    gate.set()
+    app.flush_deliveries()
+    assert "<ENTER>" not in app.typist.events
+    assert app._session_texts == ["one two three four five six", "and seven"]

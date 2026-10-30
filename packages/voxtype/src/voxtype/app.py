@@ -569,11 +569,6 @@ class VoiceTypeApp(RuntimeMixin):
             joined = " ".join(pieces)
             if enter or show:
                 self._held = []
-                if joined and self._sent:
-                    self._session_texts = []
-                    self._sent = False
-                if enter:
-                    self._sent = True
             buf = self._session_texts
         if dropped:
             self._drop_held(dropped, f"said before a {gap:.0f}s silence")
@@ -627,14 +622,21 @@ class VoiceTypeApp(RuntimeMixin):
         n_words = len(text.split())
         if enter and 0 < self.cfg.held_max_words < n_words:
             enter = False
-            with self._lock:
-                if self._session_texts is session:
-                    self._sent = False  # not sent: more may follow it
             self._status(
                 f"{n_words} words held, over held_max_words "
                 f"({self.cfg.held_max_words}): typed without Enter; "
                 "check it, then say a submit phrase"
             )
+        # Message boundaries for the clipboard and paste-again: decided
+        # here, in delivery order, once it is known whether Enter is
+        # pressed. After a sent message, the next one starts fresh.
+        with self._lock:
+            if self._session_texts is session:
+                if text and self._sent:
+                    self._session_texts = session = []
+                    self._sent = False
+                if enter:
+                    self._sent = True
         self._type(text, version, arrived, session, None, enter, checked)
 
     def _drop_held(self, text: str, why: str) -> None:
