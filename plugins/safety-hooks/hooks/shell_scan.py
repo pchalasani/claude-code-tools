@@ -10,7 +10,17 @@ def _split_command_lines(command: str) -> list[str]:
 
 def _split_line_on_operators(line: str) -> list[str]:
     """Split on shell operators outside quoted words and substitutions."""
-    return _split_shell(line, operators=True)
+    parts: list[str] = []
+    for fragment in _split_shell(line, operators=True):
+        if re.match(r'\s*(?:[({]|(?:if|then|else|elif|while|until|do|for|case|'
+                    r'function|select|coproc)\b|!)', fragment):
+            # Control syntax is outside the simple-command parser. Preserve
+            # legacy inspection of its executable strings conservatively.
+            parts.extend(re.split(r'&&|\|\||[;&|\n]',
+                                  _join_continuations(fragment)))
+        else:
+            parts.append(fragment)
+    return parts
 
 
 def _split_shell(command: str, operators: bool) -> list[str]:
@@ -76,6 +86,12 @@ def _split_shell(command: str, operators: bool) -> list[str]:
             index = end
             word_start = False
             continue
+        if quote is None and character == '(':
+            # Bare groups, arrays and function definitions are unsupported:
+            # retain legacy inspection without guessing their word grammar.
+            remainder = _join_continuations(''.join(pieces) + command[start:])
+            return (parts + re.split(r'&&|\|\||[;&|\n]', remainder)
+                    if operators else parts + [remainder])
         if character in "'\"":
             if quote == character:
                 quote = None
@@ -87,6 +103,10 @@ def _split_shell(command: str, operators: bool) -> list[str]:
             if operators:
                 if command.startswith(('&&', '||'), index):
                     width = 2
+                elif character == '&' and (
+                        (word_start and index > 0 and command[index - 1] in '<>')
+                        or command.startswith('&>', index)):
+                    pass  # Descriptor duplication/output redirection, not '&'.
                 elif character in ';&|':
                     width = 1
             elif character == '\n':

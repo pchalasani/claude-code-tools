@@ -262,3 +262,32 @@ def test_evaluator_data_arguments_remain_literal(command: str) -> None:
 def test_shell_payload_options_and_launchers(command: str) -> None:
     """Shell option ordering, redirects and launchers preserve executable code."""
     assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    "if true; then bash -c 'echo ok; rm foo'; fi",
+    "(bash -c 'echo ok; rm foo')",
+    "bash 2>&1 -c 'echo ok; rm foo'",
+    "! bash -c 'echo ok; rm foo'",
+    "f() { bash -c 'echo ok; rm foo'; }; f",
+])
+def test_shell_control_and_descriptor_payloads(command: str) -> None:
+    """Control syntax and descriptor duplication cannot hide quoted code."""
+    assert check_rm_command(command)[0]
+
+
+def test_descriptor_redirect_preserves_literal_payload_data() -> None:
+    """An ampersand in a redirect must not fragment a literal code argument."""
+    assert not check_rm_command("bash 2>&1 -c \"printf '%s' 'a|rm|b'\"")[0]
+
+
+@pytest.mark.parametrize("command", [
+    r"echo \>& rm foo",
+    r"echo \<& rm foo",
+    "foo-bar() { bash -c 'echo ok; rm foo'; }; foo-bar",
+    "f ( ) { bash -c 'echo ok; rm foo'; }; f",
+    "f( ) { bash -c 'echo ok; rm foo'; }; f",
+])
+def test_escaped_redirects_and_function_spacing(command: str) -> None:
+    """Escaped data and legal function spellings retain command inspection."""
+    assert check_rm_command(command)[0]
