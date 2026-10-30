@@ -311,3 +311,13 @@ def test_stdin_and_additional_shell_evaluators(command: str) -> None:
 def test_multiline_pipeline_and_timeout_payloads(command: str) -> None:
     """A physical newline and a timeout wrapper do not hide executable text."""
     assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    "su -c 'echo ok; rm foo'",
+    "ssh host 'echo ok; rm foo'",
+    "printf '%s' 'echo ok; rm foo' | bash -c 'bash'",
+])
+def test_remote_evaluators_and_nested_stdin_consumers(command: str) -> None:
+    """Remote evaluation and nested shells retain conservative inspection."""
+    assert check_rm_command(command)[0]

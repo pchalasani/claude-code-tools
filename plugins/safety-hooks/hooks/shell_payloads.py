@@ -2,6 +2,8 @@
 
 import shlex
 
+from shell_scan import _split_command_lines, _split_line_on_operators
+
 from shell_wrappers import (
     _command_words, _strip_literal_redirections, _exec_command,
     _FD, _FD_VALUE, _FIND_VALUE, _takes_value,
@@ -101,6 +103,15 @@ def needs_conservative_shell_scan(command: str) -> bool:
         words = shlex.split(_strip_literal_redirections(command))
     except ValueError:
         return False
-    return any(child[0].rsplit('/', 1)[-1] in _SHELLS | {'source', '.'}
-               and _evaluator_payload(child) is None
-               for child in _launched_commands(words))
+    for child in _launched_commands(words):
+        name = child[0].rsplit('/', 1)[-1]
+        if name in {'ssh', 'su'}:
+            return True  # Retain legacy inspection of opaque shell launchers.
+        payload = _evaluator_payload(child)
+        if name in _SHELLS | {'source', '.'} and payload is None:
+            return True
+        if payload and any(needs_conservative_shell_scan(part)
+                           for line in _split_command_lines(payload)
+                           for part in _split_line_on_operators(line)):
+            return True  # Nested consumers inherit the outer pipeline's stdin.
+    return False
