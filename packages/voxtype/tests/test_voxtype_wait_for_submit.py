@@ -421,7 +421,7 @@ def test_bare_submit_after_show_keeps_the_shown_text(
     app.handle_utterance("look at this, ok show")
     app.handle_utterance("go")
     app.flush_deliveries()
-    assert app._session_texts == ["look at this"]
+    assert app._session_texts[app._msg_start:] == ["look at this"]
 
 
 @pytest.mark.parametrize(
@@ -445,12 +445,11 @@ def test_shown_then_sent_message_stays_whole(make_app) -> None:  # noqa: ANN001
     app.handle_utterance("second part, send it")
     app.handle_utterance("next message, send it")
     app.flush_deliveries()
-    assert app._session_texts == ["next message"]
-    app._session_texts.clear()
+    assert app._session_texts[app._msg_start:] == ["next message"]
     app.handle_utterance("a, ok show")
     app.handle_utterance("b, send it")
     app.flush_deliveries()
-    assert app._session_texts == ["a", "b"]
+    assert app._session_texts[app._msg_start:] == ["a", "b"]
 
 
 class Clock:
@@ -626,7 +625,7 @@ def test_capped_text_stays_with_the_next_part(gap_app) -> None:  # noqa: ANN001
     app.handle_utterance("one two three four five six, send it")
     app.handle_utterance("and seven, ok show")
     app.flush_deliveries()
-    assert app._session_texts == ["one two three four five six", "and seven"]
+    assert app._session_texts[app._msg_start:] == ["one two three four five six", "and seven"]
 
 
 def test_release_during_check_keeps_capped_text(gap_app) -> None:  # noqa: ANN001
@@ -647,7 +646,7 @@ def test_release_during_check_keeps_capped_text(gap_app) -> None:  # noqa: ANN00
     gate.set()
     app.flush_deliveries()
     assert "<ENTER>" not in app.typist.events
-    assert app._session_texts == ["one two three four five six", "and seven"]
+    assert app._session_texts[app._msg_start:] == ["one two three four five six", "and seven"]
 
 
 def test_queued_messages_each_reach_the_clipboard(gap_app) -> None:  # noqa: ANN001
@@ -666,7 +665,7 @@ def test_queued_messages_each_reach_the_clipboard(gap_app) -> None:  # noqa: ANN
         app.handle_utterance(f"{msg}, send it")
     gate.set()
     app.flush_deliveries()
-    assert app._session_texts == ["third message"]
+    assert app._session_texts[app._msg_start:] == ["third message"]
 
 
 def test_toggle_off_text_reaches_the_clipboard_after_queued_send(
@@ -688,4 +687,29 @@ def test_toggle_off_text_reaches_the_clipboard_after_queued_send(
     app.toggle()  # off: types the held piece without Enter
     gate.set()
     app.flush_deliveries()
-    assert app._session_texts == ["unfinished piece"]
+    assert app._session_texts[app._msg_start:] == ["unfinished piece"]
+
+
+def test_in_flight_words_after_queued_send_reach_the_clipboard(
+    gap_app,  # noqa: ANN001
+) -> None:
+    import threading
+
+    gate = threading.Event()
+
+    class SlowClean(CleanupSpy):
+        def clean(self, text, since=None):  # noqa: ANN001, ANN202
+            gate.wait(5)
+            return text
+
+    app, _ = gap_app()
+    app._post = SlowClean()
+    app.handle_utterance("first message, send it")
+    app.handle_utterance("second message, send it")
+    app.toggle()  # off; the next words were said just before it
+    app.handle_utterance("trailing words")
+    gate.set()
+    app.flush_deliveries()
+    assert app._session_texts[app._msg_start:] == [
+        "second message", "trailing words"
+    ]

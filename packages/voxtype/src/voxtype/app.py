@@ -112,9 +112,11 @@ class VoiceTypeApp(RuntimeMixin):
         # Set by a hands-free submit: the next message typed starts a
         # fresh rescue buffer (clipboard and paste-again hold only it).
         self._sent = False
-        # Counts activations (fresh dictation sessions), so a held
-        # release can tell whether its session is still the current one.
-        self._activation = 0
+        # Where the current message starts in _session_texts: after a
+        # sent message, the next one starts fresh, so the clipboard and
+        # paste-again hold only it. The list itself is replaced only
+        # for a new dictation session.
+        self._msg_start = 0
         # Until this time, utterances are dropped: speech said before a
         # discard (Shift+Esc) that was still being transcribed.
         self._discard_until = 0.0
@@ -175,7 +177,6 @@ class VoiceTypeApp(RuntimeMixin):
             self._last_activity = time.monotonic()
             pieces, self._held = list(self._held), []
             buf = self._session_texts
-            activation = self._activation
             if new == State.ACTIVE:
                 # Fresh dictation session: the buffer is cleared as
                 # part of the SAME commit that publishes ACTIVE, so a
@@ -184,13 +185,11 @@ class VoiceTypeApp(RuntimeMixin):
                 # (which would break clipboard/paste-last recovery).
                 self._session_texts = []
                 self._sent = False
-                self._activation += 1
+                self._msg_start = 0
         if pieces and keep_held:
             self._deliver(
                 None,
-                lambda v, at: self._send_held(
-                    pieces, v, at, buf, False, activation
-                ),
+                lambda v, at: self._send_held(pieces, v, at, buf, False),
             )
             # Typing it may have used up a toggle-off's grace window; the
             # in-flight words get a full one after it. Still inside
@@ -580,7 +579,6 @@ class VoiceTypeApp(RuntimeMixin):
             if enter or show:
                 self._held = []
             buf = self._session_texts
-            activation = self._activation
         if dropped:
             self._drop_held(dropped, f"said before a {gap:.0f}s silence")
         if not (enter or show):
@@ -590,9 +588,7 @@ class VoiceTypeApp(RuntimeMixin):
             return True  # "ok show" with nothing held: nothing to show
         self._deliver(
             version,
-            lambda v, at: self._send_held(
-                pieces, v, at, buf, enter, activation
-            ),
+            lambda v, at: self._send_held(pieces, v, at, buf, enter),
         )
         return True
 
@@ -603,7 +599,6 @@ class VoiceTypeApp(RuntimeMixin):
         arrived: float,
         session: list[str],
         enter: bool,
-        activation: int = 0,
     ) -> None:
         """Type released held pieces (on the delivery thread).
 
@@ -645,10 +640,9 @@ class VoiceTypeApp(RuntimeMixin):
         # here, in delivery order, once it is known whether Enter is
         # pressed. After a sent message, the next one starts fresh.
         with self._lock:
-            if self._activation == activation:
-                session = self._session_texts
+            if session is self._session_texts:
                 if text and self._sent:
-                    self._session_texts = session = []
+                    self._msg_start = len(session)
                     self._sent = False
                 if enter:
                     self._sent = True
@@ -886,7 +880,7 @@ class VoiceTypeApp(RuntimeMixin):
             buf = self._session_texts if session is None else session
             buf.append(text)
             current = buf is self._session_texts
-            joined = " ".join(buf)
+            joined = " ".join(buf[self._msg_start:] if current else buf)
         if self.cfg.copy_to_clipboard and current:
             copy_to_clipboard(joined)
         if self.cfg.trailing_space:
@@ -960,7 +954,7 @@ class VoiceTypeApp(RuntimeMixin):
         cursor where it should have gone and hit the paste hotkey.
         """
         with self._lock:
-            session = " ".join(self._session_texts)
+            session = " ".join(self._session_texts[self._msg_start:])
         if not session:
             self._status("nothing to paste")
             return
