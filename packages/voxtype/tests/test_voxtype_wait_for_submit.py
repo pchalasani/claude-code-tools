@@ -709,3 +709,28 @@ def test_cap_note_survives_a_pause(gap_app) -> None:  # noqa: ANN001
     app.toggle()  # pause: releases it, over the cap
     app.flush_deliveries()
     assert app.current_note().startswith("3 words not typed")
+
+
+def test_cap_note_after_new_session_points_to_file(gap_app) -> None:  # noqa: ANN001
+    import threading
+
+    gate = threading.Event()
+
+    class SlowClean(CleanupSpy):
+        def clean(self, text, since=None):  # noqa: ANN001, ANN202
+            gate.wait(5)
+            return text
+
+    app, _ = gap_app(held_max_words=2, paste_hotkey="<cmd>+<ctrl>+v")
+    app._post = SlowClean()
+    app.handle_utterance("first, send it")
+    app.handle_utterance("one two three, send it")
+    app._last_toggle = -10.0
+    app.toggle()
+    app._last_toggle = -10.0
+    app.toggle()  # paused and resumed: a new session
+    gate.set()
+    app.flush_deliveries()
+    assert app.current_note() == (
+        "3 words not typed (over 2). Saved to dropped.txt."
+    )

@@ -36,7 +36,10 @@ class HeldNotesMixin:
         if self.cfg.strip_fillers:
             text = collapse_repeats(strip_fillers(text))
         with self._lock:
-            if session is self._session_texts:
+            # A pause and resume since it arrived started a new session:
+            # then the paste-again hotkey cannot reach it.
+            current = session is self._session_texts
+            if current:
                 self._msg_start = len(session)
                 self._sent = True
             session.append(text)
@@ -49,10 +52,11 @@ class HeldNotesMixin:
             f"not typed{where}"
         )
         paste = self.cfg.paste_hotkey
-        self._show_note(
-            f"{n_words} words not typed (over {cap})."
-            + (f" {chord_label(paste)} types them." if paste else "")
-        )
+        if paste and current:
+            hint = f" {chord_label(paste)} types them."
+        else:
+            hint = " Saved to dropped.txt." if where else ""
+        self._show_note(f"{n_words} words not typed (over {cap}).{hint}")
 
     def _note_kept(self: VoiceTypeApp, n_words: int, gap: float) -> None:
         """Say that words held from before a long silence are kept."""
