@@ -213,7 +213,7 @@ def _number(q, message: str, default: float, integer: bool = False):  # noqa: AN
             return "enter a whole number" if integer else "enter a number"
         return True if value >= 0 else "must be 0 or more"
 
-    shown = str(int(default)) if integer else f"{default:g}"
+    shown = str(int(default)) if integer else repr(float(default))
     text = _ask(q.text(message, default=shown, validate=_valid))
     return int(text) if integer else float(text)
 

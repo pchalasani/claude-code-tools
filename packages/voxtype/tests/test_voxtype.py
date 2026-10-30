@@ -2247,6 +2247,7 @@ def test_setup_wizard_moonshine_drops_hold(monkeypatch, tmp_path) -> None:
         "toggle", True, KEEP, "off",
         True,                        # advanced?
         "moonshine", "medium-streaming",
+        DEFAULT, DEFAULT, DEFAULT,         # always-on safeguards
         False, False, False, True, True,  # keys, paste, clip, sounds, ghost
         True,                        # save?
     ])
@@ -2256,3 +2257,20 @@ def test_setup_wizard_moonshine_drops_hold(monkeypatch, tmp_path) -> None:
     assert run_setup(config_path=out) == 0
     cfg = load_config(out)
     assert (cfg.engine, cfg.segmentation) == ("moonshine", "vad")
+
+
+def test_setup_wizard_keeps_exact_numbers(monkeypatch, tmp_path) -> None:
+    out = tmp_path / "c.toml"
+    out.write_text("post_process = true\npost_process_timeout = 1.23456789\n")
+    fake = _wizard(monkeypatch, [
+        "toggle", True, KEEP, DEFAULT, DEFAULT,  # cleanup as is
+        True, DEFAULT, DEFAULT,                  # advanced: engine, hold
+        DEFAULT, DEFAULT, DEFAULT,               # always-on safeguards
+        DEFAULT,                                 # time limit (Enter)
+        False, False, DEFAULT, DEFAULT, DEFAULT,
+    ])
+    from voxtype.setup_wizard import run_setup
+
+    assert run_setup(config_path=out) == 0
+    assert "1.23456789" in out.read_text()
+    assert not any(m.startswith("Save") for m in fake.asked)
