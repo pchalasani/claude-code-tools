@@ -75,9 +75,18 @@ Claude Code and Codex through their plugin marketplaces.
    voxtype
    ```
 
-   Press `Ctrl+;` to start, speak (watch the ghost),
-   press `Ctrl+;` again to stop -- your speech is typed
-   at the cursor. `Esc` cancels a take.
+   voxtype first asks how you want to dictate, and
+   explains both choices:
+
+   - **Toggle**: press `Ctrl+;` to start, speak (watch
+     the ghost), press `Ctrl+;` again to stop -- your
+     speech is typed at the cursor. `Esc` cancels a take.
+   - **Always-on**: just talk, pausing whenever you like,
+     and end with "send it" to type and send it all
+     (see [hands-free](#talk-then-submit-in-one-breath)).
+
+   Enter picks your configured `mode`; set
+   `ask_mode = false` to skip the question.
 
 4. Configure it: run `voxtype setup` for an
    interactive walkthrough — it asks a handful of
