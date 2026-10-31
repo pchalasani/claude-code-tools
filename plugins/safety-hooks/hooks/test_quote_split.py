@@ -345,6 +345,8 @@ def test_leading_combined_output_redirect_cannot_hide_rm(command: str) -> None:
 @pytest.mark.parametrize("command", [
     "uv run --no-project --no-sync bash -c 'echo ok; rm foo'",
     "setsid bash -c 'echo ok; rm foo'",
+    "arch -arm64 /bin/bash -c 'echo ok; rm foo'",
+    "flock /tmp/lock bash -c 'echo ok; rm foo'",
     "chroot / bash -c 'echo ok; rm foo'",
 ])
 def test_unsupported_launchers_retain_legacy_scan(command: str) -> None:

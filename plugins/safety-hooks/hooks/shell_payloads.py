@@ -108,6 +108,12 @@ def needs_conservative_shell_scan(command: str) -> bool:
         if name in {'ssh', 'su', 'docker', 'kubectl', 'busybox',
                     'uv', 'setsid', 'chroot'}:
             return True  # Retain legacy inspection of opaque shell launchers.
+        # Unknown launchers can still contain an explicit shell -c operand.
+        # Preserve legacy inspection without enumerating every platform tool.
+        if any(word.rsplit('/', 1)[-1] in _SHELLS
+               and _evaluator_payload(child[index:]) is not None
+               for index, word in enumerate(child[1:], start=1)):
+            return True
         payload = _evaluator_payload(child)
         if name in _SHELLS | {'source', '.'} and payload is None:
             return True
