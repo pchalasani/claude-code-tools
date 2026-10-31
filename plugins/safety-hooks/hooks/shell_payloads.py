@@ -1,5 +1,6 @@
 """Literal shell code executed by evaluators and command launchers."""
 
+import re
 import shlex
 
 from shell_scan import _split_command_lines, _split_line_on_operators
@@ -100,15 +101,24 @@ def literal_shell_payloads(command: str) -> list[str]:
 def needs_conservative_shell_scan(command: str) -> bool:
     """Keep legacy inspection when a shell may consume code from stdin/files."""
     if "$'" in command:
-        # shlex does not decode ANSI-C strings. Inspect executable operands
-        # conservatively, while preserving ordinary echo/rg quoted data.
+        # Mask ANSI-C operands without decoding them. This preserves command
+        # structure even when assignments or redirects precede the evaluator.
+        masked = re.sub(
+            r"""(?P<ansi>\$'(?:[^'\\]|\\.)*')|'[^']*'|"(?:[^"\\]|\\.)*"|\\.""",
+            lambda match: "''" if match.lastgroup == 'ansi' else match[0],
+            command, flags=re.DOTALL,
+        )
         try:
-            prefix = shlex.split(command.partition("$'")[0])
+            structural_words = shlex.split(_strip_literal_redirections(masked))
         except ValueError:
-            prefix = []
-        if any(_evaluator_payload([*child, '']) is not None
-               for child in _launched_commands(prefix)):
-            return True
+            structural_words = []
+        for child in _launched_commands(structural_words):
+            if not child[0] or any(
+                _evaluator_payload(child[index:]) is not None
+                for index in range(len(child))
+                if index == 0 or child[index].rsplit('/', 1)[-1] in _SHELLS
+            ):
+                return True
     try:
         words = shlex.split(_strip_literal_redirections(command))
     except ValueError:

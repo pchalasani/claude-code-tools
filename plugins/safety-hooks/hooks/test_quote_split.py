@@ -411,3 +411,24 @@ def test_ansi_c_evaluator_input_keeps_legacy_scan(command: str) -> None:
 def test_ansi_c_data_remains_literal(command: str) -> None:
     """ANSI-C data alone does not turn a non-evaluator into shell code."""
     assert not check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    r"bash 2>/dev/null -c $'printf \'ok\'; rm foo'",
+    r"2>/dev/null bash -c $'printf \'ok\'; rm foo'",
+    r"X=$'can\'t' bash -c 'echo ok; rm foo'",
+])
+def test_ansi_c_prefixes_preserve_evaluator_structure(command: str) -> None:
+    """Assignments and redirects cannot hide an ANSI-C evaluator operand."""
+    assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("body", ["# $(rm foo)", "# `rm foo`"])
+def test_unquoted_heredoc_hash_is_expanded_data(body: str) -> None:
+    """A heredoc hash is literal data, so its substitutions still execute."""
+    assert check_rm_command(f"cat <<EOF\n{body}\nEOF")[0]
+
+
+def test_quoted_heredoc_hash_remains_data() -> None:
+    """Quoted heredoc delimiters disable even hash-prefixed substitutions."""
+    assert not check_rm_command("cat <<'EOF'\n# $(rm foo)\nEOF")[0]

@@ -86,8 +86,10 @@ def _split_shell(command: str, operators: bool) -> list[str]:
             index = end
             word_start = False
             continue
-        if quote is None and character == '(':
-            # Bare groups, arrays and function definitions are unsupported:
+        if quote is None and (character == '('
+                              or command.startswith('<<', index)):
+            # Bare groups and unblanked heredocs are unsupported. Heredoc
+            # hashes are data; do not strip their executable substitutions.
             # retain legacy inspection without guessing their word grammar.
             remainder = _join_continuations(''.join(pieces) + command[start:])
             return (parts + re.split(r'&&|\|\||[;&|\n]', remainder)
