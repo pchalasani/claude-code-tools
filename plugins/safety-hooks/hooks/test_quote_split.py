@@ -392,3 +392,22 @@ def test_substitution_generated_payload_retains_legacy_scan(command: str) -> Non
 def test_literal_eval_payload_still_preserves_quoted_data() -> None:
     """A literal evaluator payload can still contain ordinary quoted data."""
     assert not check_rm_command("eval \"printf '%s' 'a|rm|b'\"")[0]
+
+
+@pytest.mark.parametrize("command", [
+    r"bash -c $'printf \'ok\'; rm foo'",
+    r"eval $'printf \'ok\'; rm foo'",
+    r"arch -arm64 bash -c $'printf \'ok\'; rm foo'",
+])
+def test_ansi_c_evaluator_input_keeps_legacy_scan(command: str) -> None:
+    """Unsupported ANSI-C evaluator operands retain conservative inspection."""
+    assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    r"echo $'a\'|rm|b'",
+    "rg $'a|rm|b' notes.md",
+])
+def test_ansi_c_data_remains_literal(command: str) -> None:
+    """ANSI-C data alone does not turn a non-evaluator into shell code."""
+    assert not check_rm_command(command)[0]

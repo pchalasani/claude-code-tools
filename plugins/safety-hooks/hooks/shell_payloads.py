@@ -99,6 +99,16 @@ def literal_shell_payloads(command: str) -> list[str]:
 
 def needs_conservative_shell_scan(command: str) -> bool:
     """Keep legacy inspection when a shell may consume code from stdin/files."""
+    if "$'" in command:
+        # shlex does not decode ANSI-C strings. Inspect executable operands
+        # conservatively, while preserving ordinary echo/rg quoted data.
+        try:
+            prefix = shlex.split(command.partition("$'")[0])
+        except ValueError:
+            prefix = []
+        if any(_evaluator_payload([*child, '']) is not None
+               for child in _launched_commands(prefix)):
+            return True
     try:
         words = shlex.split(_strip_literal_redirections(command))
     except ValueError:
