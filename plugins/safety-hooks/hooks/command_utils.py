@@ -885,7 +885,10 @@ def extract_all_commands(command: str) -> list[str]:
     if any(needs_conservative_shell_scan(part) for part in subcommands):
         # A stdin consumer may follow a pipeline continued across newlines.
         # Preserve legacy inspection of the whole normalized input.
-        all_commands.extend(re.split(r'&&|\|\||[;&|\n]', '\n'.join(lines)))
+        for fragment in re.split(r'&&|\|\||[;&|\n]', '\n'.join(lines)):
+            fragment = fragment.strip()
+            if fragment and fragment not in all_commands:
+                all_commands.append(fragment)
 
     # Quoted strings passed to evaluators are code, unlike search patterns.
     for subcommand in subcommands:

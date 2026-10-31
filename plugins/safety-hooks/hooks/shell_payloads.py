@@ -125,9 +125,12 @@ def needs_conservative_shell_scan(command: str) -> bool:
         return False
     for child in _launched_commands(words):
         name = child[0].rsplit('/', 1)[-1]
-        if name in {'ssh', 'su', 'docker', 'kubectl', 'busybox',
-                    'uv', 'setsid', 'chroot', 'watch', 'parallel'}:
-            return True  # Retain legacy inspection of opaque shell launchers.
+        if name not in _SHELLS | _FD | {
+            'eval', 'trap', 'source', '.', 'echo', 'printf', 'rg', 'grep', 'find',
+        }:
+            # Unknown command semantics retain the legacy conservative scan.
+            # Only handled evaluators and literal-data commands relax quoting.
+            return True
         # Unknown launchers can still contain an explicit shell -c operand.
         # Preserve legacy inspection without enumerating every platform tool.
         if any(word.rsplit('/', 1)[-1] in _SHELLS

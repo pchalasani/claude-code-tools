@@ -353,6 +353,9 @@ def test_leading_combined_output_redirect_cannot_hide_rm(command: str) -> None:
     "chroot / bash -c 'echo ok; rm foo'",
     "watch -n 1 'echo ok; rm foo'",
     "parallel 'echo {}; rm foo' ::: one",
+    "git -c alias.wipe='!echo ok; rm foo' wipe",
+    "npm exec -c 'echo ok; rm foo'",
+    "xterm -e 'echo ok; rm foo'",
 ])
 def test_unsupported_launchers_retain_legacy_scan(command: str) -> None:
     """Opaque launchers must preserve the protection provided by main."""
