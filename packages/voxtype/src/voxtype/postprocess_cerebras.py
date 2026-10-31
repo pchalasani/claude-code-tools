@@ -200,50 +200,6 @@ def build_messages(text: str, fmt: str) -> list[dict[str, str]]:
     ]
 
 
-_START_PROMPT = """\
-You find where a dictated message begins.
-
-An always-on microphone captured the numbered pieces of speech below, in
-order. The speaker is dictating a message to type into an app (often a
-request to an AI coding assistant), and that message ends with the last
-piece. Earlier pieces may instead be speech the microphone picked up by
-accident: a meeting or call, talking with someone in the room, a TV or
-video.
-
-Reply with only the number of the piece where the dictated message
-begins. Pieces of the same message can change topic, think aloud, or
-give background; they still belong to it. Only start later when the
-earlier pieces are clearly not part of the message. If unsure, reply 1.
-"""
-
-# max_completion_tokens for the message-start check: room for the
-# model's (low-effort) reasoning plus a one-number answer.
-START_BUDGET = 600
-
-
-def start_messages(pieces: list[str]) -> list[dict[str, str]]:
-    """Chat messages asking which piece the dictated message starts at."""
-    numbered = "\n".join(f"[{i}] {p}" for i, p in enumerate(pieces, 1))
-    return [
-        {"role": "system", "content": _START_PROMPT},
-        {"role": "user", "content": f"<pieces>\n{numbered}\n</pieces>"},
-    ]
-
-
-def parse_start(content: object, n_pieces: int) -> int | None:
-    """0-based start piece from the model's answer, or None if unclear.
-
-    The answer must be a single piece number, 1 to ``n_pieces``.
-    """
-    if not isinstance(content, str):
-        return None
-    answer = sanitize_output(content).strip().strip(".[]")
-    if not re.fullmatch(r"[0-9]{1,4}", answer):
-        return None
-    number = int(answer)
-    return number - 1 if 1 <= number <= n_pieces else None
-
-
 def completion_budget(text: str) -> int:
     """``max_completion_tokens``: it also covers the model's reasoning."""
     approx_tokens = int(len(text.split()) * 4 / 3) + 1
@@ -436,44 +392,6 @@ class CerebrasProcessor:
             return text, reason
         return cleaned, ""
 
-    # -- where the message starts ----------------------------------------
-
-    def message_start(self, pieces: list[str]) -> tuple[int | None, str]:
-        """Ask which held piece the dictated message starts at.
-
-        Args:
-            pieces: Held speech, in order; the message ends with the
-                last piece.
-
-        Returns:
-            ``(index, problem)``: the 0-based piece the message starts
-            at, or ``None`` with the reason on any problem (the caller
-            then keeps every piece).
-        """
-        if not self._ready:
-            return None, "not ready"
-        deadline = time.monotonic() + self.timeout
-        if not self._lock.acquire(timeout=self.timeout):
-            return None, "busy"
-        try:
-            status, payload = self._post_messages(
-                start_messages(pieces), START_BUDGET, deadline
-            )
-        except Exception as e:  # never lose a take to a bug here
-            return None, f"error {type(e).__name__}"
-        finally:
-            self._lock.release()
-        if status == 0:  # no HTTP response: timeout or network error
-            return None, _error_code(payload).strip() or "network error"
-        if status != 200:
-            return None, f"HTTP {status}"
-        try:
-            content = json.loads(payload)["choices"][0]["message"]["content"]
-        except (ValueError, KeyError, IndexError, TypeError):
-            return None, "malformed response"
-        index = parse_start(content, len(pieces))
-        return (index, "") if index is not None else (None, "unclear answer")
-
     # -- HTTP -------------------------------------------------------------
 
     def _new_conn(self, timeout: float) -> http.client.HTTPConnection:
@@ -501,18 +419,10 @@ class CerebrasProcessor:
         stale (closed by the server between takes), retries once on a
         fresh connection while time remains.
         """
-        return self._post_messages(
-            build_messages(text, self.fmt), completion_budget(text), deadline
-        )
-
-    def _post_messages(
-        self, messages: list[dict[str, str]], budget: int, deadline: float
-    ) -> tuple[int, bytes]:
-        """POST ``messages`` (see ``_post``). Caller holds ``_lock``."""
         body = json.dumps({
             "model": self.model,
-            "messages": messages,
-            "max_completion_tokens": budget,
+            "messages": build_messages(text, self.fmt),
+            "max_completion_tokens": completion_budget(text),
             "reasoning_effort": "low",
             "temperature": 0,
             "stream": False,
