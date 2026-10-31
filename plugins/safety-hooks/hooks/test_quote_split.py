@@ -435,3 +435,10 @@ def test_unquoted_heredoc_hash_is_expanded_data(body: str) -> None:
 def test_quoted_heredoc_hash_remains_data() -> None:
     """Quoted heredoc delimiters disable even hash-prefixed substitutions."""
     assert not check_rm_command("cat <<'EOF'\n# $(rm foo)\nEOF")[0]
+
+
+@pytest.mark.parametrize("separator", [" && ", "; ", "\n", " ||\n"])
+def test_unrelated_command_preserves_search_quotes(separator: str) -> None:
+    """Conservative scanning is scoped to commands that share a pipeline."""
+    command = "rg 'a|rm|b' notes.md" + separator + "ls"
+    assert not check_rm_command(command)[0]

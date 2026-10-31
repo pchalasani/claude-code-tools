@@ -8,6 +8,7 @@ from shell_scan import (
     _end_of_single_quote,
     _split_command_lines,
     _split_line_on_operators,
+    _split_pipeline_groups,
 )
 
 from shell_payloads import literal_shell_payloads, needs_conservative_shell_scan
@@ -882,13 +883,14 @@ def extract_all_commands(command: str) -> list[str]:
     lines = _split_command_lines(stripped)
     for line in lines:
         subshell_cmds.extend(extract_subshell_commands(line))
-    if any(needs_conservative_shell_scan(part) for part in subcommands):
-        # A stdin consumer may follow a pipeline continued across newlines.
-        # Preserve legacy inspection of the whole normalized input.
-        for fragment in re.split(r'&&|\|\||[;&|\n]', '\n'.join(lines)):
-            fragment = fragment.strip()
-            if fragment and fragment not in all_commands:
-                all_commands.append(fragment)
+    for group in _split_pipeline_groups(stripped):
+        if any(needs_conservative_shell_scan(part)
+               for part in extract_subcommands(group)):
+            # Stdin consumers share a pipeline, not an unrelated command list.
+            for fragment in re.split(r'&&|\|\||[;&|\n]', group):
+                fragment = fragment.strip()
+                if fragment and fragment not in all_commands:
+                    all_commands.append(fragment)
 
     # Quoted strings passed to evaluators are code, unlike search patterns.
     for subcommand in subcommands:

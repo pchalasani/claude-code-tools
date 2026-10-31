@@ -23,16 +23,24 @@ def _split_line_on_operators(line: str) -> list[str]:
     return parts
 
 
-def _split_shell(command: str, operators: bool) -> list[str]:
+def _split_pipeline_groups(command: str) -> list[str]:
+    """Keep connected stdin pipelines apart from sequential command groups."""
+    return _split_shell(_join_continuations(command), True, keep_pipelines=True)
+
+
+def _split_shell(command: str, operators: bool,
+                 keep_pipelines: bool = False) -> list[str]:
     """Split at one kind of shell separator while preserving quoted spans.
 
     Args:
         command: The shell text to split.
         operators: Split on operators when true, otherwise on newlines.
+        keep_pipelines: Keep pipes within groups while splitting command lists.
 
     Returns:
         Command fragments with their original quoting preserved.
     """
+    separator = r'&&|\|\||[;&\n]' if keep_pipelines else r'&&|\|\||[;&|\n]'
     parts: list[str] = []
     pieces: list[str] = []
     start = 0
@@ -82,7 +90,7 @@ def _split_shell(command: str, operators: bool) -> list[str]:
                     # Keep the remainder together so the operator pass can
                     # conservatively inspect it without losing quote context.
                     return parts + [remainder]
-                return parts + re.split(r'&&|\|\||[;&|\n]', remainder)
+                return parts + re.split(separator, remainder)
             index = end
             word_start = False
             continue
@@ -92,7 +100,7 @@ def _split_shell(command: str, operators: bool) -> list[str]:
             # hashes are data; do not strip their executable substitutions.
             # retain legacy inspection without guessing their word grammar.
             remainder = _join_continuations(''.join(pieces) + command[start:])
-            return (parts + re.split(r'&&|\|\||[;&|\n]', remainder)
+            return (parts + re.split(separator, remainder)
                     if operators else parts + [remainder])
         if character in "'\"":
             if quote == character:
@@ -109,8 +117,12 @@ def _split_shell(command: str, operators: bool) -> list[str]:
                         (word_start and index > 0 and command[index - 1] in '<>')
                         or command.startswith('&>', index)):
                     pass  # Descriptor duplication/output redirection, not '&'.
-                elif character in ';&|':
+                elif character in (';&' if keep_pipelines else ';&|'):
                     width = 1
+                elif keep_pipelines and character == '\n':
+                    prefix = (''.join(pieces) + command[start:index]).rstrip()
+                    if not re.search(r'(?<!\\)(?:\\\\)*\|$', prefix):
+                        width = 1
             elif character == '\n':
                 width = 1
             if width:
