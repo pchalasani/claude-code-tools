@@ -348,6 +348,8 @@ def test_leading_combined_output_redirect_cannot_hide_rm(command: str) -> None:
     "arch -arm64 /bin/bash -c 'echo ok; rm foo'",
     "flock /tmp/lock bash -c 'echo ok; rm foo'",
     "chroot / bash -c 'echo ok; rm foo'",
+    "watch -n 1 'echo ok; rm foo'",
+    "parallel 'echo {}; rm foo' ::: one",
 ])
 def test_unsupported_launchers_retain_legacy_scan(command: str) -> None:
     """Opaque launchers must preserve the protection provided by main."""
