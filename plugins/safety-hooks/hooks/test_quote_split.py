@@ -377,3 +377,18 @@ def test_named_descriptor_redirections_preserve_command(command: str) -> None:
 def test_named_descriptors_preserve_quoted_data(command: str) -> None:
     """Removing a real descriptor must leave ordinary quoted data literal."""
     assert not check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    "eval \"$(printf '%s' 'echo ok; rm foo')\"",
+    "bash -c \"$(printf '%s' 'echo ok; rm foo')\"",
+    "eval \"`printf '%s' 'echo ok; rm foo'`\"",
+])
+def test_substitution_generated_payload_retains_legacy_scan(command: str) -> None:
+    """Generated evaluator input keeps conservative inspection, not execution."""
+    assert check_rm_command(command)[0]
+
+
+def test_literal_eval_payload_still_preserves_quoted_data() -> None:
+    """A literal evaluator payload can still contain ordinary quoted data."""
+    assert not check_rm_command("eval \"printf '%s' 'a|rm|b'\"")[0]

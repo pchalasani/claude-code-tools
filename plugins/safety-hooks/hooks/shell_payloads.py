@@ -115,6 +115,8 @@ def needs_conservative_shell_scan(command: str) -> bool:
                for index, word in enumerate(child[1:], start=1)):
             return True
         payload = _evaluator_payload(child)
+        if payload and ('$(' in payload or '`' in payload):
+            return True  # Generated shell code is not a literal payload.
         if name in _SHELLS | {'source', '.'} and payload is None:
             return True
         if payload and any(needs_conservative_shell_scan(part)
