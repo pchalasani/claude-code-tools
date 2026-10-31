@@ -201,8 +201,9 @@ def _strip_literal_redirections(command: str) -> str:
         if re.fullmatch(r'[<>]+', token[0]):
             if kept and kept[-1].end() == token.start() and (
                     (kept[-1][0].isascii() and kept[-1][0].isdigit())
+                    or re.fullmatch(r'\{[a-zA-Z_][a-zA-Z_0-9]*\}', kept[-1][0])
                     or (kept[-1][0] == '&' and token[0].startswith('>'))):
-                kept.pop()  # A descriptor number or the '&' in '&>'/'&>>'.
+                kept.pop()  # A numeric/named descriptor, or '&' in '&>'/'&>>'.
             index += 2  # Operator and its destination word.
         else:
             kept.append(token)

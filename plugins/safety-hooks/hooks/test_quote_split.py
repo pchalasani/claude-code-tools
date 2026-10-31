@@ -340,3 +340,33 @@ def test_opaque_container_and_multicall_launchers(command: str) -> None:
 def test_leading_combined_output_redirect_cannot_hide_rm(command: str) -> None:
     """Combined stdout/stderr redirects cannot become a command word."""
     assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    "uv run --no-project --no-sync bash -c 'echo ok; rm foo'",
+    "setsid bash -c 'echo ok; rm foo'",
+    "chroot / bash -c 'echo ok; rm foo'",
+])
+def test_unsupported_launchers_retain_legacy_scan(command: str) -> None:
+    """Opaque launchers must preserve the protection provided by main."""
+    assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    "exec {fd}>/dev/null bash -c 'echo ok; rm foo'",
+    "{out_fd}>>/dev/null bash -c 'echo ok; rm foo'",
+    "bash {input_fd}</dev/null -c 'echo ok; rm foo'",
+    "{fd}>/dev/null rm foo",
+])
+def test_named_descriptor_redirections_preserve_command(command: str) -> None:
+    """A named descriptor belongs to the redirect, not the command words."""
+    assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    "exec {fd}>/dev/null bash -c \"printf '%s' 'a|rm|b'\"",
+    "echo '{fd}' > /dev/null \"bash -c 'echo ok; rm foo'\"",
+])
+def test_named_descriptors_preserve_quoted_data(command: str) -> None:
+    """Removing a real descriptor must leave ordinary quoted data literal."""
+    assert not check_rm_command(command)[0]
