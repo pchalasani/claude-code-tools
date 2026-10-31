@@ -190,8 +190,9 @@ def _command_words(words: list[str]) -> list[str]:
 
 def _strip_literal_redirections(command: str) -> str:
     """Remove literal redirections while preserving quoted argument text."""
+    # Separate an attached &> from the command, without splitting >&1.
     tokens = list(re.finditer(
-        r'''(?:[^\s'"<>\\]|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+|[<>]+''',
+        r'''(?:(?!&>)[^\s'"<>\\]|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+|&(?=>)|[<>]+''',
         command, re.DOTALL,
     ))
     kept: list[re.Match[str]] = []
