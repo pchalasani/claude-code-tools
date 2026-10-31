@@ -113,6 +113,8 @@ def _split_shell(command: str, operators: bool,
             if operators:
                 if command.startswith(('&&', '||'), index):
                     width = 2
+                elif keep_pipelines and command.startswith('|&', index):
+                    index += 1  # Consume both characters of Bash's stderr pipe.
                 elif character == '&' and (
                         (word_start and index > 0 and command[index - 1] in '<>')
                         or command.startswith('&>', index)):
@@ -121,7 +123,7 @@ def _split_shell(command: str, operators: bool,
                     width = 1
                 elif keep_pipelines and character == '\n':
                     prefix = (''.join(pieces) + command[start:index]).rstrip()
-                    if not re.search(r'(?<!\\)(?:\\\\)*\|$', prefix):
+                    if not re.search(r'(?<!\\)(?:\\\\)*\|&?$', prefix):
                         width = 1
             elif character == '\n':
                 width = 1

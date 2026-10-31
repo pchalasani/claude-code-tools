@@ -442,3 +442,10 @@ def test_unrelated_command_preserves_search_quotes(separator: str) -> None:
     """Conservative scanning is scoped to commands that share a pipeline."""
     command = "rg 'a|rm|b' notes.md" + separator + "ls"
     assert not check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("separator", [" |& ", " |&\n"])
+def test_stderr_pipeline_preserves_shell_input(separator: str) -> None:
+    """Bash's stderr pipe and its continuation keep source and shell together."""
+    command = "printf '%s' 'echo ok; rm foo'" + separator + "bash"
+    assert check_rm_command(command)[0]
