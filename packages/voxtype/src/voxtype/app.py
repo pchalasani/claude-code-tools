@@ -15,7 +15,7 @@ import time
 from enum import Enum
 from typing import Callable
 
-from .config import Config
+from .config import DEFAULT_CONFIG_PATH, Config
 from .inject import SoundPlayer, Typist, copy_to_clipboard
 from .logic import (
     collapse_repeats,
@@ -107,9 +107,16 @@ class VoiceTypeApp(RuntimeMixin):
         # Hands-free wait_for_submit: pieces held back until a submit
         # phrase (see _hold_text); typed without Enter on deactivation.
         self._held: list[str] = []
+        # When the last held piece arrived (for the held_gap rule).
+        self._held_at = 0.0
         # Set by a hands-free submit: the next message typed starts a
         # fresh rescue buffer (clipboard and paste-again hold only it).
         self._sent = False
+        # Where the current message starts in _session_texts: after a
+        # sent message, the next one starts fresh, so the clipboard and
+        # paste-again hold only it. The list itself is replaced only
+        # for a new dictation session.
+        self._msg_start = 0
         # Until this time, utterances are dropped: speech said before a
         # discard (Shift+Esc) that was still being transcribed.
         self._discard_until = 0.0
@@ -168,7 +175,7 @@ class VoiceTypeApp(RuntimeMixin):
             self._state_version += 1
             version = self._state_version
             self._last_activity = time.monotonic()
-            held, self._held = " ".join(self._held), []
+            pieces, self._held = list(self._held), []
             buf = self._session_texts
             if new == State.ACTIVE:
                 # Fresh dictation session: the buffer is cleared as
@@ -178,8 +185,14 @@ class VoiceTypeApp(RuntimeMixin):
                 # (which would break clipboard/paste-last recovery).
                 self._session_texts = []
                 self._sent = False
-        if held and keep_held:
-            self._deliver(None, lambda v, at: self._type(held, v, at, buf))
+                self._msg_start = 0
+        if pieces and keep_held:
+            self._deliver(
+                None,
+                lambda v, at: self._send_held(
+                    pieces, v, at, buf, False, ended=False
+                ),
+            )
             # Typing it may have used up a toggle-off's grace window; the
             # in-flight words get a full one after it. Still inside
             # _order_lock, so no utterance can see the stale deadline.
@@ -415,10 +428,16 @@ class VoiceTypeApp(RuntimeMixin):
         # typing held text must not run out the grace window that
         # authorizes these (in-flight) words.
         arrived = time.monotonic()
+        # When this speech began: the engine sets the segment's length
+        # just before calling here, on this thread (VAD engines only).
+        secs = getattr(self._engine, "last_segment_secs", None)
+        started = arrived - secs if isinstance(secs, (int, float)) else None
         with self._order_lock:
-            self._handle_utterance(text, arrived)
+            self._handle_utterance(text, arrived, started)
 
-    def _handle_utterance(self, text: str, arrived: float) -> None:
+    def _handle_utterance(
+        self, text: str, arrived: float, started: float | None = None
+    ) -> None:
         if not isinstance(text, str):
             return
         text = text.strip()
@@ -512,7 +531,7 @@ class VoiceTypeApp(RuntimeMixin):
             self._set_state(self._off_state)
             return
         t, enter, show = self._split_suffix(text)
-        if self._hold_text(version, t, enter, show):
+        if self._hold_text(version, t, enter, show, arrived, started):
             return
         if t:  # a bare "send it" only presses Enter
             self._status(f'typed: "{_preview(t)}"')
@@ -524,7 +543,13 @@ class VoiceTypeApp(RuntimeMixin):
         )
 
     def _hold_text(
-        self, version: int, text: str, enter: bool, show: bool = False
+        self,
+        version: int,
+        text: str,
+        enter: bool,
+        show: bool = False,
+        arrived: float | None = None,
+        started: float | None = None,
     ) -> bool:
         """Hands-free wait_for_submit: hold ``text`` until a submit.
 
@@ -533,35 +558,120 @@ class VoiceTypeApp(RuntimeMixin):
         then presses Enter, a show leaves it for review. Returns False
         when not holding, or when a transition since ``version`` already
         released the held text; the caller then types as usual.
+
+        Speech that ``started`` over ``held_gap`` seconds after the last
+        held piece arrived first drops what is held (see
+        ``_drop_held``). The release itself is ``_send_held``.
         """
         if self.cfg.mode != "vad" or not self.cfg.wait_for_submit:
             return False
+        dropped, gap = "", 0.0
         with self._lock:
             if version != self._state_version:
                 return False
+            if text and self._held and started is not None:
+                gap = started - self._held_at
+                if 0 < self.cfg.held_gap < gap:
+                    dropped, self._held = " ".join(self._held), []
             if text:
                 self._held.append(text)
-            joined = " ".join(self._held)
+                self._held_at = arrived if arrived is not None else 0.0
+            pieces = list(self._held)
+            joined = " ".join(pieces)
             if enter or show:
                 self._held = []
-                if joined and self._sent:
-                    self._session_texts = []
-                    self._sent = False
-                if enter:
-                    self._sent = True
             buf = self._session_texts
+        if dropped:
+            self._drop_held(dropped, f"said before a {gap:.0f}s silence")
         if not (enter or show):
             self._status(f'held: "{_preview(text)}"')
             return True
-        if joined:
-            self._status(f'typed: "{_preview(joined)}"')
-        elif show:
+        if not joined and show:
             return True  # "ok show" with nothing held: nothing to show
         self._deliver(
             version,
-            lambda v, at: self._type(joined, v, at, buf, None, enter),
+            lambda v, at: self._send_held(pieces, v, at, buf, enter),
         )
         return True
+
+    def _send_held(
+        self,
+        pieces: list[str],
+        version: int | None,
+        arrived: float,
+        session: list[str],
+        enter: bool,
+        ended: bool = True,
+    ) -> None:
+        """Type released held pieces (on the delivery thread).
+
+        With Cerebras cleanup and at least ``held_check_words`` words in
+        two or more pieces, Cerebras says where the dictated message
+        starts and earlier pieces are dropped; any problem keeps them
+        all; only when a submit or show phrase ``ended`` the message
+        (not a pause or stop). Then a submit of over ``held_max_words``
+        words is typed without Enter, for review.
+        """
+        check = getattr(self._post, "message_start", None)
+        n_words = len(" ".join(pieces).split())
+        checked = None
+        if (
+            check is not None
+            and ended
+            and len(pieces) > 1
+            and 0 < self.cfg.held_check_words <= n_words
+        ):
+            try:
+                start, problem = check(pieces)
+            except Exception as e:  # never lose held text to the check
+                start, problem = None, f"error {type(e).__name__}"
+            checked = time.monotonic()
+            if problem:
+                self._status(f"message-start check skipped ({problem})")
+            elif start:
+                self._drop_held(
+                    " ".join(pieces[:start]), "judged unrelated by Cerebras"
+                )
+                pieces = pieces[start:]
+        text = " ".join(pieces)
+        if text:
+            self._status(f'typed: "{_preview(text)}"')
+        n_words = len(text.split())
+        if enter and 0 < self.cfg.held_max_words < n_words:
+            enter = False
+            self._status(
+                f"{n_words} words held, over held_max_words "
+                f"({self.cfg.held_max_words}): typed without Enter; "
+                "check it, then say a submit phrase"
+            )
+        # Message boundaries for the clipboard and paste-again: decided
+        # here, in delivery order, once it is known whether Enter is
+        # pressed. After a sent message, the next one starts fresh.
+        with self._lock:
+            if session is self._session_texts:
+                if text and self._sent:
+                    self._msg_start = len(session)
+                    self._sent = False
+                if enter:
+                    self._sent = True
+        self._type(text, version, arrived, session, None, enter, checked)
+
+    def _drop_held(self, text: str, why: str) -> None:
+        """Report held text that was dropped, and save it.
+
+        Only the latest drop is kept, in ``dropped.txt`` next to the
+        default config, so a wrong drop can be recovered by hand.
+        """
+        path = DEFAULT_CONFIG_PATH.parent / "dropped.txt"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text + "\n")
+            where = f"; saved to {path}"
+        except OSError:
+            where = ""
+        self._status(
+            f"dropped {len(text.split())} held words {why}{where}"
+        )
 
     def _split_suffix(self, text: str) -> tuple[str, bool, bool]:
         """Split off a trailing submit ("send it") or show ("ok show") phrase.
@@ -734,11 +844,14 @@ class VoiceTypeApp(RuntimeMixin):
         session: list[str] | None = None,
         speech_end: float | None = None,
         enter: bool = False,
+        clean_since: float | None = None,
     ) -> None:
         """Type ``text``; ``version=None`` skips the staleness check
         (used for grace-window commits, which by definition arrive
         after a state transition). ``enter`` presses Enter after the
-        text is typed (a submit suffix ended the utterance)."""
+        text is typed (a submit suffix ended the utterance).
+        ``clean_since`` starts cleanup's timeout later than ``arrived``
+        (after the message-start check)."""
         if self.cfg.strip_fillers:
             # Fillers first: removing "um"s can make a stutter run
             # adjacent ("I um I um I" -> "I I I"), which then collapses.
@@ -753,7 +866,9 @@ class VoiceTypeApp(RuntimeMixin):
             # cleanup takes up to post_process_timeout and must never
             # hold up capture, hotkeys, or the overlay. The submit/stop/
             # wake phrases were already matched on the raw text.
-            text = self._post.clean(text, since=arrived)
+            text = self._post.clean(
+                text, since=clean_since if clean_since else arrived
+            )
             # Only "\n" may survive as a control character (see
             # strip_controls).
             text = strip_controls(text)
@@ -773,7 +888,7 @@ class VoiceTypeApp(RuntimeMixin):
             buf = self._session_texts if session is None else session
             buf.append(text)
             current = buf is self._session_texts
-            joined = " ".join(buf)
+            joined = " ".join(buf[self._msg_start:] if current else buf)
         if self.cfg.copy_to_clipboard and current:
             copy_to_clipboard(joined)
         if self.cfg.trailing_space:
@@ -847,7 +962,7 @@ class VoiceTypeApp(RuntimeMixin):
         cursor where it should have gone and hit the paste hotkey.
         """
         with self._lock:
-            session = " ".join(self._session_texts)
+            session = " ".join(self._session_texts[self._msg_start:])
         if not session:
             self._status("nothing to paste")
             return

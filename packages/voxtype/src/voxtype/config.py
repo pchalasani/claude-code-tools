@@ -113,6 +113,10 @@ class Config:
         mode: Activation mode. "toggle" starts paused (hotkey starts
             dictation), "vad" starts dictating immediately, "wake" starts
             passive and activates on the wake word.
+        ask_mode: Running plain ``voxtype`` (no arguments) in a terminal
+            first asks whether to use toggle or always-on (hands-free)
+            mode, with ``mode`` as the default answer. false skips the
+            question; so does passing any argument, or ``mode = "wake"``.
         engine: Transcription backend: "parakeet-mlx" (default on
             Apple Silicon), "parakeet" (default elsewhere), or
             "moonshine" (requires the voxtype[moonshine] extra).
@@ -208,6 +212,18 @@ class Config:
             back until a submit phrase or suffix, then clean and type
             it all at once. False types each piece at every pause.
         idle_timeout: Seconds of silence after which "wake" mode re-arms.
+        held_gap: Hands-free hold only: when you start talking again
+            after a silence longer than this many seconds, the text
+            held from before it (a meeting, the TV) is dropped and saved
+            to ``dropped.txt`` next to the config. 0 turns this off.
+        held_max_words: Hands-free hold only: a submit with more than
+            this many words held types them without pressing Enter, so
+            a long accidental recording is never sent. 0 turns this off.
+        held_check_words: Hands-free hold with Cerebras cleanup: when a
+            submit holds at least this many words in two or more pieces,
+            Cerebras is asked where the dictated message starts; earlier
+            pieces (a meeting, the TV) are dropped and saved to
+            ``dropped.txt``. 0 turns this off.
         trailing_space: Append a space after each typed utterance.
         sounds: Play a system sound on activate/deactivate (macOS).
         sound_start: Sound when recording starts — a macOS system
@@ -231,6 +247,7 @@ class Config:
     """
 
     mode: str = "toggle"
+    ask_mode: bool = True
     engine: str = field(default_factory=default_engine)
     # "auto" is a sentinel resolved in __post_init__ to the best
     # segmentation for the resolved engine/mode (hold for parakeet +
@@ -283,6 +300,9 @@ class Config:
     )
     wait_for_submit: bool = True
     idle_timeout: float = 20.0
+    held_gap: float = 15.0
+    held_max_words: int = 500
+    held_check_words: int = 50
     trailing_space: bool = True
     sounds: bool = True
     sound_start: str = "Glass"
@@ -489,6 +509,16 @@ class Config:
                 raise ValueError(f"{field_name} must be a string")
         if not isinstance(self.copy_to_clipboard, bool):
             raise ValueError("copy_to_clipboard must be a boolean")
+        if not isinstance(self.ask_mode, bool):
+            raise ValueError("ask_mode must be a boolean")
+        for name in ("held_gap", "held_max_words", "held_check_words"):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or value < 0
+            ):
+                raise ValueError(f"{name} must be a number >= 0")
 
 
     def _validate_post_process(self) -> None:
@@ -662,6 +692,10 @@ def sample_config() -> str:
 #   "wake"   - start passive; saying the wake word starts dictation
 mode = "toggle"
 
+# Plain `voxtype` (no arguments) first asks: toggle or always-on? The
+# answer above is the default. false starts in `mode` without asking.
+ask_mode = true
+
 # Transcription backend (default: the best this machine can run):
 #   "parakeet-mlx" - Parakeet-TDT 0.6b v3 on the Apple GPU via MLX:
 #                    fp16 accuracy at ~40x realtime — best accuracy
@@ -829,6 +863,22 @@ show_suffixes = [
 # to think never split it. Ctrl+; or "stop listening" types what is held
 # without Enter. false types each piece at every pause.
 wait_for_submit = true
+
+# Hands-free hold: starting to talk after more than this many seconds of
+# silence drops the text held from before (a meeting, the TV); it is
+# saved to dropped.txt next to this file. 0 turns this off.
+held_gap = 15.0
+
+# Hands-free hold: a submit with more than this many words held types
+# them without pressing Enter, so a long accidental recording is never
+# sent. 0 turns this off.
+held_max_words = 500
+
+# Hands-free hold with Cerebras cleanup: a submit holding at least this
+# many words, in two or more pieces, asks Cerebras where your message
+# starts; earlier unrelated speech is dropped (saved to dropped.txt).
+# 0 turns this off.
+held_check_words = 50
 
 # In "wake" mode, go back to passive after this many seconds of silence.
 idle_timeout = 20.0

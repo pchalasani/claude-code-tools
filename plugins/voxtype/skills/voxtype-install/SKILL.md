@@ -31,9 +31,10 @@ APIs). Tell the user this up front if they are on Linux/Windows.
 
 ## Configure
 
-Run the interactive wizard — it asks a handful of explained questions
-(engine, activation mode, hotkey, ...) and writes
-`~/.config/voxtype/config.toml`:
+Run the interactive wizard — it asks the common questions first (how
+you dictate, hotkey, cleanup), advanced ones only if wanted, shows a
+summary, and saves `~/.config/voxtype/config.toml` (editing an
+existing one in place, keeping its comments):
 
 ```bash
 voxtype setup

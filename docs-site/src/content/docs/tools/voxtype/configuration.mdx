@@ -41,17 +41,22 @@ sets the same key, that flag wins.
 Two ways to create that file:
 
 ```bash
-voxtype setup         # interactive walkthrough — asks, then writes
+voxtype setup         # interactive walkthrough — asks, then saves
 voxtype init          # write a fully commented sample to edit by hand
 voxtype init --force  # overwrite an existing sample
 ```
 
-`voxtype setup` is the quickest start: it asks a
-short series of explained questions (engine, mode,
-segmentation, hotkey, wake word, and optional extras),
-validates your choices, and writes a ready-to-use
-config — you can record the hotkey live during the
-walkthrough. `init` instead drops a fully commented
+`voxtype setup` is the quickest start, and the easiest
+way to change settings later. It asks the common
+questions first (how you dictate, the hotkey, cleanup),
+then advanced ones (engine, always-on safeguards, other
+keys, sounds) only if you want them. Your current
+values are the defaults, so Enter keeps them, and you
+can record the hotkey live. It shows a summary of the
+changes and asks before saving, and it edits your
+config in place, keeping your comments and other
+settings. `voxtype setup --force` starts from the
+defaults instead. `init` drops a fully commented
 sample (like the reference below) for hand-editing.
 
 ## The three independent axes
@@ -172,6 +177,16 @@ and types anything held, without Enter:
 mode = "vad"
 # false types each piece as soon as you pause instead
 wait_for_submit = true
+# Hands-free hold: talking after more than this many seconds of silence
+# drops the text held from before it (saved to dropped.txt); 0 = off
+held_gap = 15.0
+# Hands-free hold: a submit with more words held than this is typed
+# without Enter, for review; 0 = off
+held_max_words = 500
+# Hands-free hold with Cerebras: a submit holding at least this many
+# words in 2+ pieces asks Cerebras where the message starts, dropping
+# earlier unrelated speech (saved to dropped.txt); 0 = off
+held_check_words = 50
 ```
 
 (These recipes leave `engine` unset so it auto-selects
@@ -204,6 +219,10 @@ for CPU tuning.
 
 # Activation: "toggle" (hotkey), "vad" (hands-free), "wake" (wake word)
 mode = "toggle"
+
+# Plain `voxtype` (no arguments) asks toggle or always-on first, with
+# `mode` as the default answer; false starts in `mode` without asking
+ask_mode = true
 
 # Engine: "parakeet-mlx" | "parakeet" | "moonshine". Auto-selected when
 # unset: parakeet-mlx on Apple Silicon, parakeet on Intel. Set it only to
@@ -694,7 +713,7 @@ out, and all three formats. All of them pass.
 ```
 voxtype [flags]                    run with config + flag overrides
 voxtype --set KEY=VALUE ...        set any config key for this run (repeatable)
-voxtype setup [--config PATH] [--force]  interactive walkthrough -> writes config
+voxtype setup [--config PATH] [--force]  interactive walkthrough -> edits config
 voxtype init  [--config PATH] [--force]  write the commented sample config to edit
 voxtype hotkey                     press a chord; prints the config line
 voxtype skill                      install the voxtype skill into Claude + Codex

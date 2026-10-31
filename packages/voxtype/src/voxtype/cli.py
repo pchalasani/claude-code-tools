@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from . import mode_menu
 from .config import (
     DEFAULT_CONFIG_PATH,
     VALID_ENGINES,
@@ -197,6 +198,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
     except (ValueError, FileNotFoundError) as e:
         print(f"voxtype: {e}", file=sys.stderr)
         return 1
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    if mode_menu.should_ask(sys.argv[1:], cfg, interactive):
+        chosen = mode_menu.ask(cfg)
+        if chosen is None:
+            return 0  # Ctrl-C at the question
+        try:
+            cfg = load_config(args.config, chosen)
+        except ValueError as e:
+            print(f"voxtype: {e}", file=sys.stderr)
+            return 1
     # The optional deps (pynput, moonshine-voice, sherpa-onnx) are
     # imported lazily at construction/run time, so the ImportError guard
     # must cover the whole lifecycle, not just the module import.
@@ -306,7 +317,7 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 examples:
-  voxtype                     # run with ~/.config/voxtype/config.toml
+  voxtype                     # ask toggle or always-on, then run
   voxtype --engine parakeet-mlx --segmentation hold
                                  # best accuracy: whole-take dictation
   voxtype --mode wake         # hands-free with wake word "claude"
@@ -373,7 +384,10 @@ Accessibility (to type), Input Monitoring (global hotkeys).
         help="destination path",
     )
     p_setup.add_argument(
-        "--force", action="store_true", help="overwrite existing config"
+        "--force",
+        action="store_true",
+        help="start from the defaults instead of your current config "
+        "(replaces the file)",
     )
     sub.add_parser(
         "skill",
