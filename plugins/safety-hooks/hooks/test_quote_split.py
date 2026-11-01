@@ -449,3 +449,32 @@ def test_stderr_pipeline_preserves_shell_input(separator: str) -> None:
     """Bash's stderr pipe and its continuation keep source and shell together."""
     command = "printf '%s' 'echo ok; rm foo'" + separator + "bash"
     assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    "bash -n -c 'echo ok; rm foo'",
+    "bash -nc 'echo ok; rm foo'",
+    "bash -cn 'echo ok; rm foo'",
+    "sh -n -c 'echo ok; rm foo'",
+    "env bash -n -c 'echo ok; rm foo'",
+    "bash -o noexec -c 'echo ok; rm foo'",
+    "bash +n -n -c 'echo ok; rm foo'",
+    "printf '%s' 'echo ok; rm foo' | bash -n",
+])
+def test_noexec_shell_input_is_only_syntax_checked(command: str) -> None:
+    """A no-exec shell does not execute its literal command or stdin."""
+    assert not check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("command", [
+    "bash -n +n -c 'echo ok; rm foo'",
+    "bash -o noexec +o noexec -c 'echo ok; rm foo'",
+    "bash -n +o noexec -c 'echo ok; rm foo'",
+    "bash -o nolog -c 'echo ok; rm foo'",
+    "bash -c 'echo ok; rm foo' -n",
+    "bash -n -c \"$(rm foo)\"",
+    "bash -n -c 'echo ok; rm foo'; rm bar",
+])
+def test_noexec_does_not_hide_executed_commands(command: str) -> None:
+    """Option resets and commands evaluated by the outer shell still run."""
+    assert check_rm_command(command)[0]

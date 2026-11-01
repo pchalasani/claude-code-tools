@@ -50,7 +50,7 @@ def _launched_commands(words: list[str]) -> list[list[str]]:
 
 
 def _evaluator_payload(words: list[str]) -> str | None:
-    """Return the literal executable argument of one shell evaluator."""
+    """Return executable input, or an empty string for a no-exec shell."""
     name = words[0].rsplit('/', 1)[-1]
     arguments = words[1:]
     if arguments[:1] == ['--']:
@@ -65,6 +65,7 @@ def _evaluator_payload(words: list[str]) -> str | None:
         return None
     index = 0
     evaluates = False
+    noexec = False
     while index < len(arguments):
         option = arguments[index]
         if option == '--':
@@ -76,8 +77,16 @@ def _evaluator_payload(words: list[str]) -> str | None:
             index += 2 if option in ('--rcfile', '--init-file') else 1
             continue
         evaluates |= option.startswith('-') and 'c' in option
+        if 'n' in option[1:]:
+            noexec = option.startswith('-')
+        if ('o' in option[1:] and index + 1 < len(arguments)
+                and arguments[index + 1] == 'noexec'):
+            noexec = option.startswith('-')
         # Bash permits c before or after an o/O option in the same cluster.
         index += 2 if any(c in option[1:] for c in 'oO') else 1
+    if noexec and name in {'sh', 'bash', 'dash', 'ash'}:
+        # Distinguish proven syntax-only input from unknown stdin/file input.
+        return ''
     return arguments[index] if evaluates and index < len(arguments) else None
 
 
