@@ -478,3 +478,12 @@ def test_noexec_shell_input_is_only_syntax_checked(command: str) -> None:
 def test_noexec_does_not_hide_executed_commands(command: str) -> None:
     """Option resets and commands evaluated by the outer shell still run."""
     assert check_rm_command(command)[0]
+
+
+@pytest.mark.parametrize("pipe", ["|", "|&"])
+@pytest.mark.parametrize("comment", ["comment", "unmatched ' quote"])
+def test_pipeline_comment_backslash_does_not_consume_shell(
+        pipe: str, comment: str) -> None:
+    """A backslash inside a comment cannot continue that comment's line."""
+    command = f'printf %s "echo ok; rm foo" {pipe} # {comment} \\\nbash'
+    assert check_rm_command(command)[0]

@@ -25,7 +25,8 @@ def _split_line_on_operators(line: str) -> list[str]:
 
 def _split_pipeline_groups(command: str) -> list[str]:
     """Keep connected stdin pipelines apart from sequential command groups."""
-    return _split_shell(_join_continuations(command), True, keep_pipelines=True)
+    normalized = '\n'.join(_split_command_lines(command))
+    return _split_shell(normalized, True, keep_pipelines=True)
 
 
 def _split_shell(command: str, operators: bool,
