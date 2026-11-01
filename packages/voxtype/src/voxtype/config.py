@@ -213,17 +213,13 @@ class Config:
             it all at once. False types each piece at every pause.
         idle_timeout: Seconds of silence after which "wake" mode re-arms.
         held_gap: Hands-free hold only: when you start talking again
-            after a silence longer than this many seconds, the text
-            held from before it (a meeting, the TV) is dropped and saved
-            to ``dropped.txt`` next to the config. 0 turns this off.
-        held_max_words: Hands-free hold only: a submit with more than
-            this many words held types them without pressing Enter, so
-            a long accidental recording is never sent. 0 turns this off.
-        held_check_words: Hands-free hold with Cerebras cleanup: when a
-            submit holds at least this many words in two or more pieces,
-            Cerebras is asked where the dictated message starts; earlier
-            pieces (a meeting, the TV) are dropped and saved to
-            ``dropped.txt``. 0 turns this off.
+            after a silence longer than this many seconds, with text
+            still held from before it, the ghost shows a note that the
+            old text is kept (Shift+Esc drops it). 0 turns this off.
+        held_max_words: Hands-free hold only: when more than this many
+            words are released at once, nothing is typed: the text is
+            saved to ``dropped.txt`` next to the config and the
+            paste-again hotkey types it. 0 turns this off.
         trailing_space: Append a space after each typed utterance.
         sounds: Play a system sound on activate/deactivate (macOS).
         sound_start: Sound when recording starts — a macOS system
@@ -300,9 +296,8 @@ class Config:
     )
     wait_for_submit: bool = True
     idle_timeout: float = 20.0
-    held_gap: float = 15.0
+    held_gap: float = 600.0
     held_max_words: int = 500
-    held_check_words: int = 50
     trailing_space: bool = True
     sounds: bool = True
     sound_start: str = "Glass"
@@ -511,7 +506,7 @@ class Config:
             raise ValueError("copy_to_clipboard must be a boolean")
         if not isinstance(self.ask_mode, bool):
             raise ValueError("ask_mode must be a boolean")
-        for name in ("held_gap", "held_max_words", "held_check_words"):
+        for name in ("held_gap", "held_max_words"):
             value = getattr(self, name)
             if (
                 isinstance(value, bool)
@@ -666,6 +661,8 @@ def load_config(
     elif explicit:
         raise FileNotFoundError(f"config file not found: {path}")
 
+    for key in _RETIRED_KEYS:
+        data.pop(key, None)
     known = {f.name for f in fields(Config)}
     unknown = set(data) - known
     if unknown:
@@ -677,6 +674,11 @@ def load_config(
     cfg = Config(**data)
     cfg.validate()
     return cfg
+
+
+# Keys from earlier releases that no longer do anything; a config that
+# still sets one keeps loading.
+_RETIRED_KEYS = ("held_check_words",)
 
 
 def sample_config() -> str:
@@ -864,21 +866,16 @@ show_suffixes = [
 # without Enter. false types each piece at every pause.
 wait_for_submit = true
 
-# Hands-free hold: starting to talk after more than this many seconds of
-# silence drops the text held from before (a meeting, the TV); it is
-# saved to dropped.txt next to this file. 0 turns this off.
-held_gap = 15.0
+# Hands-free hold: starting to talk after more than this many seconds
+# of silence, with words still held from before, shows a note on the
+# ghost that they are kept (Shift+Esc drops them). 0 turns this off.
+held_gap = 600.0
 
-# Hands-free hold: a submit with more than this many words held types
-# them without pressing Enter, so a long accidental recording is never
-# sent. 0 turns this off.
-held_max_words = 500
-
-# Hands-free hold with Cerebras cleanup: a submit holding at least this
-# many words, in two or more pieces, asks Cerebras where your message
-# starts; earlier unrelated speech is dropped (saved to dropped.txt).
+# Hands-free hold: when more than this many words are released at
+# once, nothing is typed (no giant paste); the text is saved to
+# dropped.txt next to this file, and the paste-again hotkey types it.
 # 0 turns this off.
-held_check_words = 50
+held_max_words = 500
 
 # In "wake" mode, go back to passive after this many seconds of silence.
 idle_timeout = 20.0

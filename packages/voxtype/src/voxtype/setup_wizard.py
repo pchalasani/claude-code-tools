@@ -408,19 +408,13 @@ def _ask_advanced(q, cur: Config, ans: dict) -> None:  # noqa: ANN001
             default=cur.wait_for_submit,
         ))
         ans["held_gap"] = _number(
-            q, "Drop held words after a silence of this many seconds "
-            "(0 = never):", "held_gap", cur.held_gap,
+            q, "Note that held words are kept after a silence of this many "
+            "seconds (0 = never):", "held_gap", cur.held_gap,
         )
         ans["held_max_words"] = _number(
-            q, "Type without sending when more than this many words are "
-            "held (0 = no limit):", "held_max_words", cur.held_max_words,
+            q, "Type nothing when more than this many words are held "
+            "(0 = no limit):", "held_max_words", cur.held_max_words,
         )
-        if ans.get("post_process_provider") == "cerebras":
-            ans["held_check_words"] = _number(
-                q, "Ask Cerebras where your message starts once this many "
-                "words are held (0 = never):", "held_check_words",
-                cur.held_check_words,
-            )
 
     if ans.get("post_process"):
         _section("Cleanup time limit")

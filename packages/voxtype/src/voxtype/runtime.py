@@ -150,7 +150,7 @@ class RuntimeMixin:
             from . import overlay
             from .app import State
 
-            def sample() -> tuple[str, bool, float]:
+            def sample() -> tuple[str, bool, float, str]:
                 with self._lock:
                     state = self._state
                 level = getattr(engine, "level", 0.0)
@@ -158,7 +158,12 @@ class RuntimeMixin:
                     level = float(level)
                 except (TypeError, ValueError):
                     level = 0.0
-                return state.value, state is State.ACTIVE, level
+                return (
+                    state.value,
+                    state is State.ACTIVE,
+                    level,
+                    self.current_note(),
+                )
 
             overlay.run_overlay(
                 sample,
