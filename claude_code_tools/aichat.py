@@ -1858,12 +1858,31 @@ def _write_lines_atomically(
 @click.argument("session", required=True)
 @click.option("--claude-home", help="Path to Claude home directory")
 @click.option("--codex-home", help="Path to Codex home directory")
+@click.option(
+    "--provider",
+    help=(
+        "Codex model provider for the new session (e.g. openai, "
+        "local-fractal). With a Codex session: copy it onto this "
+        "provider instead of porting to Claude. With a Claude session: "
+        "the new Codex session's provider (default openai)."
+    ),
+)
+@click.option(
+    "--model",
+    help=(
+        "Model to resume the new Codex session with; added to the "
+        "printed resume command as -m (Codex otherwise resumes with "
+        "the session's last model)."
+    ),
+)
 @click.pass_context
 def port_session(
     ctx: click.Context,
     session: str,
     claude_home: "str | None",
     codex_home: "str | None",
+    provider: "str | None",
+    model: "str | None",
 ) -> None:
     """Port a session to the OTHER agent (codex <-> claude).
 
@@ -1871,6 +1890,14 @@ def port_session(
     are converted into a flattened, resumable Claude Code session;
     Claude sessions are converted into a flattened, resumable Codex
     rollout.
+
+    With --provider, a Codex session is instead copied to a new Codex
+    session bound to that model provider (Codex only resumes a thread
+    under the provider it was created with). OpenAI-only encrypted
+    reasoning and compaction summaries (and a local model's reasoning)
+    are dropped; everything else is kept. Use --provider openai to move
+    a local-model session back, with --model naming the model to resume
+    with.
 
     SESSION may be a full session id, a partial id (prefix, middle,
     or suffix fragment), a session name (set with /rename), a
@@ -1883,6 +1910,8 @@ def port_session(
         aichat port abc123 --claude-home ~/.claude-alt
         aichat port my-session-name
         aichat port 2026-03-25T14-50
+        aichat port 01a1a29a --provider local-fractal
+        aichat port 01a1a2aa --provider openai --model gpt-6.1-sol
     """
     import sys
 
@@ -1893,6 +1922,7 @@ def port_session(
         port_claude_session,
         port_codex_session,
         resolve_port_session,
+        retarget_codex_session,
     )
 
     # Group-level --claude-home/--codex-home (given BEFORE the
@@ -1924,13 +1954,34 @@ def port_session(
         display.error(str(e))
         sys.exit(1)
 
-    display.resolved(resolved)
+    if model and resolved.agent == "codex" and not provider:
+        display.error("--model only applies to a Codex target: add --provider")
+        sys.exit(1)
+    target_agent = "codex" if (resolved.agent == "claude" or provider) else "claude"
+    display.resolved(resolved, target_agent)
     if resolved.agent == "claude":
         try:
-            with display.porting(resolved.agent):
+            with display.porting(resolved.agent, target_agent):
                 result = port_claude_session(
                     resolved.session_file,
                     codex_home=codex_home,
+                    provider=provider or "openai",
+                    model=model or "",
+                )
+        except PortSessionError as e:
+            display.error(str(e))
+            sys.exit(1)
+        display.complete(result, resolved.agent)
+        return
+
+    if provider:
+        try:
+            with display.porting(resolved.agent, target_agent):
+                result = retarget_codex_session(
+                    resolved.session_file,
+                    provider,
+                    codex_home=codex_home,
+                    model=model or "",
                 )
         except PortSessionError as e:
             display.error(str(e))

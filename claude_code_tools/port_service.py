@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import shlex
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
 
@@ -97,12 +97,21 @@ class PortResult:
         output_file: Path of the synthesized target session file.
         cwd: The ported session's working directory ("" if unknown).
         resume_hint: Exact shell command to resume the new session.
+        target_agent: Agent the new session belongs to (``"claude"``
+            or ``"codex"``); a Codex session re-targeted at another
+            provider stays ``"codex"``.
+        provider: Codex model provider of the new session ("" for a
+            Claude target).
+        notes: Extra lines for the user, e.g. what was dropped.
     """
 
     new_session_id: str
     output_file: Path
     cwd: str
     resume_hint: str
+    target_agent: str = ""
+    provider: str = ""
+    notes: list[str] = field(default_factory=list)
 
 
 def resolve_port_session(
@@ -228,42 +237,136 @@ def port_codex_session(
         output_file=out_path,
         cwd=cwd,
         resume_hint=resume_hint,
+        target_agent="claude",
     )
+
+
+def _codex_resume_hint(
+    cwd: str, session_id: str, provider: str, model: str = ""
+) -> str:
+    """Shell command that resumes a Codex session under ``provider``.
+
+    The built-in ``openai`` provider needs no flag; any other provider
+    is named with ``-c model_provider=...`` (it must exist in the Codex
+    config, or be supplied the same way, e.g. by a wrapper).
+
+    Args:
+        cwd: Directory to resume from.
+        session_id: Codex session id.
+        provider: Model provider the session is bound to.
+        model: Model to resume with ("" keeps the session's own).
+
+    Returns:
+        A ``cd ... && codex resume`` command line.
+    """
+    flag = "" if provider == "openai" else (
+        f"-c model_provider={shlex.quote(provider)} ")
+    if model:
+        flag += f"-m {shlex.quote(model)} "
+    return f"cd {shlex.quote(cwd)} && codex {flag}resume {session_id}"
 
 
 def port_claude_session(
     session_file: Union[str, Path],
     codex_home: Optional[str] = None,
+    provider: str = "openai",
+    model: str = "",
 ) -> PortResult:
     """Port a resolved Claude session and build the CLI-facing result.
 
     Args:
         session_file: Path to the Claude session JSONL file.
         codex_home: Optional custom Codex home directory.
+        provider: Codex model provider for the new session.
+        model: Model for the resume command ("" for Codex's default).
 
     Returns:
         The port outcome, including the exact resume hint.
 
     Raises:
         PortSessionError: On any expected conversion failure
-            (missing/empty session, filesystem or encoding errors).
+            (missing/empty session, filesystem or encoding errors,
+            an invalid provider id).
     """
     from claude_code_tools.port_claude_to_codex import (
         port_claude_session_to_codex,
     )
+    from claude_code_tools.port_codex_provider import validate_provider
 
     try:
+        validate_provider(provider)
         new_id, out_path = port_claude_session_to_codex(
-            session_file, codex_home=codex_home
+            session_file, codex_home=codex_home, model_provider=provider
         )
     except (ValueError, OSError, UnicodeError) as e:
         raise PortSessionError(str(e)) from e
 
     cwd = _read_output_cwd(out_path)
-    resume_hint = f"cd {shlex.quote(cwd)} && codex resume {new_id}"
     return PortResult(
         new_session_id=new_id,
         output_file=out_path,
         cwd=cwd,
-        resume_hint=resume_hint,
+        resume_hint=_codex_resume_hint(cwd, new_id, provider, model),
+        target_agent="codex",
+        provider=provider,
+    )
+
+
+def retarget_codex_session(
+    session_file: Union[str, Path],
+    provider: str,
+    codex_home: Optional[str] = None,
+    model: str = "",
+) -> PortResult:
+    """Copy a Codex session onto another model provider (Codex -> Codex).
+
+    Args:
+        session_file: Path to the source Codex rollout.
+        provider: Model provider for the new session.
+        codex_home: Codex home for the new rollout; defaults to the
+            source rollout's own home.
+        model: Model for the resume command. Without it Codex resumes
+            with the session's last model, which belongs to the old
+            provider, so a note says to pass ``-m``.
+
+    Returns:
+        The port outcome, with what was dropped listed in ``notes``.
+
+    Raises:
+        PortSessionError: On any expected failure (invalid provider,
+            same provider, missing or malformed file, filesystem
+            errors).
+    """
+    from claude_code_tools.port_codex_provider import (
+        retarget_codex_session as _retarget,
+    )
+
+    try:
+        new_id, out_path, stats = _retarget(
+            session_file, provider, codex_home=codex_home)
+    except (ValueError, OSError, UnicodeError) as e:
+        raise PortSessionError(str(e)) from e
+
+    cwd = _read_output_cwd(out_path)
+    notes = [f"Provider: {stats.source_provider} -> {provider}"]
+    if stats.dropped:
+        dropped = ", ".join(f"{n} {kind}" for kind, n in sorted(stats.dropped.items()))
+        notes.append(f"Dropped provider-specific items: {dropped}")
+    if not model and stats.last_model:
+        notes.append(
+            f"Codex resumes with the session's last model ({stats.last_model}). "
+            f"If {provider} does not serve it, add -m MODEL to the command "
+            "(or pass --model to aichat port).")
+        if stats.dropped.get("compaction"):
+            notes.append(
+                "Earlier context that was only in an encrypted compaction "
+                "summary is not visible to the new provider.")
+    return PortResult(
+        new_session_id=new_id,
+        output_file=out_path,
+        cwd=cwd,
+        resume_hint=_codex_resume_hint(cwd, new_id, provider, model),
+        target_agent="codex",
+        provider=provider,
+        notes=notes,
     )

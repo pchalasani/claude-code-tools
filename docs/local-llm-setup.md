@@ -471,6 +471,24 @@ codex --model gpt-oss-20b \
   -c model_providers.llama-local.base_url="http://localhost:8124/v1"
 ```
 
+## Resuming a Session Under a Different Provider
+
+Codex binds each session to the provider it was started with, and the TUI
+refuses to resume it under another one ("This chat uses openai, but your
+current provider is llama-8124"). To continue an OpenAI session on a local
+model, copy it onto the local provider first:
+
+```bash
+aichat port <session> --provider llama-8124
+codex -c model_provider=llama-8124 resume <new id it prints>
+```
+
+The copy keeps every message, tool call and tool output; only reasoning and
+OpenAI's encrypted compaction summaries are dropped, since one provider cannot
+take them from another. Move a session back with `--provider openai`, adding
+`--model <openai model>` so it does not resume on the local model's name. See
+`aichat port --help`.
+
 ## Running llama-server for Codex
 
 Use the same llama-server commands as for Claude Code.

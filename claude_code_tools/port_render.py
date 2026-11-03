@@ -106,9 +106,9 @@ def _target_agent(source_agent: str) -> str:
     return "codex" if source_agent == "claude" else "claude"
 
 
-def _target_label(source_agent: str) -> str:
+def _target_label(source_agent: str, target_agent: str = "") -> str:
     """Return the product label for a destination agent."""
-    target = _target_agent(source_agent)
+    target = target_agent or _target_agent(source_agent)
     return "Claude Code" if target == "claude" else "Codex"
 
 
@@ -161,15 +161,16 @@ class PortDisplay:
             session_file=Path(record.session_file),
         )
 
-    def resolved(self, session: "ResolvedSession") -> None:
+    def resolved(self, session: "ResolvedSession", target_agent: str = "") -> None:
         """Print the chosen source and detected direction."""
         source = _agent_label(session.agent)
-        target = _target_label(session.agent)
+        target = _target_label(session.agent, target_agent)
         self.console.print(
             Text.assemble(
                 ("  ✓ ", "bold green"),
                 (f"Detected source agent: {session.agent}", "bold"),
-                f" — porting to {target}",
+                " — copying to a new Codex session on another provider"
+                if target_agent == session.agent else f" — porting to {target}",
             )
         )
         self.console.print(
@@ -177,9 +178,9 @@ class PortDisplay:
         )
         self.console.print(f"[bold cyan]2/3[/]  Porting {source} → {target}")
 
-    def porting(self, source_agent: str) -> Status:
+    def porting(self, source_agent: str, target_agent: str = "") -> Status:
         """Return the conversion-phase spinner."""
-        target = _target_label(source_agent)
+        target = _target_label(source_agent, target_agent)
         return self.console.status(
             f"[dim]Converting transcript and creating {target} session...[/dim]",
             spinner="dots",
@@ -187,7 +188,7 @@ class PortDisplay:
 
     def complete(self, result: "PortResult", source_agent: str) -> None:
         """Render the final destination details and resume command."""
-        target_agent = _target_agent(source_agent)
+        target_agent = result.target_agent or _target_agent(source_agent)
         target = _agent_label(target_agent)
         self.console.print("[bold cyan]3/3[/]  Ready")
 
@@ -200,6 +201,8 @@ class PortDisplay:
         )
         table.add_row("Session cwd:", Text(result.cwd or "Unknown"))
         table.add_row("Output file:", Text(str(result.output_file)))
+        if result.provider:
+            table.add_row("Model provider:", Text(result.provider))
         self.console.print(
             Panel(
                 table,
@@ -215,7 +218,9 @@ class PortDisplay:
             overflow="ignore",
         )
         self.console.print(command, soft_wrap=True)
-        if target_agent == "codex":
+        for note in result.notes:
+            self.console.print(Text(f"  {note}", style="dim"))
+        if target_agent == "codex" and source_agent == "claude":
             self.console.print()
             self.console.print(
                 "[dim]Tip: Codex's /import is also available as an "
