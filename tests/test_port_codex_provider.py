@@ -219,8 +219,8 @@ class TestRetarget:
         assert result.target_agent == "codex"
         assert result.provider == "local-fractal"
         assert result.resume_hint == (
-            f"cd {tmp_path} && codex -c model_provider=local-fractal "
-            f"resume {result.new_session_id}")
+            f"cd {tmp_path} && CODEX_HOME={codex_home} codex "
+            f"-c model_provider=local-fractal resume {result.new_session_id}")
         assert any("3 reasoning" in n for n in result.notes)
         assert any("compaction summary" in n for n in result.notes)
         assert any("last model (gpt-6-astra)" in n for n in result.notes)
@@ -231,8 +231,17 @@ class TestRetarget:
         src = write_rollout(codex_home, str(tmp_path), provider="local-fractal")
         result = retarget_service(src, "openai", model="gpt-6.1-sol")
         assert result.resume_hint == (
-            f"cd {tmp_path} && codex -m gpt-6.1-sol resume {result.new_session_id}")
+            f"cd {tmp_path} && CODEX_HOME={codex_home} codex "
+            f"-c model_provider=openai -m gpt-6.1-sol "
+            f"resume {result.new_session_id}")
         assert not any("last model" in n for n in result.notes)
+
+    def test_default_home_needs_no_codex_home(self, codex_home, tmp_path,
+                                               monkeypatch):
+        monkeypatch.setenv("CODEX_HOME", str(codex_home))
+        src = write_rollout(codex_home, str(tmp_path))
+        result = retarget_service(src, "local-fractal")
+        assert "CODEX_HOME=" not in result.resume_hint
 
 
 class TestClaudeToCodexProvider:
@@ -271,7 +280,7 @@ class TestCLI:
             "--claude-home", str(tmp_path / "claude-home")])
         assert result.exit_code == 0, result.output
         assert "Port complete" in result.output
-        assert "codex -c model_provider=local-fractal resume" in result.output
+        assert "-c model_provider=local-fractal resume" in result.output
         assert "Dropped provider-specific items" in result.output
         rollouts = list((codex_home / "sessions").rglob("rollout-*.jsonl"))
         assert len(rollouts) == 2  # the source and its re-targeted copy

@@ -222,9 +222,12 @@ To resume:
   cd /Users/you/myproject && codex -c model_provider=local-fractal resume 01a1a2aa-...
 ```
 
-`openai` needs no flag. Any other provider must be defined in your Codex
-config (`[model_providers.NAME]`) or supplied the same way, e.g. by a wrapper
-script that passes `-c model_providers.NAME={...}`.
+The command always names the provider (even `openai`, in case your config's
+default is another one), and adds `CODEX_HOME=...` when the session lives in a
+Codex home other than the one Codex searches by default. A provider other than
+`openai` must be defined in your Codex config (`[model_providers.NAME]`) or
+supplied the same way, e.g. by a wrapper script that passes
+`-c model_providers.NAME={...}`.
 
 Codex resumes a session with the **model it last used**, which belongs to the
 old provider (e.g. `qwen3.8-27b` after a local-model session). When the new

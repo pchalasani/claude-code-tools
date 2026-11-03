@@ -242,7 +242,13 @@ def port_codex_session(
 
 
 def _codex_resume_hint(
-    cwd: str, session_id: str, provider: str, model: str = ""
+    cwd: str,
+    session_id: str,
+    provider: str,
+    model: str = "",
+    *,
+    explicit: bool = False,
+    codex_home: Optional[Path] = None,
 ) -> str:
     """Shell command that resumes a Codex session under ``provider``.
 
@@ -255,15 +261,31 @@ def _codex_resume_hint(
         session_id: Codex session id.
         provider: Model provider the session is bound to.
         model: Model to resume with ("" keeps the session's own).
+        explicit: Name the provider even when it is ``openai``, so a
+            config whose default provider is another one still resumes.
+        codex_home: Home holding the session, when it is not the one
+            Codex would search by default.
 
     Returns:
         A ``cd ... && codex resume`` command line.
     """
-    flag = "" if provider == "openai" else (
+    flag = "" if provider == "openai" and not explicit else (
         f"-c model_provider={shlex.quote(provider)} ")
     if model:
         flag += f"-m {shlex.quote(model)} "
-    return f"cd {shlex.quote(cwd)} && codex {flag}resume {session_id}"
+    env = f"CODEX_HOME={shlex.quote(str(codex_home))} " if codex_home else ""
+    return f"cd {shlex.quote(cwd)} && {env}codex {flag}resume {session_id}"
+
+
+def _home_if_not_default(out_path: Path) -> Optional[Path]:
+    """The Codex home of a new rollout, unless Codex would search it anyway."""
+    from claude_code_tools.port_codex_provider import _codex_home_of
+    from claude_code_tools.session_utils import get_codex_home
+
+    home = _codex_home_of(out_path.absolute())
+    if home is None or home.resolve() == get_codex_home(None).resolve():
+        return None
+    return home
 
 
 def port_claude_session(
@@ -365,7 +387,9 @@ def retarget_codex_session(
         new_session_id=new_id,
         output_file=out_path,
         cwd=cwd,
-        resume_hint=_codex_resume_hint(cwd, new_id, provider, model),
+        resume_hint=_codex_resume_hint(
+            cwd, new_id, provider, model, explicit=True,
+            codex_home=_home_if_not_default(out_path)),
         target_agent="codex",
         provider=provider,
         notes=notes,
