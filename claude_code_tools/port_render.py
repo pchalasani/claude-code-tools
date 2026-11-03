@@ -226,12 +226,17 @@ class PortDisplay:
                 "[dim]Tip: Codex's /import is also available as an "
                 "interactive alternative.[/dim]"
             )
-        self.offer_session_id_copy(result.new_session_id, target_agent)
+        # The follow-up command keeps every flag of the resume hint
+        # (provider, model, CODEX_HOME), with the id left to paste.
+        command = result.resume_hint.split(" && ", 1)[-1].replace(
+            result.new_session_id, "<paste session ID>")
+        self.offer_session_id_copy(result.new_session_id, target_agent, command)
 
     def offer_session_id_copy(
         self,
         session_id: str,
         target_agent: str,
+        command: str = "",
     ) -> None:
         """Offer to copy a newly created session ID in interactive terminals."""
         if not self.console.is_terminal or not sys.stdin.isatty():
@@ -255,14 +260,11 @@ class PortDisplay:
             self.console.print(
                 "[bold green]✓ Session ID copied to clipboard.[/bold green]"
             )
-            command = "codex resume" if target_agent == "codex" else "claude --resume"
+            if not command:
+                command = ("codex resume" if target_agent == "codex"
+                           else "claude --resume") + " <paste session ID>"
             self.console.print("[bold]Now you can run:[/bold]")
-            self.console.print(
-                Text(
-                    f"  {command} <paste session ID>",
-                    style="bold cyan",
-                )
-            )
+            self.console.print(Text(f"  {command}", style="bold cyan"))
             return
         self.console.print(
             "[yellow]Could not find a working system clipboard command. "

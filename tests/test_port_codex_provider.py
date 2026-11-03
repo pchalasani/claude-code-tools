@@ -10,17 +10,21 @@ whose replacement and guardian histories hold encrypted items too.
 from __future__ import annotations
 
 import json
+from io import StringIO
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
+from rich.console import Console
 
 from claude_code_tools.aichat import main
 from claude_code_tools.port_codex_provider import (
     retarget_codex_session,
     validate_provider,
 )
+from claude_code_tools.port_render import PortDisplay
 from claude_code_tools.port_service import (
+    PortResult,
     PortSessionError,
     port_claude_session,
     retarget_codex_session as retarget_service,
@@ -197,6 +201,14 @@ class TestRetarget:
         assert (other / "history.jsonl").exists()
         assert not (codex_home / "history.jsonl").exists()
 
+    def test_archived_rollout_stays_in_its_home(self, codex_home, tmp_path):
+        live = write_rollout(codex_home, str(tmp_path))
+        archived = codex_home / "archived_sessions" / live.name
+        archived.parent.mkdir()
+        live.rename(archived)
+        _, out, _ = retarget_codex_session(archived, "local-fractal")
+        assert out.parents[3] == codex_home / "sessions"
+
     def test_same_provider_is_refused(self, codex_home, tmp_path):
         src = write_rollout(codex_home, str(tmp_path), provider="local-fractal")
         with pytest.raises(ValueError, match="already uses provider"):
@@ -322,3 +334,36 @@ class TestCLI:
             "--codex-home", str(codex_home)])
         assert result.exit_code == 1
         assert "Invalid provider" in result.output
+
+
+class TerminalInput(StringIO):
+    """String input stream that behaves like an interactive terminal."""
+
+    def isatty(self) -> bool:
+        """Report that the test input stream is interactive."""
+        return True
+
+
+def test_clipboard_follow_up_keeps_resume_flags(tmp_path, monkeypatch):
+    """After copying the id, the suggested command keeps provider and home."""
+    capture = tmp_path / "clipboard.txt"
+    pbcopy = tmp_path / "pbcopy"
+    pbcopy.write_text("#!/bin/sh\n/bin/cat > \"$AICHAT_CLIPBOARD_CAPTURE\"\n")
+    pbcopy.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("AICHAT_CLIPBOARD_CAPTURE", str(capture))
+    monkeypatch.setattr("sys.stdin", TerminalInput("\n"))
+    output = StringIO()
+    display = PortDisplay("session")
+    display.console = Console(file=output, color_system=None,
+                              force_terminal=True, width=160)
+    sid = "01a1a2c6-10eb-7f75-9852-9b05d4ac0355"
+    result = PortResult(
+        new_session_id=sid, output_file=tmp_path / "x.jsonl", cwd="/w",
+        resume_hint=(f"cd /w && CODEX_HOME=/h codex -c model_provider=local-fractal "
+                     f"resume {sid}"),
+        target_agent="codex", provider="local-fractal")
+    display.complete(result, "codex")
+    assert capture.read_text() == sid
+    assert ("CODEX_HOME=/h codex -c model_provider=local-fractal resume "
+            "<paste session ID>") in output.getvalue()

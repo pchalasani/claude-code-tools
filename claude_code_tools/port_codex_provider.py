@@ -95,10 +95,16 @@ def _is_provider_only(item: Any) -> bool:
 
 
 def _codex_home_of(rollout: Path) -> Optional[Path]:
-    """Codex home holding ``rollout`` (``<home>/sessions/Y/M/D/x.jsonl``)."""
+    """Codex home holding ``rollout``.
+
+    Live rollouts sit in ``<home>/sessions/Y/M/D/``; archived ones in
+    ``<home>/archived_sessions/``.
+    """
     parents = rollout.parents
     if len(parents) >= 5 and parents[3].name == "sessions":
         return parents[4]
+    if len(parents) >= 2 and parents[0].name == "archived_sessions":
+        return parents[1]
     return None
 
 
