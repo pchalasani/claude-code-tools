@@ -227,6 +227,12 @@ class TestRetarget:
         with pytest.raises(PortSessionError):
             retarget_service(src, "openai")  # same provider
 
+    def test_compaction_warning_with_explicit_model(self, codex_home, tmp_path):
+        src = write_rollout(codex_home, str(tmp_path))
+        result = retarget_service(src, "local-fractal", model="qwen3.8-27b")
+        assert any("compaction summary" in n for n in result.notes)
+        assert not any("last model" in n for n in result.notes)
+
     def test_service_model_goes_into_hint(self, codex_home, tmp_path):
         src = write_rollout(codex_home, str(tmp_path), provider="local-fractal")
         result = retarget_service(src, "openai", model="gpt-6.1-sol")
@@ -261,6 +267,13 @@ class TestClaudeToCodexProvider:
         assert read_jsonl(result.output_file)[0]["payload"]["model_provider"] \
             == "local-fractal"
         assert "-c model_provider=local-fractal resume" in result.resume_hint
+
+    def test_explicit_openai_is_named_in_hint(self, codex_home, tmp_path):
+        claude = write_claude_session(tmp_path / "claude-home", tmp_path)
+        result = port_claude_session(claude, codex_home=str(codex_home),
+                                     provider="openai", model="gpt-6-astra")
+        assert "codex -c model_provider=openai -m gpt-6-astra resume" \
+            in result.resume_hint
 
     def test_invalid_provider(self, codex_home, tmp_path):
         claude = write_claude_session(tmp_path / "claude-home", tmp_path)

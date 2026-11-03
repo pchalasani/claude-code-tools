@@ -1965,7 +1965,7 @@ def port_session(
                 result = port_claude_session(
                     resolved.session_file,
                     codex_home=codex_home,
-                    provider=provider or "openai",
+                    provider=provider,
                     model=model or "",
                 )
         except PortSessionError as e:

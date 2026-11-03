@@ -291,7 +291,7 @@ def _home_if_not_default(out_path: Path) -> Optional[Path]:
 def port_claude_session(
     session_file: Union[str, Path],
     codex_home: Optional[str] = None,
-    provider: str = "openai",
+    provider: Optional[str] = None,
     model: str = "",
 ) -> PortResult:
     """Port a resolved Claude session and build the CLI-facing result.
@@ -299,7 +299,11 @@ def port_claude_session(
     Args:
         session_file: Path to the Claude session JSONL file.
         codex_home: Optional custom Codex home directory.
-        provider: Codex model provider for the new session.
+        provider: Codex model provider for the new session; ``None``
+            means the default ``openai``, with the resume command left
+            in its usual form. A provider named explicitly (even
+            ``openai``) is also named in the resume command, so a config
+            whose default provider is another one still resumes it.
         model: Model for the resume command ("" for Codex's default).
 
     Returns:
@@ -315,6 +319,8 @@ def port_claude_session(
     )
     from claude_code_tools.port_codex_provider import validate_provider
 
+    explicit = provider is not None
+    provider = provider or "openai"
     try:
         validate_provider(provider)
         new_id, out_path = port_claude_session_to_codex(
@@ -328,7 +334,8 @@ def port_claude_session(
         new_session_id=new_id,
         output_file=out_path,
         cwd=cwd,
-        resume_hint=_codex_resume_hint(cwd, new_id, provider, model),
+        resume_hint=_codex_resume_hint(
+            cwd, new_id, provider, model, explicit=explicit),
         target_agent="codex",
         provider=provider,
     )
@@ -374,15 +381,15 @@ def retarget_codex_session(
     if stats.dropped:
         dropped = ", ".join(f"{n} {kind}" for kind, n in sorted(stats.dropped.items()))
         notes.append(f"Dropped provider-specific items: {dropped}")
+    if stats.dropped.get("compaction"):
+        notes.append(
+            "Earlier context that was only in an encrypted compaction "
+            "summary is not visible to the new provider.")
     if not model and stats.last_model:
         notes.append(
             f"Codex resumes with the session's last model ({stats.last_model}). "
             f"If {provider} does not serve it, add -m MODEL to the command "
             "(or pass --model to aichat port).")
-        if stats.dropped.get("compaction"):
-            notes.append(
-                "Earlier context that was only in an encrypted compaction "
-                "summary is not visible to the new provider.")
     return PortResult(
         new_session_id=new_id,
         output_file=out_path,
