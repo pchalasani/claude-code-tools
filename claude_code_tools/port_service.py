@@ -335,7 +335,8 @@ def port_claude_session(
         output_file=out_path,
         cwd=cwd,
         resume_hint=_codex_resume_hint(
-            cwd, new_id, provider, model, explicit=explicit),
+            cwd, new_id, provider, model, explicit=explicit,
+            codex_home=_home_if_not_default(out_path) if explicit else None),
         target_agent="codex",
         provider=provider,
     )

@@ -267,6 +267,7 @@ class TestClaudeToCodexProvider:
         assert read_jsonl(result.output_file)[0]["payload"]["model_provider"] \
             == "local-fractal"
         assert "-c model_provider=local-fractal resume" in result.resume_hint
+        assert f"CODEX_HOME={codex_home} codex" in result.resume_hint
 
     def test_explicit_openai_is_named_in_hint(self, codex_home, tmp_path):
         claude = write_claude_session(tmp_path / "claude-home", tmp_path)
