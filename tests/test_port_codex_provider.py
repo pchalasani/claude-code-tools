@@ -358,10 +358,11 @@ def test_clipboard_follow_up_keeps_resume_flags(tmp_path, monkeypatch):
     display.console = Console(file=output, color_system=None,
                               force_terminal=True, width=160)
     sid = "01a1a2c6-10eb-7f75-9852-9b05d4ac0355"
+    cwd = "/work/R&D && examples"  # an ' && ' inside the quoted cwd
     result = PortResult(
-        new_session_id=sid, output_file=tmp_path / "x.jsonl", cwd="/w",
-        resume_hint=(f"cd /w && CODEX_HOME=/h codex -c model_provider=local-fractal "
-                     f"resume {sid}"),
+        new_session_id=sid, output_file=tmp_path / "x.jsonl", cwd=cwd,
+        resume_hint=(f"cd '{cwd}' && CODEX_HOME=/h codex "
+                     f"-c model_provider=local-fractal resume {sid}"),
         target_agent="codex", provider="local-fractal")
     display.complete(result, "codex")
     assert capture.read_text() == sid

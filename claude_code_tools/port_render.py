@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -227,9 +228,13 @@ class PortDisplay:
                 "interactive alternative.[/dim]"
             )
         # The follow-up command keeps every flag of the resume hint
-        # (provider, model, CODEX_HOME), with the id left to paste.
-        command = result.resume_hint.split(" && ", 1)[-1].replace(
-            result.new_session_id, "<paste session ID>")
+        # (provider, model, CODEX_HOME), with the id left to paste. The
+        # services build the hint as `cd <quoted cwd> && <command>`.
+        prefix = f"cd {shlex.quote(result.cwd)} && "
+        command = ""
+        if result.resume_hint.startswith(prefix):
+            command = result.resume_hint[len(prefix):].replace(
+                result.new_session_id, "<paste session ID>")
         self.offer_session_id_copy(result.new_session_id, target_agent, command)
 
     def offer_session_id_copy(
