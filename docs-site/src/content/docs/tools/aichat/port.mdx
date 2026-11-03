@@ -1,5 +1,5 @@
 ---
-title: "Port (Codex ↔ Claude)"
+title: "Port (Codex ↔ Claude, or across providers)"
 ---
 
 `aichat port` converts a session from one coding agent into a **native,
@@ -98,6 +98,8 @@ Options:
 |--------|-------------|
 | `--claude-home PATH` | Override `~/.claude` |
 | `--codex-home PATH` | Override `~/.codex` |
+| `--provider NAME` | Codex model provider for the new session (see [below](#codex--codex-change-the-model-provider)) |
+| `--model NAME` | Model to resume the new Codex session with (added to the resume command as `-m`) |
 
 ## Ambiguous matches
 
@@ -174,6 +176,71 @@ Codex can also import Claude sessions itself: start `codex` and type
 to 50); `aichat port` is scriptable, has no such limits, and records lineage
 metadata for `aichat` tooling.
 :::
+
+## Codex → Codex: change the model provider
+
+Codex records the model provider a session was created with
+(`"model_provider": "openai"` in the rollout's first line), and the Codex TUI
+refuses to resume it under any other provider:
+
+```text
+This chat uses openai, but your current provider is local-fractal.
+Switch to openai to continue.
+```
+
+`--provider` copies a Codex session onto another provider instead of porting
+it to Claude:
+
+```bash
+aichat port <session> --provider local-fractal    # OpenAI -> local model
+aichat port <session> --provider openai           # and back
+```
+
+The result is a **new Codex session**, forked from the original (which is
+left untouched):
+
+- It gets a fresh UUIDv7 id, with `forked_from_id` pointing at the source,
+  and `continue_metadata` recording both providers.
+- `model_provider` is set to NAME everywhere Codex records it.
+- Everything else is copied as is: messages, tool calls, tool output,
+  compaction records, and the TUI event log, so the scrollback and rewind
+  still work.
+- Items one provider cannot take from another are dropped: **reasoning**
+  (OpenAI's is encrypted; a local model's carries raw reasoning text, which
+  OpenAI rejects as input) and **encrypted compaction summaries** (anything
+  carrying `encrypted_content`), at the top level and inside compacted
+  histories. The command reports how many it dropped. If a compaction
+  summary was dropped, the context it held (before that compaction) is no
+  longer visible to the new provider.
+- It is written to the source session's own Codex home (or `--codex-home`)
+  and registered in that home's `history.jsonl`.
+
+Resume it with the provider it now names:
+
+```text
+To resume:
+  cd /Users/you/myproject && codex -c model_provider=local-fractal resume 01a1a2aa-...
+```
+
+The command always names the provider (even `openai`, in case your config's
+default is another one), and adds `CODEX_HOME=...` when the session lives in a
+Codex home other than the one Codex searches by default. A provider other than
+`openai` must be defined in your Codex config (`[model_providers.NAME]`) or
+supplied the same way, e.g. by a wrapper script that passes
+`-c model_providers.NAME={...}`.
+
+Codex resumes a session with the **model it last used**, which belongs to the
+old provider (e.g. `qwen3.8-27b` after a local-model session). When the new
+provider does not serve that model, name one with `--model`, which adds `-m`
+to the resume command; without it, the command prints the session's last
+model as a reminder:
+
+```bash
+aichat port <session> --provider openai --model gpt-6.1-sol
+```
+
+With a **Claude** session, `--provider` sets the provider of the new Codex
+session (default `openai`), so it can be resumed on a local model directly.
 
 ## Fidelity notes
 

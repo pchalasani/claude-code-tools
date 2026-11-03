@@ -174,6 +174,22 @@ codex --model gpt-oss-20b \
 - The same model can serve both Claude Code and
   Codex at the same time
 
+### Resuming a Session Under a Different Provider
+
+Codex binds each session to the provider it was
+started with, and the TUI refuses to resume it under
+another one ("This chat uses openai, but your current
+provider is llama-local"). Copy the session onto the
+local provider first with
+[`aichat port --provider`](../../tools/aichat/port/#codex--codex-change-the-model-provider):
+
+```bash
+aichat port <session> --provider llama-local
+codex -c model_provider=llama-local resume <new-id>
+```
+
+Move it back later with `--provider openai --model <openai model>`.
+
 </TabItem>
 </Tabs>
 

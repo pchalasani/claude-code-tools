@@ -756,6 +756,7 @@ def _append_history_transactional(
 def port_claude_session_to_codex(
     claude_session_file: Union[str, Path],
     codex_home: Optional[Union[str, Path]] = None,
+    model_provider: str = CODEX_MODEL_PROVIDER,
 ) -> tuple[str, Path]:
     """Convert a Claude Code session into a new Codex rollout file.
 
@@ -771,6 +772,9 @@ def port_claude_session_to_codex(
         claude_session_file: Path to the Claude session JSONL file.
         codex_home: Optional Codex home directory (defaults to
             ``~/.codex``).
+        model_provider: Codex model provider the new rollout is bound
+            to (Codex only resumes a thread under the provider it
+            records). Defaults to ``openai``.
 
     Returns:
         Tuple ``(new_session_id, new_file_path)``.
@@ -829,7 +833,7 @@ def port_claude_session_to_codex(
         "cwd": cwd,
         "originator": PORT_ORIGINATOR,
         "cli_version": "aichat-port",
-        "model_provider": CODEX_MODEL_PROVIDER,
+        "model_provider": model_provider,
     }
     if meta["branch"]:
         payload["git"] = {"branch": meta["branch"]}
