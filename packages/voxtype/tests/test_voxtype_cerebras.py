@@ -521,6 +521,7 @@ def test_typist_types_line_breaks_as_shift_enter() -> None:
     from voxtype.inject import Typist
 
     typist = Typist()
+    typist._shifted = {}  # line breaks only; shifted keys: test_voxtype_shifted.py
     keys = _Keys()
     typist._keyboard = keys
     typist.type_text("Intro.\n\n- one\n- two")
