@@ -364,6 +364,7 @@ def _trim_once(
     target_tools: Optional[Set[str]],
     threshold: int,
     trim_assistant_messages: Optional[int],
+    keep_last: Optional[int],
     dry_run: bool,
     min_token_savings: int,
 ) -> Optional[Dict[str, Any]]:
@@ -414,6 +415,7 @@ def _trim_once(
             create_placeholder,
             new_session_id=None,
             trim_assistant_messages=trim_assistant_messages,
+            keep_last=keep_last,
             parent_file=str(backup_path),
         )
         tokens_saved = int(chars_saved / 4)
@@ -497,6 +499,7 @@ def trim_session_in_place(
     target_tools: Optional[Set[str]] = None,
     threshold: int = 500,
     trim_assistant_messages: Optional[int] = None,
+    keep_last: Optional[int] = None,
     dry_run: bool = False,
     min_token_savings: int = MIN_TOKEN_SAVINGS,
 ) -> Dict[str, Any]:
@@ -568,6 +571,7 @@ def trim_session_in_place(
             target_tools,
             threshold,
             trim_assistant_messages,
+            keep_last,
             dry_run,
             min_token_savings,
         )

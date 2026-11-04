@@ -175,7 +175,16 @@ def _keep_from_line(input_file: Path, keep_last: Optional[int]) -> Optional[int]
                 data = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(data, dict) and data.get("type") in ("response_item", "event_msg"):
+            # Codex rollouts carry reasoning items and duplicated UI events
+            # (`event_msg` mirrors of messages) beside the messages themselves.
+            # Counting those would push the cutoff past the real final message,
+            # so only `response_item` records whose payload is a message count.
+            payload = data.get("payload") if isinstance(data, dict) else None
+            if (
+                isinstance(payload, dict)
+                and data.get("type") == "response_item"
+                and payload.get("type") == "message"
+            ):
                 message_lines.append(line_num)
     if not message_lines:
         return None
