@@ -180,9 +180,12 @@ class _FakeQuartz:
     kCGEventFlagMaskControl = 1 << 18
     kCGEventFlagMaskAlternate = 1 << 19
     kCGEventFlagMaskCommand = 1 << 20
+    kCGEventSourceUnixProcessID = 41
 
     @staticmethod
     def CGEventGetIntegerValueField(event, field):  # noqa: ANN001, ANN205
+        if field == 41:
+            return getattr(event, "pid", 0)
         return event.vk if field == 9 else event.repeat
 
     @staticmethod
@@ -545,3 +548,34 @@ def test_app_passes_opacity_to_overlay(monkeypatch) -> None:  # noqa: ANN001
     )
     app.run()
     assert captured["opacity"] == 0.6
+
+
+def test_own_typing_never_triggers_a_hotkey(monkeypatch) -> None:  # noqa: ANN001
+    """voxtype types capitals as Shift+key: "D" must not fire <shift>+d."""
+    import os
+
+    _install_fakes(monkeypatch)
+    from voxtype.hotkey import DOUBLE_TAP_KEYS, _SuppressingHotKeys
+
+    q = _FakeQuartz
+    shift = q.kCGEventFlagMaskShift
+    fired = threading.Event()
+    hk = _SuppressingHotKeys([])
+    hk._by_vk[2] = [(shift, fired.set, None)]  # <shift>+d (vk 2 = D)
+    mine = SimpleNamespace(vk=2, flags=shift, repeat=0, pid=os.getpid())
+    assert hk._intercept(q.kCGEventKeyDown, mine) is mine  # passed through
+    assert not fired.wait(0.3)
+    theirs = SimpleNamespace(vk=2, flags=shift, repeat=0, pid=os.getpid() + 1)
+    assert hk._intercept(q.kCGEventKeyDown, theirs) is None  # real chord
+    assert fired.wait(2.0)
+    hk.stop()
+
+    dt_fired = threading.Event()
+    vk, devbit = DOUBLE_TAP_KEYS["right_alt"]
+    hk = _SuppressingHotKeys([], double_tap=(vk, devbit, 0.4, dt_fired.set, None))
+    alt = q.kCGEventFlagMaskAlternate
+    for flags in (alt | devbit, 0, alt | devbit, 0):
+        hk._intercept(q.kCGEventFlagsChanged,
+                      SimpleNamespace(vk=vk, flags=flags, repeat=0, pid=os.getpid()))
+    assert not dt_fired.wait(0.5), "own modifier events counted as a double tap"
+    hk.stop()
