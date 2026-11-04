@@ -431,6 +431,7 @@ def process_claude_session(
                                         isinstance(v, str)
                                         and len(v) >= threshold
                                         and not _already_trimmed(v)
+                                        and not exempt
                                     ):
                                         orig_len = len(v)
                                         item["input"][k] = (

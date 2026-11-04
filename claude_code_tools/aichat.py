@@ -794,6 +794,8 @@ def menu(ctx):
 @click.option("--trim-assistant", "-a", "trim_assistant", type=int,
               help="Trim assistant messages: positive N trims first N over threshold, "
                    "negative N trims all except last |N| over threshold")
+@click.option("--keep-last", "-k", "keep_last", type=int,
+              help="Never trim the last N messages, regardless of role")
 @click.option("--output-dir", "-o",
               help="Output directory (default: same as input file)")
 @click.option("--agent", type=click.Choice(["claude", "codex"], case_sensitive=False),
@@ -801,7 +803,7 @@ def menu(ctx):
 @click.option("--claude-home", help="Path to Claude home directory")
 @click.option("--simple-ui", is_flag=True,
               help="Use simple CLI trim instead of Node UI (requires SESSION)")
-def trim(session, tools, threshold, trim_assistant, output_dir, agent, claude_home, simple_ui):
+def trim(session, tools, threshold, trim_assistant, keep_last, output_dir, agent, claude_home, simple_ui):
     """Trim session to reduce size by truncating large tool outputs.
 
     Trims tool call results and optionally assistant messages that exceed
@@ -907,13 +909,15 @@ class _JsonContractCommand(click.Command):
 @click.option("--trim-assistant", "-a", "trim_assistant", type=int,
               help="Trim assistant messages: positive N trims first N over threshold, "
                    "negative N trims all except last |N| over threshold")
+@click.option("--keep-last", "-k", "keep_last", type=int,
+              help="Never trim the last N messages, regardless of role")
 @click.option("--dry-run", "-n", is_flag=True,
               help="Compute savings without modifying the session file")
 @click.option("--json", "json_output", is_flag=True,
               help="Print a single-line JSON result (for scripts/hooks)")
 @click.option("--claude-home", help="Path to Claude home directory")
-def trim_in_place_cmd(session, tools, threshold, trim_assistant, dry_run,
-                      json_output, claude_home):
+def trim_in_place_cmd(session, tools, threshold, trim_assistant, keep_last,
+                      dry_run, json_output, claude_home):
     """Trim a session file IN PLACE (keeps the same session ID).
 
     Unlike `aichat trim` (which creates a new trimmed session file), this
@@ -934,6 +938,7 @@ def trim_in_place_cmd(session, tools, threshold, trim_assistant, dry_run,
         aichat trim-in-place abc123               # Trim with defaults
         aichat trim-in-place abc123 -a -20        # Keep last 20 long asst msgs
         aichat trim-in-place abc123 -t bash -l 1000
+        aichat trim-in-place abc123 -k 3          # Keep the last 3 messages
     """
     import json as json_mod
     import sys
@@ -1005,6 +1010,7 @@ def trim_in_place_cmd(session, tools, threshold, trim_assistant, dry_run,
             target_tools=target_tools,
             threshold=threshold,
             trim_assistant_messages=trim_assistant,
+            keep_last=keep_last,
             dry_run=dry_run,
         )
     except Exception as e:
