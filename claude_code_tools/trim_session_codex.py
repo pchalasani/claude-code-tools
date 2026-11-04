@@ -164,6 +164,24 @@ def create_suppressed_output(
     return json.dumps(suppressed_obj)
 
 
+def _keep_from_line(input_file: Path, keep_last: Optional[int]) -> Optional[int]:
+    """First line of the last ``keep_last`` messages, or None if nothing to spare."""
+    if not keep_last or keep_last <= 0:
+        return None
+    message_lines = []
+    with open(input_file, "r") as f:
+        for line_num, line in enumerate(f, start=1):
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict) and data.get("type") in ("response_item", "event_msg"):
+                message_lines.append(line_num)
+    if not message_lines:
+        return None
+    return message_lines[-min(keep_last, len(message_lines))]
+
+
 def process_codex_session(
     input_file: Path,
     output_file: Path,
@@ -173,6 +191,7 @@ def process_codex_session(
     create_placeholder: callable,
     new_session_id: Optional[str] = None,
     trim_assistant_messages: Optional[int] = None,
+    keep_last: Optional[int] = None,
     parent_file: Optional[str] = None,
 ) -> Tuple[int, int, int]:
     """
@@ -248,6 +267,9 @@ def process_codex_session(
                 msg[0] for msg in assistant_messages[:trim_count]
             }
 
+    # Records at or after this line are the kept tail and are never trimmed.
+    keep_from_line = _keep_from_line(input_file, keep_last)
+
     # Second pass: process and trim
     with open(input_file, "r") as infile, open(
         output_file, "w"
@@ -258,6 +280,8 @@ def process_codex_session(
             except json.JSONDecodeError:
                 outfile.write(line)
                 continue
+
+            exempt = keep_from_line is not None and line_num >= keep_from_line
 
             # Replace session_id in session_meta events if new_session_id provided
             if new_session_id and data.get("type") == "session_meta":
@@ -279,7 +303,7 @@ def process_codex_session(
                         if isinstance(item, dict) and item.get("type") == "output_text":
                             original_text = item.get("text", "")
                             original_length = len(original_text)
-                            if original_length >= threshold:
+                            if original_length >= threshold and not exempt:
                                 placeholder = (
                                     f"[Assistant message trimmed - "
                                     f"original content was {original_length:,} characters. "
@@ -308,7 +332,7 @@ def process_codex_session(
             output_length = get_output_length(output_str)
 
             # Check if should suppress
-            should_suppress = output_length >= threshold and (
+            should_suppress = output_length >= threshold and not exempt and (
                 target_tools is None or tool_name.lower() in target_tools
             )
 

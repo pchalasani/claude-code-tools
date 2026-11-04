@@ -217,6 +217,31 @@ def truncate_content(
     return result
 
 
+def _keep_from_line(input_file: Path, keep_last: Optional[int]) -> Optional[int]:
+    """First line of the last ``keep_last`` messages, or None if nothing to spare.
+
+    Counting messages rather than lines means the tail survives regardless of
+    which role the messages have, which is what "keep the last N messages"
+    means to a caller continuing a session.
+    """
+    if not keep_last or keep_last <= 0:
+        return None
+    message_lines = []
+    with open(input_file, "r", encoding=_ENCODING, errors=_ENCODING_ERRORS) as f:
+        for line_num, line in enumerate(f, start=1):
+            if _has_undecodable_bytes(line):
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict) and data.get("type") in ("assistant", "user"):
+                message_lines.append(line_num)
+    if not message_lines:
+        return None
+    return message_lines[-min(keep_last, len(message_lines))]
+
+
 def process_claude_session(
     input_file: Path,
     output_file: Path,
@@ -226,6 +251,7 @@ def process_claude_session(
     create_placeholder: callable,
     new_session_id: Optional[str] = None,
     trim_assistant_messages: Optional[int] = None,
+    keep_last: Optional[int] = None,
     parent_file: Optional[str] = None,
 ) -> Tuple[int, int, int]:
     """
@@ -313,6 +339,9 @@ def process_claude_session(
                 msg[0] for msg in assistant_messages[:trim_count]
             }
 
+    # Records at or after this line are the kept tail and are never trimmed.
+    keep_from_line = _keep_from_line(input_file, keep_last)
+
     # Second pass: process and trim
     with open(
         input_file, "r", encoding=_ENCODING, errors=_ENCODING_ERRORS
@@ -345,6 +374,7 @@ def process_claude_session(
             # back verbatim at the end of the loop (re-serializing
             # them would gratuitously reformat the line).
             modified = False
+            exempt = keep_from_line is not None and line_num >= keep_from_line
 
             # Neutralize "context full" error markers - these indicate the parent
             # session hit context limits. We keep the lines (to preserve UUID chain)
@@ -440,7 +470,7 @@ def process_claude_session(
                             if _already_trimmed(original_text):
                                 continue
                             original_length = len(original_text)
-                            if original_length >= threshold:
+                            if original_length >= threshold and not exempt:
                                 placeholder = (
                                     f"[Assistant message"
                                     f" trimmed - original"
@@ -484,7 +514,7 @@ def process_claude_session(
                             )
 
                             # Check if should truncate
-                            if content_length >= threshold and (
+                            if content_length >= threshold and not exempt and (
                                 target_tools is None
                                 or tool_name.lower() in target_tools
                             ):
