@@ -58,7 +58,7 @@ def test_typist_holds_shift_for_shifted_characters() -> None:
     from pynput.keyboard import Key, KeyCode
 
     typist = Typist()
-    typist._shifted = dict(US_SHIFTED)
+    typist._shifted_lookup = lambda _kb: dict(US_SHIFTED)
     keys = _Keys()
     typist._keyboard = keys
     typist.type_text("Ok?\nI")
@@ -79,6 +79,31 @@ def test_real_layout_map_covers_capitals_and_symbols() -> None:
     for ch in "IKOQY?!":
         assert ch in shifted, ch
     assert "a" not in shifted and " " not in shifted  # plain keys untouched
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS keyboard layout")
+def test_dead_keys_are_never_pressed() -> None:
+    pytest.importorskip("pynput")
+    from pynput._util.darwin import keycode_context
+    from pynput.keyboard import Controller
+
+    from voxtype.inject import _is_dead_key
+
+    shift = 0x0200 >> 8
+    with keycode_context() as context:
+        for ch, vk in _shifted_keycodes(Controller()).items():
+            assert not _is_dead_key(context, vk, shift), ch
+
+
+def test_lookup_runs_on_every_take() -> None:
+    pytest.importorskip("pynput")
+    calls = []
+    typist = Typist()
+    typist._keyboard = _Keys()
+    typist._shifted_lookup = lambda _kb: calls.append(1) or {}
+    typist.type_text("one")
+    typist.type_text("two")
+    assert len(calls) == 2
 
 
 def test_off_macos_the_map_is_empty(monkeypatch) -> None:
