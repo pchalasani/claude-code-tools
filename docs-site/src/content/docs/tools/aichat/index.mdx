@@ -42,6 +42,9 @@ variants:
   longer than a threshold (default 500 chars), and
   optionally all-but-recent assistant messages -- all
   user-configurable. This can free up 40-60% context.
+  `--keep-last N` exempts the last N messages, whatever
+  their role, so the turns you are continuing from survive
+  intact while everything earlier follows the normal rules.
 
 - A **smart-trim** mode that uses a headless Claude/Codex
   agent to determine which messages can be safely
