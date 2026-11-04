@@ -452,7 +452,7 @@ wheels = [
 
 [[package]]
 name = "claude-code-tools"
-version = "1.30.4"
+version = "1.31.0"
 source = { editable = "." }
 dependencies = [
     { name = "claude-agent-sdk" },
@@ -2678,7 +2678,7 @@ dev = [{ name = "pytest", specifier = ">=9.0.1" }]
 
 [[package]]
 name = "voxtype"
-version = "0.3.15"
+version = "0.3.16"
 source = { editable = "packages/voxtype" }
 dependencies = [
     { name = "numba", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
