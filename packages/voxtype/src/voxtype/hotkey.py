@@ -11,6 +11,7 @@ back to the observing ``GlobalHotKeys`` behavior.
 
 from __future__ import annotations
 
+import os
 import sys
 import threading
 import time
@@ -286,6 +287,13 @@ class _SuppressingHotKeys:
 
     def _intercept(self, event_type: int, event):  # noqa: ANN001, ANN202
         q = self._quartz
+        # voxtype's own typing (Shift+key for capitals, Shift+Enter) must
+        # never trigger a hotkey or a double-tap: typing "D" is not the
+        # <shift>+d chord. Events this process posted carry its pid.
+        pid_field = getattr(q, "kCGEventSourceUnixProcessID", None)
+        if pid_field is not None and q.CGEventGetIntegerValueField(
+                event, pid_field) == os.getpid():
+            return event
         if event_type == q.kCGEventFlagsChanged:
             # Modifier press/release. Only the double-tap trigger cares,
             # and it only OBSERVES: swallowing a modifier would break

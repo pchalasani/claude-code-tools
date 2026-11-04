@@ -4,6 +4,11 @@ Typing goes through pynput's ``keyboard.Controller``, which synthesizes
 key events into whatever application currently has focus. On macOS the
 process running voxtype (your terminal) needs Accessibility permission
 (System Settings > Privacy & Security > Accessibility).
+
+Characters that need Shift (capitals, ``?``, ``!``, ...) are typed as Shift
+plus their real key. pynput would otherwise send them as key code 0 (the A
+key) with the character attached, and apps that read the key code rather
+than the attached character, such as Rex build 1696, insert "a" instead.
 """
 
 from __future__ import annotations
@@ -31,6 +36,8 @@ class Typist:
         self._keyboard = Controller()
         self._typed_at = 0.0
         self._settle_s = 0.0
+        # Looked up per take: the keyboard layout can change in between.
+        self._shifted_lookup = _shifted_keycodes
 
     def type_text(self, text: str) -> None:
         """Type ``text`` at the current cursor position.
@@ -41,6 +48,9 @@ class Typist:
         and most editors. (Raw transcripts never contain line breaks;
         only structured LLM cleanup output does.)
         """
+        # 128 key translations, well under a millisecond per take.
+        lookup = getattr(self, "_shifted_lookup", None)
+        shifted = lookup(self._keyboard) if lookup else {}
         # Every line-break form, including a lone "\r" (which pynput
         # would also type as a bare Enter).
         lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
@@ -48,12 +58,23 @@ class Typist:
             if i:
                 self.press_shift_enter()
             if line:
-                self._keyboard.type(line)
+                self._type_line(line, shifted)
         self._typed_at = time.monotonic()
         self._settle_s = min(
             _ENTER_SETTLE_S + _ENTER_SETTLE_PER_CHAR_S * len(text),
             _ENTER_SETTLE_MAX_S,
         )
+
+    def _type_line(self, line: str, shifted: dict[str, int]) -> None:
+        """Type one line: plain runs as text, shifted characters as Shift+key."""
+        from pynput.keyboard import Key, KeyCode
+
+        for kind, value in plan_keystrokes(line, shifted):
+            if kind == "text":
+                self._keyboard.type(value)
+            else:
+                with self._keyboard.pressed(Key.shift):
+                    self._keyboard.tap(KeyCode.from_vk(value))
 
     def press_shift_enter(self) -> None:
         """Insert a line break without submitting (Shift+Enter)."""
@@ -75,6 +96,78 @@ class Typist:
         if wait > 0:
             time.sleep(wait)
         self._keyboard.tap(Key.enter)
+
+
+def plan_keystrokes(line: str, shifted: dict[str, int]) -> list[tuple[str, object]]:
+    """Split a line into typed runs and Shift+key presses.
+
+    Args:
+        line: Text without line breaks.
+        shifted: Character -> key code for characters typed with Shift on
+            the current keyboard layout.
+
+    Returns:
+        ``("text", run)`` items for runs pynput can type as they are, and
+        ``("shift", keycode)`` items for each shifted character.
+    """
+    plan: list[tuple[str, object]] = []
+    run = ""
+    for ch in line:
+        if ch in shifted:
+            if run:
+                plan.append(("text", run))
+                run = ""
+            plan.append(("shift", shifted[ch]))
+        else:
+            run += ch
+    if run:
+        plan.append(("text", run))
+    return plan
+
+
+def _shifted_keycodes(keyboard: object) -> dict[str, int]:
+    """Characters the current macOS layout types with Shift, and their keys.
+
+    Only characters pynput cannot type directly are included, so plain
+    keys keep pynput's own handling, and dead keys (e.g. Shift+6 on U.S.
+    International, which would accent the next letter) are left out.
+    Empty off macOS or on any failure, which leaves typing exactly as
+    before.
+    """
+    if sys.platform != "darwin":
+        return {}
+    try:
+        from pynput._util.darwin import keycode_context, keycode_to_string
+
+        direct = getattr(keyboard, "_mapping", {}) or {}
+        shift_state = 0x0200 >> 8  # UCKeyTranslate takes (modifiers >> 8)
+        out: dict[str, int] = {}
+        with keycode_context() as context:
+            for vk in range(128):
+                ch = keycode_to_string(context, vk, shift_state)
+                if len(ch) == 1 and ch.isprintable() and ch not in direct \
+                        and ch not in out and not _is_dead_key(context, vk, shift_state):
+                    out[ch] = vk
+        return out
+    except Exception:  # noqa: BLE001 - typing must keep working
+        return {}
+
+
+def _is_dead_key(context: tuple, vk: int, modifier_state: int) -> bool:
+    """True if pressing ``vk`` with these modifiers starts a dead-key sequence."""
+    import ctypes
+
+    from pynput._util.darwin import CarbonExtra
+
+    keyboard_type, layout_data = context
+    dead_key_state = ctypes.c_uint32()
+    length = ctypes.c_uint8()
+    chars = (ctypes.c_uint16 * 4)()
+    CarbonExtra.UCKeyTranslate(
+        layout_data, vk, 0,  # kUCKeyActionDown
+        modifier_state, keyboard_type, 0,  # dead keys processed
+        ctypes.byref(dead_key_state), 4, ctypes.byref(length), chars)
+    return dead_key_state.value != 0
 
 
 def _resolve_sound(name: str) -> Path | None:
