@@ -592,9 +592,8 @@ class VoiceTypeApp(HeldNotesMixin, RuntimeMixin):
         if kept:
             self._note_kept(kept, gap)
         if not (enter or show):
-            n_words = len(joined.split())
-            if 0 < self.cfg.held_max_words < n_words:
-                self._note_over_cap(n_words)
+            if 0 < self.cfg.held_max_words < len(joined.split()):
+                self._note_over_cap()
             self._status(f'held: "{_preview(text)}"')
             return True
         if not joined and show:

@@ -84,12 +84,12 @@ class HeldNotesMixin:
             f"{n_words} words held, over held_max_words ({cap}): "
             f"not typed{where}"
         )
-        paste = self.cfg.paste_hotkey
-        if paste and pasteable:
-            hint = f"\n{chord_label(paste)} types the whole message."
-        else:
-            hint = "\nSaved to dropped.txt." if where else ""
-        self._show_note(f"{n_words} words not typed (over {cap}).{hint}")
+        did = "typed only your last part" if more else "nothing typed"
+        rest = "The rest is" if more else "It is"
+        self._show_note(
+            f"Over {cap:,} words: {did}."
+            + (f"\n{rest} saved in dropped.txt." if where else "")
+        )
 
     def _note_kept(self: VoiceTypeApp, n_words: int, gap: float) -> None:
         """Say that words held from before a long silence are kept."""
@@ -108,13 +108,18 @@ class HeldNotesMixin:
             )
         )
 
-    def _note_over_cap(self: VoiceTypeApp, n_words: int) -> None:
+    def _note_over_cap(self: VoiceTypeApp) -> None:
         """Warn, before any release, that held words passed the cap."""
         key = self.cfg.discard_hotkey
         self._show_note(
-            f"{n_words} words held (over {self.cfg.held_max_words}).\n"
-            + (f"{chord_label(key)} drops them, or only" if key else "Only")
-            + " your last part gets typed."
+            f"Over {self.cfg.held_max_words:,} words held: "
+            "only your last part will be typed."
+            + (
+                f"\nAccidental recording? Press {chord_label(key)} "
+                "before you speak."
+                if key
+                else ""
+            )
         )
 
     @staticmethod

@@ -298,7 +298,7 @@ class Config:
     wait_for_submit: bool = True
     idle_timeout: float = 20.0
     held_gap: float = 600.0
-    held_max_words: int = 500
+    held_max_words: int = 2000
     trailing_space: bool = True
     sounds: bool = True
     sound_start: str = "Glass"
@@ -877,7 +877,7 @@ held_gap = 600.0
 # (no giant paste). The rest is saved to dropped.txt next to this file;
 # up to twice this many words stay on the paste-again hotkey.
 # 0 turns this off.
-held_max_words = 500
+held_max_words = 2000
 
 # In "wake" mode, go back to passive after this many seconds of silence.
 idle_timeout = 20.0

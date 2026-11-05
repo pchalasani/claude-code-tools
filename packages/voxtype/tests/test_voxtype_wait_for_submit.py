@@ -571,8 +571,8 @@ def test_word_cap_types_the_last_piece(gap_app, tmp_path) -> None:  # noqa: ANN0
     app.flush_deliveries()
     assert app.typist.events == ["five six ", "<ENTER>"]
     assert app.current_note() == (
-        "4 words not typed (over 5).\n"
-        "Cmd+Ctrl+V types the whole message."
+        "Over 5 words: typed only your last part.\n"
+        "The rest is saved in dropped.txt."
     )
     saved = (tmp_path / "dropped.txt").read_text()
     assert saved.endswith(
@@ -607,7 +607,8 @@ def test_word_cap_far_over_stays_off_the_paste_key(gap_app, tmp_path) -> None:  
     app.flush_deliveries()
     assert app.typist.events == ["mine ", "<ENTER>"]
     assert app.current_note() == (
-        "5 words not typed (over 2).\nSaved to dropped.txt."
+        "Over 2 words: typed only your last part.\n"
+        "The rest is saved in dropped.txt."
     )
     assert "one two three four five" in (
         tmp_path / "dropped.txt"
@@ -640,8 +641,8 @@ def test_note_when_held_text_passes_the_cap(gap_app) -> None:  # noqa: ANN001
     assert app.current_note() == ""
     app.handle_utterance("three four")
     assert app.current_note() == (
-        "4 words held (over 3).\n"
-        "Shift+Esc drops them, or only your last part gets typed."
+        "Over 3 words held: only your last part will be typed.\n"
+        "Accidental recording? Press Shift+Esc before you speak."
     )
     app.discard()
     assert app.current_note() == ""
@@ -774,7 +775,7 @@ def test_cap_note_survives_a_pause(gap_app) -> None:  # noqa: ANN001
     app.handle_utterance("one two three")
     app.toggle()  # pause: releases it, over the cap
     app.flush_deliveries()
-    assert app.current_note().startswith("3 words not typed")
+    assert app.current_note().startswith("Over 2 words: nothing typed.")
 
 
 def test_cap_note_after_new_session_points_to_file(gap_app) -> None:  # noqa: ANN001
@@ -798,16 +799,16 @@ def test_cap_note_after_new_session_points_to_file(gap_app) -> None:  # noqa: AN
     gate.set()
     app.flush_deliveries()
     assert app.current_note() == (
-"3 words not typed (over 2).\nSaved to dropped.txt."
+"Over 2 words: nothing typed.\nIt is saved in dropped.txt."
     )
 
 
 def test_resume_clears_cap_note(gap_app) -> None:  # noqa: ANN001
     app, _ = gap_app(held_max_words=2, paste_hotkey="<cmd>+<ctrl>+v")
     app.handle_utterance("one two three")
-    app.toggle()  # pause: over the cap, a note with the paste hint
+    app.toggle()  # pause: over the cap, a note
     app.flush_deliveries()
-    assert "Cmd+Ctrl+V" in app.current_note()
+    assert app.current_note() != ""
     app._last_toggle = -10.0
-    app.toggle()  # resume: a new session, the hint no longer applies
+    app.toggle()  # resume: a new session
     assert app.current_note() == ""
