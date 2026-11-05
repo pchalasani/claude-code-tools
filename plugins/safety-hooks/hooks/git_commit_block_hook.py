@@ -3,6 +3,7 @@
 Git commit hook that asks for user permission before allowing commits.
 Uses the "ask" decision type to prompt user in the UI.
 """
+from __future__ import annotations
 import json
 import os
 import re

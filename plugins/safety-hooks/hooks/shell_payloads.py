@@ -1,4 +1,5 @@
 """Literal shell code executed by evaluators and command launchers."""
+from __future__ import annotations
 
 import re
 import shlex

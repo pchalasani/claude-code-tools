@@ -1,4 +1,5 @@
 """Shared parsing of command wrappers and their literal arguments."""
+from __future__ import annotations
 
 import re
 

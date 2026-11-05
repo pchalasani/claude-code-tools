@@ -1,5 +1,19 @@
 Provides safety hooks to block (or require user approval) various commands.
 
+## Requirements
+
+The standalone hooks require Python 3.9 or newer on `PATH` as `python3`.
+They use only the Python standard library and do not require installing the
+main `claude-code-tools` package (which has its own Python requirement).
+
+To check compatibility, run the hook tests with each supported interpreter,
+using pytest 8 on Python 3.9 (pytest 9 requires Python 3.10 or newer):
+
+```bash
+uv run --no-project --python 3.9 --with 'pytest<9' python -m pytest \
+  plugins/safety-hooks/hooks/test_python_compatibility.py
+```
+
 ## Hook Decision Types
 
 The hooks in this collection use three decision types:

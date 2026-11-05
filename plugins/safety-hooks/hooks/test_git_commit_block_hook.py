@@ -8,6 +8,7 @@ Tests cover:
     - The session-scoped allow flag, the deny flag, and CCTOOLS_ALLOW_GIT
     - Commands that merely mention "git commit" staying allowed
 """
+from __future__ import annotations
 import os
 import json
 import subprocess
