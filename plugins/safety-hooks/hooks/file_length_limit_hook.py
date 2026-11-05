@@ -6,6 +6,7 @@ Blocks Edit and Write operations that would result in source code files
 exceeding MAX_FILE_LINES. Uses a speed bump pattern: first attempt blocks
 with a warning, second attempt (after user approval) proceeds.
 """
+from __future__ import annotations
 import json
 import sys
 import os

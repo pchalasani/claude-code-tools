@@ -10,6 +10,7 @@ execute 'rm', including:
 
 Instead of deletion, users are guided to move files to a TRASH directory.
 """
+from __future__ import annotations
 import re
 import shlex
 import sys
