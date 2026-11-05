@@ -489,7 +489,8 @@ def test_long_silence_keeps_held_text_with_a_note(gap_app) -> None:  # noqa: ANN
     clock.now += 722  # 12 min of silence before the next 2 s of speech
     app.handle_utterance("and more")
     assert app.current_note() == (
-        "Keeping 3 words from 12 min ago. Shift+Esc drops them."
+        "Keeping 3 words from 12 min ago.\n"
+        "Shift+Esc drops them, or they go with your message."
     )
     app.handle_utterance("fix the parser, send it")
     app.flush_deliveries()
@@ -563,22 +564,87 @@ def test_no_segment_length_no_gap_rule(gap_app) -> None:  # noqa: ANN001
     assert app.typist.events == ["first part second part ", "<ENTER>"]
 
 
-def test_word_cap_types_nothing(gap_app, tmp_path) -> None:  # noqa: ANN001
+def test_word_cap_types_the_last_piece(gap_app, tmp_path) -> None:  # noqa: ANN001
     app, _ = gap_app(held_max_words=5, paste_hotkey="<cmd>+<ctrl>+v")
     app.handle_utterance("one two three four")
     app.handle_utterance("five six, send it")
     app.flush_deliveries()
-    assert app.typist.events == []
+    assert app.typist.events == ["five six ", "<ENTER>"]
     assert app.current_note() == (
-        "6 words not typed (over 5). Cmd+Ctrl+V types them."
+        "4 words not typed (over 5).\n"
+        "Cmd+Ctrl+V types the whole message."
     )
     saved = (tmp_path / "dropped.txt").read_text()
     assert saved.endswith(
-        ": 6 words, over held_max_words (5)\n"
-        "one two three four five six\n\n"
+        ": 4 words, over held_max_words (5)\none two three four\n\n"
     )
+    app.typist.events.clear()
     app.paste_last()
     assert app.typist.events == ["one two three four five six "]
+
+
+def test_word_cap_show_types_the_last_piece(gap_app) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_max_words=3)
+    app.handle_utterance("a stray call heard")
+    app.handle_utterance("my real message, ok show")
+    app.flush_deliveries()
+    assert app.typist.events == ["my real message "]
+
+
+def test_word_cap_bare_phrase_types_the_last_piece(gap_app) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_max_words=3)
+    app.handle_utterance("a stray call heard")
+    app.handle_utterance("my real message")
+    app.handle_utterance("send it")
+    app.flush_deliveries()
+    assert app.typist.events == ["my real message ", "<ENTER>"]
+
+
+def test_word_cap_far_over_stays_off_the_paste_key(gap_app, tmp_path) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_max_words=2, paste_hotkey="<cmd>+<ctrl>+v")
+    app.handle_utterance("one two three four five")
+    app.handle_utterance("mine, send it")
+    app.flush_deliveries()
+    assert app.typist.events == ["mine ", "<ENTER>"]
+    assert app.current_note() == (
+        "5 words not typed (over 2).\nSaved to dropped.txt."
+    )
+    assert "one two three four five" in (
+        tmp_path / "dropped.txt"
+    ).read_text()
+    app.typist.events.clear()
+    app.paste_last()
+    assert app.typist.events == ["mine "]
+
+
+def test_word_cap_last_piece_over_cap_types_nothing(gap_app) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_max_words=2)
+    app.handle_utterance("first")
+    app.handle_utterance("one two three, send it")
+    app.flush_deliveries()
+    assert app.typist.events == []
+
+
+def test_word_cap_pause_types_nothing(gap_app) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_max_words=2)
+    app.handle_utterance("one two three")
+    app.handle_utterance("four")
+    app.toggle()  # no phrase: no last piece was meant for the app
+    app.flush_deliveries()
+    assert app.typist.events == []
+
+
+def test_note_when_held_text_passes_the_cap(gap_app) -> None:  # noqa: ANN001
+    app, _ = gap_app(held_max_words=3)
+    app.handle_utterance("one two")
+    assert app.current_note() == ""
+    app.handle_utterance("three four")
+    assert app.current_note() == (
+        "4 words held (over 3).\n"
+        "Shift+Esc drops them, or only your last part gets typed."
+    )
+    app.discard()
+    assert app.current_note() == ""
 
 
 def test_word_cap_on_pause_and_show(gap_app) -> None:  # noqa: ANN001
@@ -732,7 +798,7 @@ def test_cap_note_after_new_session_points_to_file(gap_app) -> None:  # noqa: AN
     gate.set()
     app.flush_deliveries()
     assert app.current_note() == (
-        "3 words not typed (over 2). Saved to dropped.txt."
+"3 words not typed (over 2).\nSaved to dropped.txt."
     )
 
 

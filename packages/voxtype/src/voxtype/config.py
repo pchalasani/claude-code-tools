@@ -217,9 +217,10 @@ class Config:
             still held from before it, the ghost shows a note that the
             old text is kept (Shift+Esc drops it). 0 turns this off.
         held_max_words: Hands-free hold only: when more than this many
-            words are released at once, nothing is typed: the text is
-            saved to ``dropped.txt`` next to the config and the
-            paste-again hotkey types it. 0 turns this off.
+            words are held, a note warns; on a submit or show phrase
+            only the last piece is typed. The rest is saved to
+            ``dropped.txt`` next to the config, and up to twice this
+            many words stay on the paste-again hotkey. 0 turns this off.
         trailing_space: Append a space after each typed utterance.
         sounds: Play a system sound on activate/deactivate (macOS).
         sound_start: Sound when recording starts — a macOS system
@@ -871,9 +872,10 @@ wait_for_submit = true
 # ghost that they are kept (Shift+Esc drops them). 0 turns this off.
 held_gap = 600.0
 
-# Hands-free hold: when more than this many words are released at
-# once, nothing is typed (no giant paste); the text is saved to
-# dropped.txt next to this file, and the paste-again hotkey types it.
+# Hands-free hold: when more than this many words are held, a note
+# warns you, and a submit or show phrase types only your last piece
+# (no giant paste). The rest is saved to dropped.txt next to this file;
+# up to twice this many words stay on the paste-again hotkey.
 # 0 turns this off.
 held_max_words = 500
 
