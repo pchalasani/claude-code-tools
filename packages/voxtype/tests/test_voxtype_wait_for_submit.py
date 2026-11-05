@@ -642,7 +642,7 @@ def test_note_when_held_text_passes_the_cap(gap_app) -> None:  # noqa: ANN001
     app.handle_utterance("three four")
     assert app.current_note() == (
         "Over 3 words recorded, maybe by accident.\n"
-        "To clear them, press Shift+Esc before you speak."
+        "To discard them, press Shift+Esc before you speak."
     )
     app.discard()
     assert app.current_note() == ""

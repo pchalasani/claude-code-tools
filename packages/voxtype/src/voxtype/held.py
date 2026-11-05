@@ -115,7 +115,7 @@ class HeldNotesMixin:
             f"Over {self.cfg.held_max_words:,} words recorded, "
             "maybe by accident."
             + (
-                f"\nTo clear them, press {chord_label(key)} before you speak."
+                f"\nTo discard them, press {chord_label(key)} before you speak."
                 if key
                 else ""
             )
