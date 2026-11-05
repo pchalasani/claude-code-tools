@@ -112,11 +112,10 @@ class HeldNotesMixin:
         """Warn, before any release, that held words passed the cap."""
         key = self.cfg.discard_hotkey
         self._show_note(
-            f"Over {self.cfg.held_max_words:,} words held: "
-            "only your last part will be typed."
+            f"Over {self.cfg.held_max_words:,} words recorded, "
+            "maybe by accident."
             + (
-                f"\nAccidental recording? Press {chord_label(key)} "
-                "before you speak."
+                f"\nTo clear them, press {chord_label(key)} before you speak."
                 if key
                 else ""
             )
