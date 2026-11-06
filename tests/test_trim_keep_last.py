@@ -1,7 +1,7 @@
-"""--keep-last N: the tail of a session is never trimmed (issue #72).
+"""--keep-last N: preserve the tail of user turns (PR #256; issue #72).
 
-Continuing a session means the last few messages are the context being carried
-forward, whatever role they have. These tests pin that the kept tail survives
+Continuing a session carries forward complete user turns, including tool calls
+and results. These tests pin that the kept tail survives
 tool-result suppression, assistant-text replacement and, for Codex, output
 supression, while earlier messages are still trimmed as before.
 """
@@ -70,7 +70,7 @@ def test_kept_tail_is_untouched(session_file, tmp_path):
     out = tmp_path / "out.jsonl"
     num_tools, num_assistant, saved = process_session(
         "claude", session_file, out, None, 500, verbose=False,
-        trim_assistant_messages=-1, keep_last=2,
+        trim_assistant_messages=-1, keep_last=1,
     )
 
     lines = _read_texts(out)
@@ -94,7 +94,7 @@ def test_without_keep_last_the_tail_is_trimmed(session_file, tmp_path):
 
 
 def test_keep_last_larger_than_the_session_keeps_everything(session_file, tmp_path):
-    """Asking to keep more messages than exist exempts the whole session."""
+    """Asking to keep more turns than exist exempts the whole session."""
     out = tmp_path / "out3.jsonl"
     num_tools, num_assistant, saved = process_session(
         "claude", session_file, out, None, 500, verbose=False,
@@ -133,7 +133,7 @@ def test_kept_tail_keeps_its_tool_use_input(tmp_path):
         _assistant_with_tool_use("kept", LONG, 4),    # tail: must survive
     ])
     out = tmp_path / "o.jsonl"
-    process_session("claude", path, out, None, 500, verbose=False, keep_last=2)
+    process_session("claude", path, out, None, 500, verbose=False, keep_last=1)
 
     lines = out.read_text().splitlines()
     assert LONG not in lines[1], "older tool_use input should still be trimmed"
@@ -164,7 +164,7 @@ def test_codex_tail_is_counted_by_messages_not_by_records(tmp_path):
     out = tmp_path / "co.jsonl"
     process_session(
         "codex", path, out, None, 500, verbose=False,
-        trim_assistant_messages=-1, keep_last=2,
+        trim_assistant_messages=-1, keep_last=1,
     )
 
     lines = out.read_text().splitlines()
@@ -178,4 +178,4 @@ def test_aichat_cli_exposes_keep_last():
     from claude_code_tools.aichat import main
 
     names = {p.name for p in main.commands["trim"].params}
-    assert "keep_last" in names, sorted(names)
+    assert "keep_last" in names, sorted(names, key=str)

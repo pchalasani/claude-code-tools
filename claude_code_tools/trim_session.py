@@ -723,7 +723,7 @@ Examples:
         "--keep-last",
         "-k",
         type=int,
-        help="Never trim the last N messages, regardless of role "
+        help="Never trim the last N user turns (each prompt and all following records) "
         "(tool results and assistant text in the kept tail stay intact)",
     )
     parser.add_argument(
@@ -799,7 +799,7 @@ Examples:
 
     if args.keep_last:
         print(
-            f"Keeping the last {args.keep_last} messages untrimmed",
+            f"Keeping the last {args.keep_last} user turns untrimmed",
             file=sys.stderr,
         )
 

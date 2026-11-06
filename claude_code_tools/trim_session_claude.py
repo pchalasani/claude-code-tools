@@ -218,15 +218,10 @@ def truncate_content(
 
 
 def _keep_from_line(input_file: Path, keep_last: Optional[int]) -> Optional[int]:
-    """First line of the last ``keep_last`` messages, or None if nothing to spare.
-
-    Counting messages rather than lines means the tail survives regardless of
-    which role the messages have, which is what "keep the last N messages"
-    means to a caller continuing a session.
-    """
+    """Return the first line of the last N user turns, excluding tool replies."""
     if not keep_last or keep_last <= 0:
         return None
-    message_lines = []
+    turn_lines: list[int] = []
     with open(input_file, "r", encoding=_ENCODING, errors=_ENCODING_ERRORS) as f:
         for line_num, line in enumerate(f, start=1):
             if _has_undecodable_bytes(line):
@@ -235,11 +230,29 @@ def _keep_from_line(input_file: Path, keep_last: Optional[int]) -> Optional[int]
                 data = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(data, dict) and data.get("type") in ("assistant", "user"):
-                message_lines.append(line_num)
-    if not message_lines:
+            if (
+                not isinstance(data, dict)
+                or data.get("type") != "user"
+                or data.get("isMeta")
+                or data.get("isCompactSummary")
+            ):
+                continue
+            message = data.get("message")
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            # Tool results use role=user too, but continue the current turn.
+            if isinstance(content, str) or (
+                isinstance(content, list)
+                and any(
+                    isinstance(item, dict) and item.get("type") != "tool_result"
+                    for item in content
+                )
+            ):
+                turn_lines.append(line_num)
+    if not turn_lines:
         return None
-    return message_lines[-min(keep_last, len(message_lines))]
+    return turn_lines[-min(keep_last, len(turn_lines))]
 
 
 def process_claude_session(

@@ -795,7 +795,7 @@ def menu(ctx):
               help="Trim assistant messages: positive N trims first N over threshold, "
                    "negative N trims all except last |N| over threshold")
 @click.option("--keep-last", "-k", "keep_last", type=int,
-              help="Never trim the last N messages, regardless of role")
+              help="Keep last N user turns: each prompt and all following records")
 @click.option("--output-dir", "-o",
               help="Output directory (default: same as input file)")
 @click.option("--agent", type=click.Choice(["claude", "codex"], case_sensitive=False),
@@ -830,22 +830,20 @@ def trim(session, tools, threshold, trim_assistant, keep_last, output_dir, agent
         --output-dir, -o       Where to write trimmed file
     """
     import sys
-
-    if simple_ui or tools or trim_assistant or output_dir:
+    if simple_ui or tools or trim_assistant or output_dir or keep_last is not None:
         # Direct CLI mode - need a session
         if not session:
             print("Error: Direct trim options require SESSION", file=sys.stderr)
             print("Use 'aichat trim' without options for interactive mode", file=sys.stderr)
             sys.exit(1)
-
         resolved = _resolve_cli_session(
             session,
             agent,
             claude_home=claude_home,
         )
-
-        # Build args for trim-session CLI
         args = [str(resolved.session_file)]
+        if keep_last is not None:
+            args.extend(["--keep-last", str(keep_last)])
         if tools:
             args.extend(["--tools", tools])
         if threshold != 500:
@@ -862,7 +860,6 @@ def trim(session, tools, threshold, trim_assistant, keep_last, output_dir, agent
         from claude_code_tools.trim_session import main as trim_main
         trim_main()
         return
-
     _find_and_run_session_ui(
         session_id=session,
         agent_constraint=agent or 'both',
@@ -910,7 +907,7 @@ class _JsonContractCommand(click.Command):
               help="Trim assistant messages: positive N trims first N over threshold, "
                    "negative N trims all except last |N| over threshold")
 @click.option("--keep-last", "-k", "keep_last", type=int,
-              help="Never trim the last N messages, regardless of role")
+              help="Keep last N user turns: each prompt and all following records")
 @click.option("--dry-run", "-n", is_flag=True,
               help="Compute savings without modifying the session file")
 @click.option("--json", "json_output", is_flag=True,
@@ -938,14 +935,12 @@ def trim_in_place_cmd(session, tools, threshold, trim_assistant, keep_last,
         aichat trim-in-place abc123               # Trim with defaults
         aichat trim-in-place abc123 -a -20        # Keep last 20 long asst msgs
         aichat trim-in-place abc123 -t bash -l 1000
-        aichat trim-in-place abc123 -k 3          # Keep the last 3 messages
+        aichat trim-in-place abc123 -k 3          # Keep the last 3 user turns
     """
     import json as json_mod
     import sys
     from pathlib import Path
-
     from claude_code_tools.trim_in_place import trim_session_in_place
-
     def emit_error(msg: str) -> None:
         if json_output:
             print(json_mod.dumps({"error": msg}))
@@ -997,7 +992,6 @@ def trim_in_place_cmd(session, tools, threshold, trim_assistant, keep_last,
             selection_prompt="Which Claude session do you want to trim?",
         )
         session_file = resolved.session_file
-
     target_tools = None
     if tools:
         target_tools = {

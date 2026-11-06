@@ -165,30 +165,29 @@ def create_suppressed_output(
 
 
 def _keep_from_line(input_file: Path, keep_last: Optional[int]) -> Optional[int]:
-    """First line of the last ``keep_last`` messages, or None if nothing to spare."""
+    """Return the first line of the last N user turns, ignoring UI mirrors."""
     if not keep_last or keep_last <= 0:
         return None
-    message_lines = []
+    turn_lines: list[int] = []
     with open(input_file, "r") as f:
         for line_num, line in enumerate(f, start=1):
             try:
                 data = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            # Codex rollouts carry reasoning items and duplicated UI events
-            # (`event_msg` mirrors of messages) beside the messages themselves.
-            # Counting those would push the cutoff past the real final message,
-            # so only `response_item` records whose payload is a message count.
+            # Only user prompts start turns; assistant messages, tool calls,
+            # reasoning and event_msg mirrors all belong to the current turn.
             payload = data.get("payload") if isinstance(data, dict) else None
             if (
                 isinstance(payload, dict)
                 and data.get("type") == "response_item"
                 and payload.get("type") == "message"
+                and payload.get("role") == "user"
             ):
-                message_lines.append(line_num)
-    if not message_lines:
+                turn_lines.append(line_num)
+    if not turn_lines:
         return None
-    return message_lines[-min(keep_last, len(message_lines))]
+    return turn_lines[-min(keep_last, len(turn_lines))]
 
 
 def process_codex_session(
