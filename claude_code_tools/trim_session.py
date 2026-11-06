@@ -437,6 +437,7 @@ def trim_and_create_session(
     output_dir: Optional[Path] = None,
     trim_assistant_messages: Optional[int] = None,
     min_token_savings: int = MIN_TOKEN_SAVINGS,
+    keep_last: Optional[int] = None,
 ) -> dict:
     """
     Trim tool results and assistant messages, creating a new session file.
@@ -508,6 +509,7 @@ def trim_and_create_session(
         verbose=False,
         new_session_id=session_uuid,
         trim_assistant_messages=trim_assistant_messages,
+        keep_last=keep_last,
     )
 
     # Estimate tokens saved
@@ -591,6 +593,7 @@ def process_session(
     verbose: bool = True,
     new_session_id: Optional[str] = None,
     trim_assistant_messages: Optional[int] = None,
+    keep_last: Optional[int] = None,
 ) -> Tuple[int, int, int]:
     """
     Process session file and trim tool results and assistant messages.
@@ -628,6 +631,7 @@ def process_session(
             create_placeholder,
             new_session_id=new_session_id,
             trim_assistant_messages=trim_assistant_messages,
+            keep_last=keep_last,
         )
     elif agent == "codex":
         tool_map = codex_processor.build_tool_name_mapping(input_file)
@@ -646,6 +650,7 @@ def process_session(
             create_placeholder,
             new_session_id=new_session_id,
             trim_assistant_messages=trim_assistant_messages,
+            keep_last=keep_last,
         )
     else:
         raise ValueError(f"Unknown agent type: {agent}")
@@ -713,6 +718,13 @@ Examples:
         help="Trim assistant messages: positive N trims first N messages "
         "exceeding threshold, negative N trims all except last abs(N) "
         "messages exceeding threshold",
+    )
+    parser.add_argument(
+        "--keep-last",
+        "-k",
+        type=int,
+        help="Never trim the last N user turns (each prompt and all following records) "
+        "(tool results and assistant text in the kept tail stay intact)",
     )
     parser.add_argument(
         "--output-dir",
@@ -785,6 +797,12 @@ Examples:
     print(f"Agent: {agent_to_use}", file=sys.stderr)
     print(f"Length threshold: {args.len} characters", file=sys.stderr)
 
+    if args.keep_last:
+        print(
+            f"Keeping the last {args.keep_last} user turns untrimmed",
+            file=sys.stderr,
+        )
+
     if args.trim_assistant_messages:
         if args.trim_assistant_messages > 0:
             print(
@@ -810,6 +828,7 @@ Examples:
         args.len,
         output_dir,
         args.trim_assistant_messages,
+        keep_last=args.keep_last,
     )
 
     # Print statistics

@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Optional, Set, Tuple
 
+from .export_session import CODEX_WRAPPER_TEXT_PREFIXES
+
 
 def build_tool_name_mapping(input_file: Path) -> Dict[str, str]:
     """
@@ -164,6 +166,54 @@ def create_suppressed_output(
     return json.dumps(suppressed_obj)
 
 
+def _has_user_prompt(content: Any) -> bool:
+    """Recognize user text/images without counting injected Codex context."""
+    if not isinstance(content, list):
+        return False
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") in ("input_image", "image"):
+            return True
+        text = block.get("text")
+        if (
+            block.get("type") == "input_text"
+            and isinstance(text, str)
+            and text.strip()
+            and not text.lstrip().startswith(CODEX_WRAPPER_TEXT_PREFIXES)
+        ):
+            return True
+    return False
+
+
+def _keep_from_line(input_file: Path, keep_last: Optional[int]) -> Optional[int]:
+    """Return the first line of the last N user turns, ignoring UI mirrors."""
+    if not keep_last or keep_last <= 0:
+        return None
+    turn_lines: list[int] = []
+    with open(input_file, "r") as f:
+        for line_num, line in enumerate(f, start=1):
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            # Only user prompts start turns; assistant messages, tool calls,
+            # reasoning and event_msg mirrors all belong to the current turn.
+            payload = data.get("payload") if isinstance(data, dict) else None
+            if (
+                isinstance(payload, dict)
+                and data.get("type") == "response_item"
+                and payload.get("type") == "message"
+                and payload.get("role") == "user"
+                and not payload.get("isMeta")
+                and _has_user_prompt(payload.get("content"))
+            ):
+                turn_lines.append(line_num)
+    if not turn_lines:
+        return None
+    return turn_lines[-min(keep_last, len(turn_lines))]
+
+
 def process_codex_session(
     input_file: Path,
     output_file: Path,
@@ -174,6 +224,7 @@ def process_codex_session(
     new_session_id: Optional[str] = None,
     trim_assistant_messages: Optional[int] = None,
     parent_file: Optional[str] = None,
+    keep_last: Optional[int] = None,
 ) -> Tuple[int, int, int]:
     """
     Process Codex session file and trim tool results and assistant messages.
@@ -248,6 +299,9 @@ def process_codex_session(
                 msg[0] for msg in assistant_messages[:trim_count]
             }
 
+    # Records at or after this line are the kept tail and are never trimmed.
+    keep_from_line = _keep_from_line(input_file, keep_last)
+
     # Second pass: process and trim
     with open(input_file, "r") as infile, open(
         output_file, "w"
@@ -258,6 +312,8 @@ def process_codex_session(
             except json.JSONDecodeError:
                 outfile.write(line)
                 continue
+
+            exempt = keep_from_line is not None and line_num >= keep_from_line
 
             # Replace session_id in session_meta events if new_session_id provided
             if new_session_id and data.get("type") == "session_meta":
@@ -279,7 +335,7 @@ def process_codex_session(
                         if isinstance(item, dict) and item.get("type") == "output_text":
                             original_text = item.get("text", "")
                             original_length = len(original_text)
-                            if original_length >= threshold:
+                            if original_length >= threshold and not exempt:
                                 placeholder = (
                                     f"[Assistant message trimmed - "
                                     f"original content was {original_length:,} characters. "
@@ -308,7 +364,7 @@ def process_codex_session(
             output_length = get_output_length(output_str)
 
             # Check if should suppress
-            should_suppress = output_length >= threshold and (
+            should_suppress = output_length >= threshold and not exempt and (
                 target_tools is None or tool_name.lower() in target_tools
             )
 

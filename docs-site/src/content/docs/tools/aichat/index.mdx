@@ -42,6 +42,12 @@ variants:
   longer than a threshold (default 500 chars), and
   optionally all-but-recent assistant messages -- all
   user-configurable. This can free up 40-60% context.
+  `--keep-last N` (or `-k N`) keeps the last N **user turns**
+  untrimmed: each user prompt plus all following assistant,
+  thinking, tool-call and tool-result records, until the next
+  prompt. Earlier turns follow the normal trim rules. This
+  applies to Claude and Codex trim, including `trim-in-place`
+  for Claude; rollover is unchanged.
 
 - A **smart-trim** mode that uses a headless Claude/Codex
   agent to determine which messages can be safely
