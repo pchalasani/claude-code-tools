@@ -101,3 +101,52 @@ def test_real_prompts_still_start_turns(tmp_path: Path, prompt: object) -> None:
     result = [json.loads(line) for line in output.read_text().splitlines()]
     assert result[6:] == records[6:]
     assert LONG not in output.read_text().splitlines()[2]
+
+
+@pytest.mark.parametrize("wrapper", [
+    '<codex_internal_context source="goal">goal</codex_internal_context>',
+    "<environment_context>cwd</environment_context>",
+    "# AGENTS.md instructions\nRepository instructions",
+])
+def test_codex_injected_context_does_not_start_a_turn(
+    tmp_path: Path, wrapper: str,
+) -> None:
+    """Injected goal/context messages continue the user's existing turn."""
+    source, output = tmp_path / "session.jsonl", tmp_path / "out.jsonl"
+    records = _turn("codex", 1) + _turn("codex", 2)
+    injected = {"type": "response_item", "payload": {
+        "type": "message", "role": "user",
+        "content": [{"type": "input_text", "text": wrapper}],
+    }}
+    records.append(injected)
+    _write(source, records)
+    process_session(
+        "codex", source, output, None, 500, verbose=False,
+        trim_assistant_messages=1000, keep_last=1,
+    )
+    result = [json.loads(line) for line in output.read_text().splitlines()]
+    assert result[6:] == records[6:]
+    assert LONG not in output.read_text().splitlines()[1]
+
+
+@pytest.mark.parametrize("content", [
+    [{"type": "input_text", "text": "<codex_internal_contextual> explain"}],
+    [{"type": "input_image", "image_url": "fixture.png"}],
+    [{"type": "input_text", "text": "<environment_context>cwd</environment_context>"},
+     {"type": "input_text", "text": "the actual user question"}],
+])
+def test_codex_real_prompts_still_start_turns(
+    tmp_path: Path, content: list[dict[str, str]],
+) -> None:
+    """Genuine text, images and prompts beside context still count."""
+    source, output = tmp_path / "session.jsonl", tmp_path / "out.jsonl"
+    records = _turn("codex", 1) + _turn("codex", 2)
+    records[6]["payload"]["content"] = content
+    _write(source, records)
+    process_session(
+        "codex", source, output, None, 500, verbose=False,
+        trim_assistant_messages=1000, keep_last=1,
+    )
+    result = [json.loads(line) for line in output.read_text().splitlines()]
+    assert result[6:] == records[6:]
+    assert LONG not in output.read_text().splitlines()[1]

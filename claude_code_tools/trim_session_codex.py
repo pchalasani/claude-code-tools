@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Optional, Set, Tuple
 
+from .export_session import CODEX_WRAPPER_TEXT_PREFIXES
+
 
 def build_tool_name_mapping(input_file: Path) -> Dict[str, str]:
     """
@@ -164,6 +166,26 @@ def create_suppressed_output(
     return json.dumps(suppressed_obj)
 
 
+def _has_user_prompt(content: Any) -> bool:
+    """Recognize user text/images without counting injected Codex context."""
+    if not isinstance(content, list):
+        return False
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") in ("input_image", "image"):
+            return True
+        text = block.get("text")
+        if (
+            block.get("type") == "input_text"
+            and isinstance(text, str)
+            and text.strip()
+            and not text.lstrip().startswith(CODEX_WRAPPER_TEXT_PREFIXES)
+        ):
+            return True
+    return False
+
+
 def _keep_from_line(input_file: Path, keep_last: Optional[int]) -> Optional[int]:
     """Return the first line of the last N user turns, ignoring UI mirrors."""
     if not keep_last or keep_last <= 0:
@@ -183,6 +205,8 @@ def _keep_from_line(input_file: Path, keep_last: Optional[int]) -> Optional[int]
                 and data.get("type") == "response_item"
                 and payload.get("type") == "message"
                 and payload.get("role") == "user"
+                and not payload.get("isMeta")
+                and _has_user_prompt(payload.get("content"))
             ):
                 turn_lines.append(line_num)
     if not turn_lines:
