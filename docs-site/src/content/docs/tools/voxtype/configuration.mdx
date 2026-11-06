@@ -181,10 +181,11 @@ wait_for_submit = true
 # silence, with words still held, shows a note that they are kept
 # (Shift+Esc drops them); 0 = off
 held_gap = 600.0
-# Hands-free hold: when more words than this are released at once,
-# nothing is typed; they are saved to dropped.txt and the paste-again
-# hotkey types them; 0 = off
-held_max_words = 500
+# Hands-free hold: when more words than this are held, a note warns
+# you and a submit or show phrase types only your last piece; the rest
+# is saved to dropped.txt, and up to twice this many words stay on the
+# paste-again hotkey; 0 = off
+held_max_words = 2000
 ```
 
 (These recipes leave `engine` unset so it auto-selects

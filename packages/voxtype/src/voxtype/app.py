@@ -592,13 +592,15 @@ class VoiceTypeApp(HeldNotesMixin, RuntimeMixin):
         if kept:
             self._note_kept(kept, gap)
         if not (enter or show):
+            if 0 < self.cfg.held_max_words < len(joined.split()):
+                self._note_over_cap()
             self._status(f'held: "{_preview(text)}"')
             return True
         if not joined and show:
             return True  # "ok show" with nothing held: nothing to show
         self._deliver(
             version,
-            lambda v, at: self._send_held(pieces, v, at, buf, enter),
+            lambda v, at: self._send_held(pieces, v, at, buf, enter, True),
         )
         return True
 
@@ -609,20 +611,21 @@ class VoiceTypeApp(HeldNotesMixin, RuntimeMixin):
         arrived: float,
         session: list[str],
         enter: bool,
+        spoken: bool = False,
     ) -> None:
         """Type released held pieces (on the delivery thread).
 
         Over ``held_max_words`` words (a long accidental recording, say)
-        nothing is typed: see ``_hold_over_cap``. Any note goes: what
-        it was about is released now (in delivery order, so a later
-        message never clears an earlier one's note too soon).
+        at most the last piece is typed, and only if ``spoken`` (a
+        submit or show phrase released it): see ``_cap_release``. Any
+        note goes: what it was about is released now (in delivery order,
+        so a later message never clears an earlier one's note too soon).
         """
         self._clear_note()
-        text = " ".join(pieces)
-        n_words = len(text.split())
-        if 0 < self.cfg.held_max_words < n_words:
-            self._hold_over_cap(text, n_words, session)
+        typed = self._cap_release(pieces, session, spoken)
+        if pieces and not typed:
             return
+        text = " ".join(typed)
         if text:
             self._status(f'typed: "{_preview(text)}"')
         # Message boundaries for the clipboard and paste-again: decided

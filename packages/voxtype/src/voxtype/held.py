@@ -2,7 +2,7 @@
 
 Split out of app.py to keep it readable; ``VoiceTypeApp`` inherits these
 methods, and they use its state (``_lock``, ``_session_texts``, ``cfg``,
-...). Notes are short messages shown under the ghost (see overlay.py).
+...). Notes are short messages, up to two lines, shown by the ghost (see overlay.py).
 """
 
 from __future__ import annotations
@@ -20,30 +20,63 @@ if TYPE_CHECKING:
 #: How long a note stays under the ghost, unless cleared sooner.
 NOTE_SECONDS = 30.0
 
+#: Past this many times ``held_max_words``, text set aside by the cap is
+#: only saved to a file: the paste-again hotkey would flood the app.
+PASTE_MAX_CAPS = 2
+
 
 class HeldNotesMixin:
     """Word cap and notes for ``VoiceTypeApp`` (see app.py)."""
 
-    def _hold_over_cap(
-        self: VoiceTypeApp, text: str, n_words: int, session: list[str]
-    ) -> None:
-        """Keep an over-cap release out of the app, but rescuable.
+    def _cap_release(
+        self: VoiceTypeApp,
+        pieces: list[str],
+        session: list[str],
+        keep_last: bool,
+    ) -> list[str]:
+        """Apply ``held_max_words`` to released ``pieces``.
 
-        Nothing is typed. The text is saved to ``dropped.txt`` and
-        becomes the paste-again hotkey's message on its own; the next
-        message starts fresh.
+        Returns the pieces to type: all of them under the cap. Over it,
+        a stray recording must not flood the app, but the words just
+        spoken must not vanish with it: with ``keep_last`` (a spoken
+        release) only the last piece is typed, the rest set aside (see
+        ``_hold_over_cap``). A last piece over the cap itself is set
+        aside too, leaving nothing to type.
         """
+        cap = self.cfg.held_max_words
+        if not 0 < cap < len(" ".join(pieces).split()):
+            return pieces
+        keep = pieces[-1:] if keep_last else []
+        if len(" ".join(keep).split()) > cap:
+            keep = []
+        rest = pieces[: len(pieces) - len(keep)]
+        self._hold_over_cap(" ".join(rest), session, bool(keep))
+        return keep
+
+    def _hold_over_cap(
+        self: VoiceTypeApp, text: str, session: list[str], more: bool
+    ) -> None:
+        """Keep over-cap ``text`` out of the app, but rescuable.
+
+        It is saved to ``dropped.txt``. Unless it is far over the cap,
+        it also starts the paste-again hotkey's message; ``more`` means
+        the rest of that message is about to be typed.
+        """
+        n_words = len(text.split())
         if self.cfg.strip_fillers:
             text = collapse_repeats(strip_fillers(text))
+        cap = self.cfg.held_max_words
         with self._lock:
             # A pause and resume since it arrived started a new session:
             # then the paste-again hotkey cannot reach it.
             current = session is self._session_texts
+            pasteable = current and n_words <= PASTE_MAX_CAPS * cap
             if current:
                 self._msg_start = len(session)
-                self._sent = True
+                self._sent = not more
             session.append(text)
-        cap = self.cfg.held_max_words
+            if current and not pasteable:
+                self._msg_start = len(session)
         where = self._save_unsent(
             text, f"{n_words} words, over held_max_words ({cap})"
         )
@@ -51,12 +84,12 @@ class HeldNotesMixin:
             f"{n_words} words held, over held_max_words ({cap}): "
             f"not typed{where}"
         )
-        paste = self.cfg.paste_hotkey
-        if paste and current:
-            hint = f" {chord_label(paste)} types them."
-        else:
-            hint = " Saved to dropped.txt." if where else ""
-        self._show_note(f"{n_words} words not typed (over {cap}).{hint}")
+        did = "typed only your last part" if more else "nothing typed"
+        rest = "The rest is" if more else "It is"
+        self._show_note(
+            f"Over {cap:,} words: {did}."
+            + (f"\n{rest} saved in dropped.txt." if where else "")
+        )
 
     def _note_kept(self: VoiceTypeApp, n_words: int, gap: float) -> None:
         """Say that words held from before a long silence are kept."""
@@ -67,7 +100,25 @@ class HeldNotesMixin:
         key = self.cfg.discard_hotkey
         self._show_note(
             f"Keeping {n_words} words from {gap / 60:.0f} min ago."
-            + (f" {chord_label(key)} drops them." if key else "")
+            + (
+                f"\n{chord_label(key)} drops them, or they go with your "
+                "message."
+                if key
+                else ""
+            )
+        )
+
+    def _note_over_cap(self: VoiceTypeApp) -> None:
+        """Warn, before any release, that held words passed the cap."""
+        key = self.cfg.discard_hotkey
+        self._show_note(
+            f"Over {self.cfg.held_max_words:,} words recorded, "
+            "maybe by accident."
+            + (
+                f"\nTo discard them, press {chord_label(key)} before you speak."
+                if key
+                else ""
+            )
         )
 
     @staticmethod

@@ -412,7 +412,7 @@ def _ask_advanced(q, cur: Config, ans: dict) -> None:  # noqa: ANN001
             "seconds (0 = never):", "held_gap", cur.held_gap,
         )
         ans["held_max_words"] = _number(
-            q, "Type nothing when more than this many words are held "
+            q, "Type only your last piece when more than this many words are held "
             "(0 = no limit):", "held_max_words", cur.held_max_words,
         )
 

@@ -217,12 +217,13 @@ Nothing is typed and voxtype keeps listening (`discard_hotkey`). Set
 `wait_for_submit = false` to have each piece typed as soon as you pause
 instead.
 
-Two safeguards help when you forget the mic is on. If more than 500
-words are held when they are released (`held_max_words`), nothing is
-typed, so a long accidental recording never floods your app. A note
-above the ghost says so, the text is saved to `dropped.txt` next to your
-config, and the paste-again hotkey (`paste_hotkey`) types it if you do
-want it. And if you start talking after more than 10 minutes of silence
+Two safeguards help when you forget the mic is on. If more than 2,000
+words are held (`held_max_words`), a note above the ghost warns you;
+press `Shift+Esc` before you speak to discard them. If you don't, a submit
+or show phrase types only the last piece you said, so a long accidental recording never floods your
+app but your latest words still arrive. The rest is saved to
+`dropped.txt` next to your config, and up to twice that many words stay
+on the paste-again hotkey (`paste_hotkey`). And if you start talking after more than 10 minutes of silence
 with words still held (`held_gap`), a note above the ghost says they are
 kept; press `Shift+Esc` to drop them. Set either to 0 to turn it off.
 
