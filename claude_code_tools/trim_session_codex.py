@@ -199,8 +199,8 @@ def process_codex_session(
     create_placeholder: callable,
     new_session_id: Optional[str] = None,
     trim_assistant_messages: Optional[int] = None,
-    keep_last: Optional[int] = None,
     parent_file: Optional[str] = None,
+    keep_last: Optional[int] = None,
 ) -> Tuple[int, int, int]:
     """
     Process Codex session file and trim tool results and assistant messages.

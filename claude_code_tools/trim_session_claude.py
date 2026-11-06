@@ -5,6 +5,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional, Set, Tuple
 
+from .port_claude_noise import _is_noise_text, _is_pure_reminder_text
+
 # Session files are hostile input: a stray invalid-UTF-8 byte must
 # never raise UnicodeDecodeError mid-trim. surrogateescape maps
 # undecodable bytes to lone surrogates on read and back to the exact
@@ -217,6 +219,30 @@ def truncate_content(
     return result
 
 
+def _has_user_prompt(content: Any) -> bool:
+    """Recognize prompt text or attachments, excluding complete internal notices."""
+    blocks = [content] if isinstance(content, str) else content
+    if not isinstance(blocks, list):
+        return False
+    for block in blocks:
+        if isinstance(block, dict):
+            if block.get("type") in ("image", "document"):
+                return True
+            if block.get("type") != "text":
+                continue
+            text = block.get("text")
+        else:
+            text = block
+        if (
+            isinstance(text, str)
+            and text.strip()
+            and not _is_noise_text(text.strip())
+            and not _is_pure_reminder_text(text)
+        ):
+            return True
+    return False
+
+
 def _keep_from_line(input_file: Path, keep_last: Optional[int]) -> Optional[int]:
     """Return the first line of the last N user turns, excluding tool replies."""
     if not keep_last or keep_last <= 0:
@@ -235,20 +261,14 @@ def _keep_from_line(input_file: Path, keep_last: Optional[int]) -> Optional[int]
                 or data.get("type") != "user"
                 or data.get("isMeta")
                 or data.get("isCompactSummary")
+                or data.get("isSidechain")
             ):
                 continue
             message = data.get("message")
             if not isinstance(message, dict):
                 continue
-            content = message.get("content")
-            # Tool results use role=user too, but continue the current turn.
-            if isinstance(content, str) or (
-                isinstance(content, list)
-                and any(
-                    isinstance(item, dict) and item.get("type") != "tool_result"
-                    for item in content
-                )
-            ):
+            # Tool results and internal notices continue the current turn.
+            if _has_user_prompt(message.get("content")):
                 turn_lines.append(line_num)
     if not turn_lines:
         return None
@@ -264,8 +284,8 @@ def process_claude_session(
     create_placeholder: callable,
     new_session_id: Optional[str] = None,
     trim_assistant_messages: Optional[int] = None,
-    keep_last: Optional[int] = None,
     parent_file: Optional[str] = None,
+    keep_last: Optional[int] = None,
 ) -> Tuple[int, int, int]:
     """
     Process Claude Code session file and trim tool results and assistant messages.

@@ -499,9 +499,9 @@ def trim_session_in_place(
     target_tools: Optional[Set[str]] = None,
     threshold: int = 500,
     trim_assistant_messages: Optional[int] = None,
-    keep_last: Optional[int] = None,
     dry_run: bool = False,
     min_token_savings: int = MIN_TOKEN_SAVINGS,
+    keep_last: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Trim a Claude session file in place (or preview the savings).
 

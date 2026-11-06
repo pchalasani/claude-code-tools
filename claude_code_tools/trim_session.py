@@ -436,8 +436,8 @@ def trim_and_create_session(
     threshold: int,
     output_dir: Optional[Path] = None,
     trim_assistant_messages: Optional[int] = None,
-    keep_last: Optional[int] = None,
     min_token_savings: int = MIN_TOKEN_SAVINGS,
+    keep_last: Optional[int] = None,
 ) -> dict:
     """
     Trim tool results and assistant messages, creating a new session file.
