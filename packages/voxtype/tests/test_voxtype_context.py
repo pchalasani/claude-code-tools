@@ -51,6 +51,11 @@ def test_copied_context_is_detected() -> None:
     )
     assert not copied_context(raw, "And then tell him thanks.", context)
     assert not copied_context(raw, "anything", "")
+    # A repeated phrase with a misheard name corrected is not a copy.
+    assert not copied_context(
+        "please ask jay von to restart the kubernetes cluster tonight",
+        context, context,
+    )
     # Words the speaker said again are not a copy.
     again = "please ask Jevon to restart the Kubernetes cluster"
     assert not copied_context(again, "Please ask Jevon to restart the "

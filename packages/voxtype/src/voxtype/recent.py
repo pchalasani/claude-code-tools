@@ -54,7 +54,13 @@ def _words(text: str) -> list[str]:
 
 
 def copied_context(raw: str, cleaned: str, context: str) -> bool:
-    """True if ``cleaned`` repeats a run of ``context`` not in ``raw``."""
+    """True if ``cleaned`` repeats a run of ``context`` the speaker did
+    not say.
+
+    A run counts as copied when most of its words are absent from
+    ``raw``: a phrase the speaker repeated, with a misheard name in it
+    spelled as in the context, is a correction, not a copy.
+    """
     if not context:
         return False
 
@@ -64,5 +70,8 @@ def copied_context(raw: str, cleaned: str, context: str) -> bool:
             for i in range(len(words) - _COPY_RUN + 1)
         }
 
-    copied = runs(_words(cleaned)) & runs(_words(context))
-    return bool(copied - runs(_words(raw)))
+    said = set(_words(raw))
+    return any(
+        2 * sum(w not in said for w in run) > _COPY_RUN
+        for run in runs(_words(cleaned)) & runs(_words(context))
+    )
