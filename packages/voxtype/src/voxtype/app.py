@@ -27,6 +27,7 @@ from .logic import (
 )
 from .postprocess import effective_newlines, flatten_lines, strip_controls
 from .held import HeldNotesMixin
+from .recent import RecentText
 from .runtime import RuntimeMixin
 
 
@@ -121,6 +122,8 @@ class VoiceTypeApp(HeldNotesMixin, RuntimeMixin):
         # paste-again hold only it. The list itself is replaced only
         # for a new dictation session.
         self._msg_start = 0
+        # Recently typed text: context for cleanup (see recent.py).
+        self._recent = RecentText()
         # Until this time, utterances are dropped: speech said before a
         # discard (Shift+Esc) that was still being transcribed.
         self._discard_until = 0.0
@@ -830,7 +833,16 @@ class VoiceTypeApp(HeldNotesMixin, RuntimeMixin):
             # cleanup takes up to post_process_timeout and must never
             # hold up capture, hotkeys, or the overlay. The submit/stop/
             # wake phrases were already matched on the raw text.
-            text = self._post.clean(text, since=arrived)
+            if getattr(self._post, "takes_context", False):
+                text = self._post.clean(
+                    text,
+                    since=arrived,
+                    context=self._recent.recent(
+                        self.cfg.post_process_context_words
+                    ),
+                )
+            else:
+                text = self._post.clean(text, since=arrived)
             # Only "\n" may survive as a control character (see
             # strip_controls).
             text = strip_controls(text)
@@ -853,6 +865,7 @@ class VoiceTypeApp(HeldNotesMixin, RuntimeMixin):
             joined = " ".join(buf[self._msg_start:] if current else buf)
         if self.cfg.copy_to_clipboard and current:
             copy_to_clipboard(joined)
+        typed = text
         if self.cfg.trailing_space:
             text += " "
         inserted = True
@@ -880,6 +893,8 @@ class VoiceTypeApp(HeldNotesMixin, RuntimeMixin):
             # later speech. Consume the handoff and type.
             with self._lock:
                 keys()
+        if inserted:
+            self._recent.add(typed)
         if enter and inserted:
             self._status("submitted (Enter)")
         if self._post is not None and inserted:

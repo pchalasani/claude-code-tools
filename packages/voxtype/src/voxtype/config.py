@@ -166,6 +166,9 @@ class Config:
             "flatten" (one line), or "auto" (shift_enter for cerebras,
             flatten for s1-mini). A bare Enter is never typed.
         post_process_log_text: Log each take's before/after text.
+        post_process_context_words: Cerebras only: send up to this many
+            words of text typed in the last 30 minutes with each take,
+            as context for spelling names and terms. 0 turns this off.
         post_process_cerebras_model: Cerebras model id.
         post_process_style: Control-line styling: casual, semi-casual,
             semi-formal, or formal.
@@ -201,11 +204,11 @@ class Config:
             entire utterance (e.g. say "go" alone to submit).
         submit_suffixes: Phrases that, ending an utterance, type the
             words before them and then press Enter ("fix the build,
-            send it"); "senate" is how the transcriber often hears
-            "send it".
+            send it"); "senate", "senator" and "sendit" are how the
+            transcriber often hears "send it".
         show_suffixes: Phrases that, ending an utterance, type the held
             text without pressing Enter, for review ("..., ok show");
-            "ok sure", "ok shall we" and "ok so me" are how the
+            "ok sure", "ok shore", "ok shall we" and "ok so me" are how the
             transcriber often hears "ok show" and "ok show me"; a
             submit phrase then sends it.
         wait_for_submit: Hands-free mode ("vad") only: hold the text
@@ -264,6 +267,7 @@ class Config:
     post_process_format: str = "auto"
     post_process_newlines: str = "auto"
     post_process_log_text: bool = True
+    post_process_context_words: int = 300
     post_process_cerebras_model: str = "gpt-oss-120b"
     post_process_style: str = "semi-formal"
     post_process_structure: str = "prose"
@@ -285,14 +289,16 @@ class Config:
     submit_suffixes: list[str] = field(
         default_factory=lambda: [
             "ok go", "okay go", "now go", "go do it", "go to it",
-            "send it", "senate", "over and out",
+            "send it", "senate", "senator", "senators", "sendit",
+            "over and out",
         ]
     )
     show_suffixes: list[str] = field(
         default_factory=lambda: [
             "ok show", "okay show", "ok sure", "okay sure", "ok show me",
             "okay show me", "ok shall we", "okay shall we", "ok so me",
-            "okay so me", "now show me", "type it", "tap it",
+            "okay so me", "ok shore", "okay shore", "now show me",
+            "type it", "tap it",
         ]
     )
     wait_for_submit: bool = True
@@ -507,7 +513,9 @@ class Config:
             raise ValueError("copy_to_clipboard must be a boolean")
         if not isinstance(self.ask_mode, bool):
             raise ValueError("ask_mode must be a boolean")
-        for name in ("held_gap", "held_max_words"):
+        for name in (
+            "held_gap", "held_max_words", "post_process_context_words"
+        ):
             value = getattr(self, name)
             if (
                 isinstance(value, bool)
@@ -784,6 +792,10 @@ post_process_format = "auto"
 post_process_newlines = "auto"
 # Log each take's full before/after text (false: timings only).
 post_process_log_text = true
+# Cerebras: send up to this many words of what you typed in the last
+# 30 minutes (usually your previous message or two) with each take, so
+# names and terms are spelled the same way. 0 turns this off.
+post_process_context_words = 300
 # Cerebras model id.
 post_process_cerebras_model = "gpt-oss-120b"
 # Styling (s1-mini): casual | semi-casual | semi-formal | formal
@@ -848,17 +860,18 @@ submit_phrases = ["over", "go", "submit"]
 # Set to [] to disable.
 submit_suffixes = [
     "ok go", "okay go", "now go", "go do it", "go to it", "send it",
-    "senate", "over and out",
+    "senate", "senator", "senators", "sendit", "over and out",
 ]
 
 # Hands-free mode: ending with one of these types the held text WITHOUT
 # Enter, so you can review it; then say a submit phrase ("go") to send.
-# "ok sure", "ok shall we" and "ok so me" are how the transcriber
-# often hears "ok show" and "ok show me".
+# "ok sure", "ok shore", "ok shall we" and "ok so me" are how the
+# transcriber often hears "ok show" and "ok show me".
 show_suffixes = [
     "ok show", "okay show", "ok sure", "okay sure", "ok show me",
     "okay show me", "ok shall we", "okay shall we", "ok so me",
-    "okay so me", "now show me", "type it", "tap it",
+    "okay so me", "ok shore", "okay shore", "now show me", "type it",
+    "tap it",
 ]
 
 # Hands-free mode ("vad") only: hold the text back until you say a

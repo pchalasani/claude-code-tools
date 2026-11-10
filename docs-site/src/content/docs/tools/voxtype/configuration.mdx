@@ -272,16 +272,17 @@ submit_phrases = ["over", "go", "submit"]
 # presses Enter, with no pause: "fix the build, send it"
 submit_suffixes = [
     "ok go", "okay go", "now go", "go do it", "go to it", "send it",
-    "senate", "over and out",
+    "senate", "senator", "senators", "sendit", "over and out",
 ]
 # Hands-free: ending with one of these types the held text WITHOUT Enter
 # so you can review it; then say a submit phrase ("go") to send it.
-# "ok sure", "ok shall we" and "ok so me" are how the transcriber
-# often hears "ok show" and "ok show me".
+# "ok sure", "ok shore", "ok shall we" and "ok so me" are how the
+# transcriber often hears "ok show" and "ok show me".
 show_suffixes = [
     "ok show", "okay show", "ok sure", "okay sure", "ok show me",
     "okay show me", "ok shall we", "okay shall we", "ok so me",
-    "okay so me", "now show me", "type it", "tap it",
+    "okay so me", "ok shore", "okay shore", "now show me", "type it",
+    "tap it",
 ]
 # Hands-free (mode = "vad") only: hold text until a submit phrase, then
 # clean and type it in one piece; false types it at every pause
@@ -297,6 +298,7 @@ post_process_provider = "s1-mini"    # s1-mini (local) | cerebras (external API)
 post_process_format = "auto"         # cerebras: auto | paragraphs | minimal
 post_process_newlines = "auto"       # line breaks: auto | shift_enter | flatten
 post_process_log_text = true         # log each take's before/after text
+post_process_context_words = 300     # cerebras: recent typed text as context
 post_process_cerebras_model = "gpt-oss-120b"
 post_process_style = "semi-formal"   # casual | semi-casual | semi-formal | formal
 post_process_structure = "prose"     # prose | lists
@@ -539,8 +541,10 @@ plain-text lists, while keeping technical terms, file names, commands
 and URLs as dictated. Short utterances stay short.
 
 :::caution[Your transcripts leave your Mac]
-With this provider, every transcript is sent to `api.cerebras.ai`. The
-default (`post_process = false`, or the `s1-mini` provider) stays fully
+With this provider, every transcript is sent to `api.cerebras.ai`,
+along with up to 300 words of what you typed in the last 30 minutes, so
+names and terms are spelled the same way (`post_process_context_words`;
+0 turns that off). The default (`post_process = false`, or the `s1-mini` provider) stays fully
 local. Don't enable it for dictation you would not paste into a cloud
 service.
 :::
@@ -597,6 +601,7 @@ voxtype post-process --provider cerebras "um so lets do it Friday no sorry Thurs
 | `post_process_timeout` | `0.0` | `0` means 2 s for this provider. A take that takes longer is typed raw. |
 | `post_process_newlines` | `"auto"` | `auto` types Shift+Enter for this provider; paragraphs and lists need it. See [Line breaks](#line-breaks). |
 | `post_process_log_text` | `true` | Log the before/after text of each take. |
+| `post_process_context_words` | `300` | Cerebras only: send up to this many words of what you typed in the last 30 minutes (usually your previous message or two) with each take, so names and terms are spelled the same way. `0` turns it off. |
 
 The format is passed to the model through its prompt. The transcript
 is sent as delimited data, and the prompt tells the model never to
