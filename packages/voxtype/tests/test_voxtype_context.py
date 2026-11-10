@@ -56,6 +56,11 @@ def test_copied_context_is_detected() -> None:
         "please ask jay von to restart the kubernetes cluster tonight",
         context, context,
     )
+    # Repeated words inside the phrase still allow the correction.
+    assert not copied_context(
+        "go to steep go to sleep",
+        "go to sleep go to sleep", "go to sleep go to sleep",
+    )
     # A different request sharing some words still is a copy.
     assert copied_context(
         "please ask Jevon to check the deployment logs",

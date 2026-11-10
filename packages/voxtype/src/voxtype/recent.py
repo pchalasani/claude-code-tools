@@ -11,7 +11,6 @@ import re
 import threading
 import time
 from collections import deque
-from difflib import SequenceMatcher
 
 #: Typed text older than this many seconds is not context.
 CONTEXT_MAX_AGE = 1800.0
@@ -54,6 +53,17 @@ def _words(text: str) -> list[str]:
     return [w.casefold() for w in _WORD_RE.findall(text)]
 
 
+def _common_in_order(a: tuple[str, ...], b: list[str]) -> int:
+    """Length of the longest common subsequence of ``a`` and ``b``."""
+    prev = [0] * (len(b) + 1)
+    for x in a:
+        row = [0]
+        for j, y in enumerate(b):
+            row.append(prev[j] + 1 if x == y else max(prev[j + 1], row[j]))
+        prev = row
+    return prev[-1]
+
+
 def copied_context(raw: str, cleaned: str, context: str) -> bool:
     """True if ``cleaned`` repeats a run of ``context`` the speaker did
     not say.
@@ -88,11 +98,7 @@ def copied_context(raw: str, cleaned: str, context: str) -> bool:
         }
         for size in range(_COPY_RUN - 1, longest + 1):
             for i in sorted(starts):
-                matcher = SequenceMatcher(
-                    None, run, said[i:i + size], autojunk=False
-                )
-                hits = sum(b.size for b in matcher.get_matching_blocks())
-                if hits >= _COPY_RUN - 1:
+                if _common_in_order(run, said[i:i + size]) >= _COPY_RUN - 1:
                     return True
         return False
 
