@@ -53,8 +53,26 @@ def _words(text: str) -> list[str]:
     return [w.casefold() for w in _WORD_RE.findall(text)]
 
 
+def _common_in_order(a: tuple[str, ...], b: list[str]) -> int:
+    """Length of the longest common subsequence of ``a`` and ``b``."""
+    prev = [0] * (len(b) + 1)
+    for x in a:
+        row = [0]
+        for j, y in enumerate(b):
+            row.append(prev[j] + 1 if x == y else max(prev[j + 1], row[j]))
+        prev = row
+    return prev[-1]
+
+
 def copied_context(raw: str, cleaned: str, context: str) -> bool:
-    """True if ``cleaned`` repeats a run of ``context`` not in ``raw``."""
+    """True if ``cleaned`` repeats a run of ``context`` the speaker did
+    not say.
+
+    A run the speaker said nearly word for word is not a copy: a phrase
+    repeated with a misheard name ("jay von" for "Jevon") spelled as in
+    the context is a correction. Nearly means all but one of its words,
+    in order, within a stretch of ``raw`` at most two words longer.
+    """
     if not context:
         return False
 
@@ -64,5 +82,28 @@ def copied_context(raw: str, cleaned: str, context: str) -> bool:
             for i in range(len(words) - _COPY_RUN + 1)
         }
 
-    copied = runs(_words(cleaned)) & runs(_words(context))
-    return bool(copied - runs(_words(raw)))
+    said = _words(raw)
+    exact = runs(said)
+    # Where each three-word sequence of the take starts. A run said with
+    # one word changed has one half (three words) said exactly.
+    where: dict[tuple[str, ...], list[int]] = {}
+    for i in range(len(said) - 2):
+        where.setdefault(tuple(said[i:i + 3]), []).append(i)
+    half = _COPY_RUN // 2
+
+    def nearly_said(run: tuple[str, ...]) -> bool:
+        windows = set()
+        for size in range(_COPY_RUN - 1, _COPY_RUN + 3):
+            for at in where.get(run[:half], ()):
+                windows.add((at, at + size))
+            for at in where.get(run[half:], ()):
+                windows.add((max(0, at + half - size), at + half))
+        return any(
+            _common_in_order(run, said[a:b]) >= _COPY_RUN - 1
+            for a, b in windows
+        )
+
+    return any(
+        run not in exact and not nearly_said(run)
+        for run in runs(_words(cleaned)) & runs(_words(context))
+    )
