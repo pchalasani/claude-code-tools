@@ -11,6 +11,7 @@ import re
 import threading
 import time
 from collections import deque
+from difflib import SequenceMatcher
 
 #: Typed text older than this many seconds is not context.
 CONTEXT_MAX_AGE = 1800.0
@@ -57,9 +58,10 @@ def copied_context(raw: str, cleaned: str, context: str) -> bool:
     """True if ``cleaned`` repeats a run of ``context`` the speaker did
     not say.
 
-    A run counts as copied when most of its words are absent from
-    ``raw``: a phrase the speaker repeated, with a misheard name in it
-    spelled as in the context, is a correction, not a copy.
+    A run the speaker said nearly word for word is not a copy: a phrase
+    repeated with a misheard name ("jay von" for "Jevon") spelled as in
+    the context is a correction. Nearly means all but one of its words,
+    in order, within a stretch of ``raw`` at most two words longer.
     """
     if not context:
         return False
@@ -70,8 +72,31 @@ def copied_context(raw: str, cleaned: str, context: str) -> bool:
             for i in range(len(words) - _COPY_RUN + 1)
         }
 
-    said = set(_words(raw))
+    said = _words(raw)
+    where: dict[str, list[int]] = {}
+    for i, word in enumerate(said):
+        where.setdefault(word, []).append(i)
+    longest = _COPY_RUN + 2
+
+    def nearly_said(run: tuple[str, ...]) -> bool:
+        # Only stretches holding one of the run's words can match it.
+        starts = {
+            s
+            for word in run
+            for at in where.get(word, ())
+            for s in range(max(0, at - longest + 1), at + 1)
+        }
+        for size in range(_COPY_RUN - 1, longest + 1):
+            for i in sorted(starts):
+                matcher = SequenceMatcher(
+                    None, run, said[i:i + size], autojunk=False
+                )
+                hits = sum(b.size for b in matcher.get_matching_blocks())
+                if hits >= _COPY_RUN - 1:
+                    return True
+        return False
+
     return any(
-        2 * sum(w not in said for w in run) > _COPY_RUN
+        not nearly_said(run)
         for run in runs(_words(cleaned)) & runs(_words(context))
     )

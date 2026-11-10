@@ -56,6 +56,11 @@ def test_copied_context_is_detected() -> None:
         "please ask jay von to restart the kubernetes cluster tonight",
         context, context,
     )
+    # A different request sharing some words still is a copy.
+    assert copied_context(
+        "please ask Jevon to check the deployment logs",
+        context, context,
+    )
     # Words the speaker said again are not a copy.
     again = "please ask Jevon to restart the Kubernetes cluster"
     assert not copied_context(again, "Please ask Jevon to restart the "
