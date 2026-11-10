@@ -513,9 +513,12 @@ class Config:
             raise ValueError("copy_to_clipboard must be a boolean")
         if not isinstance(self.ask_mode, bool):
             raise ValueError("ask_mode must be a boolean")
-        for name in (
-            "held_gap", "held_max_words", "post_process_context_words"
-        ):
+        words = self.post_process_context_words
+        if isinstance(words, bool) or not isinstance(words, int) or words < 0:
+            raise ValueError(
+                "post_process_context_words must be a whole number >= 0"
+            )
+        for name in ("held_gap", "held_max_words"):
             value = getattr(self, name)
             if (
                 isinstance(value, bool)

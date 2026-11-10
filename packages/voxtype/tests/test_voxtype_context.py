@@ -111,9 +111,10 @@ def test_context_off(make_app) -> None:  # noqa: ANN001
     assert spy.contexts == ["", ""]
 
 
-def test_context_words_must_be_a_number() -> None:
+@pytest.mark.parametrize("bad", [-1, 300.0, True, "300"])
+def test_context_words_must_be_a_whole_number(bad: object) -> None:
     with pytest.raises(ValueError, match="post_process_context_words"):
-        Config(post_process_context_words=-1).validate()
+        Config(post_process_context_words=bad).validate()
 
 
 @pytest.mark.parametrize(
