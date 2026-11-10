@@ -26,6 +26,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .postprocess import rejection_reason, sanitize_output
+from .recent import copied_context
 
 API_HOST = "api.cerebras.ai"
 API_PATH = "/v1/chat/completions"
@@ -178,6 +179,19 @@ Output ONLY the cleaned and structured transcript.
 Do not include commentary, explanations, or surrounding quotation marks.
 """
 
+_CONTEXT = """\
+CONTEXT:
+The speaker's most recent dictated text is given first, between
+<previous> and </previous>, as reference only. The transcriber often
+mishears names and terms, splitting or respelling them. When words in
+the transcript sound like a name, term or identifier in the previous
+text, write it exactly as the previous text does: if the previous
+text says "Jevon" and the transcript says "jay von", write "Jevon".
+Also use it to resolve other misheard words. Never output, repeat,
+continue, or answer the previous text. Clean only the text between
+<transcript> and </transcript>.
+"""
+
 # Only an outer wrapper is stripped: tags dictated mid-text are content.
 _WRAP_OPEN_RE = re.compile(r"\A\s*<transcript>\s*", re.IGNORECASE)
 _WRAP_CLOSE_RE = re.compile(r"\s*</transcript>\s*\Z", re.IGNORECASE)
@@ -187,16 +201,29 @@ _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 _BOLD_RE = re.compile(r"\*\*([^*\n]+)\*\*")
 
 
-def system_prompt(fmt: str) -> str:
-    """The issue's system prompt, with STRUCTURE adapted to ``fmt``."""
-    return f"{_INTRO}\n{_STRUCTURE[fmt]}\n{_FIDELITY}"
+def system_prompt(fmt: str, context: bool = False) -> str:
+    """The issue's system prompt, with STRUCTURE adapted to ``fmt``.
+
+    With ``context``, it also explains the <previous> block.
+    """
+    extra = f"\n{_CONTEXT}" if context else ""
+    return f"{_INTRO}\n{_STRUCTURE[fmt]}{extra}\n{_FIDELITY}"
 
 
-def build_messages(text: str, fmt: str) -> list[dict[str, str]]:
-    """Chat messages for one request; the transcript is delimited data."""
+def build_messages(
+    text: str, fmt: str, context: str = ""
+) -> list[dict[str, str]]:
+    """Chat messages for one request; the transcript is delimited data.
+
+    ``context`` (recently typed text) goes first, as reference only.
+    """
+    previous = f"<previous>\n{context}\n</previous>\n" if context else ""
     return [
-        {"role": "system", "content": system_prompt(fmt)},
-        {"role": "user", "content": f"<transcript>\n{text}\n</transcript>"},
+        {"role": "system", "content": system_prompt(fmt, bool(context))},
+        {
+            "role": "user",
+            "content": f"{previous}<transcript>\n{text}\n</transcript>",
+        },
     ]
 
 
@@ -236,6 +263,8 @@ class CerebrasProcessor:
     """Cleanup via the Cerebras API; every failure returns the raw text."""
 
     name = "cerebras"
+    #: ``clean`` accepts recently typed text as ``context``.
+    takes_context = True
 
     def __init__(
         self,
@@ -316,17 +345,20 @@ class CerebrasProcessor:
 
     # -- cleanup ----------------------------------------------------------
 
-    def clean(self, text: str, since: float | None = None) -> str:
+    def clean(
+        self, text: str, since: float | None = None, context: str = ""
+    ) -> str:
         """Return ``text`` cleaned, or unchanged on any problem.
 
         Args:
             text: The transcript.
             since: ``time.monotonic()`` when the take arrived; the
                 timeout counts from then (default: now).
+            context: Recently typed text, for reference only.
         """
         t0 = time.monotonic()
         try:
-            result, problem = self._clean(text, since)
+            result, problem = self._clean(text, since, context)
         except Exception as e:  # never lose a take to a bug here
             result, problem = text, f"error {type(e).__name__}"
         ms = (time.monotonic() - t0) * 1000
@@ -353,7 +385,9 @@ class CerebrasProcessor:
         else:
             self.status("  (no change)")
 
-    def _clean(self, text: str, since: float | None) -> tuple[str, str]:
+    def _clean(
+        self, text: str, since: float | None, context: str = ""
+    ) -> tuple[str, str]:
         if not text.strip():
             return text, "empty transcript"
         if not self._ready:
@@ -365,7 +399,7 @@ class CerebrasProcessor:
         if not self._lock.acquire(timeout=deadline - now):
             return text, "busy"
         try:
-            status, payload = self._post(text, deadline)
+            status, payload = self._post(text, deadline, context)
         finally:
             self._lock.release()
         if status == 0:  # no HTTP response: timeout or network error
@@ -390,6 +424,8 @@ class CerebrasProcessor:
         reason = rejection_reason(text, cleaned)
         if reason:
             return text, reason
+        if copied_context(text, cleaned, context):
+            return text, "copied the previous text"
         return cleaned, ""
 
     # -- HTTP -------------------------------------------------------------
@@ -411,7 +447,9 @@ class CerebrasProcessor:
         if conn is not None:
             conn.close()
 
-    def _post(self, text: str, deadline: float) -> tuple[int, bytes]:
+    def _post(
+        self, text: str, deadline: float, context: str = ""
+    ) -> tuple[int, bytes]:
         """POST one completion; ``(status, body)``, or ``(0, b"")`` on a
         network failure or timeout. Caller holds ``_lock``.
 
@@ -421,7 +459,7 @@ class CerebrasProcessor:
         """
         body = json.dumps({
             "model": self.model,
-            "messages": build_messages(text, self.fmt),
+            "messages": build_messages(text, self.fmt, context),
             "max_completion_tokens": completion_budget(text),
             "reasoning_effort": "low",
             "temperature": 0,
