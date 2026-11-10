@@ -83,26 +83,27 @@ def copied_context(raw: str, cleaned: str, context: str) -> bool:
         }
 
     said = _words(raw)
-    where: dict[str, list[int]] = {}
-    for i, word in enumerate(said):
-        where.setdefault(word, []).append(i)
-    longest = _COPY_RUN + 2
+    exact = runs(said)
+    # Where each three-word sequence of the take starts. A run said with
+    # one word changed has one half (three words) said exactly.
+    where: dict[tuple[str, ...], list[int]] = {}
+    for i in range(len(said) - 2):
+        where.setdefault(tuple(said[i:i + 3]), []).append(i)
+    half = _COPY_RUN // 2
 
     def nearly_said(run: tuple[str, ...]) -> bool:
-        # Only stretches holding one of the run's words can match it.
-        starts = {
-            s
-            for word in run
-            for at in where.get(word, ())
-            for s in range(max(0, at - longest + 1), at + 1)
-        }
-        for size in range(_COPY_RUN - 1, longest + 1):
-            for i in sorted(starts):
-                if _common_in_order(run, said[i:i + size]) >= _COPY_RUN - 1:
-                    return True
-        return False
+        windows = set()
+        for size in range(_COPY_RUN - 1, _COPY_RUN + 3):
+            for at in where.get(run[:half], ()):
+                windows.add((at, at + size))
+            for at in where.get(run[half:], ()):
+                windows.add((max(0, at + half - size), at + half))
+        return any(
+            _common_in_order(run, said[a:b]) >= _COPY_RUN - 1
+            for a, b in windows
+        )
 
     return any(
-        not nearly_said(run)
+        run not in exact and not nearly_said(run)
         for run in runs(_words(cleaned)) & runs(_words(context))
     )
