@@ -20,6 +20,7 @@ from typing import Callable
 
 from .config import Config
 from .engine_parakeet import (
+    MAX_SEGMENT_SECONDS,
     MIN_SILENCE,
     SAMPLE_RATE,
     ParakeetEngine,
@@ -30,6 +31,7 @@ from .engine_parakeet import (
     ensure_vad,
 )
 from .engines import StatusFn
+from .preroll import with_preroll
 
 # Seconds the keepalive holds off after any cross-thread command
 # (toggle/hold/flush/reset). A just-activated user is about to speak;
@@ -192,8 +194,12 @@ class ParakeetMlxEngine(ParakeetEngine):
                 f"invalid VAD window size: {window_size!r}"
             )
         self._window_size = window_size
-        self._vad = sherpa_onnx.VoiceActivityDetector(
-            vad_config, buffer_size_in_seconds=120
+        self._vad = with_preroll(
+            sherpa_onnx.VoiceActivityDetector(
+                vad_config, buffer_size_in_seconds=120
+            ),
+            SAMPLE_RATE,
+            MAX_SEGMENT_SECONDS,
         )
 
     def _enqueue_take(

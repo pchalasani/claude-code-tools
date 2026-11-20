@@ -201,7 +201,9 @@ class Config:
             until toggle-off (nothing is transcribed mid-take), so in
             hold mode stop with the hotkey, or Esc to cancel.
         submit_phrases: Phrases that press Enter when spoken as an
-            entire utterance (e.g. say "go" alone to submit).
+            entire utterance (e.g. say "go" alone to submit); "send"
+            and "end it" are how the transcriber often hears "send it"
+            said alone.
         submit_suffixes: Phrases that, ending an utterance, type the
             words before them and then press Enter ("fix the build,
             send it"); "senate", "senator" and "sendit" are how the
@@ -211,6 +213,10 @@ class Config:
             "ok sure", "ok shore", "ok shall we" and "ok so me" are how the
             transcriber often hears "ok show" and "ok show me"; a
             submit phrase then sends it.
+        show_phrases: Phrases that act like a show phrase only when
+            spoken as an entire utterance: mishearings of "ok show me"
+            ("ok show you", "ok for me") too common at the end of a
+            sentence to be suffixes.
         wait_for_submit: Hands-free mode ("vad") only: hold the text
             back until a submit phrase or suffix, then clean and type
             it all at once. False types each piece at every pause.
@@ -284,7 +290,7 @@ class Config:
     wake_word_aliases: list[str] = field(default_factory=list)
     stop_phrase: str = "stop listening"
     submit_phrases: list[str] = field(
-        default_factory=lambda: ["over", "go", "submit"]
+        default_factory=lambda: ["over", "go", "submit", "send", "end it"]
     )
     submit_suffixes: list[str] = field(
         default_factory=lambda: [
@@ -299,6 +305,11 @@ class Config:
             "okay show me", "ok shall we", "okay shall we", "ok so me",
             "okay so me", "ok shore", "okay shore", "now show me",
             "type it", "tap it",
+        ]
+    )
+    show_phrases: list[str] = field(
+        default_factory=lambda: [
+            "ok show you", "okay show you", "ok for me", "okay for me",
         ]
     )
     wait_for_submit: bool = True
@@ -485,7 +496,10 @@ class Config:
             )
         if self.idle_timeout <= 0:
             raise ValueError("idle_timeout must be positive")
-        for name in ("submit_phrases", "submit_suffixes", "show_suffixes"):
+        for name in (
+            "submit_phrases", "submit_suffixes", "show_suffixes",
+            "show_phrases",
+        ):
             value = getattr(self, name)
             if not isinstance(value, list) or any(
                 not isinstance(p, str) or not p.strip() for p in value
@@ -854,9 +868,10 @@ wake_word_aliases = []
 stop_phrase = "stop listening"
 
 # Saying one of these as an ENTIRE utterance (pause, say it, pause)
-# presses Enter in the focused app -- e.g. to submit a prompt.
+# presses Enter in the focused app -- e.g. to submit a prompt. "send"
+# and "end it" are how the transcriber often hears "send it" said alone.
 # Set to [] to disable.
-submit_phrases = ["over", "go", "submit"]
+submit_phrases = ["over", "go", "submit", "send", "end it"]
 
 # Ending a dictation with one of these types the words before it, then
 # presses Enter -- no pause needed: "fix the build, send it".
@@ -876,6 +891,10 @@ show_suffixes = [
     "okay so me", "ok shore", "okay shore", "now show me", "type it",
     "tap it",
 ]
+
+# Like show_suffixes, but only when said as an ENTIRE utterance: these
+# mishearings of "ok show me" are too common at the end of a sentence.
+show_phrases = ["ok show you", "okay show you", "ok for me", "okay for me"]
 
 # Hands-free mode ("vad") only: hold the text back until you say a
 # submit phrase or suffix, then clean and type it all at once, so pauses
