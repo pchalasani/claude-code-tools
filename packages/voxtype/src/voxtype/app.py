@@ -40,8 +40,12 @@ class State(Enum):
 
 
 def _preview(text: str, limit: int = 60) -> str:
-    """Shorten ``text`` for a one-line status message."""
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+    """Shorten ``text`` for a status line, keeping its end (where a
+    misheard submit phrase would be)."""
+    tail = limit // 3
+    if len(text) <= limit:
+        return text
+    return text[: limit - tail - 1] + "…" + text[-tail:]
 
 
 # A queued delivery that failed authorization at arrival (see
@@ -533,6 +537,7 @@ class VoiceTypeApp(HeldNotesMixin, RuntimeMixin):
         if any(
             is_exact_phrase(text, p) for p in self.cfg.submit_phrases
         ):
+            self._status(f'submit phrase: "{text}"')
             if not self._hold_text(version, "", True):
                 self._deliver(version, self._submit)
             return
@@ -540,6 +545,12 @@ class VoiceTypeApp(HeldNotesMixin, RuntimeMixin):
             text, self.cfg.stop_phrase
         ):
             self._set_state(self._off_state)
+            return
+        if self._held and any(  # nothing held: "okay for me" is a reply
+            is_exact_phrase(text, p) for p in self.cfg.show_phrases
+        ):
+            self._status(f'show phrase: "{text}"')
+            self._hold_text(version, "", False, True)
             return
         t, enter, show = self._split_suffix(text)
         if self._hold_text(version, t, enter, show, arrived, started):
@@ -649,11 +660,16 @@ class VoiceTypeApp(HeldNotesMixin, RuntimeMixin):
         Returns the text to type, whether to press Enter after it, and
         whether a show phrase ended it (type held text, no Enter).
         """
-        rest = strip_submit_suffix(text, self.cfg.submit_suffixes)
-        if rest is not None:
-            return rest, True, False
-        rest = strip_submit_suffix(text, self.cfg.show_suffixes)
-        return (text, False, False) if rest is None else (rest, False, True)
+        for phrases, enter in (
+            (self.cfg.submit_suffixes, True), (self.cfg.show_suffixes, False)
+        ):
+            rest = strip_submit_suffix(text, phrases)
+            if rest is not None:
+                said = text[len(rest):].strip(" \t\n,;:-–—")
+                kind = "submit" if enter else "show"
+                self._status(f'{kind} phrase: "{said}"')
+                return rest, enter, not enter
+        return text, False, False
 
     def _submit(self, version: int | None, at: float) -> None:
         """Press Enter for a submit phrase that arrived at ``at``.

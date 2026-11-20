@@ -184,7 +184,7 @@ turns on local cleanup for that run.
 | Cancel recording (discard) | `Esc` (only while recording; not hands-free) | `cancel_hotkey` |
 | Discard held text (hands-free) | `Shift+Esc` (keeps listening) | `discard_hotkey` |
 | Re-type last transcript | off | `paste_hotkey` |
-| Submit (press Enter) | say "go" / "over" / "submit" | `submit_phrases` |
+| Submit (press Enter) | say "go" / "over" / "submit" / "send" alone | `submit_phrases` |
 | Type, then submit | end with "…, send it", "…, go do it", "…, ok go" or "…, over and out" | `submit_suffixes` |
 | Type for review (hands-free) | end with "…, ok show" or "…, type it" | `show_suffixes` |
 | Stop dictating (vad segmentation) | say "stop listening" | `stop_phrase` |
@@ -233,8 +233,17 @@ Enter and voxtype keeps listening. Read it, fix it by hand if needed,
 then say "go" (or "send it") to press Enter. The transcriber often hears
 "ok show" as "ok sure" or "ok shore", and "ok show me" as "ok shall we"
 or "ok so me", so those count too. It also hears "send it" as "senate",
-"senator" or "sendit", which submit like "send it". Change these phrases with `show_suffixes` and
-`submit_suffixes`.
+"senator" or "sendit", which submit like "send it". Change these phrases
+with `show_suffixes` and `submit_suffixes`.
+
+Said on its own, after a pause, "send it" is often heard as "send" or
+"end it", and "ok show me" as "ok show you" or "ok for me". Those count
+too, but only as a whole utterance, since they are ordinary words at the
+end of a sentence; "ok for me" shows only while text is held. They are
+`submit_phrases` and `show_phrases`. To catch the quiet first sound
+of a phrase ("s" in "send it"), voxtype also gives the transcriber the
+0.2 seconds of audio before speech is detected. The log names each
+phrase it heard ("submit phrase: …"), so you can spot new mishearings.
 
 The phrases are matched on the raw transcript, before filler removal
 and LLM cleanup, so cleanup cannot remove them. Change the list with

@@ -1,0 +1,213 @@
+"""Submit and show phrases: audio before speech, standalone mishearings,
+and logging which phrase was heard."""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+import wave
+from pathlib import Path
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+from test_voxtype_wait_for_submit import make_app  # noqa: F401
+
+from voxtype.app import _preview
+from voxtype.engine_parakeet import (
+    CACHE_DIR,
+    MAX_SEGMENT_SECONDS,
+    MIN_SILENCE,
+    SAMPLE_RATE,
+)
+from voxtype.preroll import PREROLL_SECONDS, PrerollVad, with_preroll
+
+
+class ScriptedVad:
+    """Stands in for sherpa-onnx's detector: one segment at a set start."""
+
+    def __init__(self) -> None:
+        self.fed = 0
+        self.segment: SimpleNamespace | None = None
+        self.resets = 0
+
+    def accept_waveform(self, samples: np.ndarray) -> None:
+        self.fed += len(samples)
+
+    def reset(self) -> None:
+        self.resets += 1
+        self.fed = 0
+
+    def empty(self) -> bool:
+        return self.segment is None
+
+    @property
+    def front(self) -> SimpleNamespace | None:
+        return self.segment
+
+
+def _feed(vad: PrerollVad, n: int, window: int = 4) -> None:
+    """Feed samples whose values are their own indices."""
+    for at in range(0, n, window):
+        vad.accept_waveform(np.arange(at, at + window, dtype=np.float32))
+
+
+def test_segment_gets_the_audio_before_it() -> None:
+    inner = ScriptedVad()
+    vad = PrerollVad(inner, preroll=5, keep=100)
+    _feed(vad, 40)
+    inner.segment = SimpleNamespace(
+        start=20, samples=np.arange(20, 30, dtype=np.float32)
+    )
+    front = vad.front
+    assert front.start == 15
+    assert front.samples.tolist() == list(range(15, 30))
+    assert not vad.empty()  # everything else passes through
+    assert inner.fed == 40
+
+
+def test_preroll_stops_at_the_start_of_the_audio() -> None:
+    inner = ScriptedVad()
+    vad = PrerollVad(inner, preroll=5, keep=100)
+    _feed(vad, 12)
+    inner.segment = SimpleNamespace(start=2, samples=[2.0, 3.0])
+    assert vad.front.samples.tolist() == [0, 1, 2, 3]
+
+
+def test_reset_restarts_the_count() -> None:
+    inner = ScriptedVad()
+    vad = PrerollVad(inner, preroll=3, keep=100)
+    _feed(vad, 40)
+    vad.reset()
+    assert inner.resets == 1
+    _feed(vad, 8)  # values 0..7 again, at indices 0..7
+    inner.segment = SimpleNamespace(start=6, samples=[6.0, 7.0])
+    assert vad.front.samples.tolist() == [3, 4, 5, 6, 7]
+
+
+def test_only_recent_audio_is_kept() -> None:
+    inner = ScriptedVad()
+    vad = PrerollVad(inner, preroll=5, keep=10)
+    _feed(vad, 100)
+    assert vad.before(50).size == 0  # long gone
+    assert vad.before(99).tolist() == [94, 95, 96, 97, 98]
+
+
+def test_odd_segments_are_left_alone() -> None:
+    inner = ScriptedVad()
+    vad = PrerollVad(inner, preroll=5, keep=100)
+    _feed(vad, 20)
+    odd = SimpleNamespace(start=None, samples=[1.0])
+    inner.segment = odd
+    assert vad.front is odd
+    inner.segment = None
+    assert vad.front is None
+
+
+def test_preview_keeps_the_end() -> None:
+    text = "word " * 30 + "and it"
+    shown = _preview(text)
+    assert len(shown) == 60 and shown.endswith("and it") and "…" in shown
+    assert _preview("short") == "short"
+
+
+@pytest.mark.parametrize("said", ["Send.", "End it."])
+def test_send_said_alone_submits(make_app, said: str) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance("Fix the build.")
+    app.handle_utterance(said)
+    assert app.typist.events == ["Fix the build. ", "<ENTER>"]
+
+
+def test_misheard_send_inside_a_sentence_is_text(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance("We should end it.")
+    app.handle_utterance("send it")
+    assert app.typist.events == ["We should end it. ", "<ENTER>"]
+
+
+@pytest.mark.parametrize("said", ["Okay, show you.", "Okay for me."])
+def test_show_mishearing_said_alone_shows(make_app, said: str) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance("Check the logs.")
+    app.handle_utterance(said)
+    assert app.typist.events == ["Check the logs. "]
+
+
+def test_show_mishearing_with_nothing_held_is_a_reply(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance("Okay for me.")
+    app.handle_utterance("send it")
+    assert app.typist.events == ["Okay for me. ", "<ENTER>"]
+
+
+def test_show_mishearing_ending_a_sentence_is_text(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance("That works okay for me.")
+    assert app.typist.events == []
+    app.handle_utterance("send it")
+    assert app.typist.events == ["That works okay for me. ", "<ENTER>"]
+
+
+def test_the_phrase_heard_is_logged(make_app, capsys) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance("Fix the build, send it.")
+    app.handle_utterance("Check it.")
+    app.handle_utterance("Okay for me.")
+    app.handle_utterance("Go.")
+    err = capsys.readouterr().err
+    assert 'submit phrase: "send it."' in err
+    assert 'show phrase: "Okay for me."' in err
+    assert 'submit phrase: "Go."' in err
+
+
+def _say(text: str, path: Path) -> np.ndarray:
+    subprocess.run(
+        ["say", "-v", "Karen", "-o", str(path),
+         "--data-format=LEI16@16000", text],
+        check=True,
+    )
+    with wave.open(str(path)) as w:
+        a = np.frombuffer(w.readframes(w.getnframes()), np.int16)
+    return a.astype(np.float32) / 32768
+
+
+@pytest.mark.skipif(
+    not shutil.which("say")
+    or not (CACHE_DIR / "silero_vad.onnx").exists(),
+    reason="needs macOS say and the cached Silero VAD",
+)
+def test_real_vad_segment_starts_before_the_first_sound(tmp_path) -> None:  # noqa: ANN001
+    """With the real Silero VAD, the segment misses the start of "send
+    it"; the wrapped detector's segment includes it."""
+    import sherpa_onnx
+
+    speech = _say("send it", tmp_path / "s.wav")
+    quiet = np.zeros(SAMPLE_RATE, np.float32)
+    audio = np.concatenate([quiet, speech, quiet])
+    onset = SAMPLE_RATE + int(np.nonzero(np.abs(speech) > 0.01)[0][0])
+
+    def first_segment(wrap: bool) -> tuple[int, int]:
+        cfg = sherpa_onnx.VadModelConfig()
+        cfg.silero_vad.model = str(CACHE_DIR / "silero_vad.onnx")
+        cfg.silero_vad.min_silence_duration = MIN_SILENCE
+        cfg.sample_rate = SAMPLE_RATE
+        vad = sherpa_onnx.VoiceActivityDetector(
+            cfg, buffer_size_in_seconds=60
+        )
+        if wrap:
+            vad = with_preroll(vad, SAMPLE_RATE, MAX_SEGMENT_SECONDS)
+        ws = cfg.silero_vad.window_size
+        for i in range(0, len(audio) - ws + 1, ws):
+            vad.accept_waveform(audio[i:i + ws])
+            if not vad.empty():
+                front = vad.front
+                return front.start, len(front.samples)
+        raise AssertionError("no segment")
+
+    start, n = first_segment(False)
+    padded_start, padded_n = first_segment(True)
+    assert start > onset  # the plain detector clips the "s"
+    pre = int(PREROLL_SECONDS * SAMPLE_RATE)
+    assert (padded_start, padded_n) == (start - pre, n + pre)
+    assert padded_start < onset

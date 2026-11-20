@@ -25,6 +25,7 @@ from typing import Any, Callable, Iterator
 
 from .config import Config
 from .engines import StatusFn
+from .preroll import with_preroll
 
 # Prefer the legacy voice-type cache when it exists so users upgrading
 # from claude-code-tools don't re-download ~0.5-1 GB of models.
@@ -705,8 +706,12 @@ class ParakeetEngine:
                 f"invalid VAD window size: {window_size!r}"
             )
         self._window_size = window_size
-        self._vad = sherpa_onnx.VoiceActivityDetector(
-            vad_config, buffer_size_in_seconds=120
+        self._vad = with_preroll(
+            sherpa_onnx.VoiceActivityDetector(
+                vad_config, buffer_size_in_seconds=120
+            ),
+            SAMPLE_RATE,
+            MAX_SEGMENT_SECONDS,
         )
 
     def transcribe(self, samples, sample_rate: int) -> str:  # noqa: ANN001

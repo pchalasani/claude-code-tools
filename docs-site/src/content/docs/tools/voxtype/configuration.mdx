@@ -266,8 +266,9 @@ wake_word_aliases = []       # misspellings the model produces, e.g. ["hey cloud
 stop_phrase = "stop listening"
 idle_timeout = 20.0          # seconds of silence before wake mode re-arms
 
-# Spoken submit: saying one of these as an ENTIRE utterance presses Enter
-submit_phrases = ["over", "go", "submit"]
+# Spoken submit: saying one of these as an ENTIRE utterance presses Enter.
+# "send" and "end it" are how the transcriber hears "send it" said alone.
+submit_phrases = ["over", "go", "submit", "send", "end it"]
 # Ending a dictation with one of these types the words before it, then
 # presses Enter, with no pause: "fix the build, send it"
 submit_suffixes = [
@@ -284,6 +285,9 @@ show_suffixes = [
     "okay so me", "ok shore", "okay shore", "now show me", "type it",
     "tap it",
 ]
+# Like show_suffixes, but only as an ENTIRE utterance with text held:
+# mishearings of "ok show me" too common at the end of a sentence
+show_phrases = ["ok show you", "okay show you", "ok for me", "okay for me"]
 # Hands-free (mode = "vad") only: hold text until a submit phrase, then
 # clean and type it in one piece; false types it at every pause
 wait_for_submit = true
