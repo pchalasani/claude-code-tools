@@ -12,6 +12,14 @@ from git_checkout_safety_hook import check_git_checkout_command
     "git clean -d --force",
     "git clean --forc",
     "git status && git reset --hard",
+    "git reset --har HEAD",
+    "git reset --h HEAD",
+    "git clean -f -e -n",
+    "git clean -fe -n",
+    "git clean -fen",
+    "git clean -f --exclude -n",
+    "git clean -f -n --no-dry-run",
+    "git clean -f --dry-run --no-dry",
 ])
 def test_blocks_commands_that_discard_work(command):
     assert check_git_checkout_command(command)[0]
@@ -27,6 +35,9 @@ def test_blocks_commands_that_discard_work(command):
     "git clean -f --dry-run",
     "git clean",
     "echo git reset --hard",
+    "git clean -f -e foo -n",
+    "git clean -f --exclude=*.log -n",
+    "git clean -f --no-dry-run --dry-run",
 ])
 def test_allows_commands_that_keep_work(command):
     assert not check_git_checkout_command(command)[0]
@@ -47,6 +58,8 @@ def test_allows_commands_that_keep_work(command):
     "git restore -p file.py",
     "git -C /tmp/repo restore .",
     "git add -A && git restore .",
+    "git restore --pathspec-from-file -S",
+    "git restore --pathspec-from-file paths.txt",
 ])
 def test_blocks_restore_of_the_working_tree(command):
     assert check_git_checkout_command(command)[0]
@@ -58,6 +71,8 @@ def test_blocks_restore_of_the_working_tree(command):
     "git restore -S file.py",
     "git restore --staged --source=HEAD~1 file.py",
     "git restore --staged -- --worktree",
+    "git restore --staged --source HEAD~1 file.py",
+    "git restore -S -s HEAD~1 file.py",
     "git restore -h",
     "git restore --help",
     "echo git restore .",

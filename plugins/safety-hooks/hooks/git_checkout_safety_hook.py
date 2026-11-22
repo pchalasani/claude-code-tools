@@ -39,7 +39,22 @@ _CHECKOUT_SHORT_VALUE_OPTS = {"b", "B"}
 
 # The same for `git restore`: ``-sHEAD~1`` means ``--source=HEAD~1``, so the
 # ``S`` in ``-sSTABLE`` is part of a tree name, not ``--staged``.
-_RESTORE_SHORT_VALUE_OPTS = {"s"}
+_RESTORE_SHORT_VALUE_OPTS = {"s", "U"}
+
+# Long `git restore` options that take the next token as their value when no
+# ``=`` is attached (from `git restore -h`). In ``--pathspec-from-file -S``
+# the ``-S`` is a file name, not ``--staged``.
+_RESTORE_LONG_VALUE_OPTS = (
+    "--source", "--conflict", "--unified", "--inter-hunk-context",
+    "--pathspec-from-file",
+)
+
+# Long `git clean` options (from `git clean -h`). ``--exclude`` takes a value,
+# so in ``--exclude -n`` the ``-n`` is a pattern, not ``--dry-run``.
+_CLEAN_LONG_OPTIONS = (
+    "--quiet", "--no-quiet", "--dry-run", "--no-dry-run", "--force",
+    "--no-force", "--interactive", "--no-interactive", "--exclude",
+)
 
 # Shell expansions cannot be reproduced reliably after shlex has split the
 # command. Tilde expansion is handled separately because it has deterministic
@@ -466,7 +481,10 @@ def _check_single_git_discard_command(
     args, _ = parse_git_checkout(command, "reset")
     if args is not None:
         head = args[:args.index("--")] if "--" in args else args
-        if "--hard" in head:
+        # Git accepts any unambiguous prefix of a long option, so `--h` and
+        # `--har` both mean `--hard`.
+        if any(token.startswith("--") and len(token) >= 3
+               and "--hard".startswith(token) for token in head):
             return True, _danger(
                 "'git reset --hard' DISCARDS all uncommitted changes!")
         return False, None
@@ -487,14 +505,60 @@ def _check_single_git_discard_command(
     args, _ = parse_git_checkout(command, "clean")
     if args is not None:
         head = args[:args.index("--")] if "--" in args else args
-        flags = _option_flags(head)
-        if "-n" in flags or "--dry-run" in flags:
-            return False, None
-        if "-f" in flags or "--force" in flags:
+        if _clean_deletes(head):
             return True, _danger(
                 "'git clean -f' DELETES untracked files, which git cannot "
                 "recover!")
     return False, None
+
+
+def _long_option(name: str, options: Tuple[str, ...]) -> Optional[str]:
+    """
+    Return the long option that `name` stands for, or None.
+
+    Git accepts any unambiguous prefix of a long option, and an exact name
+    wins over longer names that start with it.
+    """
+    if name in options:
+        return name
+    matches = [option for option in options if option.startswith(name)]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _clean_deletes(head: List[str]) -> bool:
+    """
+    Return True if `git clean` with these options deletes files.
+
+    The options are read in order, as git reads them. ``-e`` and
+    ``--exclude`` take the next token as their pattern, and the last of
+    ``--dry-run`` and ``--no-dry-run`` wins. Force counts once it is given:
+    ``-f --no-force`` still deletes when ``clean.requireForce`` is false.
+    """
+    force = dry_run = False
+    tokens = iter(head)
+    for token in tokens:
+        if token.startswith("--"):
+            name = token.split("=", 1)[0]
+            option = _long_option(name, _CLEAN_LONG_OPTIONS)
+            if name in _FORCE_LONG_OPTIONS:
+                force = True
+            elif option == "--dry-run":
+                dry_run = True
+            elif option == "--no-dry-run":
+                dry_run = False
+            elif option == "--exclude" and "=" not in token:
+                next(tokens, None)
+        elif token.startswith("-") and len(token) > 1:
+            for index, char in enumerate(token[1:], start=1):
+                if char == "f":
+                    force = True
+                elif char == "n":
+                    dry_run = True
+                elif char == "e":
+                    if index == len(token) - 1:
+                        next(tokens, None)
+                    break
+    return force and not dry_run
 
 
 def _restore_writes_worktree(head: List[str]) -> bool:
@@ -505,23 +569,31 @@ def _restore_writes_worktree(head: List[str]) -> bool:
     without `--worktree`. `--staged` alone only unstages, so every edit
     stays on disk. Git accepts unambiguous prefixes of long options
     (`--stag`, `--work`); `--s` is ambiguous with `--source`, and git
-    rejects it.
+    rejects it. An option that takes a value consumes the next token, so in
+    ``--pathspec-from-file -S`` the ``-S`` is a file name.
     """
     staged = worktree = False
-    for token in head:
+    tokens = iter(head)
+    for token in tokens:
         if token.startswith("--"):
             name = token.split("=", 1)[0]
             if len(name) >= 4 and "--staged".startswith(name):
                 staged = True
             elif len(name) >= 3 and "--worktree".startswith(name):
                 worktree = True
+            elif "=" not in token and len(name) >= 3 and any(
+                    option.startswith(name)
+                    for option in _RESTORE_LONG_VALUE_OPTS):
+                next(tokens, None)
         elif token.startswith("-") and len(token) > 1:
-            for char in token[1:]:
+            for index, char in enumerate(token[1:], start=1):
                 if char == "S":
                     staged = True
                 elif char == "W":
                     worktree = True
                 if char in _RESTORE_SHORT_VALUE_OPTS:
+                    if index == len(token) - 1:
+                        next(tokens, None)
                     break
     return worktree or not staged
 
