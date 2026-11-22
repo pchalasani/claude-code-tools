@@ -37,6 +37,10 @@ _OPAQUE_TARGET_OPTS = ("--work-tree", "--git-dir")
 # ``-b feature``; the ``f`` in ``feature`` is not ``--force``.
 _CHECKOUT_SHORT_VALUE_OPTS = {"b", "B"}
 
+# The same for `git restore`: ``-sHEAD~1`` means ``--source=HEAD~1``, so the
+# ``S`` in ``-sSTABLE`` is part of a tree name, not ``--staged``.
+_RESTORE_SHORT_VALUE_OPTS = {"s"}
+
 # Shell expansions cannot be reproduced reliably after shlex has split the
 # command. Tilde expansion is handled separately because it has deterministic
 # local semantics for ordinary home-directory paths.
@@ -61,7 +65,7 @@ _DANGER_TEMPLATE = (
     "Safer alternatives:\n"
     "- Use 'git stash' to save changes temporarily\n"
     "- Use 'git diff' to see what would be lost\n"
-    "- Use 'git restore' for clearer syntax"
+    "- Use 'git restore --staged' to unstage without discarding"
 )
 
 _UNVERIFIED_REPOSITORY_MESSAGE = (
@@ -456,8 +460,8 @@ def _check_single_git_discard_command(
     command: str,
 ) -> Tuple[bool, Optional[str]]:
     """
-    Block `git reset --hard` and `git clean -f`, which discard uncommitted
-    changes and untracked files.
+    Block `git reset --hard`, `git clean -f` and `git restore` of the working
+    tree, which discard uncommitted changes and untracked files.
     """
     args, _ = parse_git_checkout(command, "reset")
     if args is not None:
@@ -465,6 +469,19 @@ def _check_single_git_discard_command(
         if "--hard" in head:
             return True, _danger(
                 "'git reset --hard' DISCARDS all uncommitted changes!")
+        return False, None
+
+    # `git restore <path>` is the newer spelling of `git checkout -- <path>`
+    # and discards the same edits.
+    args, _ = parse_git_checkout(command, "restore")
+    if args is not None:
+        head = args[:args.index("--")] if "--" in args else args
+        if "-h" in head or "--help" in head:
+            return False, None
+        if _restore_writes_worktree(head):
+            return True, _danger(
+                "'git restore' DISCARDS uncommitted changes in the working "
+                "tree!")
         return False, None
 
     args, _ = parse_git_checkout(command, "clean")
@@ -478,6 +495,35 @@ def _check_single_git_discard_command(
                 "'git clean -f' DELETES untracked files, which git cannot "
                 "recover!")
     return False, None
+
+
+def _restore_writes_worktree(head: List[str]) -> bool:
+    """
+    Return True unless the `git restore` options name only the index.
+
+    `git restore` restores the working tree unless `--staged` is given
+    without `--worktree`. `--staged` alone only unstages, so every edit
+    stays on disk. Git accepts unambiguous prefixes of long options
+    (`--stag`, `--work`); `--s` is ambiguous with `--source`, and git
+    rejects it.
+    """
+    staged = worktree = False
+    for token in head:
+        if token.startswith("--"):
+            name = token.split("=", 1)[0]
+            if len(name) >= 4 and "--staged".startswith(name):
+                staged = True
+            elif len(name) >= 3 and "--worktree".startswith(name):
+                worktree = True
+        elif token.startswith("-") and len(token) > 1:
+            for char in token[1:]:
+                if char == "S":
+                    staged = True
+                elif char == "W":
+                    worktree = True
+                if char in _RESTORE_SHORT_VALUE_OPTS:
+                    break
+    return worktree or not staged
 
 
 def _check_single_git_checkout_command(
