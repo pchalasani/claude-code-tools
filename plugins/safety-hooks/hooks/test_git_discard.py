@@ -211,3 +211,29 @@ def test_recovery_is_not_allowed_after_a_cd(tmp_path, monkeypatch):
     (repo / "kept.txt").unlink()
     command = "cd {0} && git restore kept.txt".format(repo)
     assert check_git_checkout_command(command)[0]
+
+
+def test_hash_inside_a_file_name_is_not_a_comment(tmp_path, monkeypatch):
+    """`a#b` is one file name to the shell, not `a` plus a comment."""
+    repo = _repo_with_file(tmp_path, monkeypatch)
+    import subprocess
+    (repo / "kept.txt#2").write_text("v1\n")
+    subprocess.run(["git", "-C", str(repo), "add", "kept.txt#2"], check=True)
+    (repo / "kept.txt#2").write_text("edited\n")
+    command = "git -C {0} restore kept.txt#2".format(repo)
+    assert check_git_checkout_command(command)[0]
+
+
+@pytest.mark.parametrize("extra", ["--icase-pathspecs ", "--glob-pathspecs "])
+def test_no_recovery_with_pathspec_magic(tmp_path, monkeypatch, extra):
+    repo = _repo_with_file(tmp_path, monkeypatch)
+    (repo / "kept.txt").unlink()
+    command = "git {0}-C {1} restore kept.txt".format(extra, repo)
+    assert check_git_checkout_command(command)[0]
+
+
+def test_no_recovery_when_shell_words_were_dropped(tmp_path, monkeypatch):
+    repo = _repo_with_file(tmp_path, monkeypatch)
+    (repo / "kept.txt").unlink()
+    command = "git -C {0} restore kept.txt # recover it".format(repo)
+    assert check_git_checkout_command(command)[0]

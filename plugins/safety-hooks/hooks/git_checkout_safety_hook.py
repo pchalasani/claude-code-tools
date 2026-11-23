@@ -498,6 +498,11 @@ def _check_single_git_discard_command(
     git_words = _without_shell_only_words(command)
     if git_words is None:
         return False, None
+    # Recover files only from a command the hook reads exactly as the shell
+    # does: dropping words re-quotes the rest (a bare `~` would no longer
+    # expand), and pathspec magic can widen a file name to other files.
+    if git_words != command or re.search(r"(?i)icase|pathspecs", command):
+        allow_recovery = False
     for subcommand in ("reset", "restore", "clean"):
         args, repo_dir = parse_git_checkout(git_words, subcommand)
         if args is None:
@@ -533,26 +538,37 @@ def _without_shell_only_words(command: str) -> Optional[str]:
     """
     Return `command` without a trailing comment or redirections, which the
     shell consumes and git never sees: in ``git restore f # -S`` the ``-S``
-    is not an option. Returns None if the command cannot be split.
+    is not an option. Returns `command` itself when there is nothing to drop,
+    and None if it cannot be split.
     """
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars="<>&")
         lexer.whitespace_split = True
+        # The shell starts a comment only at the start of a word; shlex would
+        # also end a word at a `#` inside it, as in `a#b`.
+        lexer.commenters = ""
         tokens = list(lexer)
     except ValueError:
         return None
     words: List[str] = []
     skip_operand = False
+    dropped = False
     for token in tokens:
+        # An unquoted word starting with `#` starts a comment.
+        if (token.startswith("#")
+                and re.search(r"(?:^|\s)" + re.escape(token), command)):
+            dropped = True
+            break
         if skip_operand:
             skip_operand = False
             continue
         if token and set(token) <= set("<>&"):
             # A redirection operator and the file or descriptor it names.
             skip_operand = token not in ("&", "&&")
+            dropped = True
             continue
         words.append(token)
-    return shlex.join(words)
+    return shlex.join(words) if dropped else command
 
 
 def _restores_only_safe_paths(
