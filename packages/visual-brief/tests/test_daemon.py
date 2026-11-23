@@ -88,6 +88,33 @@ def test_health_responds(live_server: tuple[VisualBriefServer, Path]) -> None:
     assert health["runs_root_id"] != str(run_dir.parent)
 
 
+@pytest.mark.parametrize("method", ["GET", "HEAD", "POST"])
+def test_health_rejects_untrusted_host(
+    live_server: tuple[VisualBriefServer, Path], method: str
+) -> None:
+    """The daemon rejects an unknown authority before method-specific dispatch."""
+    server, _ = live_server
+    status, body = request(server, method, "/health", host="example.invalid")
+    assert status == 421
+    if method == "HEAD":
+        assert body == b""
+
+
+def test_duplicate_host_is_rejected(
+    live_server: tuple[VisualBriefServer, Path],
+) -> None:
+    """The server requires one unambiguous authority."""
+    server, _ = live_server
+    conn = http.client.HTTPConnection(HOST, server.server_address[1], timeout=2)
+    try:
+        conn.putrequest("HEAD", "/health")
+        conn.putheader("Host", "localhost")
+        conn.endheaders()
+        assert conn.getresponse().status == 421
+    finally:
+        conn.close()
+
+
 def test_url_forms_serve_identical_run(
     live_server: tuple[VisualBriefServer, Path],
 ) -> None:

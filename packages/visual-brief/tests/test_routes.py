@@ -13,7 +13,7 @@ from visual_brief.server.routes import Route, route_request, run_id_from_host
         ("demo-run.localhost", "/"),
         ("demo-run.localhost:8765", "/"),
         ("localhost", "/r/demo-run/"),
-        ("anything.invalid", "/r/demo-run/"),
+        ("127.0.0.1:8765", "/r/demo-run/"),
     ],
 )
 def test_both_url_forms_reach_same_run(host: str, path: str) -> None:
@@ -51,14 +51,34 @@ def test_run_endpoints_work_in_both_forms(
         "localhost",
         "localhost:8765",
         "127.0.0.1",
-        "Demo-Run.localhost",
-        None,
-        "garbage.invalid",
+        "LOCALHOST",
     ],
 )
-def test_bare_or_garbage_host_reaches_dashboard(host: str | None) -> None:
-    """A request without a valid run subdomain reaches the dashboard."""
+def test_bare_loopback_host_reaches_dashboard(host: str) -> None:
+    """Bare loopback names serve the dashboard."""
     assert route_request(host, "/") == Route("dashboard")
+
+
+@pytest.mark.parametrize(
+    "authority",
+    [
+        None,
+        "",
+        "example.invalid",
+        "nested.demo.localhost",
+        "localhost:bad",
+        "localhost:99999",
+        "localhost:80:80",
+        "[localhost]",
+        "localhost, localhost",
+    ],
+)
+@pytest.mark.parametrize("path", ["/health", "/", "/r/demo-run/"])
+def test_unrecognized_authority_is_rejected_before_routing(
+    authority: str | None, path: str
+) -> None:
+    """The authority check takes precedence over every kind of path."""
+    assert route_request(authority, path) == Route("invalid_host")
 
 
 def test_host_port_is_removed_before_run_id_parsing() -> None:
@@ -81,5 +101,5 @@ def test_bad_path_route_is_not_found(path: str) -> None:
 
 
 def test_health_is_not_run_scoped() -> None:
-    """Health is available regardless of the Host header."""
+    """Health is available on each allowed local hostname."""
     assert route_request("demo-run.localhost", "/health") == Route("health")

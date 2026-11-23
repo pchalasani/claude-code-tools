@@ -18,8 +18,8 @@ class Route:
 def route_request(host_header: str | None, request_path: str) -> Route:
     """Route a request using its host and URL path.
 
-    Path-based run routes take precedence over the host. Invalid and absent
-    hosts behave as a bare dashboard host.
+    Only loopback authorities reach the router. On those authorities,
+    path-based run routes take precedence over a subdomain.
 
     Args:
         host_header: Raw Host header, including an optional port.
@@ -28,6 +28,11 @@ def route_request(host_header: str | None, request_path: str) -> Route:
     Returns:
         The parsed route.
     """
+    host = _host_name(host_header)
+    run_id = _run_subdomain(host)
+    if host not in {"localhost", "127.0.0.1"} and run_id is None:
+        return Route("invalid_host")
+
     if request_path == "/health":
         return Route("health")
 
@@ -35,7 +40,6 @@ def route_request(host_header: str | None, request_path: str) -> Route:
     if path_route is not None:
         return path_route
 
-    run_id = run_id_from_host(host_header)
     if run_id is not None:
         endpoint = _run_endpoint(request_path)
         if endpoint is not None:
@@ -56,27 +60,25 @@ def run_id_from_host(host_header: str | None) -> str | None:
     Returns:
         A valid run id, or ``None`` for bare and malformed hosts.
     """
-    if not host_header:
-        return None
-    host = _strip_port(host_header.strip())
-    suffix = ".localhost"
-    if not host.endswith(suffix):
-        return None
-    run_id = host[: -len(suffix)]
-    if "." in run_id or not is_valid_run_id(run_id):
-        return None
-    return run_id
+    return _run_subdomain(_host_name(host_header))
 
 
-def _strip_port(host: str) -> str:
-    """Remove the port portion from an HTTP Host value."""
-    if host.startswith("["):
-        closing = host.find("]")
-        return host[1:closing] if closing >= 0 else ""
-    name, separator, port = host.rpartition(":")
-    if separator and port.isdecimal():
-        return name
-    return host
+def _run_subdomain(host: str) -> str | None:
+    """Recognize only a single valid run id under localhost."""
+    run_id, dot, domain = host.partition(".")
+    if dot and domain == "localhost" and is_valid_run_id(run_id):
+        return run_id
+    return None
+
+
+def _host_name(authority: str | None) -> str:
+    """Read an ASCII hostname with an optional numeric TCP port."""
+    if not authority or not authority.isascii():
+        return ""
+    name, colon, port = authority.strip(" \t").partition(":")
+    if colon and not (port.isdigit() and len(port) <= 5 and int(port) <= 65535):
+        return ""
+    return name.lower()
 
 
 def _path_run_route(path: str) -> Route | None:

@@ -73,6 +73,8 @@ class VisualBriefHandler(JsonResponder):
     def do_POST(self) -> None:
         """Handle the run-scoped question and signal endpoints."""
         route = self._route()
+        if route is None:
+            return
         if route.endpoint not in {"ask", "signal"} or route.run_id is None:
             self._json_error(HTTPStatus.NOT_FOUND, "Not found")
             return
@@ -86,6 +88,8 @@ class VisualBriefHandler(JsonResponder):
 
     def _dispatch(self, *, send_body: bool) -> None:
         route = self._route()
+        if route is None:
+            return
         if route.endpoint == "health":
             self._send_json(
                 HTTPStatus.OK,
@@ -129,10 +133,17 @@ class VisualBriefHandler(JsonResponder):
         else:
             self._serve_render_version(run_dir, send_body=send_body)
 
-    def _route(self) -> Route:
-        """Parse the current request."""
-        path = urlsplit(self.path).path
-        return route_request(self.headers.get("Host"), path)
+    def _route(self) -> Route | None:
+        """Reject an ambiguous or non-local authority before serving any route."""
+        hosts = self.headers.get_all("Host", [])
+        authority = hosts[0] if len(hosts) == 1 else None
+        route = route_request(authority, urlsplit(self.path).path)
+        if route.endpoint == "invalid_host":
+            # A rejected POST can still have an unread body on this connection.
+            self.close_connection = True
+            self.send_error(HTTPStatus.MISDIRECTED_REQUEST, "Invalid Host")
+            return None
+        return route
 
     def _existing_run(
         self,
