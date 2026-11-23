@@ -10,7 +10,6 @@ from http import HTTPStatus
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 from visual_brief import __version__
 from visual_brief.server.dashboard import render_dashboard
@@ -137,18 +136,7 @@ class VisualBriefHandler(JsonResponder):
         """Reject an ambiguous or non-local authority before serving any route."""
         hosts = self.headers.get_all("Host", [])
         authority = hosts[0] if len(hosts) == 1 else None
-        try:
-            target = urlsplit(self.path)
-        except ValueError:
-            self.send_error(HTTPStatus.BAD_REQUEST, "Invalid request target")
-            return None
-        if target.scheme or target.netloc:
-            # In absolute form the target names its own authority.
-            header = (authority or "").strip(" \t").lower().removesuffix(":80")
-            target_host = target.netloc.lower().removesuffix(":80")
-            if target.scheme != "http" or target_host != header:
-                authority = None
-        route = route_request(authority, target.path or "/")
+        route = route_request(authority, self.path)
         if route.endpoint == "invalid_host":
             # A rejected POST can still have an unread body on this connection.
             self.close_connection = True

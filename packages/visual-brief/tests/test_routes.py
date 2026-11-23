@@ -65,6 +65,7 @@ def test_bare_loopback_host_reaches_dashboard(host: str) -> None:
         None,
         "",
         "example.invalid",
+        "Demo-Run.localhost",
         "nested.demo.localhost",
         "localhost:bad",
         "localhost:99999",
@@ -79,6 +80,12 @@ def test_unrecognized_authority_is_rejected_before_routing(
 ) -> None:
     """The authority check takes precedence over every kind of path."""
     assert route_request(authority, path) == Route("invalid_host")
+
+
+def test_absolute_target_requires_a_valid_port() -> None:
+    """An absolute URL contains one numeric port at most."""
+    route = route_request("localhost:8000", "http://localhost:8000:80/health")
+    assert route == Route("invalid_host")
 
 
 def test_host_port_is_removed_before_run_id_parsing() -> None:
