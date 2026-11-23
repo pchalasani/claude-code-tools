@@ -468,11 +468,15 @@ def check_git_checkout_command(command: str) -> Tuple[bool, Optional[str]]:
 
     Returns tuple: (should_block: bool, reason: str or None)
     """
-    # Check each subcommand in compound commands
-    for subcmd in _split_compound_command(command):
+    # Check each subcommand in compound commands. A file is recovered only
+    # when the command is a lone git command: after an earlier `cd`, the
+    # file names would be read against the wrong directory.
+    subcommands = _split_compound_command(command)
+    allow_recovery = len(subcommands) == 1
+    for subcmd in subcommands:
         for check in (_check_single_git_checkout_command,
                       _check_single_git_discard_command):
-            result = check(subcmd)
+            result = check(subcmd, allow_recovery)
             should_block, reason = result
             if should_block:
                 return result
@@ -481,7 +485,7 @@ def check_git_checkout_command(command: str) -> Tuple[bool, Optional[str]]:
 
 
 def _check_single_git_discard_command(
-    command: str,
+    command: str, allow_recovery: bool = True,
 ) -> Tuple[bool, Optional[str]]:
     """
     Block `git reset --hard`, `git clean -f` and `git restore` of the working
@@ -512,7 +516,8 @@ def _check_single_git_discard_command(
         # it only brings back files that are missing or unchanged.
         if (subcommand == "restore"
                 and _restore_writes_worktree(names)
-                and not _restores_only_safe_paths(names, paths, repo_dir)):
+                and not (allow_recovery
+                         and _restores_only_safe_paths(names, paths, repo_dir))):
             return True, _danger(
                 "'git restore' DISCARDS uncommitted changes in the working "
                 "tree!")
@@ -722,7 +727,7 @@ def _restore_writes_worktree(names: List[str]) -> bool:
 
 
 def _check_single_git_checkout_command(
-    command: str,
+    command: str, allow_recovery: bool = True,
 ) -> Tuple[bool, Optional[str]]:
     """
     Check a single (non-compound) git checkout command.
@@ -767,7 +772,7 @@ def _check_single_git_checkout_command(
         # `git checkout -- <files>` with no tree-ish copies the files from
         # the index. Bringing back files that are missing or unchanged loses
         # no edit, so recovering an accidentally deleted file is allowed.
-        if not head and safe_index_paths(repo_dir, pathspecs):
+        if allow_recovery and not head and safe_index_paths(repo_dir, pathspecs):
             return False, None
         return True, _danger(
             "This will overwrite your local file with version from another "

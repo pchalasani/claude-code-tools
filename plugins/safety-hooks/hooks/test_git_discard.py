@@ -203,3 +203,11 @@ def test_restoring_a_deleted_file_from_another_commit_is_blocked(
     (repo / "kept.txt").unlink()
     command = "git -C {0} restore --source=HEAD kept.txt".format(repo)
     assert check_git_checkout_command(command)[0]
+
+
+def test_recovery_is_not_allowed_after_a_cd(tmp_path, monkeypatch):
+    """After `cd`, the file name would be checked against the wrong directory."""
+    repo = _repo_with_file(tmp_path, monkeypatch)
+    (repo / "kept.txt").unlink()
+    command = "cd {0} && git restore kept.txt".format(repo)
+    assert check_git_checkout_command(command)[0]
