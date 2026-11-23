@@ -111,7 +111,9 @@ def test_preview_keeps_the_end() -> None:
     assert _preview("short") == "short"
 
 
-@pytest.mark.parametrize("said", ["Send.", "End it."])
+@pytest.mark.parametrize(
+    "said", ["Send.", "End it.", "Sunday.", "Said it.", "So neat."]
+)
 def test_send_said_alone_submits(make_app, said: str) -> None:  # noqa: ANN001
     app = make_app(mode="vad")
     app.handle_utterance("Fix the build.")
