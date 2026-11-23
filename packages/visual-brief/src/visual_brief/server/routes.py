@@ -90,11 +90,17 @@ def _parse_authority(authority: str | None) -> tuple[str, int] | None:
     if not authority or not authority.isascii():
         return None
     name, colon, port = authority.strip(" \t").partition(":")
-    if colon and not (port.isdigit() and len(port) <= 5 and int(port) <= 65535):
-        return None
+    number = 80
+    if colon:
+        digits = port.lstrip("0") or "0"
+        if not port.isdigit() or len(digits) > 5:
+            return None
+        number = int(digits)
+        if number > 65535:
+            return None
     label, dot, domain = name.partition(".")
     host = label + dot + domain.lower() if dot else name.lower()
-    return host, int(port) if colon else 80
+    return host, number
 
 
 def _path_run_route(path: str) -> Route | None:

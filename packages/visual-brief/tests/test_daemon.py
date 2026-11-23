@@ -98,6 +98,8 @@ def test_health_rejects_untrusted_host(
     assert status == 421
     if method == "HEAD":
         assert body == b""
+    else:
+        assert json.loads(body) == {"error": "Invalid Host"}
 
 
 def test_absolute_health_target_checks_authority(

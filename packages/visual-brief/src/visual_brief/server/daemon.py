@@ -140,7 +140,11 @@ class VisualBriefHandler(JsonResponder):
         if route.endpoint == "invalid_host":
             # A rejected POST can still have an unread body on this connection.
             self.close_connection = True
-            self.send_error(HTTPStatus.MISDIRECTED_REQUEST, "Invalid Host")
+            self._json_error(
+                HTTPStatus.MISDIRECTED_REQUEST,
+                "Invalid Host",
+                send_body=self.command != "HEAD",
+            )
             return None
         return route
 

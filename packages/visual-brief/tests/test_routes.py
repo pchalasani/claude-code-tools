@@ -50,6 +50,7 @@ def test_run_endpoints_work_in_both_forms(
     [
         "localhost",
         "localhost:8765",
+        "localhost:0008765",
         "127.0.0.1",
         "LOCALHOST",
     ],
