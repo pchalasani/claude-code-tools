@@ -223,9 +223,9 @@ def test_audio_log_keeps_the_newest_pieces(tmp_path) -> None:  # noqa: ANN001
     log = AudioLog(2, reports.append, folder=tmp_path)
     transcribe = log.wrap(lambda samples, rate: f"piece {samples[0]:.1f}")
     for n in range(3):
-        assert transcribe(np.full(1600, 0.1 * (n + 1), np.float32), 16000) == (
-            f"piece {0.1 * (n + 1):.1f}"
-        )
+        level = 0.1 * (n + 1)
+        out = transcribe(np.full(1600, level, np.float32), 16000)
+        assert out == f"piece {level:.1f}"
         time.sleep(0.002)  # distinct file names
     transcribe(np.zeros(800, np.float32), 16000)  # warm-up: not saved
     wavs = sorted(p.name for p in tmp_path.glob("*.wav"))
