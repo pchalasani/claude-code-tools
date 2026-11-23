@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
+import functools
 import os
 import re
 import shlex
 import subprocess
 import sys
-from typing import List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 # Add plugin hooks directory to Python path for local imports
 PLUGIN_ROOT = os.environ.get('CLAUDE_PLUGIN_ROOT')
@@ -37,6 +38,31 @@ _OPAQUE_TARGET_OPTS = ("--work-tree", "--git-dir")
 # ``-b feature``; the ``f`` in ``feature`` is not ``--force``.
 _CHECKOUT_SHORT_VALUE_OPTS = {"b", "B"}
 
+# The discard check reads the options of `git reset`, `git clean` and
+# `git restore` from `git <subcommand> --help-all`, which git prints from the
+# same table it parses the options with. An option line looks like
+#     -s, --[no-]source <tree-ish>
+#     -d                    remove whole directories
+#     --[no-]recurse-submodules[=<reset>]
+# Option lines start a few spaces in. The description starts after two or more
+# spaces, or on the next line, which starts far deeper.
+_HELP_OPTION_LINE = re.compile(r"^ {1,8}-")
+_HELP_OPTION_SPEC = re.compile(
+    r"^(?:-(?P<short>[^-\s,])(?:,\s*)?)?"
+    r"(?:--(?P<negatable>\[no-\])?(?P<long>[^\s\[=<]+))?"
+    r"(?P<value>.*)$"
+)
+
+# An option with a REQUIRED value takes the rest of its token, or else the next
+# token: in ``--pathspec-from-file -S`` the ``-S`` is a file name. An option
+# with an OPTIONAL value takes only a value attached to it.
+_REQUIRED = "required"
+_OPTIONAL = "optional"
+
+# git handles these itself, and its help does not list them.
+_GIT_HELP_LONG_OPTIONS = {"--help": None, "--help-all": None}
+_GIT_HELP_SHORT_OPTIONS = {"h": None}
+
 # Shell expansions cannot be reproduced reliably after shlex has split the
 # command. Tilde expansion is handled separately because it has deterministic
 # local semantics for ordinary home-directory paths.
@@ -61,7 +87,7 @@ _DANGER_TEMPLATE = (
     "Safer alternatives:\n"
     "- Use 'git stash' to save changes temporarily\n"
     "- Use 'git diff' to see what would be lost\n"
-    "- Use 'git restore' for clearer syntax"
+    "- Use 'git restore --staged' to unstage without discarding"
 )
 
 _UNVERIFIED_REPOSITORY_MESSAGE = (
@@ -343,9 +369,11 @@ def _env_chdir(
 
 def parse_git_checkout(
     command: str,
+    subcommand: str = "checkout",
 ) -> Tuple[Optional[List[str]], Optional[str]]:
     """
     Split ``git [global-opts] checkout <args...>`` into (args, repo_dir).
+    Pass ``subcommand`` to split another subcommand, such as ``reset``.
 
     Returns ``(None, None)`` when the command is not a git checkout at all.
 
@@ -407,7 +435,7 @@ def parse_git_checkout(
             continue
         break
 
-    if i >= len(tokens) or tokens[i] != "checkout":
+    if i >= len(tokens) or tokens[i] != subcommand:
         return None, None
 
     args = tokens[i + 1:]
@@ -440,12 +468,206 @@ def check_git_checkout_command(command: str) -> Tuple[bool, Optional[str]]:
     """
     # Check each subcommand in compound commands
     for subcmd in _split_compound_command(command):
-        result = _check_single_git_checkout_command(subcmd)
-        should_block, reason = result
-        if should_block:
-            return result
+        for check in (_check_single_git_checkout_command,
+                      _check_single_git_discard_command):
+            result = check(subcmd)
+            should_block, reason = result
+            if should_block:
+                return result
 
     return False, None
+
+
+def _check_single_git_discard_command(
+    command: str,
+) -> Tuple[bool, Optional[str]]:
+    """
+    Block `git reset --hard`, `git clean -f` and `git restore` of the working
+    tree, which discard uncommitted changes and untracked files.
+
+    Git accepts any unambiguous prefix of a long option, so `--har` is
+    `--hard`. The check reads git's own option list and blocks a long option
+    that is not a full name.
+    """
+    for subcommand in ("reset", "restore", "clean"):
+        args, _ = parse_git_checkout(command, subcommand)
+        if args is None:
+            continue
+        head = args[:args.index("--")] if "--" in args else args
+        problem, options = _read_options(subcommand, head)
+        if problem:
+            return True, problem
+        names = [name for name, _ in options]
+        if subcommand == "reset" and "--hard" in names:
+            return True, _danger(
+                "'git reset --hard' DISCARDS all uncommitted changes!")
+        # `git restore <path>` is the newer spelling of
+        # `git checkout -- <path>` and discards the same edits.
+        if (subcommand == "restore"
+                and not {"-h", "--help"} & set(names)
+                and _restore_writes_worktree(names)):
+            return True, _danger(
+                "'git restore' DISCARDS uncommitted changes in the working "
+                "tree!")
+        if subcommand == "clean" and _clean_deletes(names):
+            return True, _danger(
+                "'git clean -f' DELETES untracked files, which git cannot "
+                "recover!")
+        return False, None
+    return False, None
+
+
+def _parse_git_help(
+    text: str,
+) -> Tuple[Dict[str, Optional[str]], Dict[str, Optional[str]]]:
+    """
+    Return the long and short options in `git <subcommand> -h` output.
+
+    Each one maps an option to the value it takes: None, _REQUIRED or
+    _OPTIONAL. A ``--[no-]`` option also adds its ``--no-`` form, which takes
+    no value.
+    """
+    long_options: Dict[str, Optional[str]] = {}
+    short_options: Dict[str, Optional[str]] = {}
+    for line in text.splitlines():
+        if not _HELP_OPTION_LINE.match(line):
+            continue
+        spec = re.split(r"\s{2,}", line.strip(), maxsplit=1)[0]
+        match = _HELP_OPTION_SPEC.match(spec)
+        value = match.group("value").strip()
+        kind = (None if not value
+                else _OPTIONAL if value.startswith("[") else _REQUIRED)
+        if match.group("short"):
+            short_options[match.group("short")] = kind
+        if match.group("long"):
+            long_options["--" + match.group("long")] = kind
+            if match.group("negatable"):
+                long_options["--no-" + match.group("long")] = None
+    return long_options, short_options
+
+
+@functools.lru_cache(maxsize=None)
+def _git_options(
+    subcommand: str,
+) -> Optional[Tuple[Dict[str, Optional[str]], Dict[str, Optional[str]]]]:
+    """Return the options that `git <subcommand>` lists, or None."""
+    try:
+        result = subprocess.run(
+            ["git", subcommand, "--help-all"], capture_output=True,
+            text=True, timeout=10, env=dict(os.environ, LC_ALL="C"))
+    except (OSError, subprocess.SubprocessError):
+        return None
+    long_options, short_options = _parse_git_help(
+        result.stdout + result.stderr)
+    if not long_options and not short_options:
+        return None
+    return long_options, short_options
+
+
+def _read_options(
+    subcommand: str, head: List[str],
+) -> Tuple[Optional[str], List[Tuple[str, str]]]:
+    """
+    Return the options in `head` in order, each with its value.
+
+    The options are read as git reads them: an option with a value takes it,
+    so in ``-e -n`` the ``-n`` is a pattern, and ``--end-of-options`` ends the
+    options as ``--`` does. The first item of the result is a message when an
+    option is not one that git lists by its full name.
+    """
+    known = _git_options(subcommand)
+    if known is None:
+        return ("Could not read git's option list ('git {0} -h'), so this "
+                "check cannot read the 'git {0}' command."
+                .format(subcommand)), []
+    listed_long, listed_short = known
+    long_options = {**_GIT_HELP_LONG_OPTIONS, **listed_long}
+    short_options = {**_GIT_HELP_SHORT_OPTIONS, **listed_short}
+    options: List[Tuple[str, str]] = []
+    tokens = iter(head)
+    for token in tokens:
+        if token == "--end-of-options":
+            break
+        if token.startswith("--"):
+            name, attached, value = token.partition("=")
+            if name not in long_options:
+                return _not_a_full_name(subcommand, name, listed_long), []
+            if long_options[name] == _REQUIRED and not attached:
+                value = next(tokens, "")
+            options.append((name, value))
+        elif token.startswith("-") and len(token) > 1:
+            for index, char in enumerate(token[1:], start=1):
+                if char not in short_options:
+                    return ("'git {0} -h' lists no option '-{1}'. Write each "
+                            "option as git lists it.".format(subcommand, char)
+                            ), []
+                kind = short_options[char]
+                if kind is None:
+                    options.append(("-" + char, ""))
+                    continue
+                value = token[index + 1:]
+                if not value and kind == _REQUIRED:
+                    value = next(tokens, "")
+                options.append(("-" + char, value))
+                break
+    return None, options
+
+
+def _not_a_full_name(
+    subcommand: str, name: str, listed_long: Dict[str, Optional[str]],
+) -> str:
+    """Return the message for a long option that is not a full name."""
+    matches = sorted(option for option in listed_long if option.startswith(name))
+    if len(matches) == 1:
+        return ("Git reads '{0}' as '{1}', because it accepts any unambiguous "
+                "prefix of an option name. This check reads only full names. "
+                "Spell the option out: '{1}'.".format(name, matches[0]))
+    if matches:
+        return ("'{0}' is the start of more than one option: {1}. Spell out "
+                "the option you mean.".format(
+                    name, ", ".join("'{0}'".format(m) for m in matches)))
+    return ("'git {0} -h' lists no option '{1}'. Write each option as git "
+            "lists it.".format(subcommand, name))
+
+
+def _clean_deletes(names: List[str]) -> bool:
+    """
+    Return True if `git clean` with these options deletes files.
+
+    The last of ``--dry-run`` and ``--no-dry-run`` wins. Force counts once it
+    is given: ``-f --no-force`` still deletes when ``clean.requireForce`` is
+    false.
+    """
+    force = dry_run = False
+    for name in names:
+        if name in ("-f", "--force"):
+            force = True
+        elif name in ("-n", "--dry-run"):
+            dry_run = True
+        elif name == "--no-dry-run":
+            dry_run = False
+    return force and not dry_run
+
+
+def _restore_writes_worktree(names: List[str]) -> bool:
+    """
+    Return True unless the `git restore` options name only the index.
+
+    `git restore` restores the working tree unless `--staged` is given
+    without `--worktree`. `--staged` alone only unstages, so every edit
+    stays on disk. The last of each option and its ``--no-`` form wins.
+    """
+    staged = worktree = False
+    for name in names:
+        if name in ("-S", "--staged"):
+            staged = True
+        elif name == "--no-staged":
+            staged = False
+        elif name in ("-W", "--worktree"):
+            worktree = True
+        elif name == "--no-worktree":
+            worktree = False
+    return worktree or not staged
 
 
 def _check_single_git_checkout_command(
