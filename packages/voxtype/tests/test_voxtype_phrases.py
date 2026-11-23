@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import time
 import wave
 from pathlib import Path
 from types import SimpleNamespace
@@ -213,3 +214,47 @@ def test_real_vad_segment_starts_before_the_first_sound(tmp_path) -> None:  # no
     pre = int(PREROLL_SECONDS * SAMPLE_RATE)
     assert (padded_start, padded_n) == (start - pre, n + pre)
     assert padded_start < onset
+
+
+def test_audio_log_keeps_the_newest_pieces(tmp_path) -> None:  # noqa: ANN001
+    from voxtype.audio_log import AudioLog
+
+    reports: list[str] = []
+    log = AudioLog(2, reports.append, folder=tmp_path)
+    transcribe = log.wrap(lambda samples, rate: f"piece {samples[0]:.1f}")
+    for n in range(3):
+        level = 0.1 * (n + 1)
+        out = transcribe(np.full(1600, level, np.float32), 16000)
+        assert out == f"piece {level:.1f}"
+        time.sleep(0.002)  # distinct file names
+    transcribe(np.zeros(800, np.float32), 16000)  # warm-up: not saved
+    wavs = sorted(p.name for p in tmp_path.glob("*.wav"))
+    assert len(wavs) == 2
+    index = (tmp_path / "index.txt").read_text().splitlines()
+    assert [line.split("\t") for line in index] == [
+        [wavs[0], "piece 0.2"], [wavs[1], "piece 0.3"],
+    ]
+    with wave.open(str(tmp_path / wavs[1])) as w:
+        assert (w.getframerate(), w.getnframes()) == (16000, 1600)
+    assert reports == []
+
+
+def test_audio_log_failure_is_reported_once(tmp_path) -> None:  # noqa: ANN001
+    from voxtype.audio_log import AudioLog
+
+    blocker = tmp_path / "file"
+    blocker.write_text("not a folder")
+    reports: list[str] = []
+    log = AudioLog(5, reports.append, folder=blocker)
+    transcribe = log.wrap(lambda samples, rate: "hi")
+    assert transcribe(np.ones(10, np.float32), 16000) == "hi"
+    assert transcribe(np.ones(10, np.float32), 16000) == "hi"
+    assert len(reports) == 1 and "could not save audio" in reports[0]
+
+
+@pytest.mark.parametrize("bad", [-1, 1001, 2.0, True, "20"])
+def test_save_audio_must_be_a_whole_number(bad: object) -> None:
+    from voxtype.config import Config
+
+    with pytest.raises(ValueError, match="save_audio"):
+        Config(save_audio=bad).validate()

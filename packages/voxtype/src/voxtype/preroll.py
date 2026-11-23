@@ -5,7 +5,8 @@ first consonant, like the "s" of "send it", falls before that point, and
 the transcriber then hears "and it" or "end it". Measured with macOS
 voices: the segment started 80-94 ms after "send it" began; adding the
 200 ms before it turned "Percentage" into "Sendage" and "Okay, sure"
-into "Okay show".
+into "Okay show". Real use then lost a soft "Did we" at the start of
+a question, so the preroll is 0.5 s; tests showed no harm from that.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from typing import Any
 import numpy as np
 
 #: Seconds of audio added before each VAD segment.
-PREROLL_SECONDS = 0.2
+PREROLL_SECONDS = 0.5
 
 
 class PrerollVad:

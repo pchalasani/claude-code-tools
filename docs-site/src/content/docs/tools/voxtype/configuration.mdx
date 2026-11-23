@@ -342,7 +342,21 @@ overlay_opacity = 1.0  # 0.1–1.0; lower it if the ghost hides text under it
 # max 1440 (a day). See the note below on the one trade-off. Also keeps
 # the post-processing model warm when post_process is on.
 keepalive_minutes = 0.0
+
+# Keep the audio of this many recent pieces in ~/.cache/voxtype/audio,
+# listed with their text in index.txt, to find out why words went
+# missing (parakeet engines). 0 (default) saves nothing.
+save_audio = 0
 ```
+
+### About `save_audio`
+
+If words go missing from the start of what you say, set `save_audio =
+20` and restart voxtype. When it happens again, find the piece by its
+text in `~/.cache/voxtype/audio/index.txt` and play its wav. If the
+words are not in the audio, speech detection started too late; if they
+are, the transcriber dropped them. The audio stays on your Mac, and
+only the newest pieces are kept.
 
 ### About `keepalive_minutes`
 
