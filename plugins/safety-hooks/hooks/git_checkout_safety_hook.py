@@ -14,6 +14,8 @@ if PLUGIN_ROOT:
     if hooks_dir not in sys.path:
         sys.path.insert(0, hooks_dir)
 
+from git_recovery import safe_index_paths  # noqa: E402
+
 # git's own global options that consume the NEXT token as their value. They sit
 # between "git" and the subcommand, so the subcommand is not always argv[1].
 _GIT_GLOBAL_VALUE_OPTS = {
@@ -489,32 +491,77 @@ def _check_single_git_discard_command(
     `--hard`. The check reads git's own option list and blocks a long option
     that is not a full name.
     """
+    git_words = _without_shell_only_words(command)
+    if git_words is None:
+        return False, None
     for subcommand in ("reset", "restore", "clean"):
-        args, _ = parse_git_checkout(command, subcommand)
+        args, repo_dir = parse_git_checkout(git_words, subcommand)
         if args is None:
             continue
-        head = args[:args.index("--")] if "--" in args else args
-        problem, options = _read_options(subcommand, head)
+        problem, options, paths = _read_options(subcommand, args)
         if problem:
             return True, problem
         names = [name for name, _ in options]
+        if {"-h", "--help", "--help-all"} & set(names):
+            return False, None
         if subcommand == "reset" and "--hard" in names:
             return True, _danger(
                 "'git reset --hard' DISCARDS all uncommitted changes!")
         # `git restore <path>` is the newer spelling of
-        # `git checkout -- <path>` and discards the same edits.
+        # `git checkout -- <path>` and discards the same edits, except when
+        # it only brings back files that are missing or unchanged.
         if (subcommand == "restore"
-                and not {"-h", "--help"} & set(names)
-                and _restore_writes_worktree(names)):
+                and _restore_writes_worktree(names)
+                and not _restores_only_safe_paths(names, paths, repo_dir)):
             return True, _danger(
                 "'git restore' DISCARDS uncommitted changes in the working "
                 "tree!")
         if subcommand == "clean" and _clean_deletes(names):
             return True, _danger(
-                "'git clean -f' DELETES untracked files, which git cannot "
+                "'git clean' DELETES untracked files, which git cannot "
                 "recover!")
         return False, None
     return False, None
+
+
+def _without_shell_only_words(command: str) -> Optional[str]:
+    """
+    Return `command` without a trailing comment or redirections, which the
+    shell consumes and git never sees: in ``git restore f # -S`` the ``-S``
+    is not an option. Returns None if the command cannot be split.
+    """
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars="<>&")
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return None
+    words: List[str] = []
+    skip_operand = False
+    for token in tokens:
+        if skip_operand:
+            skip_operand = False
+            continue
+        if token and set(token) <= set("<>&"):
+            # A redirection operator and the file or descriptor it names.
+            skip_operand = token not in ("&", "&&")
+            continue
+        words.append(token)
+    return shlex.join(words)
+
+
+def _restores_only_safe_paths(
+    names: List[str], paths: List[str], repo_dir: Optional[str],
+) -> bool:
+    """
+    Return True if `git restore` only copies named files from the index and
+    each one is missing or unchanged, so no edit is lost.
+    """
+    from_elsewhere = {"-s", "--source", "-p", "--patch",
+                      "--pathspec-from-file", "--staged", "-S"}
+    if from_elsewhere & set(names):
+        return False
+    return safe_index_paths(repo_dir, paths)
 
 
 def _parse_git_help(
@@ -565,33 +612,37 @@ def _git_options(
 
 
 def _read_options(
-    subcommand: str, head: List[str],
-) -> Tuple[Optional[str], List[Tuple[str, str]]]:
+    subcommand: str, args: List[str],
+) -> Tuple[Optional[str], List[Tuple[str, str]], List[str]]:
     """
     Return the options in `head` in order, each with its value.
 
     The options are read as git reads them: an option with a value takes it,
-    so in ``-e -n`` the ``-n`` is a pattern, and ``--end-of-options`` ends the
-    options as ``--`` does. The first item of the result is a message when an
-    option is not one that git lists by its full name.
+    so in ``-e -n`` the ``-n`` is a pattern and in ``-e -- -f`` the ``--``
+    is one too. A ``--`` or ``--end-of-options`` that is not a value ends the
+    options. Returns a message when an option is not one that git lists by
+    its full name, the options, and the remaining non-option words.
     """
     known = _git_options(subcommand)
     if known is None:
         return ("Could not read git's option list ('git {0} -h'), so this "
                 "check cannot read the 'git {0}' command."
-                .format(subcommand)), []
+                .format(subcommand)), [], []
     listed_long, listed_short = known
     long_options = {**_GIT_HELP_LONG_OPTIONS, **listed_long}
     short_options = {**_GIT_HELP_SHORT_OPTIONS, **listed_short}
     options: List[Tuple[str, str]] = []
-    tokens = iter(head)
+    positionals: List[str] = []
+    tokens = iter(args)
     for token in tokens:
-        if token == "--end-of-options":
+        if token in ("--", "--end-of-options"):
+            positionals.extend(tokens)
             break
         if token.startswith("--"):
             name, attached, value = token.partition("=")
             if name not in long_options:
-                return _not_a_full_name(subcommand, name, listed_long), []
+                return (_not_a_full_name(subcommand, name, listed_long),
+                        [], [])
             if long_options[name] == _REQUIRED and not attached:
                 value = next(tokens, "")
             options.append((name, value))
@@ -600,7 +651,7 @@ def _read_options(
                 if char not in short_options:
                     return ("'git {0} -h' lists no option '-{1}'. Write each "
                             "option as git lists it.".format(subcommand, char)
-                            ), []
+                            ), [], []
                 kind = short_options[char]
                 if kind is None:
                     options.append(("-" + char, ""))
@@ -610,7 +661,9 @@ def _read_options(
                     value = next(tokens, "")
                 options.append(("-" + char, value))
                 break
-    return None, options
+        else:
+            positionals.append(token)
+    return None, options, positionals
 
 
 def _not_a_full_name(
@@ -634,19 +687,17 @@ def _clean_deletes(names: List[str]) -> bool:
     """
     Return True if `git clean` with these options deletes files.
 
-    The last of ``--dry-run`` and ``--no-dry-run`` wins. Force counts once it
-    is given: ``-f --no-force`` still deletes when ``clean.requireForce`` is
-    false.
+    Only a dry run is safe: with ``clean.requireForce`` set to false, git
+    deletes without ``-f``. The last of ``--dry-run`` and ``--no-dry-run``
+    wins.
     """
-    force = dry_run = False
+    dry_run = False
     for name in names:
-        if name in ("-f", "--force"):
-            force = True
-        elif name in ("-n", "--dry-run"):
+        if name in ("-n", "--dry-run"):
             dry_run = True
         elif name == "--no-dry-run":
             dry_run = False
-    return force and not dry_run
+    return not dry_run
 
 
 def _restore_writes_worktree(names: List[str]) -> bool:
@@ -713,6 +764,11 @@ def _check_single_git_checkout_command(
         if any(p in _UNBOUNDED_PATHSPECS for p in pathspecs):
             return True, _danger(
                 "This will DISCARD ALL changes in current directory!")
+        # `git checkout -- <files>` with no tree-ish copies the files from
+        # the index. Bringing back files that are missing or unchanged loses
+        # no edit, so recovering an accidentally deleted file is allowed.
+        if not head and safe_index_paths(repo_dir, pathspecs):
+            return False, None
         return True, _danger(
             "This will overwrite your local file with version from another "
             "branch/commit!"

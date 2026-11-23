@@ -21,6 +21,15 @@ from git_checkout_safety_hook import _parse_git_help, check_git_checkout_command
     "git clean -f --exclude -n",
     "git clean -f -n --no-dry-run",
     "git clean -f --dry-run --no-dry",
+    # clean.requireForce=false makes git delete without -f.
+    "git clean",
+    "git -c clean.requireForce=false clean -d",
+    # `--` here is the value of -e, so -f and --no-dry-run are still options.
+    "git clean -n -e -- -f --no-dry-run",
+    # The shell drops comments and redirections; git never sees `-S` here.
+    "git restore live # -S",
+    "git restore live > -S",
+    "git restore live 2> --staged",
 ])
 def test_blocks_commands_that_discard_work(command):
     assert check_git_checkout_command(command)[0]
@@ -34,11 +43,12 @@ def test_blocks_commands_that_discard_work(command):
     "git clean -n",
     "git clean -fdn",
     "git clean -f --dry-run",
-    "git clean",
     "echo git reset --hard",
     "git clean -f -e foo -n",
     "git clean -f --exclude=*.log -n",
     "git clean -f --no-dry-run --dry-run",
+    "git restore --help-all",
+    "git reset --soft HEAD~1 # --hard is not an option here",
 ])
 def test_allows_commands_that_keep_work(command):
     assert not check_git_checkout_command(command)[0]
@@ -151,3 +161,45 @@ def test_danger_message_does_not_recommend_a_discarding_restore():
     reason = check_git_checkout_command("git checkout -- file.py")[1]
     assert "git restore --staged" in reason
     assert "for clearer syntax" not in reason
+
+
+def _repo_with_file(tmp_path, monkeypatch):
+    """A repository with one committed file, `kept.txt`."""
+    import subprocess
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / "kept.txt").write_text("original\n")
+    subprocess.run(["git", "-C", str(repo), "add", "kept.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "commit.gpgsign=false",
+                    "commit", "-q", "-m", "init"], check=True)
+    return repo
+
+
+@pytest.mark.parametrize("spelling", ["restore", "restore --", "checkout --"])
+def test_recovering_a_deleted_file_is_allowed(tmp_path, monkeypatch, spelling):
+    repo = _repo_with_file(tmp_path, monkeypatch)
+    (repo / "kept.txt").unlink()
+    command = "git -C {0} {1} kept.txt".format(repo, spelling)
+    assert not check_git_checkout_command(command)[0]
+
+
+@pytest.mark.parametrize("spelling", ["restore", "restore --", "checkout --"])
+def test_restoring_over_an_edited_file_is_blocked(tmp_path, monkeypatch,
+                                                  spelling):
+    repo = _repo_with_file(tmp_path, monkeypatch)
+    (repo / "kept.txt").write_text("edited\n")
+    command = "git -C {0} {1} kept.txt".format(repo, spelling)
+    assert check_git_checkout_command(command)[0]
+
+
+def test_restoring_a_deleted_file_from_another_commit_is_blocked(
+        tmp_path, monkeypatch):
+    repo = _repo_with_file(tmp_path, monkeypatch)
+    (repo / "kept.txt").unlink()
+    command = "git -C {0} restore --source=HEAD kept.txt".format(repo)
+    assert check_git_checkout_command(command)[0]
