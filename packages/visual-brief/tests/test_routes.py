@@ -83,6 +83,11 @@ def test_unrecognized_authority_is_rejected_before_routing(
     assert route_request(authority, path) == Route("invalid_host")
 
 
+def test_query_only_target_is_not_a_dashboard_path() -> None:
+    """A relative target needs a path to select the dashboard."""
+    assert route_request("localhost", "?view=all") == Route("not_found")
+
+
 def test_absolute_target_requires_a_valid_port() -> None:
     """An absolute URL contains one numeric port at most."""
     route = route_request("localhost:8000", "http://localhost:8000:80/health")

@@ -44,7 +44,9 @@ def route_request(host_header: str | None, request_path: str) -> Route:
     if target.scheme or target.netloc:
         if target.scheme != "http" or _parse_authority(target.netloc) != authority:
             return Route("invalid_host")
-    request_path = target.path or "/"
+    request_path = target.path
+    if target.netloc and not request_path:
+        request_path = "/"
 
     if request_path == "/health":
         return Route("health")

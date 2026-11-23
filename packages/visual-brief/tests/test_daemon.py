@@ -96,9 +96,7 @@ def test_health_rejects_untrusted_host(
     server, _ = live_server
     status, body = request(server, method, "/health", host="example.invalid")
     assert status == 421
-    if method == "HEAD":
-        assert body == b""
-    else:
+    if method != "HEAD":
         assert json.loads(body) == {"error": "Invalid Host"}
 
 
@@ -121,7 +119,12 @@ def test_duplicate_host_is_rejected(
         conn.putrequest("HEAD", "/health")
         conn.putheader("Host", "localhost")
         conn.endheaders()
-        assert conn.getresponse().status == 421
+        with conn.getresponse() as response:
+            assert response.status == 421
+            assert response.getheader("Connection") == "close"
+            # HTTPResponse.read() skips HEAD bodies, so inspect the wire to EOF.
+            assert response.fp is not None
+            assert response.fp.read() == b""
     finally:
         conn.close()
 
