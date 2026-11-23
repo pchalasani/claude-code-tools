@@ -175,9 +175,17 @@ def create_engine(cfg: Config, status: StatusFn) -> Engine:
     if cfg.engine == "parakeet":
         from .engine_parakeet import ParakeetEngine
 
-        return ParakeetEngine(cfg, status)
-    if cfg.engine == "parakeet-mlx":
+        engine = ParakeetEngine(cfg, status)
+    elif cfg.engine == "parakeet-mlx":
         from .engine_parakeet_mlx import ParakeetMlxEngine
 
-        return ParakeetMlxEngine(cfg, status)
-    return MoonshineEngine(cfg, status)
+        engine = ParakeetMlxEngine(cfg, status)
+    else:
+        return MoonshineEngine(cfg, status)
+    if cfg.save_audio:
+        from .audio_log import AudioLog
+
+        log = AudioLog(cfg.save_audio, status)
+        engine.transcribe = log.wrap(engine.transcribe)  # type: ignore[method-assign]
+        status(f"saving the last {cfg.save_audio} recordings to {log.folder}")
+    return engine

@@ -150,6 +150,10 @@ class Config:
             far less likely, and any page-in cost lands in an idle
             moment instead of on a take. 0 disables (default);
             max 1440 (a day).
+        save_audio: Keep the audio of this many recent pieces in
+            ~/.cache/voxtype/audio (parakeet engines), listed with their
+            text in index.txt, to diagnose missing words. 0 (default)
+            saves nothing.
         post_process: Clean each transcript with an LLM before typing
             it: punctuation, casing, self-corrections (and, with the
             cerebras provider, paragraphs and lists). Off by default;
@@ -268,6 +272,7 @@ class Config:
     overlay_speed: float = 1.0
     overlay_opacity: float = 1.0
     keepalive_minutes: float = 0.0
+    save_audio: int = 0
     post_process: bool = False
     post_process_provider: str = "s1-mini"
     post_process_format: str = "auto"
@@ -475,6 +480,15 @@ class Config:
             raise ValueError(
                 "keepalive_minutes must be between 0 and 1440 "
                 "(a day); 0 disables"
+            )
+        if (
+            isinstance(self.save_audio, bool)
+            or not isinstance(self.save_audio, int)
+            or not 0 <= self.save_audio <= 1000
+        ):
+            raise ValueError(
+                "save_audio must be a whole number from 0 to 1000, "
+                f"got {self.save_audio!r}"
             )
         self._validate_post_process()
         if self.mode == "wake" and not self.wake_word.strip():
@@ -784,6 +798,10 @@ strip_fillers = true
 # 30 s after any hotkey, but a press landing exactly as it starts can
 # clip the first moment of dictation.
 keepalive_minutes = 0.0
+
+# Keep the audio of this many recent pieces in ~/.cache/voxtype/audio
+# (text in index.txt), to find out why words went missing. 0: off.
+save_audio = 0
 
 # Optional LLM cleanup of each transcript before it is typed:
 # punctuation, casing, dropped self-corrections ("Tuesday, I mean
