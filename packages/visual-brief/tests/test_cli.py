@@ -384,3 +384,21 @@ def test_render_ignores_invalid_utf8_metadata_before_publishing(
 
     assert metadata.read_bytes() == b"\xff"
     assert index.read_text(encoding="utf-8").startswith("<!doctype html>")
+
+
+def test_serve_warns_when_reusing_a_daemon_of_another_version(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An older daemon left running after an upgrade is called out."""
+    body = json.dumps({"service": "visual-brief", "version": "0.0.1"}).encode()
+    response = (
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
+        + body
+    )
+    with raw_listener(response) as port:
+        assert serve_command(tmp_path / "runs", port) == 0
+
+    captured = capsys.readouterr()
+    assert f"http://localhost:{port}/" in captured.out
+    assert "version 0.0.1" in captured.err
