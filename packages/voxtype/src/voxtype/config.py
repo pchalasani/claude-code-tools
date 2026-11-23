@@ -201,9 +201,9 @@ class Config:
             until toggle-off (nothing is transcribed mid-take), so in
             hold mode stop with the hotkey, or Esc to cancel.
         submit_phrases: Phrases that press Enter when spoken as an
-            entire utterance (e.g. say "go" alone to submit); "send"
-            and "end it" are how the transcriber often hears "send it"
-            said alone.
+            entire utterance (e.g. say "go" alone to submit); "send",
+            "end it", "sunday", "said it" and "so neat" are how the
+            transcriber often hears "send it" said alone.
         submit_suffixes: Phrases that, ending an utterance, type the
             words before them and then press Enter ("fix the build,
             send it"); "senate", "senator" and "sendit" are how the
@@ -290,7 +290,10 @@ class Config:
     wake_word_aliases: list[str] = field(default_factory=list)
     stop_phrase: str = "stop listening"
     submit_phrases: list[str] = field(
-        default_factory=lambda: ["over", "go", "submit", "send", "end it"]
+        default_factory=lambda: [
+            "over", "go", "submit", "send", "end it", "sunday", "said it",
+            "so neat",
+        ]
     )
     submit_suffixes: list[str] = field(
         default_factory=lambda: [
@@ -868,10 +871,12 @@ wake_word_aliases = []
 stop_phrase = "stop listening"
 
 # Saying one of these as an ENTIRE utterance (pause, say it, pause)
-# presses Enter in the focused app -- e.g. to submit a prompt. "send"
-# and "end it" are how the transcriber often hears "send it" said alone.
-# Set to [] to disable.
-submit_phrases = ["over", "go", "submit", "send", "end it"]
+# presses Enter in the focused app -- e.g. to submit a prompt. "send",
+# "end it", "sunday", "said it" and "so neat" are how the transcriber
+# often hears "send it" said alone. Set to [] to disable.
+submit_phrases = [
+    "over", "go", "submit", "send", "end it", "sunday", "said it", "so neat",
+]
 
 # Ending a dictation with one of these types the words before it, then
 # presses Enter -- no pause needed: "fix the build, send it".
