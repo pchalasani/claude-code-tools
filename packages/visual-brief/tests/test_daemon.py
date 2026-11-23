@@ -100,6 +100,15 @@ def test_health_rejects_untrusted_host(
         assert body == b""
 
 
+def test_absolute_health_target_checks_authority(
+    live_server: tuple[VisualBriefServer, Path],
+) -> None:
+    """An absolute HTTP target must agree with the local Host header."""
+    server, _ = live_server
+    assert request(server, "HEAD", "http://localhost:80/health")[0] == 200
+    assert request(server, "HEAD", "http://demo-run.localhost/health")[0] == 421
+
+
 def test_duplicate_host_is_rejected(
     live_server: tuple[VisualBriefServer, Path],
 ) -> None:
