@@ -348,12 +348,13 @@ def serve_command(runs_root: Path, port: int) -> int:
             raise CliError(
                 f"port {port} is already used by a different service"
             ) from error
-        if health.get("version") != __version__:
+        running = health.get("version")
+        if running != __version__:
             # An older daemon keeps serving with its old code (and old fixes).
             print(
                 f"warning: the visual-brief daemon on port {port} is version "
-                f"{health.get('version')}, not {__version__}; stop it and run "
-                "serve again to use this version",
+                f"{running!r}, not {__version__}; stop it and run serve again "
+                "to use this version",
                 file=sys.stderr,
             )
         print(f"http://localhost:{port}/")

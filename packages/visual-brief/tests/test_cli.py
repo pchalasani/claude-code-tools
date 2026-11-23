@@ -401,4 +401,4 @@ def test_serve_warns_when_reusing_a_daemon_of_another_version(
 
     captured = capsys.readouterr()
     assert f"http://localhost:{port}/" in captured.out
-    assert "version 0.0.1" in captured.err
+    assert "version '0.0.1'" in captured.err
