@@ -1,4 +1,6 @@
 """git reset --hard, git clean -f and git restore discard work that git cannot recover."""
+from pathlib import Path
+
 import pytest
 import git_checkout_safety_hook
 from git_checkout_safety_hook import _parse_git_help, check_git_checkout_command
@@ -192,12 +194,21 @@ def test_reads_each_option_and_its_value_from_git_help():
 def test_danger_message_does_not_recommend_a_discarding_restore():
     reason = check_git_checkout_command("git checkout -- file.py")[1]
     assert reason is not None
-    assert "git restore --staged" in reason
-    assert "for clearer syntax" not in reason
+    assert "git diff --cached" in reason
+    assert "git restore" not in reason
 
 
-def _repo_with_file(tmp_path, monkeypatch):
-    """A repository with one committed file, `kept.txt`."""
+def test_clean_warning_explains_how_to_preview_untracked_files() -> None:
+    """The preview must include the files that cleaning would remove."""
+    blocked, reason = check_git_checkout_command("git clean")
+    assert blocked and reason is not None
+    assert "--dry-run" in reason and "untracked" in reason
+
+
+def _repo_with_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filename: str = "kept.txt"
+) -> Path:
+    """Create a repository with one committed file."""
     import subprocess
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -206,11 +217,19 @@ def _repo_with_file(tmp_path, monkeypatch):
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    (repo / "kept.txt").write_text("original\n")
-    subprocess.run(["git", "-C", str(repo), "add", "kept.txt"], check=True)
+    (repo / filename).write_text("original\n")
+    subprocess.run(["git", "-C", str(repo), "add", filename], check=True)
     subprocess.run(["git", "-C", str(repo), "-c", "commit.gpgsign=false",
                     "commit", "-q", "-m", "init"], check=True)
     return repo
+
+
+def test_restore_literal_file_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repo_with_file(tmp_path, monkeypatch, "pathspecs.txt")
+    (repo / "pathspecs.txt").unlink()
+    assert not check_git_checkout_command(f"git -C {repo} restore -- pathspecs.txt")[0]
 
 
 @pytest.mark.parametrize("spelling", ["restore", "restore --", "checkout --"])
@@ -257,11 +276,16 @@ def test_hash_inside_a_file_name_is_not_a_comment(tmp_path, monkeypatch):
     assert check_git_checkout_command(command)[0]
 
 
-@pytest.mark.parametrize("extra", ["--icase-pathspecs ", "--glob-pathspecs "])
-def test_no_recovery_with_pathspec_magic(tmp_path, monkeypatch, extra):
+@pytest.mark.parametrize("prefix", [
+    "git --icase-pathspecs", "git --glob-pathspecs",
+    "env GIT_ICASE_PATHSPECS=1 git", "GIT_GLOB_PATHSPECS=1 git",
+])
+def test_no_recovery_with_pathspec_magic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, prefix: str
+) -> None:
     repo = _repo_with_file(tmp_path, monkeypatch)
     (repo / "kept.txt").unlink()
-    command = "git {0}-C {1} restore kept.txt".format(extra, repo)
+    command = f"{prefix} -C {repo} restore kept.txt"
     assert check_git_checkout_command(command)[0]
 
 

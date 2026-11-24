@@ -37,6 +37,14 @@ _GIT_TERMINAL_OPTS = {
 # composition with -C; rather than guess, mark the target unknown and let the
 # caller decline to probe anything.
 _OPAQUE_TARGET_OPTS = ("--work-tree", "--git-dir")
+_PATHSPEC_OPTS = {
+    "--literal-pathspecs", "--no-literal-pathspecs", "--glob-pathspecs",
+    "--noglob-pathspecs", "--icase-pathspecs",
+}
+_PATHSPEC_VARS = {
+    "GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS",
+    "GIT_ICASE_PATHSPECS",
+}
 
 # Short checkout options whose remaining characters are their argument, rather
 # than more options in the same cluster. For example, ``-bfeature`` means
@@ -88,11 +96,8 @@ _LEADING_REDIRECTION_OPERATOR = re.compile(r"^\d*(?:<>|>>|>|<|>&|<&)\Z")
 
 _DANGER_TEMPLATE = (
     "⚠️  DANGEROUS COMMAND DETECTED!\n\n{message}\n\n"
-    "This command will destroy uncommitted work without warning.\n\n"
-    "Safer alternatives:\n"
-    "- Use 'git stash' to save changes temporarily\n"
-    "- Use 'git diff' to see what would be lost\n"
-    "- Use 'git restore --staged' to unstage without discarding"
+    "Inspect working-tree edits with 'git diff' and staged edits with "
+    "'git diff --cached'. Save any versions you need before continuing."
 )
 
 _UNVERIFIED_REPOSITORY_MESSAGE = (
@@ -410,13 +415,21 @@ def parse_git_checkout(
     ):
         chdir = None
 
-    opaque = False
+    # Restore recovery compares literal index entries. An explicit pathspec
+    # mode can change which files the same operands select.
+    opaque = subcommand == "restore" and (
+        bool(_PATHSPEC_VARS.intersection(os.environ))
+        or any("=" in word and word.partition("=")[0] in _PATHSPEC_VARS
+               for word in tokens[:executable])
+    )
     i = executable + 1
     while i < len(tokens):
         token = tokens[i]
         if token in _GIT_TERMINAL_OPTS:
             return None, None
         if token.split("=", 1)[0] in _OPAQUE_TARGET_OPTS:
+            opaque = True
+        if subcommand == "restore" and token in _PATHSPEC_OPTS:
             opaque = True
         if token in _GIT_GLOBAL_VALUE_OPTS:
             # git applies repeated -C cumulatively, each relative to the last.
@@ -539,10 +552,8 @@ def _check_single_git_discard_command(
     git_words = _without_shell_only_words(command)
     if git_words is None:
         return False, None
-    # Recover files only from a command the hook reads exactly as the shell
-    # does: dropping words re-quotes the rest (a bare `~` would no longer
-    # expand), and pathspec magic can widen a file name to other files.
-    if git_words != command or re.search(r"(?i)icase|pathspecs", command):
+    # Recovery needs a command whose complete argument list was verified.
+    if git_words != command:
         allow_recovery = False
     for subcommand in ("reset", "restore", "clean"):
         args, repo_dir = parse_git_checkout(git_words, subcommand)
@@ -571,9 +582,10 @@ def _check_single_git_discard_command(
                 "'git restore' DISCARDS uncommitted changes in the working "
                 "tree!")
         if subcommand == "clean" and _clean_deletes(names):
-            return True, _danger(
+            return True, (
                 "'git clean' DELETES untracked files, which git cannot "
-                "recover!")
+                "recover! Preview the same selection with --dry-run and "
+                "back up any files you want to keep.")
         return False, None
     return False, None
 

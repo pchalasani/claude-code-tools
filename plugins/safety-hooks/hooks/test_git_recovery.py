@@ -3,9 +3,11 @@
 import os
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+import git_recovery
 from git_recovery import safe_index_paths
 
 
@@ -43,6 +45,19 @@ def test_only_safe_index_files(repo: Path) -> None:
     assert not safe_index_paths(str(repo), paths)
     git(repo, "add", "--", "live")
     assert safe_index_paths(str(repo), paths)
+
+
+def test_git_probes_share_one_deadline(
+    repo: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stop examining files when the remaining time for all probes runs out."""
+    times = iter((0.0, 0.5, 1.25, 2.25))
+    monkeypatch.setattr(
+        git_recovery, "monotonic", lambda: next(times, 2.25), raising=False,
+    )
+    with patch.object(subprocess, "check_output", wraps=subprocess.check_output) as run:
+        assert not safe_index_paths(str(repo), ["lost", "live"])
+    assert [call.kwargs["timeout"] for call in run.call_args_list] == [1.5, 0.75]
 
 
 @pytest.mark.parametrize("flag", ["--skip-worktree", "--assume-unchanged"])
