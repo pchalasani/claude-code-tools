@@ -166,6 +166,30 @@ def test_quote_in_comment_preserves_next_command(
     assert seen == ["git status", "git --version"]
 
 
+@pytest.mark.parametrize(("header", "tail", "inspect_body"), [
+    ("cat >notes.md <<'DOC'", "", False),
+    ('cat <<"DOC" >>notes.md', "", False),
+    ("cat <<DOC", "", True),
+    ("bash <<'DOC'", "", True),
+    ("cat <<'DOC' | bash", "", True),
+    ("cat <<'DOC'", "\ngit status", True),
+])
+def test_inspects_only_unproven_doc_bodies(
+    header: str, tail: str, inspect_body: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[str] = []
+
+    def record(command: str, allow_recovery: bool) -> tuple[bool, None]:
+        seen.append(command)
+        return False, None
+
+    monkeypatch.setattr(
+        git_checkout_safety_hook, "_check_single_git_discard_command", record
+    )
+    check_git_checkout_command(f"{header}\ngit --version\nDOC{tail}")
+    assert ("git --version" in seen) is inspect_body
+
+
 @pytest.mark.parametrize(("command", "expected"), [
     ("2>errors git status", "git status"),
     ("12>>errors git status", "git status"),
@@ -204,6 +228,20 @@ def test_reads_each_option_and_its_value_from_git_help():
     }
     assert short_options == {
         "s": "required", "d": None, "e": "required", "u": "optional",
+    }
+
+
+@pytest.mark.parametrize("decoration", ["", "[no-]"])
+def test_negated_flags_in_git_help(decoration: str) -> None:
+    """Older help omits the negation marker on supported boolean flags."""
+    options, _ = _parse_git_help(
+        f"    -n, --{decoration}dry-run    dry run\n"
+        f"    -W, --{decoration}worktree   restore the working tree\n"
+        "    -e, --exclude <pattern>     exclude files\n"
+    )
+    assert options == {
+        "--dry-run": None, "--no-dry-run": None,
+        "--worktree": None, "--no-worktree": None, "--exclude": "required",
     }
 
 

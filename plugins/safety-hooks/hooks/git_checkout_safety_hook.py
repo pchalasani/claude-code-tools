@@ -14,6 +14,7 @@ if PLUGIN_ROOT:
     if hooks_dir not in sys.path:
         sys.path.insert(0, hooks_dir)
 
+from command_utils import strip_heredoc_bodies  # noqa: E402
 from git_recovery import safe_index_paths  # noqa: E402
 from shell_payloads import SHELL_QUOTED_SPANS
 from shell_scan import _split_command_lines
@@ -75,6 +76,8 @@ _OPTIONAL = "optional"
 # git handles these itself, and its help does not list them.
 _GIT_HELP_LONG_OPTIONS = {"--help": None, "--help-all": None}
 _GIT_HELP_SHORT_OPTIONS = {"h": None}
+# Older Git help prints these negatable boolean flags without the [no-] prefix.
+_LEGACY_NEGATABLE_FLAGS = {"dry-run", "worktree", "staged", "quiet", "progress"}
 
 # Shell expansions cannot be reproduced reliably after shlex has split the
 # command. Tilde expansion is handled separately because it has deterministic
@@ -93,6 +96,7 @@ _ENV_SHORT_VALUE_OPTS = {"a", "u", "C", "P", "S"}
 _REPOSITORY_ROUTING_VARS = {"GIT_DIR", "GIT_WORK_TREE"}
 _LEADING_REDIRECTION = re.compile(r"^\d*[<>].+")
 _LEADING_REDIRECTION_OPERATOR = re.compile(r"^\d*(?:<>|>>|>|<|>&|<&)\Z")
+_LITERAL_DOC_HEADER = re.compile(r"""[ A-Za-z0-9_'".<>/\t-]+""")
 
 _DANGER_TEMPLATE = (
     "⚠️  DANGEROUS COMMAND DETECTED!\n\n{message}\n\n"
@@ -514,6 +518,16 @@ def check_git_checkout_command(command: str) -> Tuple[bool, Optional[str]]:
 
     Returns tuple: (should_block: bool, reason: str or None)
     """
+    # A single literal document sent directly to cat contains no Git commands.
+    # Compound headers, expandable bodies and trailing commands need inspection.
+    if "<<" in command:
+        header = command.partition("\n")[0]
+        if (header.count("<<") == 1 and _LITERAL_DOC_HEADER.fullmatch(header)
+                and _strip_literal_redirections(header) == "cat"):
+            stripped, expanded = strip_heredoc_bodies(command)
+            if (stripped != command and not expanded
+                    and not stripped.partition("\n")[2].strip(" \t\n")):
+                return False, None
     # Check each subcommand in compound commands. A file is recovered only
     # when the command is a lone git command: after an earlier `cd`, the
     # file names would be read against the wrong directory.
@@ -646,10 +660,12 @@ def _parse_git_help(
                 else _OPTIONAL if value.startswith("[") else _REQUIRED)
         if match.group("short"):
             short_options[match.group("short")] = kind
-        if match.group("long"):
-            long_options["--" + match.group("long")] = kind
-            if match.group("negatable"):
-                long_options["--no-" + match.group("long")] = None
+        name = match.group("long")
+        if name:
+            long_options["--" + name] = kind
+            legacy_boolean = kind is None and name in _LEGACY_NEGATABLE_FLAGS
+            if match.group("negatable") or legacy_boolean:
+                long_options["--no-" + name] = None
     return long_options, short_options
 
 
