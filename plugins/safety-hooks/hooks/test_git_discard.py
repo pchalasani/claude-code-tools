@@ -150,6 +150,22 @@ def test_ansi_c_command_words(command: str, blocked: bool) -> None:
     assert check_git_checkout_command(command)[0] is blocked
 
 
+def test_quote_in_comment_preserves_next_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[str] = []
+
+    def record(command: str, allow_recovery: bool) -> tuple[bool, None]:
+        seen.append(command)
+        return False, None
+
+    monkeypatch.setattr(
+        git_checkout_safety_hook, "_check_single_git_discard_command", record
+    )
+    check_git_checkout_command("git status # today's summary\ngit --version")
+    assert seen == ["git status", "git --version"]
+
+
 @pytest.mark.parametrize(("command", "expected"), [
     ("2>errors git status", "git status"),
     ("12>>errors git status", "git status"),
@@ -224,12 +240,34 @@ def _repo_with_file(
     return repo
 
 
-def test_restore_literal_file_name(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_recover_with_git_c_from_outside_a_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    repo = _repo_with_file(tmp_path, monkeypatch, "pathspecs.txt")
-    (repo / "pathspecs.txt").unlink()
-    assert not check_git_checkout_command(f"git -C {repo} restore -- pathspecs.txt")[0]
+    """Discover Git's options even when only the -C target is a repository."""
+    repo = _repo_with_file(tmp_path, monkeypatch)
+    (repo / "kept.txt").unlink()
+    monkeypatch.chdir(tmp_path)
+    git_checkout_safety_hook._git_options.cache_clear()
+    blocked, reason = check_git_checkout_command(f"git -C {repo} restore -- kept.txt")
+    assert not blocked, reason
+
+
+@pytest.mark.parametrize("filename", ["pathspecs.txt", "kept.txt#2"])
+def test_restore_literal_file_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filename: str
+) -> None:
+    repo = _repo_with_file(tmp_path, monkeypatch, filename)
+    (repo / filename).unlink()
+    assert not check_git_checkout_command(f"git -C {repo} restore -- {filename}")[0]
+
+
+@pytest.mark.parametrize("mode", ["--merge", "--conflict=diff3"])
+def test_conflict_modes_require_manual_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    repo = _repo_with_file(tmp_path, monkeypatch)
+    command = f"git -C {repo} restore {mode} -- kept.txt"
+    assert check_git_checkout_command(command)[0]
 
 
 @pytest.mark.parametrize("spelling", ["restore", "restore --", "checkout --"])

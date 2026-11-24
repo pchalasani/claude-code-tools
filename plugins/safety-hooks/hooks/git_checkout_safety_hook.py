@@ -52,7 +52,7 @@ _PATHSPEC_VARS = {
 _CHECKOUT_SHORT_VALUE_OPTS = {"b", "B"}
 
 # The discard check reads the options of `git reset`, `git clean` and
-# `git restore` from `git <subcommand> --help-all`, which git prints from the
+# `git restore` from `git <subcommand> -h`, which git prints from the
 # same table it parses the options with. An option line looks like
 #     -s, --[no-]source <tree-ish>
 #     -d                    remove whole directories
@@ -517,12 +517,11 @@ def check_git_checkout_command(command: str) -> Tuple[bool, Optional[str]]:
     # Check each subcommand in compound commands. A file is recovered only
     # when the command is a lone git command: after an earlier `cd`, the
     # file names would be read against the wrong directory.
-    normalized = command
-    allow_recovery = True
-    if "$'" in command:
-        shell_text = "\n".join(_split_command_lines(command))
-        allow_recovery = shell_text == command
-        normalized = SHELL_QUOTED_SPANS.sub(_normalize_ansi_span, shell_text)
+    # Comments end at the newline even when their text contains unmatched quotes.
+    normalized = "\n".join(_split_command_lines(command))
+    allow_recovery = normalized == command
+    if "$'" in normalized:
+        normalized = SHELL_QUOTED_SPANS.sub(_normalize_ansi_span, normalized)
     subcommands = _split_compound_command(normalized)
     allow_recovery = allow_recovery and len(subcommands) == 1
     for subcmd in subcommands:
@@ -616,9 +615,9 @@ def _restores_only_safe_paths(
     Return True if `git restore` only copies named files from the index and
     each one is missing or unchanged, so no edit is lost.
     """
-    from_elsewhere = {"-s", "--source", "-p", "--patch",
-                      "--pathspec-from-file", "--staged", "-S"}
-    if from_elsewhere & set(names):
+    plain_copy_options = {"-W", "--worktree", "-q", "--quiet", "--no-quiet",
+                          "--progress", "--no-progress"}
+    if not plain_copy_options.issuperset(names):
         return False
     return safe_index_paths(repo_dir, paths)
 
@@ -660,13 +659,16 @@ def _git_options(
 ) -> Optional[Tuple[Dict[str, Optional[str]], Dict[str, Optional[str]]]]:
     """Return the options that `git <subcommand>` lists, or None."""
     try:
+        # Short help works outside a repository, including on Apple Git.
         result = subprocess.run(
-            ["git", subcommand, "--help-all"], capture_output=True,
-            text=True, timeout=10, env=dict(os.environ, LC_ALL="C"))
+            ["git", subcommand, "-h"], capture_output=True,
+            text=True, timeout=1, env=dict(os.environ, LC_ALL="C"))
     except (OSError, subprocess.SubprocessError):
         return None
-    long_options, short_options = _parse_git_help(
-        result.stdout + result.stderr)
+    usage = f"usage: git {subcommand} "
+    if result.returncode != 129 or not result.stdout.startswith(usage):
+        return None
+    long_options, short_options = _parse_git_help(result.stdout)
     if not long_options and not short_options:
         return None
     return long_options, short_options

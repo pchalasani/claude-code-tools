@@ -27,7 +27,7 @@ def _git(repo_dir: str, deadline: float, *args: str) -> bytes:
 
 def _safe_file(repo_dir: str, path: str, deadline: float) -> bool:
     """Require one ordinary index entry and a missing or identical file."""
-    if (not re.fullmatch(r"[\w ./@+,=:%-]+", path)
+    if (not re.fullmatch(r"[\w ./@+#,=:%-]+", path)
             or path.startswith((":", "=")) or path.endswith(("/", "/."))
             or ".." in Path(path).parts):
         return False
