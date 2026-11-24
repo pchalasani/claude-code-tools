@@ -308,6 +308,17 @@ def test_conflict_modes_require_manual_recovery(
     assert check_git_checkout_command(command)[0]
 
 
+@pytest.mark.parametrize("verb", ["restore --", "checkout --"])
+def test_recovery_with_quoted_parentheses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, verb: str
+) -> None:
+    filename = "report (final).txt"
+    repo = _repo_with_file(tmp_path, monkeypatch, filename)
+    (repo / filename).unlink()
+    assert not check_git_checkout_command(f'git -C {repo} {verb} "{filename}"')[0]
+    assert check_git_checkout_command(f"git -C {repo} {verb} {filename}")[0]
+
+
 @pytest.mark.parametrize("spelling", ["restore", "restore --", "checkout --"])
 def test_recovering_a_deleted_file_is_allowed(tmp_path, monkeypatch, spelling):
     repo = _repo_with_file(tmp_path, monkeypatch)

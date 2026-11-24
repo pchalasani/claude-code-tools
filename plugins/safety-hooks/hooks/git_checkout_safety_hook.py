@@ -534,6 +534,10 @@ def check_git_checkout_command(command: str) -> Tuple[bool, Optional[str]]:
     # Comments end at the newline even when their text contains unmatched quotes.
     normalized = "\n".join(_split_command_lines(command))
     allow_recovery = normalized == command
+    if "(" in command or ")" in command:
+        # Only literal parentheses can be part of a verified filename.
+        unquoted = SHELL_QUOTED_SPANS.sub("", command)
+        allow_recovery = allow_recovery and "(" not in unquoted and ")" not in unquoted
     if "$'" in normalized:
         normalized = SHELL_QUOTED_SPANS.sub(_normalize_ansi_span, normalized)
     subcommands = _split_compound_command(normalized)
