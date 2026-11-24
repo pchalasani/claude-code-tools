@@ -14,6 +14,10 @@ from shell_wrappers import (
 
 _SHELLS = {'sh', 'bash', 'dash', 'zsh', 'ksh', 'csh', 'tcsh',
            'fish', 'ash', 'yash'}
+SHELL_QUOTED_SPANS = re.compile(
+    r"""(?P<ansi>\$'(?:[^'\\]|\\.)*')|'[^']*'|"(?:[^"\\]|\\.)*"|\\.""",
+    re.DOTALL,
+)
 
 
 def _launched_commands(words: list[str]) -> list[list[str]]:
@@ -113,10 +117,9 @@ def needs_conservative_shell_scan(command: str) -> bool:
     if "$'" in command:
         # Mask ANSI-C operands without decoding them. This preserves command
         # structure even when assignments or redirects precede the evaluator.
-        masked = re.sub(
-            r"""(?P<ansi>\$'(?:[^'\\]|\\.)*')|'[^']*'|"(?:[^"\\]|\\.)*"|\\.""",
+        masked = SHELL_QUOTED_SPANS.sub(
             lambda match: "''" if match.lastgroup == 'ansi' else match[0],
-            command, flags=re.DOTALL,
+            command,
         )
         try:
             structural_words = shlex.split(_strip_literal_redirections(masked))
