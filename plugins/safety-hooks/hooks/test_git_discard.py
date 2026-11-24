@@ -7,6 +7,7 @@ from git_checkout_safety_hook import _parse_git_help, check_git_checkout_command
 @pytest.mark.parametrize("command", [
     "git reset --hard",
     "git reset --hard HEAD~1",
+    "git reset --merge",
     "git -C /tmp/repo reset --hard origin/main",
     "git clean -f",
     "git clean -fdx",
@@ -106,12 +107,14 @@ def test_allows_restore_of_the_index_only(command):
 def test_blocks_a_shortened_option_and_names_the_full_one(command, full_name):
     should_block, reason = check_git_checkout_command(command)
     assert should_block
+    assert reason is not None
     assert "Spell the option out: '{0}'".format(full_name) in reason
 
 
 def test_names_each_option_a_shortened_name_can_mean():
     should_block, reason = check_git_checkout_command("git restore --s file.py")
     assert should_block
+    assert reason is not None
     assert "'--source', '--staged'" in reason
 
 
@@ -122,6 +125,7 @@ def test_names_each_option_a_shortened_name_can_mean():
 def test_blocks_an_option_that_git_does_not_list(command, option):
     should_block, reason = check_git_checkout_command(command)
     assert should_block
+    assert reason is not None
     assert "lists no option '{0}'".format(option) in reason
 
 
@@ -129,11 +133,39 @@ def test_end_of_options_ends_the_options():
     assert check_git_checkout_command("git clean -f --end-of-options -n")[0]
 
 
+@pytest.mark.parametrize(("command", "blocked"), [
+    ("git $'reset' --frobnicate", True),
+    ("git reset $'--frobnicate'", True),
+    ("$'git' reset --frobnicate", True),
+    (r"git $'stat\x75s'", True),
+    (r"git reset $'--s\x6fft'", True),
+    (r"git log --format=$'subject\nbody'", False),
+    (r"printf '%s' $'a\nb'", False),
+    ("git $'status'", False),
+])
+def test_ansi_c_command_words(command: str, blocked: bool) -> None:
+    """Plain words dispatch normally; opaque Git words require clarification."""
+    assert check_git_checkout_command(command)[0] is blocked
+
+
+@pytest.mark.parametrize(("command", "expected"), [
+    ("2>errors git status", "git status"),
+    ("12>>errors git status", "git status"),
+    ("git status 2 >errors", "git status 2"),
+    ("git status '2'>errors", "git status '2'"),
+    ("git status '>' 2>errors", "git status '>'"),
+    ("git status '2>errors'", "git status '2>errors'"),
+])
+def test_strips_only_shell_redirections(command: str, expected: str) -> None:
+    assert git_checkout_safety_hook._without_shell_only_words(command) == expected
+
+
 def test_blocks_when_git_option_list_cannot_be_read(monkeypatch):
     monkeypatch.setattr(
         git_checkout_safety_hook, "_git_options", lambda subcommand: None)
     should_block, reason = check_git_checkout_command("git reset --soft HEAD~1")
     assert should_block
+    assert reason is not None
     assert "Could not read git's option list" in reason
 
 
@@ -159,6 +191,7 @@ def test_reads_each_option_and_its_value_from_git_help():
 
 def test_danger_message_does_not_recommend_a_discarding_restore():
     reason = check_git_checkout_command("git checkout -- file.py")[1]
+    assert reason is not None
     assert "git restore --staged" in reason
     assert "for clearer syntax" not in reason
 

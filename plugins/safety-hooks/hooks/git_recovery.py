@@ -44,6 +44,7 @@ def _safe_file(repo_dir: str, path: str) -> bool:
     # Git can replace a non-directory ancestor while recreating a missing file.
     target = Path(repo_dir)
     parts = Path(relative).parts
+    permissions = 0
     for index, part in enumerate(parts):
         target = target / part
         try:

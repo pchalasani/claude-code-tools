@@ -15,6 +15,9 @@ if PLUGIN_ROOT:
         sys.path.insert(0, hooks_dir)
 
 from git_recovery import safe_index_paths  # noqa: E402
+from shell_payloads import SHELL_QUOTED_SPANS
+from shell_scan import _split_command_lines
+from shell_wrappers import _strip_literal_redirections
 
 # git's own global options that consume the NEXT token as their value. They sit
 # between "git" and the subcommand, so the subcommand is not always argv[1].
@@ -461,6 +464,36 @@ def _option_flags(tokens: List[str]) -> Set[str]:
     return flags
 
 
+def _normalize_ansi_span(match: re.Match[str]) -> str:
+    """Treat plain ANSI-C words as literals and escaped spans as opaque."""
+    if match.lastgroup != "ansi":
+        return match[0]
+    # NUL cannot occur in a shell argument. Keep the rest of its word intact.
+    return "\0" if "\\" in match[0] else match[0][1:]
+
+
+def _opaque_git_words(command: str) -> bool:
+    """Check whether opaque words can affect a guarded Git command."""
+    effective = _without_shell_only_words(command)
+    if effective is None:
+        return True
+    if "\0" not in effective:
+        return False
+    words, _ = _expand_env_split(_tokenize(effective))
+    if words is None:
+        return True
+    index = _executable_index(words)
+    if index >= len(words):
+        return False
+    if "\0" in words[index]:
+        return True
+    if os.path.basename(words[index]) != "git":
+        return False
+    verbs = {"checkout", "reset", "clean", "restore"}
+    verbs.update(word for word in words if "\0" in word)
+    return any(parse_git_checkout(effective, verb)[0] is not None for verb in verbs)
+
+
 def check_git_checkout_command(command: str) -> Tuple[bool, Optional[str]]:
     """
     Check if a git checkout command is safe to execute.
@@ -471,9 +504,17 @@ def check_git_checkout_command(command: str) -> Tuple[bool, Optional[str]]:
     # Check each subcommand in compound commands. A file is recovered only
     # when the command is a lone git command: after an earlier `cd`, the
     # file names would be read against the wrong directory.
-    subcommands = _split_compound_command(command)
-    allow_recovery = len(subcommands) == 1
+    normalized = command
+    allow_recovery = True
+    if "$'" in command:
+        shell_text = "\n".join(_split_command_lines(command))
+        allow_recovery = shell_text == command
+        normalized = SHELL_QUOTED_SPANS.sub(_normalize_ansi_span, shell_text)
+    subcommands = _split_compound_command(normalized)
+    allow_recovery = allow_recovery and len(subcommands) == 1
     for subcmd in subcommands:
+        if "\0" in subcmd and _opaque_git_words(subcmd):
+            return True, "Spell out the Git command without ANSI-C escapes."
         for check in (_check_single_git_checkout_command,
                       _check_single_git_discard_command):
             result = check(subcmd, allow_recovery)
@@ -516,6 +557,9 @@ def _check_single_git_discard_command(
         if subcommand == "reset" and "--hard" in names:
             return True, _danger(
                 "'git reset --hard' DISCARDS all uncommitted changes!")
+        if subcommand == "reset" and "--merge" in names:
+            return True, _danger(
+                "'git reset --merge' can overwrite staged working-tree changes!")
         # `git restore <path>` is the newer spelling of
         # `git checkout -- <path>` and discards the same edits, except when
         # it only brings back files that are missing or unchanged.
@@ -541,34 +585,16 @@ def _without_shell_only_words(command: str) -> Optional[str]:
     is not an option. Returns `command` itself when there is nothing to drop,
     and None if it cannot be split.
     """
+    without_comments = "\n".join(_split_command_lines(command))
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars="<>&")
-        lexer.whitespace_split = True
-        # The shell starts a comment only at the start of a word; shlex would
-        # also end a word at a `#` inside it, as in `a#b`.
-        lexer.commenters = ""
-        tokens = list(lexer)
+        words = shlex.split(without_comments)
+        if "<" in without_comments or ">" in without_comments:
+            stripped = _strip_literal_redirections(without_comments)
+            if shlex.split(stripped) != words:
+                return stripped
     except ValueError:
         return None
-    words: List[str] = []
-    skip_operand = False
-    dropped = False
-    for token in tokens:
-        # An unquoted word starting with `#` starts a comment.
-        if (token.startswith("#")
-                and re.search(r"(?:^|\s)" + re.escape(token), command)):
-            dropped = True
-            break
-        if skip_operand:
-            skip_operand = False
-            continue
-        if token and set(token) <= set("<>&"):
-            # A redirection operator and the file or descriptor it names.
-            skip_operand = token not in ("&", "&&")
-            dropped = True
-            continue
-        words.append(token)
-    return shlex.join(words) if dropped else command
+    return without_comments
 
 
 def _restores_only_safe_paths(
@@ -602,6 +628,8 @@ def _parse_git_help(
             continue
         spec = re.split(r"\s{2,}", line.strip(), maxsplit=1)[0]
         match = _HELP_OPTION_SPEC.match(spec)
+        if match is None:
+            continue
         value = match.group("value").strip()
         kind = (None if not value
                 else _OPTIONAL if value.startswith("[") else _REQUIRED)
