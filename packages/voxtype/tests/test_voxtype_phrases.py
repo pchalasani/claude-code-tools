@@ -129,7 +129,9 @@ def test_misheard_send_inside_a_sentence_is_text(make_app) -> None:  # noqa: ANN
     assert app.typist.events == ["We should end it. ", "<ENTER>"]
 
 
-@pytest.mark.parametrize("said", ["Okay, show you.", "Okay for me."])
+@pytest.mark.parametrize(
+    "said", ["Okay, show you.", "Okay for me.", "Show me.", "Type it."]
+)
 def test_show_mishearing_said_alone_shows(make_app, said: str) -> None:  # noqa: ANN001
     app = make_app(mode="vad")
     app.handle_utterance("Check the logs.")
@@ -314,3 +316,9 @@ def test_empty_piece_is_decoded_with_the_one_before() -> None:
     assert retrying(show, 16000) == "show me."
     assert retrying(show, 16000) == ""  # nothing before it now
     assert len(reports) == 1 and "show me." in reports[0]
+
+
+def test_show_me_inside_a_sentence_is_text(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance("Can you show me.")
+    assert app.typist.events == []
