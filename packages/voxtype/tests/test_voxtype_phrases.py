@@ -258,3 +258,58 @@ def test_save_audio_must_be_a_whole_number(bad: object) -> None:
 
     with pytest.raises(ValueError, match="save_audio"):
         Config(save_audio=bad).validate()
+
+
+def test_show_phrase_split_in_two_is_one_phrase(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance("Fix the build.")
+    app.handle_utterance("Okay.")
+    app.handle_utterance("show me.")
+    assert app.typist.events == ["Fix the build. "]
+
+
+def test_a_whole_phrase_after_okay_keeps_the_okay(make_app) -> None:  # noqa: ANN001
+    app = make_app(mode="vad")
+    app.handle_utterance("Okay.")
+    app.handle_utterance("send it")
+    assert app.typist.events == ["Okay. ", "<ENTER>"]
+
+
+def test_new_words_after_the_earlier_text() -> None:
+    from voxtype.rejoin import new_words
+
+    assert new_words("Okay.", "Okay, show me.") == "show me."
+    assert new_words("Okay.", "Cash on me.") == ""
+    assert new_words("Okay.", "Okay.") == ""
+    assert new_words("", "show me") == ""
+
+
+def test_join_audio_drops_the_shared_samples() -> None:
+    from voxtype.rejoin import join_audio
+
+    rng = np.random.default_rng(0)
+    audio = rng.uniform(-0.5, 0.5, 3000).astype(np.float32)
+    first, second = audio[:2000], audio[1600:]  # 400 samples shared
+    assert np.array_equal(join_audio(first, second, 16000), audio)
+    apart = join_audio(first, audio[2500:], 16000)
+    assert apart.size == 2000 + 3200 + 500  # 0.2 s of silence between
+
+
+def test_empty_piece_is_decoded_with_the_one_before() -> None:
+    from voxtype.rejoin import EmptyRetry
+
+    okay = np.full(1600, 0.1, np.float32)
+    show = np.full(1600, 0.2, np.float32)
+
+    def transcribe(samples: np.ndarray, rate: int) -> str:
+        if samples.size > 1600:
+            return "Okay, show me."
+        return "Okay." if samples[0] == np.float32(0.1) else ""
+
+    reports: list[str] = []
+    retrying = EmptyRetry(reports.append).wrap(transcribe)
+    assert retrying(okay, 16000) == "Okay."
+    assert retrying(np.zeros(800, np.float32), 16000) == ""  # keepalive
+    assert retrying(show, 16000) == "show me."
+    assert retrying(show, 16000) == ""  # nothing before it now
+    assert len(reports) == 1 and "show me." in reports[0]

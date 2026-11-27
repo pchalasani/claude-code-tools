@@ -96,6 +96,11 @@ def is_exact_phrase(text: str, phrase: str) -> bool:
     return bool(phrase_words) and normalize_words(text) == phrase_words
 
 
+def is_any_phrase(text: str, phrases: list[str]) -> bool:
+    """Return True if ``text`` is exactly one of ``phrases``."""
+    return any(is_exact_phrase(text, p) for p in phrases)
+
+
 def strip_submit_suffix(text: str, phrases: list[str]) -> str | None:
     """Return ``text`` without a trailing submit suffix, or None if absent.
 

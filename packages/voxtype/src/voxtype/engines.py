@@ -188,4 +188,9 @@ def create_engine(cfg: Config, status: StatusFn) -> Engine:
         log = AudioLog(cfg.save_audio, status)
         engine.transcribe = log.wrap(engine.transcribe)  # type: ignore[method-assign]
         status(f"saving the last {cfg.save_audio} recordings to {log.folder}")
+    if cfg.segmentation == "vad":
+        from .rejoin import EmptyRetry
+
+        retry = EmptyRetry(status)
+        engine.transcribe = retry.wrap(engine.transcribe)  # type: ignore[method-assign]
     return engine

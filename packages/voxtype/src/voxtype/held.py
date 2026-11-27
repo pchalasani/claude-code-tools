@@ -11,7 +11,7 @@ import time
 from typing import TYPE_CHECKING
 
 from .config import DEFAULT_CONFIG_PATH
-from .logic import collapse_repeats, strip_fillers
+from .logic import collapse_repeats, is_any_phrase, strip_fillers
 from .mode_menu import chord_label
 
 if TYPE_CHECKING:
@@ -90,6 +90,24 @@ class HeldNotesMixin:
             f"Over {cap:,} words: {did}."
             + (f"\n{rest} saved in dropped.txt." if where else "")
         )
+
+    def _join_split_phrase(self: VoiceTypeApp, text: str) -> str:
+        """``text``, joined to the last held piece when only the two
+        together are a submit or show phrase ("Okay." then "show me");
+        that piece is then no longer held."""
+        c = self.cfg
+        ps = [*c.submit_phrases, *c.submit_suffixes, *c.show_suffixes]
+        with self._lock:
+            last = self._held[-1] if self._held else ""
+        if not last or is_any_phrase(text, ps):
+            return text
+        if not is_any_phrase(f"{last} {text}", ps):
+            return text
+        with self._lock:
+            if self._held and self._held[-1] == last:
+                self._held.pop()
+                return f"{last} {text}"
+        return text
 
     def _note_kept(self: VoiceTypeApp, n_words: int, gap: float) -> None:
         """Say that words held from before a long silence are kept."""
