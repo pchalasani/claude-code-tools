@@ -218,9 +218,9 @@ class Config:
             transcriber often hears "ok show" and "ok show me"; a
             submit phrase then sends it.
         show_phrases: Phrases that act like a show phrase only when
-            spoken as an entire utterance: mishearings of "ok show me"
-            ("ok show you", "ok for me") too common at the end of a
-            sentence to be suffixes.
+            spoken as an entire utterance: "show me" alone, and mishearings
+            of "ok show me" ("ok show you", "ok for me"), too common at the
+            end of a sentence to be suffixes.
         wait_for_submit: Hands-free mode ("vad") only: hold the text
             back until a submit phrase or suffix, then clean and type
             it all at once. False types each piece at every pause.
@@ -317,7 +317,7 @@ class Config:
     )
     show_phrases: list[str] = field(
         default_factory=lambda: [
-            "ok show you", "okay show you", "ok for me", "okay for me",
+            "show me", "ok show you", "okay show you", "ok for me", "okay for me",
         ]
     )
     wait_for_submit: bool = True
@@ -915,9 +915,9 @@ show_suffixes = [
     "tap it",
 ]
 
-# Like show_suffixes, but only when said as an ENTIRE utterance: these
-# mishearings of "ok show me" are too common at the end of a sentence.
-show_phrases = ["ok show you", "okay show you", "ok for me", "okay for me"]
+# Like show_suffixes, but only as an ENTIRE utterance ("show me" alone,
+# mishearings of "ok show me"): too common at the end of a sentence.
+show_phrases = ["show me", "ok show you", "okay show you", "ok for me", "okay for me"]
 
 # Hands-free mode ("vad") only: hold the text back until you say a
 # submit phrase or suffix, then clean and type it all at once, so pauses

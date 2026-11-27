@@ -237,13 +237,15 @@ or "ok so me", so those count too. It also hears "send it" as "senate",
 with `show_suffixes` and `submit_suffixes`.
 
 Said on its own, after a pause, "send it" is often heard as "send",
-"end it", "Sunday", "said it" or "so neat", and "ok show me" as "ok show you" or "ok for me". Those count
+"end it", "Sunday", "said it" or "so neat", and "ok show me" as "ok show you" or
+"ok for me". Those count
 too, but only as a whole utterance, since they are ordinary words at the
 end of a sentence; "ok for me" shows only while text is held. They are
 `submit_phrases` and `show_phrases`. To catch the quiet first sound
 of a phrase ("s" in "send it"), voxtype also gives the transcriber the
 0.5 seconds of audio before speech is detected. The log names each
 phrase it heard ("submit phrase: …"), so you can spot new mishearings.
+"Show me" said on its own also shows the held text, as does "type it".
 
 A pause inside a phrase can split it: "okay" is heard as one piece and
 "show me" as the next. The two pieces still count as the phrase. When the
