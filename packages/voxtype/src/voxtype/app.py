@@ -534,6 +534,7 @@ class VoiceTypeApp(HeldNotesMixin, RuntimeMixin):
                 )
             return
         # ACTIVE
+        text = self._join_split_phrase(text)
         if any(
             is_exact_phrase(text, p) for p in self.cfg.submit_phrases
         ):
