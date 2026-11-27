@@ -64,13 +64,14 @@ def new_words(earlier: str, joined: str) -> str:
     words = normalize_words(joined)
     if not before or words[: len(before)] != before:
         return ""
-    # Map the count of normalized words back onto the original tokens.
+    # Map the count of normalized words back onto the original tokens;
+    # if a token holds the boundary ("Okay—show"), use the bare words.
     seen = 0
     for i, token in enumerate(tokens):
         if seen == len(before):
             return " ".join(tokens[i:])
         seen += len(normalize_words(token))
-    return ""
+    return " ".join(words[len(before):])
 
 
 class EmptyRetry:

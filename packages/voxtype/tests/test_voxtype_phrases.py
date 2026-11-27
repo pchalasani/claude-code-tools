@@ -282,6 +282,7 @@ def test_new_words_after_the_earlier_text() -> None:
     assert new_words("Okay.", "Cash on me.") == ""
     assert new_words("Okay.", "Okay.") == ""
     assert new_words("", "show me") == ""
+    assert new_words("Okay.", "Okay—show me.") == "show me"
 
 
 def test_join_audio_drops_the_shared_samples() -> None:
