@@ -2678,7 +2678,7 @@ dev = [{ name = "pytest", specifier = ">=9.0.1" }]
 
 [[package]]
 name = "voxtype"
-version = "0.3.24"
+version = "0.3.25"
 source = { editable = "packages/voxtype" }
 dependencies = [
     { name = "numba", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
