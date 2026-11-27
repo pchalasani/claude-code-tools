@@ -105,7 +105,11 @@ class AutoGain:
     # Running-peak attack is instantaneous (max); release decays fast
     # enough to adapt to a quiet mic within a few seconds of audio.
     DECAY = 0.85  # per ~0.1 s chunk
-    SMOOTHING = 0.3  # fraction of the way to the target gain per chunk
+    # Gain rises this fraction of the way to the target per chunk, but
+    # falls at once: after a pause it has climbed near MAX_GAIN, and a
+    # gradual fall clipped the first ~0.7 s of speech into a decode of
+    # nothing (the first words of a sentence went missing).
+    SMOOTHING = 0.3
 
     def __init__(self) -> None:
         self._running_peak = self.TARGET_PEAK  # start at gain 1.0
@@ -130,7 +134,8 @@ class AutoGain:
             self.MAX_GAIN,
             max(1.0, self.TARGET_PEAK / max(self._running_peak, 1e-6)),
         )
-        self._gain += self.SMOOTHING * (target_gain - self._gain)
+        step = 1.0 if target_gain < self._gain else self.SMOOTHING
+        self._gain += step * (target_gain - self._gain)
         if self._gain <= 1.001:
             if peak <= 1.0:
                 return samples

@@ -322,3 +322,19 @@ def test_show_me_inside_a_sentence_is_text(make_app) -> None:  # noqa: ANN001
     app = make_app(mode="vad")
     app.handle_utterance("Can you show me.")
     assert app.typist.events == []
+
+
+def test_speech_after_a_pause_is_not_clipped() -> None:
+    """After a pause the gain has climbed near its cap; the first words
+    must not be clipped while it comes back down."""
+    from voxtype.engine_parakeet import AutoGain
+
+    rng = np.random.default_rng(0)
+    agc = AutoGain()
+    for _ in range(30):  # 3 s of room noise
+        agc.process(rng.normal(0, 0.001, 1600).astype(np.float32))
+    assert agc._gain > 40
+    speech = (0.2 * np.sin(np.arange(1600) / 5)).astype(np.float32)
+    for _ in range(10):
+        out = agc.process(speech)
+        assert np.abs(out).max() < 0.999
